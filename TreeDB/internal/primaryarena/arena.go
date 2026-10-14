@@ -96,6 +96,7 @@ type Counters struct {
 }
 type Arena struct {
 	mu                   sync.Mutex
+	closeWork            physicalCloseState
 	pager                *pager.Pager
 	uuid                 [16]byte
 	chunks               [maxChunks]*bankChunk
@@ -220,20 +221,7 @@ func initializeFileArena(a *Arena, readOnly bool) error {
 func (a *Arena) UUID() [16]byte      { return a.uuid }
 func (a *Arena) Pager() *pager.Pager { return a.pager }
 func (a *Arena) Counters() Counters  { a.mu.Lock(); defer a.mu.Unlock(); return a.counters }
-func (a *Arena) Close() error {
-	// The independent namespace owner calls Close only after its last actual DATA,
-	// dependency and physical-cut edge. Failed physical close keeps accounting.
-	if err := a.pager.Close(); err != nil {
-		a.metadata.CleanupFailed()
-		return err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.pager.ClearPrimaryReadRootsV6()
-	a.chunks = [maxChunks]*bankChunk{}
-	a.ordinaryRelease = ReleaseQueue{}
-	return a.metadata.Close()
-}
+func (a *Arena) Close() error        { return a.closeOrdinaryPhysical() }
 
 // Claim is private destination construction. Its expected epoch/extent prevent
 // two prepared claims from publishing the same bank. A caller may cancel before

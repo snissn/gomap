@@ -22,10 +22,11 @@ type primaryReadRootEntryV6 struct {
 	next  *primaryReadRootEntryV6
 }
 type primaryReadRootTableV6 struct {
-	mu        sync.RWMutex
-	heads     []*primaryReadRootEntryV6
-	count     int
-	retention *retainedalloc.Owner
+	mu            sync.RWMutex
+	heads         []*primaryReadRootEntryV6
+	count         int
+	clearPosition int
+	retention     *retainedalloc.Owner
 }
 
 func (t *primaryReadRootTableV6) find(id uint64) *primaryReadRootEntryV6 {
@@ -162,7 +163,7 @@ func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWor
 func (p *Pager) PrimaryMetadataBaselineV6() uint64 {
 	alloc := retainedalloc.AllocationCharge
 	ptr := uint64(unsafe.Sizeof(uintptr(0)))
-	size := alloc(uint64(cap(p.chunks))*3*ptr) + alloc(uint64(cap(p.dirtyChunks.words))*8)
+	size := alloc(uint64(cap(p.chunks))*3*ptr) + alloc(uint64(cap(p.mappings))*uint64(unsafe.Sizeof(mappingOwner{}))) + alloc(uint64(cap(p.dirtyChunks.words))*8)
 	if view := p.atomicChunks.Load(); view != nil {
 		size += alloc(uint64(unsafe.Sizeof(chunkList{})))
 		if len(p.chunks) == 0 || len(view.data) == 0 || &p.chunks[0] != &view.data[0] {
@@ -180,11 +181,15 @@ func (p *Pager) PrimaryMetadataBaselineV6() uint64 {
 		retainedalloc.AllocationCharge(uint64(len(p.path)))
 }
 func (p *Pager) ClearPrimaryReadRootsV6() {
-	t := &p.immutableReadRoots
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.heads = nil
-	t.count = 0
+	for {
+		done, err := p.ClearPrimaryReadRootsWorkV6(nil)
+		if err != nil {
+			panic(err)
+		}
+		if done {
+			return
+		}
+	}
 }
 
 func (p *Pager) PrimaryMetadataFixedV6() uint64 {

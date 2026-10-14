@@ -129,11 +129,11 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 		return 0, nil
 	}
 
-	idx := db.idx.Load()
+	idx := db.acquireIndexWithWrapperBorrow()
 	if idx == nil {
 		return 0, nil
 	}
-	idx.acquire()
+	defer idx.releaseWrapperBorrow(nil, nil)
 	defer db.releaseIndex(idx)
 
 	var deadline time.Time

@@ -66,7 +66,7 @@ func newOriginalObservedStableResourceTokenNormalized(spec StableResourceSpec, n
 	return token, nil
 }
 
-func (cleanup *resourcePinnedBacking) finishOriginalObservation(registry *IdentityPinRegistry, identity StableIdentity, namespace *StableNamespaceToken) {
+func (cleanup *resourcePinnedBacking) finishOriginalObservation(registry *IdentityPinRegistry, identity StableIdentity, namespace *StableNamespaceToken) error {
 	// The token's once-only release consumed its physical and namespace edges
 	// before arriving here. Observe/Unobserve is independent of handle sharing.
 	if registry != nil {
@@ -77,9 +77,9 @@ func (cleanup *resourcePinnedBacking) finishOriginalObservation(registry *Identi
 		cleanup.refs.Store(0)
 		cleanup.owner.CleanupFailed()
 		cleanup.registry.retainFailedPinnedBacking(cleanup)
-		return
+		return cleanup.failure
 	}
-	cleanup.release()
+	return cleanup.release()
 }
 
 // OriginalCleanupCustody is a preborn failure edge in the existing physical
@@ -143,7 +143,16 @@ func (custody *OriginalCleanupCustody) Complete(payload any, err error) {
 // CaptureStableNamespaceWithMetadata creates an independent, admitted namespace
 // descriptor for an already-held child. It never changes a generation's cached
 // proof owner. Every cleanup operand is preborn at the original registry.
-func CaptureStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *IdentityPinRegistry, directory string, child *os.File, name, diagnostic string) (token *StableNamespaceToken, err error) {
+func CaptureStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *IdentityPinRegistry, directory string, child *os.File, name, diagnostic string) (*StableNamespaceToken, error) {
+	return captureStableNamespaceWithMetadata(owner, registry, directory, child, name, diagnostic, false)
+}
+
+// CaptureKnownStableNamespaceWithMetadata preserves the original manager's
+// exact identity-keyed stable-link reuse through the same checked producer.
+func CaptureKnownStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *IdentityPinRegistry, directory string, child *os.File, name, diagnostic string) (*StableNamespaceToken, error) {
+	return captureStableNamespaceWithMetadata(owner, registry, directory, child, name, diagnostic, true)
+}
+func captureStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *IdentityPinRegistry, directory string, child *os.File, name, diagnostic string, reuseKnown bool) (token *StableNamespaceToken, err error) {
 	if owner == nil || registry == nil || child == nil {
 		return nil, ErrResourceOwnership
 	}
@@ -172,13 +181,10 @@ func CaptureStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *Id
 		if proof != nil {
 			backing.causes.add(proof.ReleaseWithError())
 		}
-		closeErr := parent.Close()
-		if !errors.Is(closeErr, os.ErrClosed) {
-			backing.causes.add(closeErr)
-		}
+		backing.causes.add(parent.Close())
 		if backing.causes.count != 0 {
 			if token != nil {
-				token.Release()
+				backing.causes.add(token.ReleaseWithError())
 				token = nil
 			}
 			backing.file = parent
@@ -189,19 +195,40 @@ func CaptureStableNamespaceWithMetadata(owner *retainedalloc.Owner, registry *Id
 			custody.Complete(nil, nil)
 		}
 	}()
+	generation, err := StableNamespaceParentGeneration(parent)
+	if err != nil {
+		return nil, err
+	}
+	if reuseKnown {
+		token, err = registry.newStableNamespaceTokenForKnownLinkWithMetadata(StableNamespaceSpec{
+			Parent: parent, LinkedResource: child, ParentGeneration: generation,
+			Operation: NamespaceCreate, NewName: name, DiagnosticPath: diagnostic}, owner)
+		if err == nil {
+			err = token.BindCleanupRegistry(registry)
+			if err != nil {
+				backing.causes.add(token.ReleaseWithError())
+				token = nil
+			}
+			return token, err
+		}
+		if !errors.Is(err, ErrNamespaceUnstable) {
+			return nil, err
+		}
+	}
 	proof, err = NewOwnedStableNamespaceCreationProof(parent, child, name, owner)
 	if err != nil {
 		return nil, err
 	}
-	generation, err := StableNamespaceParentGeneration(parent)
-	if err != nil {
-		return nil, err
+	if reuseKnown {
+		if err = registry.RememberStableNamespaceLink(parent, child, name); err != nil {
+			return nil, err
+		}
 	}
 	token, err = proof.Bind(parent, generation, name, diagnostic)
 	if err == nil {
 		err = token.BindCleanupRegistry(registry)
 		if err != nil {
-			token.Release()
+			backing.causes.add(token.ReleaseWithError())
 			token = nil
 		}
 	}

@@ -20,10 +20,13 @@ import (
 // supplies release after registering the exact root's sequence with its reader
 // registry. The directory contains no retained per-obligation index or cache.
 type DependencyDirectoryV2 struct {
-	ref     DependencyDirectoryRefV2
-	tree    *tree.Tree
-	refs    atomic.Int64
-	release func()
+	cleanupFailure  originalReleaseFailure
+	cleanupDone     atomic.Bool
+	cleanupConsumed bool
+	ref             DependencyDirectoryRefV2
+	tree            *tree.Tree
+	refs            atomic.Int64
+	release         func()
 	// Selected PRIMARY construction owns these allocations independently of
 	// the physical token rope. Last Retain/Release also joins active reads.
 	metadata       *retainedalloc.Owner
@@ -101,32 +104,65 @@ func (directory *DependencyDirectoryV2) Retain() error {
 	return ErrResourceOwnership
 }
 
-func (directory *DependencyDirectoryV2) Release() {
+func (directory *DependencyDirectoryV2) Release() { _, _ = directory.ReleaseOutcome() }
+
+// ReleaseOutcome reports this original edge's consumption separately from
+// earlier physical-owner errors. The last callback runs at most once.
+func (directory *DependencyDirectoryV2) ReleaseOutcome() (bool, error) {
 	if directory == nil {
-		return
+		return true, nil
 	}
+	if directory.cleanupDone.Load() {
+		if directory.cleanupFailure.causes[0] != nil {
+			if directory.cleanupConsumed {
+				return true, directory.cleanupFailure.causes[0]
+			}
+			return false, &directory.cleanupFailure
+		}
+		return directory.cleanupConsumed, nil
+	}
+	last := false
 	for refs := directory.refs.Load(); refs > 0; refs = directory.refs.Load() {
 		if directory.refs.CompareAndSwap(refs, refs-1) {
-			if refs == 1 {
-				if directory.metadata == nil {
-					directory.release()
-				} else if disposed, _ := directory.ownedRelease(); !disposed {
-					// Only this callback's real remaining physical custody keeps
-					// its tree and charge. Earlier sibling errors live on their
-					// own producer-owned failure edge, not this completed lease.
-					directory.metadata.CleanupFailed()
-				} else {
-					metadata, charge := directory.metadata, directory.metadataCharge
-					directory.tree = nil
-					directory.ownedRelease = nil
-					directory.metadata = nil
-					directory.metadataCharge = 0
-					metadata.RemovePending(charge)
-				}
-			}
-			return
+			last = refs == 1
+			break
 		}
 	}
+	if !last {
+		return true, nil
+	}
+	disposed, err := true, error(nil)
+	if directory.metadata == nil {
+		directory.release()
+	} else {
+		disposed, err = directory.ownedRelease()
+		if !disposed {
+			if err == nil {
+				err = ErrResourceOwnership
+			}
+			directory.metadata.CleanupFailed()
+		} else {
+			metadata, charge := directory.metadata, directory.metadataCharge
+			directory.tree, directory.ownedRelease = nil, nil
+			directory.metadata, directory.metadataCharge = nil, 0
+			metadata.RemovePending(charge)
+		}
+	}
+	directory.cleanupConsumed = disposed
+	if err != nil {
+		directory.cleanupFailure.causes[0] = err
+		if !disposed {
+			directory.cleanupFailure.original = directory
+		}
+	}
+	directory.cleanupDone.Store(true)
+	if err != nil {
+		if disposed {
+			return true, err
+		}
+		return false, &directory.cleanupFailure
+	}
+	return disposed, nil
 }
 
 // LookupLogical resolves exact identity through the pinned root. Corruption and

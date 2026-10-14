@@ -1,6 +1,9 @@
 package rootpublication
 
-import "github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+import (
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+)
 
 // Mutation input is borrowed only for the synchronous construction. Exact
 // duplicate declarations have normalization's idempotent semantics; conflicting
@@ -109,7 +112,7 @@ func selectedFieldCommitment(views *resourceKindBacking, field ReachabilityField
 
 // Only immutable entry summaries are aggregated. No retained obligation
 // history, generic entry snapshot, opaque map, or new ownership is constructed.
-func certifySelectedMutation(source *StableResourceSet, m StableLogicalObligationMutation, r StableLogicalObligationRequirements, excluded []ResourceKind) (bool, error) {
+func certifySelectedMutation(source *StableResourceSet, m StableLogicalObligationMutation, r StableLogicalObligationRequirements, excluded []ResourceKind) (valid bool, retErr error) {
 	if err := validateBorrowedMutation(m); err != nil {
 		return false, err
 	}
@@ -124,7 +127,12 @@ func certifySelectedMutation(source *StableResourceSet, m StableLogicalObligatio
 	if err != nil {
 		return false, err
 	}
-	defer borrow.release()
+	defer func() {
+		retErr = errors.Join(retErr, borrow.release())
+		if retErr != nil {
+			valid = false
+		}
+	}()
 	for _, field := range m.ScopedFields {
 		final, ok := r.commitments[field]
 		if !ok {

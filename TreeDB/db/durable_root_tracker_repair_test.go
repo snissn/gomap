@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"maps"
 	"reflect"
 	"testing"
@@ -22,12 +23,12 @@ func snapshotCandidateTracker(db *DB) candidateTrackerSnapshot {
 	tracker := db.valueLogRefTracker
 	tracker.mu.RLock()
 	defer tracker.mu.RUnlock()
-	return candidateTrackerSnapshot{tracker.valid, tracker.commitSeq, tracker.revision, maps.Clone(tracker.counts)}
+	return candidateTrackerSnapshot{tracker.valid, tracker.commitSeq, tracker.revision, tracker.counts.toMap()}
 }
 
 func assertCandidateTrackerMatchesFullScan(t *testing.T, db *DB) {
 	t.Helper()
-	counts, sequence, err := db.scanValueLogRefCounts(context.Background())
+	counts, sequence, _, err := db.scanValueLogRefCountsBound(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,12 +217,20 @@ func TestDurableRootCandidateScanRejectsMismatchedEvidence(t *testing.T) {
 	before := snapshotCandidateTracker(db)
 	next := db.meta
 	next.CommitSeq++
-	for _, name := range []string{"index", "sequence", "user-root", "system-root", "missing-counts", "stale-candidate", "allocator-abort"} {
+	incarnation, captureErr := captureValueLogRefIncarnation(db.idx.Load())
+	if captureErr != nil {
+		t.Fatal(captureErr)
+	}
+	for _, name := range []string{"physical-generation", "physical-identity", "index", "sequence", "user-root", "system-root", "missing-counts", "stale-candidate", "allocator-abort"} {
 		t.Run(name, func(t *testing.T) {
-			evidence := &candidateValueLogRefCountsV1{idx: db.idx.Load(), commitSeq: next.CommitSeq,
-				userRootID: next.UserRootPageID, systemRootID: next.SystemRootPageID, counts: map[uint32]uint64{}}
+			evidence := &candidateValueLogRefCountsV1{incarnation: incarnation, idx: db.idx.Load(), commitSeq: next.CommitSeq,
+				userRootID: next.UserRootPageID, systemRootID: next.SystemRootPageID, counts: valueLogRefCounts{metadata: db.valueLogRefTracker.metadata}}
 			install := &rootPublicationVisibleInstallV1{db: db, idx: db.idx.Load(), next: next, vlogRefCounts: evidence}
 			switch name {
+			case "physical-generation":
+				evidence.incarnation.indexID++
+			case "physical-identity":
+				evidence.incarnation.data = rootpublication.StableIdentity{}
 			case "index":
 				evidence.idx = &indexGen{}
 			case "sequence":
@@ -231,7 +240,7 @@ func TestDurableRootCandidateScanRejectsMismatchedEvidence(t *testing.T) {
 			case "system-root":
 				evidence.systemRootID++
 			case "missing-counts":
-				evidence.counts = nil
+				evidence.counts = valueLogRefCounts{}
 			case "stale-candidate":
 				install.next.CommitSeq--
 			}
@@ -269,9 +278,17 @@ func TestDurableRootCandidateScanDoesNotApplyDeltaTwice(t *testing.T) {
 	delta := newValueLogRefDelta()
 	defer releaseValueLogRefDelta(delta)
 	delta.add(7, 1)
-	install := &rootPublicationVisibleInstallV1{db: db, activated: true,
+	incarnation, captureErr := captureValueLogRefIncarnation(db.idx.Load())
+	if captureErr != nil {
+		t.Fatal(captureErr)
+	}
+	records, err := valueLogRefCountsFromMap(db.valueLogRefTracker.metadata, map[uint32]uint64{7: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := &rootPublicationVisibleInstallV1{db: db, idx: db.idx.Load(), activated: true,
 		next: db.meta, post: finalizeCommitPost{commitSeq: db.meta.CommitSeq, vlogRefDelta: delta},
-		vlogRefCounts: &candidateValueLogRefCountsV1{counts: map[uint32]uint64{7: 2}}}
+		vlogRefCounts: &candidateValueLogRefCountsV1{idx: db.idx.Load(), commitSeq: db.meta.CommitSeq, incarnation: incarnation, counts: records.take()}}
 	if err := install.completeOrderedPostActivation(); err != nil {
 		t.Fatal(err)
 	}
@@ -282,9 +299,9 @@ func TestDurableRootCandidateScanDoesNotApplyDeltaTwice(t *testing.T) {
 		t.Fatal("post-work could reapply delta or retained scan evidence")
 	}
 	// Restore exact real counts before Close persists the optional tracker.
-	counts, sequence, err := db.scanValueLogRefCounts(context.Background())
+	counts, sequence, incarnation, err := db.scanValueLogRefCountsBound(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.valueLogRefTracker.replace(counts, sequence, true)
+	db.valueLogRefTracker.replace(counts, sequence, incarnation, true)
 }

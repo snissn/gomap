@@ -44,17 +44,31 @@ func (node *stableResourceLogicalIndexNode) retainAllocation() bool {
 
 // releaseOwnedResourceLogical releases metadata only. Physical resources are
 // separately owned by the existing rope. Generic diagnostic nodes are untouched.
-func releaseOwnedResourceLogical(node *stableResourceLogicalIndexNode) {
-	if node == nil || !node.allocation.drop() {
-		return
+func releaseOwnedResourceLogical(node *stableResourceLogicalIndexNode) error {
+	if node == nil {
+		return nil
 	}
-	left, right, entry := node.left, node.right, node.entry
-	node.left, node.right, node.entry = nil, nil, nil
+	if err := node.allocation.cleanupResult(); err != nil {
+		return err
+	}
+	if !node.allocation.drop() {
+		return nil
+	}
+	if err := releaseOwnedResourceLogical(node.left); err != nil {
+		return node.allocation.cleanupFailed(node, err)
+	}
+	node.left = nil
+	if err := releaseOwnedResourceLogical(node.right); err != nil {
+		return node.allocation.cleanupFailed(node, err)
+	}
+	node.right = nil
+	if err := node.entry.releaseBacking(); err != nil {
+		return node.allocation.cleanupFailed(node, err)
+	}
+	node.entry = nil
 	node.key = stableLogicalResourceKey{}
-	releaseOwnedResourceLogical(left)
-	releaseOwnedResourceLogical(right)
-	entry.releaseBacking()
 	node.allocation.refund()
+	return nil
 }
 
 // insertOwnedResourceLogical returns a new owned root without changing any

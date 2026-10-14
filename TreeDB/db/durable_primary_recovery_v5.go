@@ -38,7 +38,7 @@ func selectDurablePrimaryRootV5(data, localArena freelist.PageSource, dataPages,
 // the existing detached diagnostic contract. The physical selector is shared.
 func selectDurablePrimaryRootWithMetadataV5(data, localArena freelist.PageSource, dataPages, arenaPages uint64, uuid [16]byte, manifestValidator durableManifestValidatorV1, directoryValidator durablePrimaryDirectoryValidatorV5, metadata *retainedalloc.Owner) (durableRootSelectionV1, error) {
 	arena := primaryBankPageSource{local: localArena, extent: arenaPages}
-	return selectDurableRootCandidates(data, func(candidate durableMetaCandidateV1) (durableRootSelectionV1, error) {
+	return selectDurableRootCandidates(data, func(candidate durableMetaCandidateV1) (result durableRootSelectionV1, resultErr error) {
 		image, e := arena.ReadPage(candidate.meta.RootRecordPageID)
 		if e != nil {
 			return durableRootSelectionV1{}, fmt.Errorf("primary record: %w", e)
@@ -60,7 +60,9 @@ func selectDurablePrimaryRootWithMetadataV5(data, localArena freelist.PageSource
 		parentOwned := true
 		defer func() {
 			if parentOwned {
-				selected.ParentResources[candidate.slot].Release()
+				if cleanup := selected.ParentResources[candidate.slot].ReleaseWithError(); cleanup != nil {
+					result, resultErr = selected, errors.Join(resultErr, cleanup)
+				}
 			}
 		}()
 		if r.ParentRecordPageID != 0 {
@@ -120,11 +122,11 @@ func selectDurablePrimaryRootWithMetadataV5(data, localArena freelist.PageSource
 				resources, e = manifestValidator(manifest)
 			}
 		}
-		if e != nil {
-			resources.Release()
-			return durableRootSelectionV1{}, fmt.Errorf("primary dependency metadata: %w", e)
-		}
 		selected.resources = resources
+		if e != nil {
+			cleanup := resources.ReleaseWithError()
+			return selected, errors.Join(fmt.Errorf("primary dependency metadata: %w", e), cleanup)
+		}
 		parentOwned = false
 		return selected, nil
 	})

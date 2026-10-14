@@ -37,20 +37,26 @@ var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublicati
 var openStableValueLogParent = rootpublication.OpenStableParent
 
 type pendingValueLogSuccessor struct {
-	parent          *os.File
-	file            *os.File
-	path            string
-	fileID          uint32
-	active          StableResourceRegistration
-	stableIdentity  rootpublication.StableIdentity
-	stableObserved  bool
-	observerEmitted bool
-	creationProof   *rootpublication.StableNamespaceCreationProof
-	failStop        bool
-	metadata        *retainedalloc.Owner
-	metadataCharge  uint64
-	cleanup         *rootpublication.OriginalCleanupCustody
-	failure         stableSuccessorCleanupError
+	writerFileReserve    uint64
+	parentOwned          bool
+	parentCloseAttempted bool
+	cleanupAttempted     bool
+	fileMetadataCharge   uint64
+	parentMetadataCharge uint64
+	parent               *os.File
+	file                 *os.File
+	path                 string
+	fileID               uint32
+	active               StableResourceRegistration
+	stableIdentity       rootpublication.StableIdentity
+	stableObserved       bool
+	observerEmitted      bool
+	creationProof        *rootpublication.StableNamespaceCreationProof
+	failStop             bool
+	metadata             *retainedalloc.Owner
+	metadataCharge       uint64
+	cleanup              *rootpublication.OriginalCleanupCustody
+	failure              stableSuccessorCleanupError
 }
 type stableSuccessorCleanupError struct {
 	causes [4]error
@@ -58,7 +64,7 @@ type stableSuccessorCleanupError struct {
 }
 
 func (e *stableSuccessorCleanupError) add(err error) {
-	if err != nil && !errors.Is(err, os.ErrClosed) {
+	if err != nil && e.count < len(e.causes) {
 		e.causes[e.count] = err
 		e.count++
 	}
@@ -77,25 +83,31 @@ func (e *stableSuccessorCleanupError) Is(target error) bool {
 
 // This is the existing pending successor owner, admitted before opening its
 // private file. A failed physical close stays at the original identity registry.
-func newPendingStableSuccessor(parent *os.File, path string, fileID uint32, active StableResourceRegistration) (*pendingValueLogSuccessor, error) {
+func newPendingStableSuccessor(parent *os.File, path string, fileID uint32, active StableResourceRegistration, producerOwner ...*retainedalloc.Owner) (*pendingValueLogSuccessor, error) {
 	owner := active.MetadataOwner
+	if owner == nil && len(producerOwner) != 0 && producerOwner[0] != nil {
+		owner = producerOwner[0]
+	}
+	fileCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(path)))
+	if err != nil {
+		return nil, err
+	}
 	if owner == nil {
-		return &pendingValueLogSuccessor{parent: parent, path: path, fileID: fileID, active: cloneStableResourceRegistration(active)}, nil
+		return &pendingValueLogSuccessor{parent: parent, path: path, fileID: fileID, fileMetadataCharge: fileCharge, active: cloneStableResourceRegistration(active)}, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(pendingValueLogSuccessor{}))) + retainedalloc.AllocationCharge(uint64(len(path)))
 	for _, v := range []string{string(active.Kind), active.LogicalLane, active.DiagnosticPath, string(active.Reachability), active.OldName, active.NewName} {
 		charge += retainedalloc.AllocationCharge(uint64(len(v)))
 	}
 	charge += retainedalloc.AllocationCharge(uint64(len(active.ExternalRIDs)) * 8)
-	fileCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(path)))
-	if err != nil {
-		return nil, err
-	}
 	charge += fileCharge
 	if err = owner.AddPending(charge); err != nil {
 		return nil, err
 	}
-	cleanup, err := rootpublication.NewOriginalCleanupCustody(active.PinRegistry, owner)
+	var cleanup *rootpublication.OriginalCleanupCustody
+	if active.PinRegistry != nil {
+		cleanup, err = rootpublication.NewOriginalCleanupCustody(active.PinRegistry, owner)
+	}
 	if err != nil {
 		owner.RemovePending(charge)
 		return nil, err
@@ -105,7 +117,7 @@ func newPendingStableSuccessor(parent *os.File, path string, fileID uint32, acti
 	active.LogicalLane, active.DiagnosticPath = strings.Clone(active.LogicalLane), strings.Clone(active.DiagnosticPath)
 	active.OldName, active.NewName = strings.Clone(active.OldName), strings.Clone(active.NewName)
 	active.ExternalRIDs = append([]uint64(nil), active.ExternalRIDs...)
-	return &pendingValueLogSuccessor{parent: parent, path: strings.Clone(path), fileID: fileID, active: active, metadata: owner, metadataCharge: charge, cleanup: cleanup}, nil
+	return &pendingValueLogSuccessor{parent: parent, path: strings.Clone(path), fileID: fileID, active: active, metadata: owner, metadataCharge: charge, fileMetadataCharge: fileCharge, cleanup: cleanup}, nil
 }
 func releaseStableCreationProof(proof *rootpublication.StableNamespaceCreationProof, custody *rootpublication.OriginalCleanupCustody) error {
 	e := proof.ReleaseWithError()
@@ -157,7 +169,7 @@ func (w *Writer) newStableCreationProof(parent, child *os.File, path string, met
 func (w *Writer) prepareStableCreationProof(parent, child *os.File, path string, created, syncDirectory, retainProof bool) (*rootpublication.StableNamespaceCreationProof, bool, bool, error) {
 	if created && retainProof && syncDirectory {
 		if rootpublication.StableRelativeNamespaceSupported() {
-			proof, err := w.newStableCreationProof(parent, child, path)
+			proof, err := w.newStableCreationProof(parent, child, path, w.metadata)
 			return proof, false, false, err
 		}
 		if err := syncNewFileDirectory(w, path); err != nil {
@@ -235,8 +247,10 @@ func (w *Writer) releaseStableResourceObservation() error {
 		return nil
 	}
 	err := w.stableResourcePins.Unobserve(w.stableResourceIdentity)
-	w.stableResourceIdentity = rootpublication.StableIdentity{}
-	w.stableResourceObserved = false
+	if err == nil {
+		w.stableResourceIdentity = rootpublication.StableIdentity{}
+		w.stableResourceObserved = false
+	}
 	return err
 }
 
@@ -313,33 +327,56 @@ func (m *Manager) StableSegmentIdentity(fileID uint32) (rootpublication.StableId
 	return file.stableIdentity, true
 }
 
-// StableResourceToken captures a checked token from a manager-owned exact
-// handle while holding the manager read lock. The registry is supplied by the
-// manager and cannot be omitted or substituted by the caller.
-func (m *Manager) StableResourceToken(fileID uint32, registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
-	if m == nil {
-		return nil, errors.New("valuelog: nil manager")
+// StableResourceToken borrows the SAME manager-owned file under the membership
+// lock. Namespace construction and physical cleanup run after unlocking.
+func (m *Manager) StableResourceToken(fileID uint32, registration StableResourceRegistration) (token *rootpublication.StableResourceToken, err error) {
+	file, registry, err := m.borrowOriginalStableFile(fileID)
+	if err != nil {
+		return nil, err
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.stableResourceTokenLocked(fileID, registration)
+	defer func() {
+		err = errors.Join(err, m.releaseOriginalFileBorrow(file))
+		if err != nil && token != nil {
+			err = errors.Join(err, token.ReleaseWithError())
+			token = nil
+		}
+	}()
+	registration.PinRegistry = registry
+	return stableResourceTokenFromOriginal(file, fileID, registration)
 }
-
-func (m *Manager) stableResourceTokenLocked(fileID uint32, registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
-	file := m.files[fileID]
-	if file == nil {
-		return nil, &fileNotFoundError{id: fileID}
-	}
-	if m.stableResourcePins == nil {
-		return nil, fmt.Errorf("%w: manager has no stable identity registry", rootpublication.ErrUnresolvedResource)
-	}
-	registration.PinRegistry = m.stableResourcePins
+func stableResourceTokenFromOriginal(file *File, fileID uint32, registration StableResourceRegistration) (token *rootpublication.StableResourceToken, err error) {
 	namespace, err := stableValueLogNamespaceToken(file.File, registration)
 	if err != nil {
 		return nil, err
 	}
-	defer namespace.Release()
+	defer func() {
+		err = errors.Join(err, namespace.ReleaseWithError())
+		if err != nil && token != nil {
+			err = errors.Join(err, token.ReleaseWithError())
+			token = nil
+		}
+	}()
 	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
+}
+
+func (m *Manager) borrowOriginalStableFile(fileID uint32) (*File, *rootpublication.IdentityPinRegistry, error) {
+	if m == nil {
+		return nil, nil, errors.New("valuelog: nil manager")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil || file.File == nil {
+		return nil, nil, &fileNotFoundError{id: fileID}
+	}
+	if m.closing || file.closed.Load() {
+		return nil, nil, os.ErrClosed
+	}
+	if m.stableResourcePins == nil || !file.stableObserved {
+		return nil, nil, fmt.Errorf("%w: manager segment has no stable identity observer", rootpublication.ErrUnresolvedResource)
+	}
+	file.RefCount.Add(1)
+	return file, m.stableResourcePins, nil
 }
 
 // StableExternalRIDSegment describes the exact value-log child required by an
@@ -407,7 +444,7 @@ func canonicalStableExternalRIDs(rids []uint64) ([]uint64, error) {
 // needed by the independently derived fence. The manager fixes the producer,
 // reachability field, exact handles, and shared deletion gate; callers cannot
 // omit a segment/RID, substitute paths, or provide identity overrides.
-func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, segments []StableExternalRIDSegment) (*rootpublication.StableResourceSet, error) {
+func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, segments []StableExternalRIDSegment) (resources *rootpublication.StableResourceSet, err error) {
 	if m == nil || fence.Count == 0 || len(segments) == 0 {
 		return nil, fmt.Errorf("%w: external-RID fence has no value-log children", rootpublication.ErrUnresolvedResource)
 	}
@@ -445,16 +482,26 @@ func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, se
 	}
 
 	files := make([]*File, len(ordered))
-	m.mu.RLock()
-	for i, child := range ordered {
-		file := m.files[child.FileID]
-		if file == nil {
-			m.mu.RUnlock()
-			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, &fileNotFoundError{id: child.FileID})
+	defer func() {
+		for i := range files {
+			if files[i] != nil {
+				err = errors.Join(err, m.releaseOriginalFileBorrow(files[i]))
+				files[i] = nil
+			}
 		}
-		files[i] = file
+		if err != nil && resources != nil {
+			err = errors.Join(err, resources.ReleaseWithError())
+			resources = nil
+		}
+	}()
+	var registry *rootpublication.IdentityPinRegistry
+	for i, child := range ordered {
+		file, capturedRegistry, captureErr := m.borrowOriginalStableFile(child.FileID)
+		if captureErr != nil {
+			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, captureErr)
+		}
+		files[i], registry = file, capturedRegistry
 	}
-	m.mu.RUnlock()
 	for i, child := range ordered {
 		if err := validateStableExternalRIDMembership(files[i], child); err != nil {
 			return nil, err
@@ -462,34 +509,33 @@ func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, se
 	}
 
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	for i, child := range ordered {
-		if m.files[child.FileID] != files[i] {
+		if m.files[child.FileID] != files[i] || m.closing {
+			m.mu.RUnlock()
 			return nil, fmt.Errorf("%w: external-RID value-log child %d changed during membership validation", rootpublication.ErrResourceConflict, child.FileID)
 		}
 	}
+	m.mu.RUnlock()
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALExternalRIDFence)
-	for _, child := range ordered {
-		token, err := m.stableResourceTokenLocked(child.FileID, StableResourceRegistration{
-			Kind: rootpublication.ResourceCommandWALExternalRID, LogicalLane: "command-wal-v2/external-rid",
+	defer func() { err = errors.Join(err, builder.AbandonWithError()) }()
+	for i, child := range ordered {
+		token, err := stableResourceTokenFromOriginal(files[i], child.FileID, StableResourceRegistration{
+			PinRegistry: registry,
+			Kind:        rootpublication.ResourceCommandWALExternalRID, LogicalLane: "command-wal-v2/external-rid",
 			Generation:     uint64(child.FileID),
 			DiagnosticPath: filepath.Join(filepath.Base(m.dir), fmt.Sprintf("%06d.vlog", child.FileID)),
 			Reachability:   rootpublication.ReachabilityCommandWALExternalRIDFence,
 			ExternalRIDs:   child.RIDs, Digest: child.Digest,
 		})
 		if err != nil {
-			builder.Abandon()
 			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, err)
 		}
 		if err := builder.Add(token); err != nil {
-			token.Release()
-			builder.Abandon()
-			return nil, err
+			return nil, errors.Join(err, token.ReleaseWithError())
 		}
 	}
-	resources, err := builder.Freeze()
+	resources, err = builder.Freeze()
 	if err != nil {
-		builder.Abandon()
 		return nil, err
 	}
 	return resources, nil
@@ -520,80 +566,48 @@ func (m *Manager) StableExistingPhysicalResourceToken(
 	fileID uint32,
 	spec rootpublication.StableResourceSpec,
 	constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error),
-) (*rootpublication.StableResourceToken, error) {
+) (token *rootpublication.StableResourceToken, err error) {
 	if m == nil || constructor == nil {
 		return nil, errors.New("valuelog: stable physical capture unavailable")
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	file := m.files[fileID]
-	if file == nil || file.File == nil {
-		return nil, &fileNotFoundError{id: fileID}
+	file, registry, err := m.borrowOriginalStableFile(fileID)
+	if err != nil {
+		return nil, err
 	}
-	if m.stableResourcePins == nil || !file.stableObserved {
-		return nil, fmt.Errorf("%w: manager segment has no stable identity observer", rootpublication.ErrUnresolvedResource)
-	}
-	spec.File = file.File
-	spec.PinRegistry = m.stableResourcePins
+	spec.File, spec.PinRegistry = file.File, registry
+	// This runs after namespace and temporary File cleanup. Never return a
+	// private token alongside a cleanup error that would make callers lose it.
+	defer func() {
+		if err != nil && token != nil {
+			err = errors.Join(err, token.ReleaseWithError())
+			token = nil
+		}
+	}()
+	defer func() { err = errors.Join(err, m.releaseOriginalFileBorrow(file)) }()
 	if spec.Namespace == nil {
 		var namespace *rootpublication.StableNamespaceToken
-		var err error
+		metadata := spec.MetadataOwner
+		if metadata == nil {
+			// Generic callers share the SAME original registry producer. Namespace
+			// capture never creates a replacement owner or bypasses admission.
+			metadata = registry.MetadataOwner()
+		}
 		if spec.MetadataOwner == nil {
-			namespace, err = m.stableExistingPhysicalNamespaceToken(file, spec.DiagnosticPath)
+			namespace, err = rootpublication.CaptureKnownStableNamespaceWithMetadata(metadata, registry, filepath.Dir(file.Path), file.File, filepath.Base(file.Path), filepath.Dir(spec.DiagnosticPath))
 		} else {
-			namespace, err = rootpublication.CaptureStableNamespaceWithMetadata(spec.MetadataOwner, m.stableResourcePins, filepath.Dir(file.Path), file.File, filepath.Base(file.Path), filepath.Dir(spec.DiagnosticPath))
+			namespace, err = rootpublication.CaptureStableNamespaceWithMetadata(metadata, registry, filepath.Dir(file.Path), file.File, filepath.Base(file.Path), filepath.Dir(spec.DiagnosticPath))
 		}
 		if err != nil {
 			return nil, err
 		}
-		defer namespace.Release()
+		defer func() {
+			if releaseErr := namespace.ReleaseWithError(); releaseErr != nil {
+				err = errors.Join(err, releaseErr)
+			}
+		}()
 		spec.Namespace = namespace
 	}
 	return constructor(spec)
-}
-
-func (m *Manager) stableExistingPhysicalNamespaceToken(file *File, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
-	if m == nil || file == nil || file.File == nil || m.stableResourcePins == nil {
-		return nil, fmt.Errorf("%w: stable physical namespace capture unavailable", rootpublication.ErrUnresolvedResource)
-	}
-	parent, err := captureStableValueLogParent(file.Path, file.File)
-	if err != nil {
-		return nil, err
-	}
-	defer parent.Close()
-	parentGeneration, err := rootpublication.StableNamespaceParentGeneration(parent)
-	if err != nil {
-		return nil, err
-	}
-	namespaceDiagnosticPath := filepath.Dir(diagnosticPath)
-	if namespaceDiagnosticPath == "." {
-		return nil, fmt.Errorf("%w: stable physical resource diagnostic path has no parent namespace", rootpublication.ErrUnresolvedResource)
-	}
-	namespaceSpec := rootpublication.StableNamespaceSpec{
-		Parent: parent, LinkedResource: file.File, ParentGeneration: parentGeneration,
-		Operation: rootpublication.NamespaceCreate, NewName: filepath.Base(file.Path),
-		DiagnosticPath: namespaceDiagnosticPath,
-	}
-	namespace, err := m.stableResourcePins.NewStableNamespaceTokenForKnownLink(namespaceSpec)
-	if err == nil {
-		return namespace, nil
-	}
-	if !errors.Is(err, rootpublication.ErrNamespaceUnstable) {
-		return nil, err
-	}
-	namespace, err = newValueLogStableNamespaceToken(namespaceSpec)
-	if err != nil {
-		return nil, err
-	}
-	if err := namespace.Stabilize(); err != nil {
-		namespace.Release()
-		return nil, err
-	}
-	if err := m.stableResourcePins.RememberStableNamespaceLink(parent, file.File, filepath.Base(file.Path)); err != nil {
-		namespace.Release()
-		return nil, err
-	}
-	return namespace, nil
 }
 
 // openRegisteredSegmentParent captures namespace authority before the child
@@ -604,18 +618,19 @@ func openRegisteredSegmentParent(path string) (*os.File, rootpublication.StableI
 	if err != nil {
 		return nil, rootpublication.StableIdentity{}, err
 	}
-	parent, err := rootpublication.OpenStableParent(resolved)
+	parent, err := openStableValueLogParent(resolved)
 	if err != nil {
-		return nil, rootpublication.StableIdentity{}, err
+		return parent, rootpublication.StableIdentity{}, err
 	}
 	identity, err := rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
-		return nil, rootpublication.StableIdentity{}, errors.Join(err, parent.Close())
+		return parent, rootpublication.StableIdentity{}, err
 	}
 	return parent, identity, nil
 }
 
-func validateRegisteredSegmentParent(path string, file, parent *os.File, identity rootpublication.StableIdentity) error {
+func validateRegisteredSegmentParent(path string, original *File, parent *os.File, identity rootpublication.StableIdentity) error {
+	file := original.File
 	owned, err := rootpublication.StableIdentityFromFile(file)
 	if err != nil {
 		return err
@@ -630,10 +645,10 @@ func validateRegisteredSegmentParent(path string, file, parent *os.File, identit
 	// Detect an alias rebound during the open, including one containing a hard
 	// link to the same child. This is a checked capture, not an atomic alias API.
 	current, currentIdentity, err := openRegisteredSegmentParent(path)
+	original.constructionParents[1] = current
 	if err != nil {
 		return err
 	}
-	defer current.Close()
 	if !rootpublication.SamePhysicalIdentity(identity, currentIdentity) {
 		return fmt.Errorf("%w: segment parent changed during registration", rootpublication.ErrResourceConflict)
 	}
@@ -824,6 +839,7 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 // snapshots while retaining its exact owner through close and physical unlink.
 func (m *Manager) retainSegmentForDeletionLocked(file *File) {
 	file.deletionAdmissions++
+	file.producerDeleteGuards.Add(1)
 	if !file.IsZombie.Load() {
 		m.retiredCount++
 		file.IsZombie.Store(true)
@@ -836,7 +852,9 @@ func (m *Manager) retainSegmentForDeletionLocked(file *File) {
 func (m *Manager) finishDeletionAdmission(file *File) {
 	m.mu.Lock()
 	file.deletionAdmissions--
+	file.producerDeleteGuards.Add(-1)
 	m.mu.Unlock()
+	file.refundProducerMetadata()
 }
 
 // finishDirectSegmentDeletion runs after admission releases mu. Incomplete
@@ -862,7 +880,7 @@ func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublicati
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return errors.Join(removeErr, unobserveErr, closeRetirementParent(parent))
+	return m.finishOriginalDeletion(file, errors.Join(removeErr, unobserveErr), parent)
 }
 
 // forgetSegmentLocked balances retirement ownership at every removal site.
@@ -876,6 +894,7 @@ func (m *Manager) detachSegmentLocked(file *File) {
 		m.retiredCount--
 	}
 	delete(m.files, file.ID)
+	file.producerDetached.Store(true)
 }
 
 func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
@@ -1016,7 +1035,7 @@ func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.
 	// completion belongs to this File even before manager ownership finalizes:
 	// after unlink, the filesystem may reuse the original inode identity.
 	file.deleteMu.Lock()
-	defer file.deleteMu.Unlock()
+	defer func() { file.deleteMu.Unlock(); file.refundProducerMetadata() }()
 	if file.deleteCompleted {
 		return true, nil
 	}
@@ -1554,6 +1573,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		return err
 	}
 	file.deletionAdmissions++
+	file.producerDeleteGuards.Add(1)
 	m.mu.Unlock()
 	defer m.finishDeletionAdmission(file)
 	if m.directDeleteAdmissionHook != nil {
@@ -1579,35 +1599,18 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return errors.Join(unlinkErr, syncErr, unobserveErr, closeRetirementParent(parent))
+	return m.finishOriginalDeletion(file, errors.Join(unlinkErr, syncErr, unobserveErr), parent)
 }
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
 	parent, err := openStableValueLogParent(filepath.Dir(path))
 	if err != nil {
-		if parent != nil {
-			_ = parent.Close()
-		}
-		return nil, err
+		return parent, err
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, resource, filepath.Base(path)); err != nil {
-		_ = parent.Close()
-		return nil, err
+		return parent, err
 	}
 	return parent, nil
-}
-
-// replaceStableValueLogParent transfers ownership of parent to w and releases
-// the previously retained directory handle. A capture failure is retained so
-// ordinary rotation remains usable while every later stable rotation fails
-// closed instead of falling back to an older namespace identity.
-func (w *Writer) replaceStableValueLogParent(parent *os.File, captureErr error) {
-	old := w.stableParent
-	w.stableParent = parent
-	w.stableParentErr = captureErr
-	if old != nil && old != parent {
-		_ = old.Close()
-	}
 }
 
 // NewStableValueLogResourceToken registers an exact already-open persistent
@@ -1740,10 +1743,14 @@ func cleanStableRegistrationPath(path string) bool {
 // rotation and the new active segment. Callers transfer each token into a
 // candidate builder or release the unused remainder.
 type StableResourceRotation struct {
-	Closed         *rootpublication.StableResourceToken
-	Active         *rootpublication.StableResourceToken
-	metadata       *retainedalloc.Owner
-	metadataCharge uint64
+	releaseMu        sync.Mutex
+	releaseAttempted bool
+	releaseErr       error
+	releaseFailure   StableRotationCleanupFailure
+	Closed           *rootpublication.StableResourceToken
+	Active           *rootpublication.StableResourceToken
+	metadata         *retainedalloc.Owner
+	metadataCharge   uint64
 }
 
 func (rotation *StableResourceRotation) TakeClosed() *rootpublication.StableResourceToken {
@@ -1764,20 +1771,50 @@ func (rotation *StableResourceRotation) TakeActive() *rootpublication.StableReso
 	return token
 }
 
-func (rotation *StableResourceRotation) Release() {
+func (rotation *StableResourceRotation) Release() { _ = rotation.ReleaseWithError() }
+
+// ReleaseWithError consumes original token edges once and retains the same
+// containing rotation until both selected physical completions succeed.
+func (rotation *StableResourceRotation) ReleaseWithError() error {
 	if rotation == nil {
-		return
+		return nil
 	}
-	rotation.Closed.Release()
-	rotation.Active.Release()
-	rotation.Closed = nil
-	rotation.Active = nil
-	if rotation.metadata != nil {
-		owner, charge := rotation.metadata, rotation.metadataCharge
-		rotation.metadata = nil
-		rotation.metadataCharge = 0
+	rotation.releaseMu.Lock()
+	defer rotation.releaseMu.Unlock()
+	if rotation.releaseAttempted {
+		return rotation.releaseErr
+	}
+	rotation.releaseAttempted = true
+	rotation.releaseFailure.rotation = rotation
+	if rotation.Closed != nil {
+		err := rotation.Closed.ReleaseWithError()
+		if err == nil {
+			rotation.Closed = nil
+		} else {
+			rotation.releaseFailure.causes[0] = err
+		}
+	}
+	if rotation.Active != nil {
+		err := rotation.Active.ReleaseWithError()
+		if err == nil {
+			rotation.Active = nil
+		} else {
+			rotation.releaseFailure.causes[1] = err
+		}
+	}
+	if rotation.releaseFailure.causes[0] != nil || rotation.releaseFailure.causes[1] != nil {
+		rotation.releaseErr = &rotation.releaseFailure
+		if rotation.metadata != nil {
+			rotation.metadata.CleanupFailed()
+		}
+		return rotation.releaseErr
+	}
+	owner, charge := rotation.metadata, rotation.metadataCharge
+	rotation.metadata, rotation.metadataCharge = nil, 0
+	if owner != nil {
 		owner.RemovePending(charge)
 	}
+	return nil
 }
 
 // StableCreationNamespacePending reports whether the current segment was
@@ -2046,7 +2083,7 @@ func pendingValueLogFailure(parent, file *os.File, path string, err error) error
 // second directory sync. It then pins the newly-created active segment after
 // that segment's namespace operation has been made persistent.
 func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
-	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
+	if w != nil && (w.closeAttempted || w.failedPredecessor.failed || (w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop)) {
 		return nil, fmt.Errorf("%w: value-log stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
 	}
 	if w == nil || w.f == nil {
@@ -2126,16 +2163,32 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	}
 	pending := w.pendingStableSuccessor
 	if pending == nil {
-		pending, err = newPendingStableSuccessor(w.stableParent, path, fileID, normalizedActive)
+		pending, err = newPendingStableSuccessor(w.stableParent, path, fileID, normalizedActive, w.metadata)
 		if err != nil {
-			closedToken.Release()
+			w.releaseUnusedStableToken(closedToken)
 			return nil, err
+		}
+		w.pendingStableSuccessor = pending
+		// A different existing producer owner must reserve its successor's actual
+		// file contribution before that physical file is allocated.
+		if w.metadata != nil && w.metadata != pending.metadata {
+			if err = w.metadata.AddPending(pending.fileMetadataCharge); err != nil {
+				pending.disposeMetadata()
+				w.pendingStableSuccessor = nil
+				w.releaseUnusedStableToken(closedToken)
+				return nil, err
+			}
+			pending.writerFileReserve = pending.fileMetadataCharge
+			w.metadataCharge += pending.writerFileReserve
 		}
 		prepared, openErr := openStableValueLogFile(w.stableParent, path)
 		if openErr != nil {
-			pending.disposeMetadata()
-			closedToken.Release()
-			return nil, openErr
+			pending.file = prepared
+			w.closeMu.Lock()
+			cleanupErr := w.disposePendingSuccessorLocked()
+			w.closeMu.Unlock()
+			w.releaseUnusedStableToken(closedToken)
+			return nil, errors.Join(openErr, cleanupErr)
 		}
 		pending.file = prepared
 		preparedIdentity, observeErr := observeStableWriterFile(prepared, w.stableResourcePins)
@@ -2151,9 +2204,26 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			pending.failure.add(closeErr)
 			pending.failure.add(removeErr)
 			pending.failure.add(syncErr)
-			pending.disposeMetadata()
-			closedToken.Release()
-			return nil, errors.Join(observeErr, validateErr, closeErr, removeErr, syncErr)
+			if closeErr == nil {
+				pending.file = nil
+			}
+			pending.cleanupAttempted = true
+			pending.failStop = pending.failure.count != 0
+			w.closeMu.Lock()
+			for _, actual := range []error{validateErr, closeErr, removeErr, syncErr} {
+				w.addCleanupFailureLocked(actual)
+			}
+			if pending.failure.count == 0 {
+				w.refundPendingWriterReserveLocked(pending)
+				pending.disposeMetadata()
+				w.pendingStableSuccessor = nil
+			} else {
+				pending.disposeMetadata()
+			}
+			cleanupErr := w.closeErr
+			w.closeMu.Unlock()
+			w.releaseUnusedStableToken(closedToken)
+			return nil, errors.Join(observeErr, cleanupErr)
 		}
 		pending.stableIdentity = preparedIdentity
 		pending.stableObserved = w.stableResourcePins != nil
@@ -2163,7 +2233,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if !pending.observerEmitted {
 		pending.observerEmitted = true
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), filepath.Dir(path), "", path); observeErr != nil {
-			closedToken.Release()
+			w.releaseUnusedStableToken(closedToken)
 			return nil, pendingValueLogFailure(w.stableParent, prepared, path, observeErr)
 		}
 	}
@@ -2171,13 +2241,13 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		proof, proofErr := w.newStableCreationProof(w.stableParent, prepared, pending.path, pending.metadata)
 		pending.creationProof = proof
 		if proofErr != nil {
-			closedToken.Release()
+			w.releaseUnusedStableToken(closedToken)
 			return nil, pendingValueLogFailure(w.stableParent, prepared, path, proofErr)
 		}
 	}
 	preparedInfo, err := prepared.Stat()
 	if err != nil {
-		closedToken.Release()
+		w.releaseUnusedStableToken(closedToken)
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
 	var namespace *rootpublication.StableNamespaceToken
@@ -2188,36 +2258,43 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			normalizedActive.NewName, filepath.Dir(normalizedActive.DiagnosticPath))
 	}
 	if err != nil {
-		closedToken.Release()
+		w.releaseUnusedStableToken(closedToken)
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
 	activeToken, err := stableValueLogResourceToken(prepared, fileID, normalizedActive, namespace, false)
 	namespace.Release()
 	if err != nil {
-		closedToken.Release()
+		w.releaseUnusedStableToken(closedToken)
 		return nil, err
 	}
-	old := w.f
-	oldCreationProof := w.creationProof
-	oldCreationCustody := w.creationProofCustody
-	closeErr := w.closeRotatedResource(old)
-	observeErr := w.releaseStableResourceObservation()
-	if err := errors.Join(closeErr, observeErr); err != nil {
-		activeToken.Release()
-		closedToken.Release()
+	// Move the original predecessor before any destructive action. The parent
+	// is shared with the exact successor; it remains the current Writer operand.
+	w.failedPredecessor = writerPredecessor{file: w.f, proof: w.creationProof, custody: w.creationProofCustody, identity: w.stableResourceIdentity, observed: w.stableResourceObserved, fileCharge: w.fileMetadataCharge}
+	w.f, w.creationProof, w.creationProofCustody = nil, nil, nil
+	w.stableResourceIdentity = rootpublication.StableIdentity{}
+	w.stableResourceObserved = false
+	w.closeMu.Lock()
+	retireErr := w.disposePredecessorLocked()
+	w.closeMu.Unlock()
+	if retireErr != nil {
 		pending.failStop = true
-		w.f = nil
-		w.bw = nil
-		return nil, fmt.Errorf("valuelog: retire old writer during stable rotation: %w", err)
+		w.releaseUnusedStableToken(activeToken)
+		w.releaseUnusedStableToken(closedToken)
+		return nil, retireErr
 	}
-	pending.file = nil
 	w.f = prepared
+	if w.metadata != nil && w.metadata == pending.metadata {
+		w.metadataCharge += pending.fileMetadataCharge
+		pending.metadataCharge -= pending.fileMetadataCharge
+	}
+	w.fileMetadataCharge = pending.fileMetadataCharge
+	pending.writerFileReserve = 0 // already belongs to the installed Writer
+	pending.file = nil
 	w.creationProof = pending.creationProof
 	w.creationProofCustody = pending.cleanup
 	pending.cleanup = nil
-	w.creationUnsupported = false
-	w.creationUncertified = false
 	pending.creationProof = nil
+	w.creationUnsupported, w.creationUncertified = false, false
 	w.bw = nil
 	w.size = preparedInfo.Size()
 	w.fileID = fileID
@@ -2229,17 +2306,8 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		w.stableResourceObserved = true
 		pending.stableObserved = false
 	}
-	var proofCloseErr error
-	if oldCreationProof != nil {
-		proofCloseErr = releaseStableCreationProof(oldCreationProof, oldCreationCustody)
-	}
 	pending.disposeMetadata()
 	w.pendingStableSuccessor = nil
-	if proofCloseErr != nil {
-		activeToken.Release()
-		closedToken.Release()
-		return nil, rotationInstalledError{err: proofCloseErr}
-	}
 	transferred = true
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken, metadata: active.MetadataOwner, metadataCharge: rotationCharge}, nil
 }

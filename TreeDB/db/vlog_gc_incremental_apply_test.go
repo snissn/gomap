@@ -130,7 +130,7 @@ func TestValueLogRefTrackerPreservesSharedPointerMultiplicity(t *testing.T) {
 	}
 	_ = removeOne.Close()
 
-	seq, counts, ok := d.valueLogRefTracker.dirtySnapshot()
+	seq, _, _, counts, ok := d.valueLogRefTracker.dirtySnapshot()
 	if !ok || seq != d.currentCommitSeq() {
 		t.Fatalf("tracker snapshot ok=%v seq=%d current=%d", ok, seq, d.currentCommitSeq())
 	}

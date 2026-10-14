@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"bytes"
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 	"slices"
@@ -14,11 +15,13 @@ import (
 // lock. Generic indexes remain original producer storage; selected indexes keep
 // their original admitted backing until this operation finishes.
 type resourceImportSource struct {
-	allocation  *resourceAllocation
-	cells       []resourceKindCell
-	backing     *resourceKindBacking
-	empty       *DependencyDirectoryV2
-	directories *resourceImportDirectory
+	closeAttempted bool
+	closeErr       error
+	allocation     *resourceAllocation
+	cells          []resourceKindCell
+	backing        *resourceKindBacking
+	empty          *DependencyDirectoryV2
+	directories    *resourceImportDirectory
 }
 
 func borrowResourceImportSource(owner *retainedalloc.Owner, source *StableResourceSet) (*resourceImportSource, error) {
@@ -44,58 +47,83 @@ func borrowResourceImportSource(owner *retainedalloc.Owner, source *StableResour
 	if source.kindViews != nil && source.kindViews.allocation != nil {
 		if !source.kindViews.retain() {
 			source.mu.Unlock()
-			snapshot.close()
-			return nil, ErrResourceOwnership
+			return nil, errors.Join(ErrResourceOwnership, snapshot.close())
 		}
 		snapshot.backing = source.kindViews
 	}
 	for kind, view := range source.kindViews.all() {
 		if snapshot.backing == nil && !retainStableResourceKindView(view) {
 			source.mu.Unlock()
-			snapshot.close()
-			return nil, ErrResourceOwnership
+			return nil, errors.Join(ErrResourceOwnership, snapshot.close())
 		}
 		snapshot.cells = append(snapshot.cells, resourceKindCell{kind: kind, view: view})
 	}
 	if empty := source.emptyDependencyDirectoryLocked(); empty != nil {
 		if err := empty.Retain(); err != nil {
 			source.mu.Unlock()
-			snapshot.close()
-			return nil, err
+			return nil, errors.Join(err, snapshot.close())
 		}
 		snapshot.empty = empty
 	}
 	source.mu.Unlock()
 	return snapshot, nil
 }
-func (s *resourceImportSource) close() {
+func (s *resourceImportSource) close() error {
 	if s == nil {
-		return
+		return nil
+	}
+	if s.closeAttempted {
+		return s.closeErr
+	}
+	s.closeAttempted = true
+	fail := func(err error) error {
+		if err != nil && s.allocation != nil {
+			err = s.allocation.cleanupFailed(s, err)
+		}
+		s.closeErr = err
+		return err
 	}
 	if s.backing != nil {
-		s.backing.release()
+		if err := s.backing.release(); err != nil {
+			return fail(err)
+		}
 		s.backing = nil
 	} else {
-		for _, cell := range s.cells {
-			releaseStableResourceKindView(cell.view)
+		for i := range s.cells {
+			if err := releaseStableResourceKindView(s.cells[i].view); err != nil {
+				return fail(err)
+			}
+			s.cells[i].view = stableResourceKindView{}
 		}
 	}
 	clear(s.cells)
 	s.cells = nil
 	if s.empty != nil {
-		s.empty.Release()
-		s.empty = nil
+		consumed, err := s.empty.ReleaseOutcome()
+		if consumed {
+			s.empty = nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if !consumed {
+			return fail(ErrResourceOwnership)
+		}
 	}
 	for s.directories != nil {
 		d := s.directories
-		s.directories = d.next
-		d.close()
+		next := d.next
+		if err := d.close(); err != nil {
+			return fail(err)
+		}
+		s.directories = next
 	}
 	allocation := s.allocation
 	s.allocation = nil
 	if allocation != nil && allocation.drop() {
 		allocation.refund()
 	}
+	return nil
 }
 
 // Directory bytes, removed identities and immutable deltas are all original
@@ -217,7 +245,7 @@ func ImportStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 	return importStableResourceSetMetadata(owner, source, false)
 }
 
-func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableResourceSet, flatten bool) (*StableResourceSet, error) {
+func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableResourceSet, flatten bool) (_ *StableResourceSet, retErr error) {
 	if owner == nil {
 		return nil, ErrResourceOwnership
 	}
@@ -226,7 +254,7 @@ func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 		if err != nil {
 			return nil, err
 		}
-		defer b.Abandon()
+		defer func() { retErr = errors.Join(retErr, b.AbandonWithError()) }()
 		return b.Freeze()
 	}
 	if !flatten {
@@ -238,12 +266,12 @@ func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 	if err != nil {
 		return nil, err
 	}
-	defer original.close()
+	defer func() { retErr = errors.Join(retErr, original.close()) }()
 	builder, err := NewStableResourceSetBuilderWithMetadata(owner)
 	if err != nil {
 		return nil, err
 	}
-	defer builder.Abandon()
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 	for _, cell := range original.cells {
 		var importErr error
 		rangeStableResourceLogicalIndex(cell.view.logical, func(entry *stableResourceEntry) bool {
@@ -269,8 +297,7 @@ func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 			e = builder.Add(token)
 			token.importedFields = nil
 			if e != nil {
-				token.Release()
-				importErr = e
+				importErr = errors.Join(e, token.ReleaseWithError())
 				return false
 			}
 			return true

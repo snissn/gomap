@@ -9,10 +9,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"path/filepath"
+	"sync"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -22,9 +22,10 @@ import (
 const primaryIndexFileName = "index.db.primary"
 
 type primaryStateRootV5 struct {
-	arena      *primaryarena.Arena
-	ref        primaryarena.Ref
-	dataCommit uint64
+	arena       *primaryarena.Arena
+	ref         primaryarena.Ref
+	dataCommit  uint64
+	certificate *primaryarena.ReadRootCertificateV6
 }
 type primaryDurableRuntimeV5 struct {
 	projection     rootpublication.PrimaryProjectionV5
@@ -33,12 +34,31 @@ type primaryDurableRuntimeV5 struct {
 	proofs         [2]primaryarena.Ref
 	proofRecords   [2]rootpublication.DurablePrimaryRootRecordV5
 	proofResources [2]*rootpublication.StableResourceSet
+	slotResources  [2]*rootpublication.StableResourceSet
 	dataFloor      [4]uint64
 	current        *primaryStateRootV5
 	capsuleImages  [2][]byte
 	capsuleViews   [2]rootpublication.PrimaryCapsuleViewV6
+	// The containing descriptor is independently pending until all original
+	// physical and resource edges complete. Root wrappers retain their own
+	// root-owned charges and never subsidize this descriptor.
+	disposalMu              sync.Mutex
+	metadata                *retainedalloc.Owner
+	metadataCharge          uint64
+	disposalAttempted       bool
+	disposalErr             error
+	disposalFailure         originalDBCleanupFailure
+	arena                   *primaryarena.Arena
+	constructionRoots       []primaryarena.Ref
+	constructionRootsCharge uint64
+	rebuildScratch          *primaryRebuildScratchV5
+	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
+	disposalMu        sync.Mutex
+	disposalAttempted bool
+	disposalErr       error
+	disposalFailure   originalDBCleanupFailure
 	prepared          *rootpublication.PreparedPrimaryRootV5
 	projection        rootpublication.PrimaryProjectionV5
 	manifestBanks     *primaryBankConstructionV5
@@ -99,7 +119,7 @@ func (db *DB) attachPrimaryArenaV5(idx *indexGen, opts Options) error {
 	return nil
 }
 
-func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
+func (db *DB) recoverDurablePrimaryV5(idx *indexGen) (retErr error) {
 	defer idx.clearPrimaryRecoveryLeasesV5()
 	if idx.primary.CapsuleFormatV6() {
 		return db.recoverPrimaryCapsuleV6(idx)
@@ -112,21 +132,23 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
 		return e
 	}
 	defer func() { a.MetadataOwner().RemovePending(pendingCharge) }()
-	selected, e := selectDurablePrimaryRootWithMetadataV5(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
-	if e != nil {
-		return e
-	}
+	primary := &primaryDurableRuntimeV5{}
+	bindReservedPrimaryRuntimeV5(primary, a)
+	primary.metadataCharge = descriptorCharge
+	pendingCharge -= descriptorCharge
 	installed := false
 	defer func() {
 		if !installed {
-			for _, r := range selected.SlotResources {
-				r.Release()
-			}
-			for _, r := range selected.ParentResources {
-				r.Release()
-			}
+			retErr = errors.Join(retErr, db.releaseOriginalPrimaryRuntimeV5(a, primary))
 		}
 	}()
+	selected, e := selectDurablePrimaryRootWithMetadataV5(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
+	primary.projection, primary.slots = selected.Primary, selected.SlotPrimary
+	primary.proofRecords, primary.proofResources = selected.ParentRecords, selected.ParentResources
+	primary.slotResources = selected.SlotResources
+	if e != nil {
+		return e
+	}
 	for _, r := range selected.SlotRecords {
 		if r.CommitSeq != 0 && (r.Directory.RootPageID != 0) != db.dependencyDirectoryRequiredFeature {
 			return fmt.Errorf("%w: primary dependency directory feature mismatch", ErrLegacyFormatRebuildRequired)
@@ -134,28 +156,26 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
 	}
 	rootBacking := make([]primaryarena.RecoveredRoot, 0, 4)
 	refBacking := make([]primaryarena.Ref, 0, 4)
-	defer func() { clear(rootBacking[:cap(rootBacking)]); clear(refBacking[:cap(refBacking)]) }()
+	defer func() {
+		clear(rootBacking[:cap(rootBacking)])
+		if primary.constructionRoots == nil {
+			clear(refBacking[:cap(refBacking)])
+		}
+	}()
 	extent, roots, e := recoveredPrimaryRootsIntoV5(selected, rootBacking)
 	if e != nil {
 		return e
 	}
 	refs, e := a.RecoverInto(extent, roots, refBacking)
+	// RecoverInto may refuse after earlier roots were appended to this exact
+	// preadmitted backing. Preserve those actual original edges on failure.
+	primary.constructionRoots = refBacking[:cap(refBacking)]
+	primary.constructionRootsCharge = retainedalloc.AllocationCharge(4 * uint64(unsafe.Sizeof(primaryarena.Ref{})))
+	primary.metadataCharge += primary.constructionRootsCharge
+	pendingCharge -= primary.constructionRootsCharge
 	if e != nil {
 		return e
 	}
-	refsOwned := true
-	defer func() {
-		if refsOwned {
-			for _, ref := range refs {
-				a.Drop(ref, nil)
-			}
-		}
-	}()
-	if e = idx.activatePrimaryRecoveryLeasesV5(); e != nil {
-		return e
-	}
-	primary := &primaryDurableRuntimeV5{projection: selected.Primary, slots: selected.SlotPrimary, proofRecords: selected.ParentRecords, proofResources: selected.ParentResources}
-
 	cursor := 0
 	for i := range primary.records {
 		if selected.SlotRecords[i].CommitSeq != 0 {
@@ -169,6 +189,17 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
 			}
 		}
 	}
+	// Slot/proof fields now own each recovered edge; the temporary slice is
+	// only a borrowed view and can be scrubbed/refunded without another Drop.
+	clear(primary.constructionRoots)
+	primary.constructionRoots = nil
+	charge := primary.constructionRootsCharge
+	primary.constructionRootsCharge = 0
+	primary.metadataCharge -= charge
+	a.MetadataOwner().RemovePending(charge)
+	if e = idx.activatePrimaryRecoveryLeasesV5(); e != nil {
+		return e
+	}
 	r, ok, e := a.BorrowDirectory(selected.Record.UserRootPageID, nil)
 	if !ok || e != nil {
 		return errors.Join(e, rootpublication.ErrResourceOwnership)
@@ -176,12 +207,7 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
 	if ok, e = a.Acquire(r, nil); !ok || e != nil {
 		return errors.Join(e, rootpublication.ErrResourceOwnership)
 	}
-	primary.current = &primaryStateRootV5{a, r, selected.Primary.DataCommitSeq}
-	defer func() {
-		if !installed {
-			a.Drop(r, nil)
-		}
-	}()
+	primary.current = &primaryStateRootV5{arena: a, ref: r, dataCommit: selected.Primary.DataCommitSeq}
 	p.SetPageCount(selected.Record.TotalPages)
 	if e = idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); e != nil {
 		return e
@@ -189,9 +215,9 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) error {
 	p.SetPageCount(selected.Record.TotalPages)
 	db.installDurableRootSelectionV1(selected)
 	db.durableRoot.primary = primary
-	a.AdoptPendingRootMetadata(r, descriptorCharge)
-	pendingCharge -= descriptorCharge
-	refsOwned = false
+	a.AdoptPendingRootMetadata(r, primaryStateDescriptorChargeV5())
+	primary.metadataCharge -= primaryStateDescriptorChargeV5()
+	primary.slotResources = [2]*rootpublication.StableResourceSet{} // transferred to original DB slots
 	installed = true
 	return nil
 }
@@ -417,7 +443,17 @@ func (db *DB) initializeDurablePrimaryV5(idx *indexGen) (err error) {
 		}
 		return err
 	}
-	initialMetadata := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))
+	initialMetadata := primaryStateDescriptorChargeV5()
+	runtimeCharge := primaryRuntimeDescriptorChargeV5()
+	if e = a.MetadataOwner().AddPending(runtimeCharge); e != nil {
+		return e
+	}
+	runtimeOwned := false
+	defer func() {
+		if !runtimeOwned {
+			a.MetadataOwner().RemovePending(runtimeCharge)
+		}
+	}()
 	if e = a.AdmitRootMetadata(bundle.Directory, initialMetadata); e != nil {
 		return e
 	}
@@ -449,7 +485,9 @@ func (db *DB) initializeDurablePrimaryV5(idx *indexGen) (err error) {
 	}
 	db.installDurableRootSelectionV1(durableRootSelectionV1{Slot: 0, Meta: meta, Record: record, Freelist: generation, Manifest: m, SlotCommits: [2]uint64{1, 0}, SlotMetas: [2]page.DurableMetaV1{meta, {}}, SlotRecords: [2]rootpublication.DurableRootRecordV1{record, {}}, SlotResources: [2]*rootpublication.StableResourceSet{initialResources, nil}})
 	initialOwned = false
-	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: projection, slots: [2]rootpublication.PrimaryProjectionV5{projection, {}}, records: [2]primaryarena.Ref{bundle.Record, {}}, dataFloor: [4]uint64{generation.CommitSeq()}, current: &primaryStateRootV5{a, bundle.Directory, generation.CommitSeq()}}
+	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: projection, slots: [2]rootpublication.PrimaryProjectionV5{projection, {}}, records: [2]primaryarena.Ref{bundle.Record, {}}, dataFloor: [4]uint64{generation.CommitSeq()}, current: &primaryStateRootV5{arena: a, ref: bundle.Directory, dataCommit: generation.CommitSeq()}}
+	bindReservedPrimaryRuntimeV5(db.durableRoot.primary, a)
+	runtimeOwned = true
 	return nil
 }
 
@@ -594,6 +632,8 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealV5(ctx context.Contex
 		return e
 	}
 	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: group.Len(), idx: runtime.idx, next: next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: projection, manifestBanks: mrefs, token: pt, proof: proof, proofResources: proofResources}}
+	seal.metadata = a.MetadataOwner()
+	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)
 	runtime.activeSeal = seal
 	owned, mOwned, tOwned, pOwned, prOwned, sealTransferred = false, false, false, false, false, true
@@ -673,16 +713,30 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if base.primary == nil || base.record.CommitSeq >= seal.latestSequence {
 		return 0, errDurableRootCandidateStale
 	}
-	runtimeRoot := member.primary.Bundle().Record
-	if seal.primary.promotion != nil {
-		runtimeRoot = seal.primary.promotion.Root
-	}
-	if e := a.AdmitRootMetadata(runtimeRoot, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{})))); e != nil {
+	runtimeCharge := primaryRuntimeDescriptorChargeV5()
+	if e := a.MetadataOwner().AddPending(runtimeCharge); e != nil {
 		return 0, e
 	}
-	primary := *base.primary
-	oldRecord, oldProof := primary.records[seal.target], primary.proofs[seal.target]
-	oldProofResources := primary.proofResources[seal.target]
+	primary := &primaryDurableRuntimeV5{
+		projection: base.primary.projection, slots: base.primary.slots,
+		records: base.primary.records, proofs: base.primary.proofs,
+		proofRecords: base.primary.proofRecords, proofResources: base.primary.proofResources,
+		dataFloor: base.primary.dataFloor, current: base.primary.current,
+		capsuleImages: base.primary.capsuleImages, capsuleViews: base.primary.capsuleViews,
+	}
+	bindReservedPrimaryRuntimeV5(primary, a)
+	descriptorPublished := false
+	defer func() {
+		if !descriptorPublished {
+			clear(primary.records[:])
+			clear(primary.proofs[:])
+			clear(primary.proofResources[:])
+			clear(primary.capsuleImages[:])
+			clear(primary.capsuleViews[:])
+			primary.current, primary.metadata, primary.metadataCharge = nil, nil, 0
+			a.MetadataOwner().RemovePending(runtimeCharge)
+		}
+	}()
 	primary.proofResources[seal.target] = seal.primary.proofResources
 	primary.proofRecords[seal.target] = rootpublication.DurablePrimaryRootRecordV5{Record: base.record, Primary: base.primary.projection}
 	if seal.primary.promotion != nil {
@@ -709,7 +763,7 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	primary.current = member.install.primaryRoot
 	primary.dataFloor[seal.target] = seal.primary.projection.DataCommitSeq
 	primary.dataFloor[seal.target+2] = base.primary.slots[base.slot].DataCommitSeq
-	current := durableRootRuntimeV1{meta: seal.meta, record: seal.record, manifest: seal.manifest.DiagnosticProjectionV1(), slot: seal.target, slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord, primary: &primary}
+	current := durableRootRuntimeV1{meta: seal.meta, record: seal.record, manifest: seal.manifest.DiagnosticProjectionV1(), slot: seal.target, slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord, primary: primary}
 	current.slotCommit[seal.target] = seal.latestSequence
 	current.slotMeta[seal.target] = seal.meta
 	current.slotRecord[seal.target] = seal.record
@@ -742,6 +796,17 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 		}
 	}
 	db.durableRoot = current
+	descriptorPublished = true
+	for slot := range base.primary.records {
+		if uint64(slot) != seal.target {
+			base.primary.records[slot], base.primary.proofs[slot] = primaryarena.Ref{}, primaryarena.Ref{}
+			base.primary.proofResources[slot] = nil
+			base.primary.capsuleImages[slot] = nil
+			base.primary.capsuleViews[slot] = rootpublication.PrimaryCapsuleViewV6{}
+		}
+	}
+	base.primary.current = nil // alias only: the actual DBState edge owns this root.
+	base.primary.slotResources[seal.target] = previousResources
 	db.metaPageID = seal.target
 	member.primaryRecordTransferred = true
 	seal.primary.recordTransferred = true
@@ -769,52 +834,88 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	runtime.seals = kept
 	runtime.activeSeal = nil
 	unlock()
-	previousResources.Release()
-	oldProofResources.Release()
-	for _, r := range []primaryarena.Ref{oldRecord, oldProof} {
-		if r != (primaryarena.Ref{}) {
-			if _, e = a.Drop(r, nil); e != nil {
-				return 0, e
-			}
-		}
+	// The SAME predecessor descriptor owns overwritten original physical
+	// operands until their root-before-resource completion has really succeeded.
+	if e = db.releaseOriginalPrimaryRuntimeV5(a, base.primary); e != nil {
+		return 0, e
 	}
 	for _, s := range retired {
-		s.release()
+		if cleanupErr := s.release(); cleanupErr != nil {
+			db.retainOriginalCleanupError(cleanupErr)
+			e = errors.Join(e, cleanupErr)
+		}
 	}
-	return oldest, nil
+	return oldest, e
 }
 
-func (seal *primaryPublicationSealV5) release() {
+func (seal *primaryPublicationSealV5) release() error {
 	if seal == nil {
-		return
+		return nil
 	}
+	seal.disposalMu.Lock()
+	defer seal.disposalMu.Unlock()
+	if seal.disposalAttempted {
+		return seal.disposalErr
+	}
+	seal.disposalAttempted = true
 	a := seal.prepared.Arena()
-	if seal.promotion != nil {
-		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-		for _, r := range []primaryarena.Ref{seal.promotion.Root, seal.promotion.Parent} {
-			if r != (primaryarena.Ref{}) {
-				_, _ = a.Drop(r, work)
-			}
+	var first error
+	drop := func(ref *primaryarena.Ref) {
+		if *ref == (primaryarena.Ref{}) {
+			return
 		}
-		seal.promotion.Root, seal.promotion.Parent = primaryarena.Ref{}, primaryarena.Ref{}
+		consumed, err := a.Drop(*ref, nil)
+		if err == nil && !consumed {
+			err = rootpublication.ErrResourceOwnership
+		}
+		if err == nil {
+			*ref = primaryarena.Ref{}
+		} else if first == nil {
+			first = err
+		}
 	}
-
 	if seal.promotion != nil {
-		seal.promotion.Image = nil
-		seal.promotion.View = rootpublication.PrimaryCapsuleViewV6{}
+		drop(&seal.promotion.Root)
+		drop(&seal.promotion.Parent)
+		if seal.promotion.Root == (primaryarena.Ref{}) && seal.promotion.Parent == (primaryarena.Ref{}) {
+			seal.promotion.Image = nil
+			seal.promotion.View = rootpublication.PrimaryCapsuleViewV6{}
+		}
 	}
-	seal.proofResources.Release()
-	seal.proofResources = nil
-	_ = seal.manifestBanks.release()
-	seal.manifestBanks = nil
-	if seal.proof != (primaryarena.Ref{}) {
-		_, _ = a.Drop(seal.proof, nil)
-		seal.proof = primaryarena.Ref{}
+	drop(&seal.proof)
+	// Manifest bank preparation also precedes resource-edge consumption.
+	if first == nil {
+		if err := seal.manifestBanks.release(); err != nil {
+			first = err
+		} else {
+			seal.manifestBanks = nil
+		}
 	}
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
+	if first == nil {
+		if err := seal.proofResources.ReleaseWithError(); err != nil {
+			first = err
+		} else {
+			seal.proofResources = nil
+		}
+		if err := seal.token.ReleaseWithError(); err != nil {
+			if first == nil {
+				first = err
+			}
+		} else {
+			seal.token = nil
+		}
 	}
+	if first != nil {
+		seal.disposalFailure.payload = seal
+		seal.disposalFailure.retainCause(0, first)
+		seal.disposalErr = &seal.disposalFailure
+		a.MetadataOwner().CleanupFailed()
+		return seal.disposalErr
+	}
+	seal.promotion = nil
+	seal.prepared = nil
+	seal.projection = rootpublication.PrimaryProjectionV5{}
+	return nil
 }
 
 func (state *DBState) primaryRetentionCommitV5() uint64 {

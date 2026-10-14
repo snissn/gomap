@@ -5,11 +5,14 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -21,7 +24,9 @@ import (
 // A vacuum file swap creates a new generation and publishes it as current while
 // keeping the previous generation alive until all pinned readers drain.
 type indexGen struct {
-	id uint64
+	id             uint64
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
 
 	primary               *primaryarena.Arena
 	primaryRecoveryLeases *primaryDependencyLeaseV5
@@ -34,6 +39,13 @@ type indexGen struct {
 	graveyard *lifecycle.Graveyard
 
 	refs atomic.Int32
+
+	// Original containing-wrapper borrowers are separate from physical
+	// generation/retirement refs and survive terminal physical close.
+	wrapperMu         sync.Mutex
+	wrapperBorrows    uint64
+	physicalCompleted bool
+	failedSnapshots   *Snapshot
 
 	closeOnce sync.Once
 	closeErr  error
@@ -52,8 +64,20 @@ type indexGen struct {
 	stableNamespaceMetadata     *retainedalloc.Owner
 	stableNamespaceParentCharge uint64
 	stableNamespaceFailure      primaryCleanupFailureV5
-	closeFailure                primaryCleanupFailureV5
+	closeFailure                originalDBCleanupFailure
 	failedNext                  *indexGen
+
+	// Startup borrows the SAME containing DB, Manager and namespace LOCK until
+	// original construction and its actual physical cleanup have completed.
+	// These embedded controls are included in this generation's birth charge.
+	startupDB               *DB
+	startupManager          *valuelog.Manager
+	startupLock             *lockfile.Lock
+	startupCustody          *rootpublication.OriginalCleanupCustody
+	startupConstructed      bool
+	startupManagerAttempted bool
+	startupManagerErr       error
+	startupReceipt          OpenRecoveryCleanupError
 }
 
 func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {
@@ -65,8 +89,29 @@ func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper
 		registry:  lifecycle.NewReaderRegistry(),
 		graveyard: lifecycle.NewGraveyard(),
 	}
+	g.closeFailure.payload = g
 	g.refs.Store(1) // DB holds one ref while generation is live.
 	return g
+}
+
+// The original DB registry governs the complete generation wrapper before
+// its creation, independently from the physical PRIMARY owner.
+func newIndexGenWithMetadata(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper, metadata *retainedalloc.Owner) (*indexGen, error) {
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(indexGen{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	g := newIndexGen(id, p, alloc, z)
+	g.metadata, g.metadataCharge = metadata, charge
+	return g, nil
+}
+
+func (g *indexGen) originalCloseFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	g.closeFailure.retainCause(0, err)
+	return &g.closeFailure
 }
 
 func (g *indexGen) acquire() {
@@ -79,9 +124,27 @@ func (g *indexGen) release() int32 {
 
 func (g *indexGen) close() error {
 	g.closeOnce.Do(func() {
+		defer func() {
+			if g.closeErr != nil {
+				g.closeErr = g.originalCloseFailure(g.closeErr)
+				if g.metadata != nil {
+					g.metadata.CleanupFailed()
+				}
+				return
+			}
+			// A successful pager/generation action is not yet successful
+			// startup Manager/LOCK cleanup. Keep the original containing
+			// payload until the SAME startup completion edge consumes it.
+			g.wrapperMu.Lock()
+			g.physicalCompleted = true
+			g.scrubAndRefundGenerationLocked()
+			g.wrapperMu.Unlock()
+		}()
 		g.clearPrimaryRecoveryLeasesV5()
 		if g.unpublishedPrimary != nil {
-			releasePrimaryRuntimeV5(g.primary, g.unpublishedPrimary)
+			if g.closeErr = releasePrimaryRuntimeV5(g.primary, g.unpublishedPrimary); g.closeErr != nil {
+				return
+			}
 			g.unpublishedPrimary = nil
 		}
 		if g.unpublishedSelection != nil {
@@ -113,7 +176,7 @@ func (g *indexGen) close() error {
 				if g.stableNamespaceMetadata == nil {
 					g.closeErr = errors.Join(g.closeErr, err)
 					g.stableNamespaceParent = nil
-				} else if err == nil || errors.Is(err, os.ErrClosed) {
+				} else if err == nil {
 					g.stableNamespaceParent = nil
 					g.stableNamespaceMetadata.RemovePending(g.stableNamespaceParentCharge)
 					g.stableNamespaceParentCharge = 0
@@ -123,8 +186,8 @@ func (g *indexGen) close() error {
 			}
 			if g.stableNamespaceFailure.causes[0] != nil || g.stableNamespaceFailure.causes[1] != nil {
 				g.stableNamespaceMetadata.CleanupFailed()
-				g.closeFailure.causes[0] = g.closeErr
-				g.closeFailure.causes[1] = &g.stableNamespaceFailure
+				g.closeFailure.retainCause(0, g.closeErr)
+				g.closeFailure.retainCause(1, &g.stableNamespaceFailure)
 				g.closeErr = &g.closeFailure
 			}
 			g.stableNamespaceMu.Unlock()
@@ -150,4 +213,51 @@ func (g *indexGen) close() error {
 		}
 	})
 	return g.closeErr
+}
+
+func (g *indexGen) retainWrapperBorrow() {
+	g.wrapperMu.Lock()
+	// Each increment has one live original containing Snapshot/Prune object;
+	// uint64 represents the complete physically addressable object domain.
+	g.wrapperBorrows++
+	g.wrapperMu.Unlock()
+}
+func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, err error) {
+	g.wrapperMu.Lock()
+	if err != nil {
+		if snapshot != nil {
+			snapshot.generationFailedNext = g.failedSnapshots
+			g.failedSnapshots = snapshot
+		}
+		if g.metadata != nil {
+			g.metadata.CleanupFailed()
+		}
+		g.wrapperMu.Unlock()
+		if snapshot != nil {
+			g.closeFailure.retainCause(2, err)
+		}
+		return
+	}
+	g.wrapperBorrows--
+	g.scrubAndRefundGenerationLocked()
+	g.wrapperMu.Unlock()
+}
+func (g *indexGen) scrubAndRefundGeneration() {
+	g.wrapperMu.Lock()
+	defer g.wrapperMu.Unlock()
+	g.scrubAndRefundGenerationLocked()
+}
+func (g *indexGen) scrubAndRefundGenerationLocked() {
+	if !g.physicalCompleted || g.wrapperBorrows != 0 || g.startupDB != nil || g.closeErr != nil {
+		return
+	}
+	if g.metadata == nil {
+		return
+	}
+	metadata, charge := g.metadata, g.metadataCharge
+	g.pager, g.allocator, g.zipper = nil, nil, nil
+	g.registry, g.graveyard = nil, nil
+	g.primary, g.primaryOwner = nil, nil
+	g.metadata, g.metadataCharge = nil, 0
+	metadata.RemovePending(charge)
 }

@@ -276,10 +276,10 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rebuiltOlderRootIndexAuthorityV1(resources, identity, generation) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, identity, generation); err != nil || !authoritative {
 		t.Fatal("exact index authority rejected")
 	}
-	if rebuiltOlderRootIndexAuthorityV1(resources, identity, generation+1) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, identity, generation+1); err != nil || authoritative {
 		t.Fatal("mismatched index generation accepted")
 	}
 	other, err := os.Create(filepath.Join(dir, "other.db"))
@@ -291,14 +291,14 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rebuiltOlderRootIndexAuthorityV1(resources, otherIdentity, generation) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, otherIdentity, generation); err != nil || authoritative {
 		t.Fatal("mismatched physical index accepted")
 	}
 	missingNamespace := projectionResourceSetV1(t,
 		projectionResourceFixtureV1{rootpublication.ResourceIndex, rootpublication.ReachabilityIndexFile, nil},
 	)
 	defer missingNamespace.Release()
-	if rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1); err != nil || authoritative {
 		t.Fatal("index without exact namespace authority accepted")
 	}
 }
@@ -321,7 +321,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 			roots.rootResourceIndex = rootpublication.StableIdentity{}
 		}, wantReason: rebuiltDurableResourceFallbackIdentity},
 		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
-			delete(roots.rootResources, key)
+			roots.removeRootResources(key)
 		}, wantReason: rebuiltDurableResourceFallbackMissingSource},
 	}
 	for _, test := range tests {
@@ -370,7 +370,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 				SystemRootPageID: olderRecord.SystemRootPageID, AppliedCommandLSN: olderRecord.AppliedCommandLSN,
 				MaxEntryRevision: olderRecord.MaxEntryRevision,
 			})
-			source, ok := roots.rootResources[key]
+			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
 				database.maintenanceMu.Unlock()
 				t.Fatal("older root has no captured exact closure")
@@ -423,7 +423,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 			roots.rootResourceIndex = rootpublication.StableIdentity{}
 		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackIdentity},
 		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
-			delete(roots.rootResources, key)
+			roots.removeRootResources(key)
 		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackMissingSource},
 	}
 	for _, test := range tests {
@@ -477,7 +477,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 				MaxEntryRevision:  uint64(roots.visible.MaxEntryRevision),
 			}
 			key := recoverableRootIdentity(visibleRoot)
-			source, ok := roots.rootResources[key]
+			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
 				database.maintenanceMu.Unlock()
 				t.Fatal("visible root has no captured exact closure")

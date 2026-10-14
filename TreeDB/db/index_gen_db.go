@@ -61,9 +61,15 @@ func (db *DB) releaseIndex(gen *indexGen) {
 
 	// Ghost instead of immediate close
 	if db.ghostManager != nil {
-		db.ghostManager.add(gen)
+		if err := db.ghostManager.add(gen); err != nil {
+			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+			db.quiesceFailedRetiredGeneration(gen)
+		}
 	} else {
-		_ = gen.close()
+		if err := gen.close(); err != nil {
+			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+			db.quiesceFailedRetiredGeneration(gen)
+		}
 	}
 }
 
@@ -99,9 +105,32 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	db.idxMu.Unlock()
 
 	if db.ghostManager != nil {
-		db.ghostManager.add(gen)
+		if err := db.ghostManager.add(gen); err != nil {
+			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+			db.quiesceFailedRetiredGeneration(gen)
+		}
 	} else {
-		_ = gen.close()
+		if err := gen.close(); err != nil {
+			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+			db.quiesceFailedRetiredGeneration(gen)
+		}
+	}
+}
+
+// Quiescence is separate from physical disposal. A retired failed generation
+// cannot regain write admission; a PRIMARY still shared by the actual current
+// generation remains eligible and is quiesced only at terminal DB withdrawal.
+func (db *DB) quiesceFailedRetiredGeneration(gen *indexGen) {
+	if gen == nil || gen.primary == nil {
+		return
+	}
+	db.idxMu.Lock()
+	current := db.idx.Load()
+	eligible := current == gen || (current != nil && current.primary == gen.primary)
+	physicalPager := gen.primary.Pager()
+	db.idxMu.Unlock()
+	if !eligible {
+		physicalPager.QuiesceBackgroundGrowth()
 	}
 }
 
@@ -117,9 +146,26 @@ func (db *DB) closeAllIndexes() error {
 
 	var errs []error
 	for _, g := range gens {
+		// Current publication is already nil and writers have drained. Stop
+		// growth without consuming any physical owner or failed debt.
+		db.quiesceFailedRetiredGeneration(g)
 		if err := g.close(); err != nil {
+			db.retainOriginalCleanupError(g.originalCloseFailure(err))
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Prune borrows original wrapper aliases before terminal discovery withdrawal.
+// Physical refs retain their existing retirement meaning.
+func (db *DB) acquireIndexWithWrapperBorrow() *indexGen {
+	db.idxMu.Lock()
+	defer db.idxMu.Unlock()
+	idx := db.idx.Load()
+	if idx != nil {
+		idx.retainWrapperBorrow()
+		idx.acquire()
+	}
+	return idx
 }

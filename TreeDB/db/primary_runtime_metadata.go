@@ -37,8 +37,8 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 	}
 	nextCharge := retainedalloc.AllocationCharge(uint64(capacity) * size)
 	oldCharge := retainedalloc.AllocationCharge(uint64(cap(*values)) * size)
-	if runtime.idx.primary != nil {
-		if err := runtime.idx.primary.MetadataOwner().AddPending(nextCharge); err != nil {
+	if runtime.metadata != nil {
+		if err := runtime.metadata.AddPending(nextCharge); err != nil {
 			return err
 		}
 	}
@@ -48,8 +48,8 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 	*values = next
 	clear(old[:cap(old)])
 	old = nil
-	if runtime.idx.primary != nil {
-		runtime.idx.primary.MetadataOwner().RemovePending(oldCharge)
+	if runtime.metadata != nil {
+		runtime.metadata.RemovePending(oldCharge)
 		runtime.metadataCharge += nextCharge - oldCharge
 	}
 	return nil
@@ -78,7 +78,7 @@ func primarySealMetadataV6(prefixCount int) uint64 {
 		retainedalloc.AllocationCharge(uint64(prefixCount)*uint64(unsafe.Sizeof(uintptr(0))))
 }
 
-// Four actual visibility callback environments capture these immutable
+// Five actual visibility callback environments capture these immutable
 // pointers; the nested allocator-activation callback has its own environment.
 // The conservative rounded capacities cover each separately allocated closure.
 type primaryVisibilityCallbackEnvironmentV6 struct {
@@ -91,7 +91,7 @@ type primaryVisibilityCallbackEnvironmentV6 struct {
 
 func primaryVisibleMetadataV6() uint64 {
 	return retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleMemberV1{}))) +
-		4*retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{}))) +
+		5*retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{}))) +
 		retainedalloc.AllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
 }
 

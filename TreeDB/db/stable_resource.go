@@ -152,7 +152,7 @@ func ValidateStableTemplateResourceClosure(resources *rootpublication.StableReso
 
 // Every relevant physical descriptor must independently contain the selected
 // immutable bytes. Streaming avoids retaining any inherited logical corpus.
-func validateStableEncodedResourceClosure(resources *rootpublication.StableResourceSet, field rootpublication.ReachabilityField, id uint64, length int64, digest [32]byte) error {
+func validateStableEncodedResourceClosure(resources *rootpublication.StableResourceSet, field rootpublication.ReachabilityField, id uint64, length int64, digest [32]byte) (retErr error) {
 	type key struct {
 		kind           rootpublication.ResourceKind
 		lane, resource string
@@ -166,7 +166,7 @@ func validateStableEncodedResourceClosure(resources *rootpublication.StableResou
 	if captureErr != nil {
 		return captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, descriptor := range diagnostics.Physical() {
 		for _, reachable := range descriptor.ReachabilityFields() {
 			if reachable == field {
@@ -491,7 +491,7 @@ func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32,
 func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
 	return snapshot.newStablePagerResourceToken(spec, constructor, indexFileName)
 }
-func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error), name string) (*rootpublication.StableResourceToken, error) {
+func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error), name string) (_ *rootpublication.StableResourceToken, retErr error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable index snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -519,7 +519,13 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		if e != nil {
 			return nil, e
 		}
-		defer ownedOperations.Release()
+		defer func() {
+			consumed, err := ownedOperations.Release()
+			if !consumed && err == nil {
+				err = rootpublication.ErrResourceOwnership
+			}
+			retErr = errors.Join(retErr, err)
+		}()
 		spec.OwnedOperations = ownedOperations
 	}
 	if ownedOperations == nil && spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
@@ -539,7 +545,7 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 	if err != nil {
 		return nil, err
 	}
-	defer namespace.Release()
+	defer func() { retErr = errors.Join(retErr, namespace.ReleaseWithError()) }()
 
 	var (
 		token            *rootpublication.StableResourceToken
@@ -581,7 +587,7 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		unobserveErr := registry.Unobserve(identity)
 		if unobserveErr != nil {
 			if token != nil {
-				token.Release()
+				err = errors.Join(err, token.ReleaseWithError())
 				token = nil
 			}
 			return errors.Join(err, unobserveErr)
@@ -609,8 +615,7 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 	}
 	snapshot.iteratorMu.Unlock()
 	if err != nil {
-		token.Release()
-		return nil, err
+		return nil, errors.Join(err, token.ReleaseWithError())
 	}
 	return token, nil
 }

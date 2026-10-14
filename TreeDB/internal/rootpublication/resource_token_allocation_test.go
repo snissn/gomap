@@ -117,20 +117,27 @@ func TestOwnedResourceTokenRefusalKeepsInputsAndCharges(t *testing.T) {
 // The operation environment is a separately admitted allocation, shared by
 // genuine token clones and retained until the last immutable descriptor alias.
 type ownedTokenOperationsFixture struct {
-	owner    *retainedalloc.Owner
-	refs     atomic.Int32
-	syncs    atomic.Int32
-	disposed atomic.Bool
-	charge   uint64
+	owner        *retainedalloc.Owner
+	refs         atomic.Int32
+	syncs        atomic.Int32
+	disposed     atomic.Bool
+	charge       uint64
+	releaseErr   error
+	releaseCalls atomic.Int32
 }
 
 func (o *ownedTokenOperationsFixture) MetadataOwner() *retainedalloc.Owner { return o.owner }
 func (o *ownedTokenOperationsFixture) Retain() error                       { o.refs.Add(1); return nil }
-func (o *ownedTokenOperationsFixture) Release() {
+func (o *ownedTokenOperationsFixture) Release() (bool, error) {
+	o.releaseCalls.Add(1)
+	if o.releaseErr != nil {
+		return false, o.releaseErr
+	}
 	if o.refs.Add(-1) == 0 {
 		o.disposed.Store(true)
 		o.owner.RemovePending(o.charge)
 	}
+	return true, nil
 }
 func (o *ownedTokenOperationsFixture) FlushThrough(*os.File, DurableFrontier) error { return nil }
 func (o *ownedTokenOperationsFixture) SyncThrough(*os.File, DurableFrontier) error {
@@ -187,5 +194,46 @@ func TestOwnedResourceTokenOperationsLastDescriptorAlias(t *testing.T) {
 	backing.release()
 	if ops.refs.Load() != 0 || !ops.disposed.Load() || owner.Bytes() != 0 {
 		t.Fatalf("last descriptor cleanup refs=%d bytes=%d", ops.refs.Load(), owner.Bytes())
+	}
+}
+
+func TestOwnedTokenConstructorRefusalRetainsOriginalCompletePayload(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedTokenOperationsFixture{})))
+	if err := owner.AddPending(charge); err != nil {
+		t.Fatal(err)
+	}
+	physicalErr := errors.New("actual original producer Release refusal")
+	operations := &ownedTokenOperationsFixture{owner: &owner, charge: charge, releaseErr: physicalErr}
+	operations.refs.Store(1)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "constructor-real.bin", "payload")
+	// Missing ID reaches the original registration validation after the SAME
+	// callback/obligation constructor admissions. Refused unwind must retain all.
+	token, err := NewStableResourceToken(StableResourceSpec{
+		MetadataOwner: &owner, OwnedOperations: operations, PinRegistry: registry,
+		Kind: ResourceIndex, LogicalLane: "lane", Generation: 1, DiagnosticPath: "constructor-real.bin",
+		File: file, Frontier: DurableFrontier{Bytes: 7}, Reachability: ReachabilityIndexFile,
+	})
+	if token != nil || !errors.Is(err, ErrUnresolvedResource) || !errors.Is(err, physicalErr) {
+		t.Fatalf("lost first registration/actual cleanup outcome: %v %v", token, err)
+	}
+	var receipt *originalReleaseFailure
+	if !errors.As(err, &receipt) {
+		t.Fatal("missing original preborn receipt")
+	}
+	original, ok := receipt.original.(*StableResourceToken)
+	if !ok || original.metadata == nil || original.obligationBacking == nil || original.ownedOperations != operations || operations.releaseCalls.Load() != 1 {
+		t.Fatal("original complete constructor operands lost reachability")
+	}
+	if original.obligationBacking.allocation.owner != &owner || owner.Bytes() <= charge {
+		t.Fatal("unresolved obligations/containing metadata uncharged")
+	}
+	before := owner.Bytes()
+	_ = errors.Is(err, physicalErr)
+	if operations.releaseCalls.Load() != 1 || owner.Bytes() != before {
+		t.Fatal("error observation retried/refunded original action")
 	}
 }

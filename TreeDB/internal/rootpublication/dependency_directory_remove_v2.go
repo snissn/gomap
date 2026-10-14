@@ -1,6 +1,9 @@
 package rootpublication
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // cloneDirectoryRemovingV2 checks declared removals against the pinned root and
 // carries only those exact keys until the next directory is built. Physical
@@ -156,7 +159,7 @@ func cloneDirectoryForRequirementsV2(source *StableResourceSet, requirements Sta
 	return result, work, err
 }
 
-func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableLogicalObligationRequirementIndex, work StableResourceClosureWork) (StableResourceClosureWork, error) {
+func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableLogicalObligationRequirementIndex, work StableResourceClosureWork) (_ StableResourceClosureWork, retErr error) {
 	type fieldKey struct {
 		resource stableLogicalResourceKey
 		field    ReachabilityField
@@ -166,7 +169,7 @@ func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableL
 	if captureErr != nil {
 		return work, captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, physical := range diagnostics.Physical() {
 		work.SourceEntriesInspected++
 		key := stableLogicalResourceKey{kind: physical.Kind, lane: physical.logicalLane, resourceID: physical.resourceID, generation: physical.Generation}

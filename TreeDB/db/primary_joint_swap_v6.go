@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -147,6 +148,9 @@ func writePrimaryJointCommitV6(dir string, parent *os.File, d primaryJointDecisi
 	return true, jointSwapHookV6("after-commit")
 }
 func jointFileByIdentityV6(parent *os.File, canonical, staging string, want rootpublication.StableIdentity) (*os.File, string, error) {
+	return jointFileByIdentityWithProofV6(parent, canonical, staging, want, nil, nil)
+}
+func jointFileByIdentityWithProofV6(parent *os.File, canonical, staging string, want rootpublication.StableIdentity, proof *primaryJointRecoveryProofV6, slot **os.File) (*os.File, string, error) {
 	for _, name := range []string{canonical, staging} {
 		f, e := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
 		if os.IsNotExist(e) {
@@ -155,11 +159,22 @@ func jointFileByIdentityV6(parent *os.File, canonical, staging string, want root
 		if e != nil {
 			return nil, "", e
 		}
+		if proof != nil {
+			*slot = f
+		}
 		id, e := rootpublication.StableIdentityFromFile(f)
 		if e == nil && rootpublication.SamePhysicalIdentity(id, want) {
 			return f, name, nil
 		}
-		f.Close()
+		var closeErr error
+		if proof == nil {
+			closeErr = f.Close()
+		} else {
+			closeErr = proof.closeFile(slot)
+		}
+		if e != nil || closeErr != nil {
+			return nil, "", errors.Join(e, closeErr)
+		}
 		if e != nil {
 			return nil, "", e
 		}
@@ -204,6 +219,43 @@ func validateJointPairV6(data, primary *os.File, d primaryJointDecisionV6) error
 // relative to the retained parent and must match the COMMIT identity; pathname
 // reopening and unsupported-platform fallbacks cannot supply this authority.
 func rollForwardPrimaryJointV6(ctx context.Context, dir string, parent *os.File, d primaryJointDecisionV6) error {
+	return rollForwardPrimaryJointWithProofV6(ctx, dir, parent, d, nil)
+}
+func rollForwardPrimaryJointWithProofV6(ctx context.Context, dir string, parent *os.File, d primaryJointDecisionV6, proof *primaryJointRecoveryProofV6) error {
+	closeFile := func(f *os.File) error {
+		if proof == nil {
+			return f.Close()
+		}
+		if proof.failure != nil {
+			return &proof.receipt
+		}
+		switch f {
+		case proof.data:
+			return proof.closeFile(&proof.data)
+		case proof.primary:
+			return proof.closeFile(&proof.primary)
+		case proof.dependency:
+			return proof.closeFile(&proof.dependency)
+		}
+		return proof.refuse(rootpublication.ErrResourceOwnership)
+	}
+	openFile := func(canonical, staging string, want rootpublication.StableIdentity, which int) (*os.File, string, error) {
+		if proof == nil {
+			return jointFileByIdentityV6(parent, canonical, staging, want)
+		}
+		if proof.failure != nil {
+			return nil, "", &proof.receipt
+		}
+		slot := &proof.dependency
+		if which == 0 {
+			slot = &proof.data
+		}
+		if which == 1 {
+			slot = &proof.primary
+		}
+		return jointFileByIdentityWithProofV6(parent, canonical, staging, want, proof, slot)
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -211,15 +263,15 @@ func rollForwardPrimaryJointV6(ctx context.Context, dir string, parent *os.File,
 	if err != nil || !rootpublication.SamePhysicalIdentity(parentID, d.Parent) {
 		return errors.Join(err, ErrRecoveryRequired)
 	}
-	data, dname, err := jointFileByIdentityV6(parent, d.DataName, d.DataStaging, d.Data)
+	data, dname, err := openFile(d.DataName, d.DataStaging, d.Data, 0)
 	if err != nil {
 		return err
 	}
-	primary, pname, err := jointFileByIdentityV6(parent, d.PrimaryName, d.PrimaryStaging, d.Primary)
+	primary, pname, err := openFile(d.PrimaryName, d.PrimaryStaging, d.Primary, 1)
 	if err != nil {
-		return errors.Join(err, data.Close())
+		return errors.Join(err, closeFile(data))
 	}
-	err = errors.Join(validateJointPairV6(data, primary, d), data.Close(), primary.Close())
+	err = errors.Join(validateJointPairV6(data, primary, d), closeFile(data), closeFile(primary))
 	if err != nil {
 		return err
 	}
@@ -234,22 +286,22 @@ func rollForwardPrimaryJointV6(ctx context.Context, dir string, parent *os.File,
 			if err = jointSwapHookV6("before-" + entry.phase + "-rename"); err != nil {
 				return err
 			}
-			f, name, e := jointFileByIdentityV6(parent, entry.from, entry.from, entry.identity)
+			f, name, e := openFile(entry.from, entry.from, entry.identity, 2)
 			if e != nil {
 				return e
 			}
-			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), f.Close())
+			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), closeFile(f))
 			if e != nil {
 				return e
 			}
 			if e = rootpublication.RenameStableChildFile(parent, entry.from, entry.to); e != nil {
 				return e
 			}
-			f, name, e = jointFileByIdentityV6(parent, entry.to, entry.to, entry.identity)
+			f, name, e = openFile(entry.to, entry.to, entry.identity, 2)
 			if e != nil {
 				return e
 			}
-			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceIndex, dir, filepath.Join(dir, entry.from), filepath.Join(dir, entry.to), parent, f, entry.from, entry.to), f.Close())
+			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceIndex, dir, filepath.Join(dir, entry.from), filepath.Join(dir, entry.to), parent, f, entry.from, entry.to), closeFile(f))
 			if e != nil {
 				return e
 			}
@@ -263,18 +315,18 @@ func rollForwardPrimaryJointV6(ctx context.Context, dir string, parent *os.File,
 	}
 	// Both canonical files must still form the complete committed pair before
 	// removing its recovery decision. A successful first rename is insufficient.
-	data, dname, err = jointFileByIdentityV6(parent, d.DataName, d.DataName, d.Data)
+	data, dname, err = openFile(d.DataName, d.DataName, d.Data, 0)
 	if err != nil {
 		return err
 	}
-	primary, pname, err = jointFileByIdentityV6(parent, d.PrimaryName, d.PrimaryName, d.Primary)
+	primary, pname, err = openFile(d.PrimaryName, d.PrimaryName, d.Primary, 1)
 	if err != nil {
-		return errors.Join(err, data.Close())
+		return errors.Join(err, closeFile(data))
 	}
-	return errors.Join(validateJointPairV6(data, primary, d), data.Close(), primary.Close())
+	return errors.Join(validateJointPairV6(data, primary, d), closeFile(data), closeFile(primary))
 }
 
-func deletePrimaryJointCommitV6(ctx context.Context, dir string, parent *os.File) error {
+func deletePrimaryJointCommitV6(ctx context.Context, dir string, parent *os.File) (err error) {
 	if e := ctx.Err(); e != nil {
 		return e
 	}
@@ -283,7 +335,7 @@ func deletePrimaryJointCommitV6(ctx context.Context, dir string, parent *os.File
 		return e
 	}
 	if decision != nil {
-		defer decision.Close()
+		defer func() { err = errors.Join(err, decision.Close()) }()
 	}
 	if e := jointSwapHookV6("before-decision-delete"); e != nil {
 		return e
@@ -302,21 +354,37 @@ func deletePrimaryJointCommitV6(ctx context.Context, dir string, parent *os.File
 
 // Called under LOCK, before legacy cleanup or any writable pager.Open.
 // A marker other than the exact old "ready\n" cannot authorize legacy cleanup.
-func recoverPrimaryJointSwapV6(dir string, readOnly bool) (handled bool, e error) {
-	parent, e := rootpublication.OpenStableParent(dir)
+func recoverPrimaryJointSwapV6(dir string, readOnly bool) (bool, error) {
+	registry := rootpublication.NewIdentityPinRegistry()
+	defer registry.Close()
+	return recoverPrimaryJointSwapWithRegistryV6(dir, readOnly, registry, nil)
+}
+
+func recoverPrimaryJointSwapWithRegistryV6(dir string, readOnly bool, registry *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (handled bool, e error) {
+	proof, e := newPrimaryJointRecoveryProofV6(registry, lock)
 	if e != nil {
 		return false, e
 	}
-	defer parent.Close()
-	f, e := rootpublication.OpenStableChildFile(parent, indexReadyFileName, os.O_RDONLY, 0)
+	defer func() { e = proof.finish(e) }()
+	proof.parent, e = rootpublication.OpenStableParent(dir)
+	if e != nil {
+		return false, e
+	}
+	proof.marker, e = rootpublication.OpenStableChildFile(proof.parent, indexReadyFileName, os.O_RDONLY, 0)
 	if os.IsNotExist(e) {
 		return false, nil
 	}
 	if e != nil {
 		return true, e
 	}
-	image, e := io.ReadAll(io.LimitReader(f, 4141))
-	e = errors.Join(e, f.Close())
+	image, e := io.ReadAll(io.LimitReader(proof.marker, 4141))
+	proof.image = image
+	if testHookPrimaryJointRecoveryProofV6 != nil {
+		testHookPrimaryJointRecoveryProofV6("before-marker-close", proof)
+	}
+	if closeErr := proof.closeFile(&proof.marker); closeErr != nil {
+		return true, errors.Join(e, closeErr)
+	}
 	if e != nil {
 		return true, e
 	}
@@ -330,16 +398,20 @@ func recoverPrimaryJointSwapV6(dir string, readOnly bool) (handled bool, e error
 	if e != nil {
 		return true, e
 	}
-	if e = rollForwardPrimaryJointV6(context.Background(), dir, parent, d); e != nil {
+	completed, e := proof.completedCanonical(dir, d)
+	if e != nil {
 		return true, errors.Join(e, ErrRecoveryRequired)
 	}
-	e = deletePrimaryJointCommitV6(context.Background(), dir, parent)
-	return true, errors.Join(e, func() error {
-		if e != nil {
-			return ErrRecoveryRequired
+	if !completed {
+		if e = rollForwardPrimaryJointWithProofV6(context.Background(), dir, proof.parent, d, proof); e != nil {
+			return true, errors.Join(e, ErrRecoveryRequired)
 		}
-		return nil
-	}())
+	}
+	e = proof.deleteDecision(dir)
+	if e != nil {
+		return true, errors.Join(e, ErrRecoveryRequired)
+	}
+	return true, nil
 }
 
 func (g *indexGen) rebindPrimaryJointNamespaceV6(dir string) error {

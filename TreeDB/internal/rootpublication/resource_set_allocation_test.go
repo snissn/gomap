@@ -1,10 +1,13 @@
 package rootpublication
 
 import (
+	"context"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"os"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestOwnedSetWrapperFreezeRefusalPreservesSource(t *testing.T) {
@@ -272,5 +275,333 @@ func TestOwnedSetDiagnosticOwnerRefusalAliasesAndLastCleanup(t *testing.T) {
 	}
 	if _, err = source.AcquirePhysicalDiagnostics(); !errors.Is(err, ErrResourceOwnership) {
 		t.Fatalf("released diagnostic resurrected=%v", err)
+	}
+}
+
+// A real owned token's duplicated OS handle is closed before its actual last
+// Close. This tests the original kind/logical/physical/rope disposal graph,
+// rather than substituting a cleanup callback or scalar accounting receipt.
+func TestOwnedSetActualPhysicalCloseFailureRetainsOriginalGraph(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "real-close.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	set := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
+	views := set.kindViews
+	view := views.get(ResourceIndex)
+	token := view.logical.entry.token
+	originalPhysical := token.physicalBacking
+	if err = token.pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = set.transfer(ResourceOwnerBuilder, ResourceOwnerCoordinator); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[ResourceKind]uint64{}
+	set.adjustActivePinsByKind(counts, true)
+	if counts[ResourceIndex] != 1 {
+		t.Fatal("pending contribution missing")
+	}
+	before := owner.Bytes()
+	first := set.releaseFromWithActivePins(ResourceOwnerCoordinator, counts)
+	if !errors.Is(first, os.ErrClosed) {
+		t.Fatalf("actual Close refusal: %v", first)
+	}
+	if set.Owner() != ResourceOwnerReleased || counts[ResourceIndex] != 0 {
+		t.Fatal("Set edge was not consumed exactly once")
+	}
+	if set.kindViews != views || set.metadata == nil || owner.Bytes() == 0 || owner.Bytes() > before || originalPhysical.file == nil || originalPhysical.owner == nil || registry.failedPinned != originalPhysical {
+		t.Fatal("failure refunded original wrapper/backing or lost physical custody")
+	}
+	remaining := owner.Bytes()
+	for i := 0; i < 3; i++ {
+		if again := set.ReleaseWithError(); again != first {
+			t.Fatal("repeated Close replaced first result")
+		}
+	}
+	if owner.Bytes() != remaining || originalPhysical.refs.Load() != 0 || originalPhysical.failedNext == originalPhysical {
+		t.Fatal("repeated Close replayed physical cleanup/refund")
+	}
+	if err = registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoveryHandoffActualPhysicalCloseFailureIsSticky(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "handoff-close.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	set := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
+	token := set.kindViews.get(ResourceIndex).logical.entry.token
+	// This real terminal coordinator transfers its original retained slice/Set.
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishAmbiguous}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = set.transfer(ResourceOwnerBuilder, ResourceOwnerCoordinator); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.recoverySets = append(coordinator.recoverySets, set)
+	coordinator.mu.Unlock()
+	handoff, err := coordinator.TakeRecoveryHandoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.metadata != &owner || handoff.metadataCharge == 0 {
+		t.Fatal("handoff was not preadmitted on original owner")
+	}
+	if err = token.pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first := handoff.ReleaseWithError()
+	if !errors.Is(first, os.ErrClosed) || handoff.failure.original != handoff || handoff.sets[0] != set {
+		t.Fatalf("handoff lost original failed payload: %v", first)
+	}
+	remaining := owner.Bytes()
+	if again := handoff.ReleaseWithError(); again != first || owner.Bytes() != remaining {
+		t.Fatal("handoff repeated original cleanup or refund")
+	}
+	if err = registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The diagnostic is the actual final descriptor borrower after source Close.
+func TestOwnedDiagnosticActualPhysicalCloseFailureRetainsOriginalPayload(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "diagnostic-real-close.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	set := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
+	token := set.kindViews.get(ResourceIndex).logical.entry.token
+	diagnostic, err := set.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = set.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if err = token.pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first := diagnostic.CloseWithError()
+	if !errors.Is(first, os.ErrClosed) || diagnostic.allocation == nil || diagnostic.allocation.failure.original != diagnostic || len(diagnostic.physical) != 1 || token.physicalBacking == nil {
+		t.Fatalf("last diagnostic lost exact retained payload: %v", first)
+	}
+	remaining := owner.Bytes()
+	if remaining == 0 || diagnostic.Physical() != nil {
+		t.Fatal("failed original payload was refunded or exposed")
+	}
+	for i := 0; i < 3; i++ {
+		if again := diagnostic.CloseWithError(); again != first || owner.Bytes() != remaining {
+			t.Fatal("diagnostic retried/refunded actual failure")
+		}
+	}
+	if err = registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnedScopedTokenCallbackActualLastCloseFailure(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "scoped-real-close.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	set := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
+	operationErr := errors.New("original callback refusal")
+	err = set.WithScopedTokens(func(tokens []*StableResourceToken) error {
+		if len(tokens) != 1 {
+			t.Fatal("missing actual original token")
+		}
+		if e := set.ReleaseWithError(); e != nil {
+			t.Fatal(e)
+		}
+		if e := tokens[0].pinned.Close(); e != nil {
+			t.Fatal(e)
+		}
+		return operationErr
+	})
+	if !errors.Is(err, operationErr) || !errors.Is(err, os.ErrClosed) || owner.Bytes() == 0 || registry.failedPinned == nil {
+		t.Fatalf("scoped cleanup erased original operation/physical outcome: %v", err)
+	}
+	if e := registry.Unobserve(identity); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestOwnedBuilderActualLastCloseFailureRetainsOriginalPayload(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "builder-real-close.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	source := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
+	token := source.kindViews.get(ResourceIndex).logical.entry.token
+	builder, err := NewStableResourceSetBuilderWithMetadata(&owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = builder.Merge(source); err != nil {
+		t.Fatal(err)
+	}
+	if err = token.pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	views := builder.kindViews
+	before := owner.Bytes()
+	first := builder.AbandonWithError()
+	if !errors.Is(first, os.ErrClosed) || builder.metadata == nil || builder.metadata.failure.original != builder || builder.kindViews != views || registry.failedPinned == nil {
+		t.Fatalf("builder lost original failure payload: %v", first)
+	}
+	held := owner.Bytes()
+	if held == 0 || held > before {
+		t.Fatalf("invalid retained contribution: %d -> %d", before, held)
+	}
+	for i := 0; i < 3; i++ {
+		if again := builder.AbandonWithError(); again != first || owner.Bytes() != held {
+			t.Fatal("repeated builder disposal replayed/refunded original refusal")
+		}
+	}
+	if err = registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The original operation callback holds its actual last edge while the SAME
+// builder is already claimed. Reentrant and concurrent callers must not report
+// completion or replay Release while that physical callback is still pending.
+type blockingBuilderOperations struct {
+	ownedTokenOperationsFixture
+	builder *StableResourceSetBuilder
+	entered chan error
+	resume  chan struct{}
+}
+
+func (o *blockingBuilderOperations) Release() (bool, error) {
+	if o.refs.Load() == 1 {
+		o.entered <- o.builder.AbandonWithError()
+		<-o.resume
+	}
+	return o.ownedTokenOperationsFixture.Release()
+}
+func TestOwnedBuilderActualCompletionReentrantAndPending(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(blockingBuilderOperations{})))
+	if err := owner.AddPending(charge); err != nil {
+		t.Fatal(err)
+	}
+	ops := &blockingBuilderOperations{
+		ownedTokenOperationsFixture: ownedTokenOperationsFixture{owner: &owner, charge: charge},
+		entered:                     make(chan error, 1), resume: make(chan struct{}),
+	}
+	ops.refs.Store(1)
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "builder-pending.bin", "payload")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Unobserve(identity)
+	token, err := NewStableResourceToken(StableResourceSpec{
+		MetadataOwner: &owner, OwnedOperations: ops, PinRegistry: registry,
+		Kind: ResourceIndex, LogicalLane: "lane", ResourceID: "builder-pending.bin",
+		Generation: 1, DiagnosticPath: "builder-pending.bin", File: file,
+		Frontier: DurableFrontier{Bytes: 7}, Reachability: ReachabilityIndexFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ops.Release(); err != nil {
+		t.Fatal(err)
+	}
+	builder, err := NewStableResourceSetBuilderWithMetadata(&owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops.builder = builder
+	if err = builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	complete := make(chan error, 1)
+	go func() { complete <- builder.AbandonWithError() }()
+	select {
+	case err = <-ops.entered:
+		if !errors.Is(err, ErrResourceOwnership) {
+			t.Fatalf("reentrant close pretended completion: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("original release callback never entered")
+	}
+	held := owner.Bytes()
+	if held == 0 || builder.metadata == nil || ops.disposed.Load() {
+		t.Fatal("pending original payload refunded")
+	}
+	for i := 0; i < 3; i++ {
+		if err = builder.AbandonWithError(); !errors.Is(err, ErrResourceOwnership) || owner.Bytes() != held {
+			t.Fatalf("pending duplicate replay/refund: %v", err)
+		}
+	}
+	close(ops.resume)
+	select {
+	case err = <-complete:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("original callback completion deadlocked")
+	}
+	if err = builder.AbandonWithError(); err != nil || owner.Bytes() != 0 || !ops.disposed.Load() || ops.releaseCalls.Load() != 2 {
+		t.Fatalf("actual final completion failed: %v bytes=%d calls=%d", err, owner.Bytes(), ops.releaseCalls.Load())
 	}
 }

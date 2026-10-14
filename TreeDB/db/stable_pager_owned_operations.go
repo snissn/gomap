@@ -20,6 +20,7 @@ type stablePagerOwnedOperations struct {
 	snapshotCompleted bool
 	completionErr     error
 	disposalClaimed   bool
+	disposalConsumed  atomic.Bool
 	transferred       atomic.Bool
 	snapshot          *Snapshot
 	pager             *pager.Pager
@@ -77,35 +78,50 @@ func (operations *stablePagerOwnedOperations) FlushThrough(*os.File, rootpublica
 func (operations *stablePagerOwnedOperations) SyncThrough(file *os.File, _ rootpublication.DurableFrontier) error {
 	return operations.pager.SyncIndexDataWithStableFile(file)
 }
-func (operations *stablePagerOwnedOperations) Release() {
+func (operations *stablePagerOwnedOperations) Release() (consumed bool, err error) {
 	n := operations.refs.Add(-1)
 	if n < 0 {
 		panic("unbalanced pager callback backing")
 	}
 	if n != 0 {
-		return
+		return true, nil
 	}
 	operations.completionMu.Lock()
 	if !operations.transferred.Load() && !operations.snapshotCompleted {
-		// Failed construction never transferred the caller's Snapshot edge.
-		operations.snapshot = nil
-		operations.counter = nil
+		operations.snapshot, operations.counter = nil, nil
 		operations.snapshotCompleted = true
 	}
 	if operations.snapshotCompleted {
 		claimed := !operations.disposalClaimed
 		operations.disposalClaimed = true
+		prior := operations.completionErr
 		operations.completionMu.Unlock()
 		if claimed {
-			operations.disposeAfterSnapshotCompletion()
+			err := operations.disposeAfterSnapshotCompletion()
+			operations.completionMu.Lock()
+			if operations.completionErr == nil {
+				operations.completionErr = err
+			}
+			prior = operations.completionErr
+			operations.completionMu.Unlock()
 		}
-		return
+		if !claimed {
+			// The descriptor reference is consumed. The SAME Snapshot finalizer and
+			// original custody retain the in-flight physical action and its outcome.
+			return true, prior
+		}
+		return operations.disposalConsumed.Load(), prior
 	}
 	snapshot := operations.snapshot
 	operations.completionMu.Unlock()
-	// Close only requests retirement. The actual finalizer owns completion,
-	// including an overlapping last read and all of its original error outcome.
-	_ = snapshot.Close()
+	// An overlapping read retains the SAME original completion edge. This
+	// descriptor consumed its independent reference; actual asynchronous debt
+	// remains in that original Snapshot/operations custody.
+	err = snapshot.Close()
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Called by the original Snapshot finalizer after successful handle scrub.
@@ -173,6 +189,7 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() e
 	operations.originalCustody.Complete(nil, nil)
 	operations.originalCustody = nil
 	operations.owner = nil
+	operations.disposalConsumed.Store(true)
 	operations.metadata = nil
 	operations.charge = 0
 	metadata.RemovePending(charge)

@@ -88,9 +88,10 @@ existing DATA producer storage and the selected metadata ownership boundary
 remain distinct. The added PRIMARY and DATA `OpenStableChildFile`
 handles have separately allocated `os.File` backing and child diagnostic-name
 storage (`parent.Name()+name`), distinct from the Pager diagnostic path. Their
-actual containing/file/name preadmission, transfer and disposal remains an
-explicit open 19-group item; the path-only Pager baseline cannot represent
-that new backing by itself. Arbitrary parent Close uncertainty and complete
+actual containing/file/name preadmission is now in the original owned-child
+producer and their original Pager/Arena completion governs disposal. Native
+phasing must preserve this charge; the path-only Pager baseline cannot represent
+that backing by itself. Final integrated qualification remains open. Arbitrary parent Close uncertainty and complete
 writer/manager physical-cleanup closure remain unqualified by these component
 characterizations. Pair component tests do not establish the pending complete
 value/leaf creation, registration and retirement allocation/lifetime closure.
@@ -249,3 +250,123 @@ before their independent allocation is released. The original held-C3 physical
 PRIMARY close fault also discriminates a public GetManyView callback: an operation
 that succeeds must still report its actual final cleanup error. These caller
 checks retain successful missing-key and original refusal semantics.
+
+
+The optional refcount tracker admits its actual containing struct on the SAME
+DB identity-registry metadata owner before allocation at startup. Its
+physical tuple contains copied values and an original generation scalar; it
+retains no added pager/generation alias or separate physical owner. The original collector, tracker and candidate transfer one explicit-capacity
+open-addressed count array. Growth preadmits complete new backing and copy
+overlap; shutdown clears aliases and the physical tuple before actual capacity
+and containing refunds. Canonical sorted disk serialization is unchanged.
+Derived-cache admission refusal after an accepted write invalidates the cache
+without rejecting or reapplying that accepted write.
+Fallback candidate evidence admits its full actual containing object before
+its private heap copy; its metadata fields belong to that SAME original owner.
+Original physical Abort refusal retains this evidence and its contribution;
+successful abort or ordered activation consumes outgoing aliases before refund.
+This does not qualify the remaining child-file/name, value/leaf, arbitrary parent
+Close, completed-COMMIT recovery, or required platform closure items.
+
+### Prepared closure status and real nineteen-group gate
+
+Prepared manifest and pack closures now admit their whole original containing
+structs before allocation/effects, using the existing DB identity-registry owner.
+Their retained buffers, actual replacement child handles/names, promoted segment
+and path slices use separate concrete capacity admission. The embedded original
+cleanup receipt retains failed operands through the existing DB error graph.
+Successful sibling edges refund only consumed storage; failure keeps exact debt.
+
+Manifest Take transfers the original Set while preserving abandonment authority.
+Abandon and Release have distinct once-only first outcomes. Compatibility reads,
+restore temp and exact revision unlink use the same admitted closure handles.
+Their final physical Close and namespace release run outside the store lock.
+A refusal after authorized rename/unlink records that disposition and never
+claims rollback or repeats it. Pack Take checks original parent Close before
+transfer; Release retains failed Set, promoted proofs, segments, pins and handles.
+
+The table below is the real allocation/lifetime census, distinct from evidence
+member counts. Source/object/caller bindings are the nineteen numbered rows above.
+Component evidence is reusable when bytes are unchanged; native transferred
+source requires integration and revalidation before whole-candidate acceptance.
+
+| Group | Focused evidence/status | Remaining gate |
+|---|---|---|
+| 1 Arena/read roots | Original same-owner root/index admission | Integrated last-root closure and native release phases. |
+| 2 Banks/chunks/zipper | Original constructor/Abort first-refusal controls | Native continuation, normal/race and unchanged caps. |
+| 3 Pager/growth | Actual child-file admission and grower quiescence controls | Integrated physical close/growth exclusion. |
+| 4 DATA prepared roots | Existing allocator retained; public PRIMARY selection controls | Final public activation/cut source binding. |
+| 5 Transaction/member | Root-before-Set and complete first physical outcome controls | Native constructor/transaction phases and caller migration. |
+| 6 Runtime/slot arrays | Separate runtime/root charges; actual-owner fixture GREEN | Integrated runtime/slot terminal disposal. |
+| 7 Capsule/recovery | Original interrupted and completed-SAME-pair controls | Full format/fault/required-platform gate. |
+| 8 Seal/callbacks | Original final physical completion governs resource release | Native Finish plus accepted/once-ACK validation. |
+| 9 Failure/Snapshot | Ghost/wrapper/late DATA-only physical fault controls | Integrated finalizer/index/primary/leaf race. |
+| 10 Startup/dictionary | Original capture receipt/sibling/closing retention controls | Bounded Capture/Finish, final admission/caller coverage. |
+| 11 File/proofs | Actual containing/file/name prebirth admission | Integrated native File/proof final physical action. |
+| 12 Token/operations | Checked outcome and original pending-completion controls | Finalizer versus last-descriptor race and callers. |
+| 13 Namespace/custody | Metadata-aware pending constructor and Close debt | Native proof stages and Windows fail-closed behavior. |
+| 14 Identity registry | Original capacity/guard/refusal controls | Integrated terminal outstanding-completion checks. |
+| 15 Directories/leases | Root preparation before original Set disposal | Native last-root stages and original borrowed custody. |
+| 16 Manifest/load/rebind | Actual Close/admission original RED; focused normal/race GREEN | Canonical load/rebind and full format/platform gate. |
+| 17 Builder/set/import | Constructor transfer and failed import capacity custody controls | Integrated unwind/borrowed-kind/caller checks. |
+| 18 Rope/RID/history | Immutable old frontier versus canonical merged frontier controls | RID/fence/recovery and default-path costs. |
+| 19 Release/diagnostics | Consumed/pending/physical-debt distinctions implemented | Integrated full caller/race and complete-operation costs. |
+
+All nineteen remain subject to final integrated qualification. Genuine outer-leaf
+and value creation/registration/reclamation, original format/fault controls,
+forty-percent shrink, eight-fold output and raw/default-path cost gates, selected
+command-WAL/COW runtime proof, required Windows CI, latest-head CI and independent
+review remain required. Local prepared-closure GREEN does not waive these gates.
+
+### Selected predecessor ownership and capture error results
+
+The common synchronous/queued capture selects the first nonnil original
+metadata owner from PRIMARY, then the selected preceding resource set, then
+the producer addition. It selects before the builder and every fresh exact or
+projected physical descriptor is constructed. Rebuilt capture preserves its
+source-set owner; manifest replacement uses its existing base/manifest owner.
+Import and merge checks remain strict. This keeps newly born descriptors in the
+same allocation domain instead of repairing a generic allocation afterward.
+
+Capture helpers dispose any frozen nonnil output when later deferred cleanup
+returns an error. Actual physical refusal retains that same set's embedded
+receipt, failed operands and charge through the DB's existing error graph.
+The rule also covers rebuilt/projected output and both manifest replacement
+outputs. Successful constituent cleanup clears its own aliases; failed physical
+cleanup is never replayed or treated as a successful refund.
+
+The focused predecessor control uses a real DATA DB, registered persistent
+value pointer and selected preceding closure. Its original source fails while
+merging freshly captured dependencies with an ownership violation. The direct
+capture-result disposal control exercises the shared normalization boundary
+with an admitted original producer and a genuine second physical Close refusal;
+it is not an outer-call fault injection. Nine focused controls, including the
+seven public post-pack controls, pass normally; retained race/caller results are
+bound separately to source bytes. This evidence does not qualify unintegrated
+native physical phases or any whole-candidate cost/platform gate.
+
+
+Packed publication uncertainty and a failed physical cleanup are different
+outcomes. An uncertain metadata fence retains the original promotion authority
+on the existing capture-teardown array without marking its metadata cleanup
+failed. Its function/receiver environment is admitted before creation, and the
+same array owns an explicit post-return containing charge. Successful terminal
+cleanup scrubs physical and callback aliases before the DB removes that charge.
+The array backing has its own DB-registry admission and transfers at drain.
+
+A hard refusal after an authorized unlink retains the exact original parent,
+staging operands, namespace proof, deletion pins and first cause. Repeated or
+concurrent observation never repeats the unlink or starts the refused physical
+Sync. The post-mutation and rebound controls preserve their original promotion
+and exact-file assertions; their prior teardown-success expectations are
+replaced only by this source-proven hard-failure custody contract. Pure metadata
+ambiguity still requires a successful terminal drain and actual capacity refund.
+
+The prepared pack closure serializes concurrent Take/Release completion on an
+embedded condition charged in its containing allocation. A caller waiting for
+an active original parent Close observes that completed result rather than a
+fabricated ownership refusal. The containing contribution remains admitted until
+the final caller already using that mutex/condition returns from completion;
+its final refund uses local owner/charge values and performs no later access to
+the containing closure. These focused controls do not qualify the pending
+native shared lifecycle integration or the complete nineteen-group gate.

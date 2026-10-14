@@ -1758,7 +1758,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	layout := resolveStorageLayout(db.dir)
-	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes, db.valueLogIdentityPins)
 	if db.indexOuterLeavesInValueLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	}
@@ -2699,7 +2699,7 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 }
 
 func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValueLog bool) bool {
-	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
+	return db != nil && db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq) && !outerLeavesInValueLog
 }
 
 func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte, preferredRoot uint64) (uint64, [][]byte, bool, error) {
@@ -3136,9 +3136,15 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	if err != nil {
 		return stats, err
 	}
-	defer func() { _ = lock.Close() }()
+	defer func() {
+		if !recoveryCleanupOwnsLockV6(retErr, lock) {
+			retErr = errors.Join(retErr, lock.Close())
+		}
+	}()
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	defer valueLogIdentityPins.Close()
 
-	if err := recoverIndexSwap(opts.Dir); err != nil {
+	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
 		return stats, err
 	}
 	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
@@ -3165,7 +3171,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		oldValueIDs[seg.fileID] = struct{}{}
 	}
 
-	d, err := openReadOnlyNoLock(opts)
+	d, err := openReadOnlyNoLockWithRegistryV6(opts, valueLogIdentityPins, lock)
 	if err != nil {
 		return stats, err
 	}
@@ -3249,7 +3255,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		}
 	}
 	layout := resolveStorageLayout(opts.Dir)
-	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes, d.valueLogIdentityPins)
 	if rewriteUsesLeafLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
 	}
@@ -3783,8 +3789,12 @@ const (
 	rewriteTemplateClassOuterLeaf
 )
 
-func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
+func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64, originalRegistry ...*rootpublication.IdentityPinRegistry) *rewriteWriter {
+	var registry *rootpublication.IdentityPinRegistry
+	if len(originalRegistry) != 0 {
+		registry = originalRegistry[0]
+	}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize, stableResourcePins: registry}
 }
 
 const rewriteLeafLogLaneID uint32 = valuelog.ReservedLeafLogLaneID
@@ -4127,7 +4137,7 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 	}
 	rid, err := w.nextRecordRID()
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	ptr, err := w.appendLeafPageWithRIDCapture(rid, leafPage, capture)
@@ -4135,12 +4145,12 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 		err = capture.captureCurrent()
 	}
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	resources, err := capture.freeze([]page.LeafLogPtr{ptr})
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	return ptr, resources, nil
@@ -4173,7 +4183,7 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 	}
 	startRID, err := w.reserveRecordRIDs(len(leafPages))
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	ptrs, err := w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, capture)
@@ -4181,12 +4191,12 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 		err = capture.captureCurrent()
 	}
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	resources, err := capture.freeze(ptrs)
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	return ptrs, resources, nil
@@ -4643,7 +4653,7 @@ func (w *rewriteWriter) rotate() error {
 	}
 	path := filepath.Join(w.walDir, fmt.Sprintf("value-l%d-%06d.log", w.lane, nextSeq))
 	if w.w == nil {
-		writer, err := valuelog.NewWriter(path, fileID)
+		writer, err := valuelog.NewWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		if err != nil {
 			return err
 		}
@@ -4652,9 +4662,11 @@ func (w *rewriteWriter) rotate() error {
 		w.w = writer
 		w.seq = nextSeq
 		if err := w.noteCreatedSegment(path, fileID, w.w); err != nil {
-			_ = w.w.Close()
-			w.w = nil
-			return err
+			cleanupErr := w.w.Close()
+			if cleanupErr == nil {
+				w.w = nil
+			}
+			return joinOriginalWriterCleanup(err, cleanupErr)
 		}
 		w.currentPath = path
 		w.currentFileID = fileID
@@ -4776,11 +4788,11 @@ func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCapture
 			if capture != nil {
 				return fmt.Errorf("%w: staging leaf writer cannot certify raw outer-leaf authority", rootpublication.ErrUnresolvedResource)
 			}
-			writer, err = valuelog.NewStagingWriter(path, fileID)
+			writer, err = valuelog.NewStagingWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		} else if w.stableResourcePins != nil {
 			writer, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, w.stableResourcePins)
 		} else {
-			writer, err = valuelog.NewWriter(path, fileID)
+			writer, err = valuelog.NewWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		}
 		if err != nil {
 			return err
@@ -4794,9 +4806,11 @@ func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCapture
 		w.leafW = writer
 		w.leafSeq = nextSeq
 		if err := w.noteCreatedSegment(path, fileID, w.leafW); err != nil {
-			_ = w.leafW.Close()
-			w.leafW = nil
-			return err
+			cleanupErr := w.leafW.Close()
+			if cleanupErr == nil {
+				w.leafW = nil
+			}
+			return joinOriginalWriterCleanup(err, cleanupErr)
 		}
 		w.leafCurrentPath = path
 		w.leafCurrentFileID = fileID
@@ -5298,14 +5312,18 @@ func (w *rewriteWriter) Close() error {
 	}
 	var err error
 	if w.w != nil {
-		valueWriter := w.w
-		w.w = nil
-		err = errors.Join(err, valueWriter.Close())
+		actual := w.w.Close()
+		if actual == nil {
+			w.w = nil
+		}
+		err = joinOriginalWriterCleanup(err, actual)
 	}
 	if w.leafW != nil {
-		leafWriter := w.leafW
-		w.leafW = nil
-		err = errors.Join(err, leafWriter.Close())
+		actual := w.leafW.Close()
+		if actual == nil {
+			w.leafW = nil
+		}
+		err = joinOriginalWriterCleanup(err, actual)
 	}
 	return err
 }
@@ -6119,4 +6137,24 @@ func removeOldValueLogSegments(segments []logSegment) error {
 		}
 	}
 	return nil
+}
+
+// Reuse an original physical-cleanup receipt so its containing payload and
+// sibling errors remain reachable through ordinary caller wrapping.
+func joinOriginalWriterCleanup(prior, actual error) error {
+	if actual == nil {
+		return prior
+	}
+	if prior == nil {
+		return actual
+	}
+	if original, ok := actual.(interface{ LinkPriorCleanupError(error) }); ok {
+		original.LinkPriorCleanupError(prior)
+		return actual
+	}
+	if original, ok := prior.(interface{ LinkPriorCleanupError(error) }); ok {
+		original.LinkPriorCleanupError(actual)
+		return prior
+	}
+	return errors.Join(prior, actual)
 }

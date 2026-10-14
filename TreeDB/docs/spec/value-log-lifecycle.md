@@ -420,12 +420,22 @@ TreeDB maintains commit-time reference counters per value-log segment.
 - `ValueLogGC` may use these counters as a fast path instead of full-tree scans.
 - A compact metadata snapshot (`vlog_ref_counts.meta`) is stored in the DB dir.
 
+The V6 cache binds CommitSeq to the exact DATA stable identity and, on PRIMARY
+routes, the PRIMARY stable identity and UUID. Counts and this pair are captured
+from the SAME original Snapshot generation. DATA-only caches use an explicit
+unpaired form. Reopen requires that complete physical tuple; V5 metadata misses
+and rebuilds. During one DB lifetime, the original generation scalar also guards
+cache eligibility and ordinary deltas. Incremental deltas carry the captured
+pair without per-commit filesystem discovery; physical cutover captures its new
+pair before publication. A delayed same-sequence scan or persistence completion
+cannot replace or mark clean another physical incarnation.
+
 If counters are unavailable, stale, or corrupt, TreeDB rebuilds by scanning trees
 and rewrites metadata.
 
 A durable-root fallback scan may also supply exact counters for its candidate.
-These counts remain private and are bound to the candidate index, sequence, and
-user/system roots until that matching candidate activates. Publication then
+These counts remain private and are bound to the candidate index, captured
+physical pair, sequence, and user/system roots until that matching candidate activates. Publication then
 installs the already computed counts without applying its commit delta twice.
 Aborted or mismatched candidates cannot repair the live tracker. This reuses the
 required scan; it does not add a scan or change the reachability authority for GC.
@@ -786,7 +796,7 @@ its mandatory CRC prefixes. Genuine dead physical records, active/protected
 segment eligibility and retained-root GC debt follow the existing policies.
 Audit results are published to the incremental
 reference tracker only after the protected basis brackets two exact backend-state
-checks; one invalidation is retried and a second returns
+checks, including the captured physical pair and original generation; one invalidation is retried and a second returns
 `ErrCompactStorageAuditStale`. Later settle/final audits perform zero new walks
 when they reuse structural reachability on an exact complete-basis match. File
 sizes, pins, and zero-byte debt are recomputed on every audit.

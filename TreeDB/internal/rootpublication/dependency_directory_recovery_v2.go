@@ -2,7 +2,10 @@ package rootpublication
 
 import (
 	"bytes"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
+	"sort"
+	"unsafe"
 )
 
 // RecoverDependencyDirectoryV2 admits physical handles before streaming their
@@ -99,11 +102,8 @@ func RecoverDependencyDirectoryV2(directory *DependencyDirectoryV2, admit func(D
 		return nil, err
 	}
 	for _, entry := range builder.entries {
-		switch entry.token.kind {
-		case ResourceColumnAsset, ResourceTypedColumnAsset, ResourceVectorGraphPack, ResourceDictionary, ResourceTemplate:
-			if entry.logicalObligations.count == 0 {
-				return nil, ErrUnresolvedResource
-			}
+		if dependencyKindRequiresLogicalV2(entry.token.kind) && entry.logicalObligations.count == 0 {
+			return nil, ErrUnresolvedResource
 		}
 	}
 	resources, err := builder.Freeze()
@@ -118,4 +118,89 @@ func RecoverDependencyDirectoryV2(directory *DependencyDirectoryV2, admit func(D
 		resources.extras = &stableResourceSetExtras{empty: directory}
 	}
 	return resources, nil
+}
+
+// ValidateDependencyDirectoryDescriptorsV2 uses the original complete Walk and
+// owner lookup codecs without creating resource tokens or a second registry.
+// Only the physical-key census is admitted; logical records stream one at a
+// time and their exact owner/frontier remains the directory's authority.
+func ValidateDependencyDirectoryDescriptorsV2(directory *DependencyDirectoryV2, metadata *retainedalloc.Owner, validate func(DependencyManifestEntryV1, bool) error) error {
+	if directory == nil || metadata == nil || validate == nil {
+		return ErrResourceOwnership
+	}
+	type ownerProof struct {
+		key             []byte
+		required, found bool
+	}
+	n := directory.ref.PhysicalCount
+	if n > uint64(int(^uint(0)>>1))/uint64(unsafe.Sizeof(ownerProof{})) {
+		return ErrDependencyManifestFormat
+	}
+	charge := retainedalloc.AllocationCharge(n * uint64(unsafe.Sizeof(ownerProof{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return err
+	}
+	owners := make([]ownerProof, 0, int(n))
+	defer func() {
+		for i := range owners {
+			clear(owners[i].key)
+			owners[i] = ownerProof{}
+		}
+		owners = nil
+		metadata.RemovePending(charge)
+	}()
+	err := directory.Walk(func(key, value []byte) error {
+		if key[0] == dependencyPhysicalKeyV2 {
+			entry, err := DecodeDependencyPhysicalV2(key, value)
+			if err != nil {
+				return err
+			}
+			if err = validate(entry, true); err != nil {
+				return err
+			}
+			keyCharge := retainedalloc.AllocationCharge(uint64(len(key)))
+			if err = metadata.AddPending(keyCharge); err != nil {
+				return err
+			}
+			charge += keyCharge
+			owners = append(owners, ownerProof{key: bytes.Clone(key), required: dependencyKindRequiresLogicalV2(entry.Kind)})
+			return nil
+		}
+		owner, obligation, err := DecodeDependencyLogicalV2(key, value)
+		if err != nil {
+			return err
+		}
+		i := sort.Search(len(owners), func(i int) bool { return bytes.Compare(owners[i].key, owner) >= 0 })
+		if i == len(owners) || !bytes.Equal(owners[i].key, owner) {
+			return ErrUnresolvedResource
+		}
+		entry, err := directory.LookupPhysical(owner)
+		if err != nil {
+			return err
+		}
+		entry.LogicalObligations = []StableLogicalObligation{obligation}
+		if err = validate(entry, false); err != nil {
+			return err
+		}
+		owners[i].found = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, owner := range owners {
+		if owner.required && !owner.found {
+			return ErrUnresolvedResource
+		}
+	}
+	return nil
+}
+
+func dependencyKindRequiresLogicalV2(kind ResourceKind) bool {
+	switch kind {
+	case ResourceColumnAsset, ResourceTypedColumnAsset, ResourceVectorGraphPack, ResourceDictionary, ResourceTemplate:
+		return true
+	default:
+		return false
+	}
 }

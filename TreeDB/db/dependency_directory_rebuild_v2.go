@@ -83,7 +83,7 @@ func rebuildDependencyDirectoryV2(p *pager.Pager, allocator bulk.Allocator, reso
 // Required-format rebuilds also encode independently imported direct obligations.
 // Import preserves their complete logical authority without retaining an inherited
 // directory as the representation of that authority.
-func rebuildDependencyDirectoryWithRequirementV2(p *pager.Pager, allocator bulk.Allocator, resources *rootpublication.StableResourceSet, required bool) (rootpublication.DependencyDirectoryRefV2, error) {
+func rebuildDependencyDirectoryWithRequirementV2(p *pager.Pager, allocator bulk.Allocator, resources *rootpublication.StableResourceSet, required bool) (_ rootpublication.DependencyDirectoryRefV2, retErr error) {
 	base, err := resources.DependencyDirectoryBaseV2()
 	if err != nil || (base == nil && !required) {
 		return rootpublication.DependencyDirectoryRefV2{}, err
@@ -96,7 +96,7 @@ func rebuildDependencyDirectoryWithRequirementV2(p *pager.Pager, allocator bulk.
 	if captureErr != nil {
 		return rootpublication.DependencyDirectoryRefV2{}, captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, descriptor := range diagnostics.Physical() {
 		if !descriptor.LogicalObligationCountAvailable || descriptor.LogicalObligationCount > ^uint64(0)-reference.LogicalCount {
 			return reference, rootpublication.ErrDependencyManifestFormat

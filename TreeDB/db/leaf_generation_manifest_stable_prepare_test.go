@@ -126,10 +126,22 @@ func TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement(t *tes
 		closure.Release()
 		t.Fatal(err)
 	}
-	descriptors := mustStableResourceDescriptors(t, resources)
-	if len(descriptors) != 1 || descriptors[0].Generation() != persisted.ManifestRevision || descriptors[0].Digest() != closure.Digest() {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	descriptors := diagnostics.Physical()
+	if len(descriptors) != 1 || descriptors[0].Generation != persisted.ManifestRevision || descriptors[0].Digest() != closure.Digest() {
 		resources.Release()
 		t.Fatalf("manifest descriptors=%+v revision=%d digest=%x", descriptors, persisted.ManifestRevision, closure.Digest())
+	}
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := closure.TakeStableResources(); !errors.Is(err, ErrLeafGenerationManifestStablePreparedClosureConsumed) {
 		resources.Release()

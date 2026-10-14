@@ -4197,3 +4197,23 @@ wraps its actual new DATA root through the same owned construction boundary.
 PRIMARY bank IDs retire through their original physical closure and never enter
 the DATA freelist. This uses the existing format and does not add a recovery or
 native capability variant.
+
+
+### Derived value-log reference cache V6
+
+`vlog_ref_counts.meta` remains an optional scan cache, not durable-root or
+reclamation authority. V6 stores `TVREFCNT`, version 6, CommitSeq, a 116-byte
+physical tuple, the sorted count entries (uint32 file ID, uint64 count), and a
+CRC32 covering every preceding byte. Integers use little-endian encoding.
+The tuple contains an explicit uint32 DATA-only (0) or DATA/PRIMARY (1) form,
+two 48-byte stable identities, and the 16-byte PRIMARY UUID. Each identity
+contains a zero-padded 16-byte platform, volume ID, 16-byte object ID, and
+physical generation. DATA-only caches require an empty PRIMARY identity and
+zero UUID; paired caches require the actual PRIMARY stable identity and UUID.
+
+Load matches both CommitSeq and the physical pair captured from the same
+original Snapshot generation. V5, malformed tuples, checksum failures, or a
+foreign physical pair miss and rebuild through the existing full scan.
+Process-local index-generation IDs are not persisted. A completed scan never
+receives identities captured from a later current generation. No atomic-file
+rename persistence assumption can make an old physical pair eligible.

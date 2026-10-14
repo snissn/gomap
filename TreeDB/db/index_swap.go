@@ -7,6 +7,8 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -41,11 +43,17 @@ var syncDirFn = func(dir string) (err error) {
 // It prevents Open from accidentally creating an empty new DB when a previous
 // vacuum crashed after moving index.db aside.
 func recoverIndexSwap(dir string) error {
+	registry := rootpublication.NewIdentityPinRegistry()
+	defer registry.Close()
+	return recoverIndexSwapWithRegistryV6(dir, registry, nil)
+}
+
+func recoverIndexSwapWithRegistryV6(dir string, registry *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) error {
 	if dir == "" {
 		return fmt.Errorf("recover index swap: empty dir")
 	}
 
-	if handled, err := recoverPrimaryJointSwapV6(dir, false); handled || err != nil {
+	if handled, err := recoverPrimaryJointSwapWithRegistryV6(dir, false, registry, lock); handled || err != nil {
 		return err
 	}
 

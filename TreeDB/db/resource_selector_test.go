@@ -39,7 +39,8 @@ func dbSelectorFixture(t *testing.T) (*rootpublication.StableResourceSet, rootpu
 func TestRecoverableRootSetCloneStableResourceForExactRoot(t *testing.T) {
 	resources, selector := dbSelectorFixture(t)
 	root := RecoverableRoot{CommitSeq: 1, UserRootPageID: 2, SystemRootPageID: 3, AppliedCommandLSN: 4, MaxEntryRevision: 5}
-	set := &RecoverableRootSet{rootResources: map[recoverableRootKey]*rootpublication.StableResourceSet{recoverableRootIdentity(root): resources}, resources: []*rootpublication.StableResourceSet{resources}}
+	set := &RecoverableRootSet{resources: []*rootpublication.StableResourceSet{resources}}
+	set.putRootResources(recoverableRootIdentity(root), resources)
 	selected, err := set.CloneStableResourceForRoot(root, selector)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +54,8 @@ func TestRecoverableRootSetCloneStableResourceForExactRoot(t *testing.T) {
 	selected.Release()
 
 	resources, selector = dbSelectorFixture(t)
-	set = &RecoverableRootSet{rootResources: map[recoverableRootKey]*rootpublication.StableResourceSet{recoverableRootIdentity(root): resources}, resources: []*rootpublication.StableResourceSet{resources}}
+	set = &RecoverableRootSet{resources: []*rootpublication.StableResourceSet{resources}}
+	set.putRootResources(recoverableRootIdentity(root), resources)
 	mismatch := root
 	mismatch.MaxEntryRevision++
 	if got, err := set.CloneStableResourceForRoot(mismatch, selector); got != nil || !errors.Is(err, ErrRecoverableRootSetStale) {

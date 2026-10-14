@@ -182,9 +182,9 @@ func (owner *primaryArenaOwnerV5) retainFailedDataGeneration(g *indexGen) {
 	defer owner.mu.Unlock()
 	g.failedNext = owner.failedDataGenerations
 	owner.failedDataGenerations = g
-	g.closeFailure.causes[2] = owner.cleanupErr
+	g.closeFailure.retainCause(2, owner.cleanupErr)
 	if g.closeErr != &g.closeFailure {
-		g.closeFailure.causes[0] = g.closeErr
+		g.closeFailure.retainCause(0, g.closeErr)
 	}
 	g.closeErr = &g.closeFailure
 	owner.cleanupErr = g.closeErr

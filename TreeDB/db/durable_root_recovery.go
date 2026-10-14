@@ -97,6 +97,13 @@ func selectDurableRootCandidates(source freelist.PageSource, validate func(durab
 	return selectDurableRootCandidateSetV1(candidates, reasons, validate)
 }
 
+// A selected original release receipt denotes physical refusal, rather than
+// invalid recovery bytes. It must never become permission to accept another slot.
+func originalRecoveryCleanupRefused(err error) bool {
+	var receipt interface{ LinkPriorCleanupError(error) }
+	return errors.As(err, &receipt)
+}
+
 // Both authorities use the same independent two-slot resource installation.
 func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reasons [2]error, validate func(durableMetaCandidateV1) (durableRootSelectionV1, error)) (durableRootSelectionV1, error) {
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -129,8 +136,15 @@ func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reason
 		selected, err := validate(candidate)
 		if err == nil {
 			if priorSlot, duplicate := seenGenerations[selected.Meta.CommitSeq]; duplicate {
-				selected.resources.Release()
-				selected.ParentResources[candidate.slot].Release()
+				cleanup := errors.Join(selected.resources.ReleaseWithError(), selected.ParentResources[candidate.slot].ReleaseWithError())
+				if cleanup != nil {
+					selected.SlotResources = slotResources
+					selected.SlotResources[candidate.slot] = selected.resources
+					selected.resources = nil
+					parentResources[candidate.slot] = selected.ParentResources[candidate.slot]
+					selected.ParentResources = parentResources
+					return selected, cleanup
+				}
 				reasons[candidate.slot] = fmt.Errorf("duplicate recovery generation: commit %d already selected from slot %d", selected.Meta.CommitSeq, priorSlot)
 				continue
 			}
@@ -152,6 +166,15 @@ func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reason
 				chosen.SlotCommits[candidate.slot] = selected.Meta.CommitSeq
 			}
 			continue
+		}
+		if originalRecoveryCleanupRefused(err) {
+			// The returned original selected payload carries the refusing edge;
+			// previously accepted siblings remain in their exact captured arrays.
+			slotResources[candidate.slot] = selected.resources
+			parentResources[candidate.slot] = selected.ParentResources[candidate.slot]
+			selected.resources = nil
+			selected.SlotResources, selected.ParentResources = slotResources, parentResources
+			return selected, err
 		}
 		reasons[candidate.slot] = err
 	}
@@ -208,7 +231,7 @@ func readDurableMetaSlotV1(source freelist.PageSource, slot uint64) (page.Durabl
 	return meta, nil
 }
 
-func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
+func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (result durableRootSelectionV1, resultErr error) {
 	meta := candidate.meta
 	recordImage, err := source.ReadPage(meta.RootRecordPageID)
 	if err != nil {
@@ -248,13 +271,16 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 		}
 	}
 	if err != nil {
-		resources.Release()
-		return durableRootSelectionV1{}, fmt.Errorf("dependency metadata: %w", err)
+		cleanup := resources.ReleaseWithError()
+		return durableRootSelectionV1{Slot: candidate.slot, resources: resources}, errors.Join(fmt.Errorf("dependency metadata: %w", err), cleanup)
 	}
 	accepted := false
 	defer func() {
 		if !accepted {
-			resources.Release()
+			if cleanup := resources.ReleaseWithError(); cleanup != nil {
+				result = durableRootSelectionV1{Slot: candidate.slot, resources: resources}
+				resultErr = errors.Join(resultErr, cleanup)
+			}
 		}
 	}()
 	if err := validateDurableRootPageV1(source, record.UserRootPageID, record.TotalPages); err != nil {

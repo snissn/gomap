@@ -32,7 +32,6 @@ type primaryRebuildScratchV5 struct {
 	inputs           [4]rebuiltPrimaryRootV5
 	built            [4]rebuiltPrimaryOwnedRecordV5
 	privateResources [2]*rootpublication.StableResourceSet
-	acquired         [4]primaryarena.Ref
 	count            int
 }
 
@@ -79,11 +78,21 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 	a, p := idx.primary, idx.pager
 	source := roots.durable
 	scratchCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryRebuildScratchV5{})))
-	if e := a.MetadataOwner().AddPending(scratchCharge); e != nil {
+	headerCharge := primaryRuntimeDescriptorChargeV5()
+	if e := a.MetadataOwner().AddPending(scratchCharge + headerCharge); e != nil {
 		return selected, nil, e
 	}
+	construction := &primaryDurableRuntimeV5{}
+	bindReservedPrimaryRuntimeV5(construction, a)
+	construction.metadataCharge += scratchCharge
 	scratch := &primaryRebuildScratchV5{}
-	defer func() { *scratch = primaryRebuildScratchV5{}; a.MetadataOwner().RemovePending(scratchCharge) }()
+	construction.rebuildScratch, construction.rebuildScratchCharge = scratch, scratchCharge
+	published := false
+	defer func() {
+		if !published {
+			err = errors.Join(err, db.releaseOriginalPrimaryRuntimeV5(a, construction))
+		}
+	}()
 	if e := scratch.put(older.meta.CommitSeq, rebuiltPrimaryRootV5{root: older, source: source.slotRecord[source.slot^1]}); e != nil {
 		return selected, nil, e
 	}
@@ -91,11 +100,6 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		return selected, nil, e
 	}
 	privateResources := scratch.privateResources[:0]
-	defer func() {
-		for _, resources := range privateResources {
-			resources.Release()
-		}
-	}()
 	// Only the two explicitly retained one-hop proofs participate. Their own
 	// parent fields are not followed or used for lookup or ownership.
 	for proofSlot, proof := range source.primaryProof {
@@ -166,21 +170,6 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		return selected, nil, e
 	}
 	owned := true
-	defer func() {
-		if owned {
-			for _, record := range scratch.built[:scratch.count] {
-				var drop error
-				if record.bundle.Record.PageID != 0 {
-					_, drop = a.Drop(record.bundle.Record, nil)
-				}
-				err = errors.Join(err, drop)
-				if record.bundle.Directory.PageID != 0 {
-					_, drop = a.Drop(record.bundle.Directory, nil)
-					err = errors.Join(err, drop)
-				}
-			}
-		}
-	}()
 	for _, seq := range sequences {
 		if e = ctx.Err(); e != nil {
 			return selected, nil, e
@@ -306,7 +295,7 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			return selected, nil, e
 		}
 		imageCharge := retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6)
-		descriptorCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))
+		descriptorCharge := primaryStateDescriptorChargeV5()
 		// Both installation images overlap the selector copies. Selected copies
 		// transfer to their independently retained roots only after complete install.
 		pendingCharge := 4*imageCharge + descriptorCharge
@@ -363,24 +352,15 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			installImages[slot] = image
 		}
 		selected, images, e = selectPrimaryCapsuleAuthorityV6(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
+		runtime = construction
+		runtime.projection, runtime.slots = selected.Primary, selected.SlotPrimary
+		runtime.proofRecords, runtime.proofResources = selected.ParentRecords, selected.ParentResources
+		runtime.capsuleImages, runtime.slotResources = images, selected.SlotResources
+		runtime.metadataCharge += descriptorCharge + 2*imageCharge
+		pendingCharge -= descriptorCharge + 2*imageCharge
 		if e != nil {
 			return selected, nil, e
 		}
-		runtime = &primaryDurableRuntimeV5{projection: selected.Primary, slots: selected.SlotPrimary, proofRecords: selected.ParentRecords, proofResources: selected.ParentResources, capsuleImages: images}
-		acquired := scratch.acquired[:0]
-		defer func() {
-			if owned {
-				for _, r := range acquired {
-					a.Drop(r, nil)
-				}
-				for _, r := range selected.SlotResources {
-					r.Release()
-				}
-				for _, r := range selected.ParentResources {
-					r.Release()
-				}
-			}
-		}()
 		for slot, image := range images {
 			if len(image) == 0 {
 				return selected, nil, rootpublication.ErrResourceOwnership
@@ -394,7 +374,6 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			if ok, e := a.Acquire(root, nil); !ok || e != nil {
 				return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 			}
-			acquired = append(acquired, root)
 			runtime.records[slot] = root
 			runtime.dataFloor[slot] = generation.CommitSeq()
 			if parent := selected.ParentRecords[slot]; parent.Record.CommitSeq != 0 {
@@ -402,32 +381,29 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 				if ok, e := a.Acquire(proof, nil); !ok || e != nil {
 					return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 				}
-				acquired = append(acquired, proof)
 				runtime.proofs[slot] = proof
 				runtime.dataFloor[slot+2] = generation.CommitSeq()
 			}
 		}
 		current := scratch.built[scratch.index(selected.Record.CommitSeq)].bundle.Directory
-		runtime.current = &primaryStateRootV5{a, current, generation.CommitSeq()}
-		for i, seq := range sequences {
-			value := scratch.built[i]
-			if seq != selected.Record.CommitSeq {
-				if _, e = a.Drop(value.bundle.Directory, nil); e != nil {
-					return selected, nil, e
-				}
-				value.bundle.Directory = primaryarena.Ref{}
-				scratch.built[scratch.index(seq)] = value
-			}
+		runtime.current = &primaryStateRootV5{arena: a, ref: current, dataCommit: generation.CommitSeq()}
+		scratch.built[scratch.index(selected.Record.CommitSeq)].bundle.Directory = primaryarena.Ref{} // SAME original edge transferred
+		if e = bindPrimaryReadRootCertificateV6(runtime.current); e != nil {
+			return selected, nil, e
 		}
 		for i, image := range images {
 			if image != nil {
 				a.AdoptPendingRootMetadata(runtime.records[i], imageCharge)
-				pendingCharge -= imageCharge
+				runtime.metadataCharge -= imageCharge
 			}
 		}
-		a.AdoptPendingRootMetadata(current, descriptorCharge)
-		pendingCharge -= descriptorCharge
-		owned = false
+		a.AdoptPendingRootMetadata(current, primaryStateDescriptorChargeV5())
+		runtime.metadataCharge -= descriptorCharge
+		if e = finishPrimaryRuntimeRebuildScratchV5(runtime); e != nil {
+			return selected, nil, e
+		}
+		runtime.slotResources = [2]*rootpublication.StableResourceSet{}
+		owned, published = false, true
 		return selected, runtime, nil
 	}
 	for _, slot := range []uint64{source.slot ^ 1, source.slot} {
@@ -447,36 +423,19 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			return selected, nil, e
 		}
 	}
-	descriptorCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))
+	descriptorCharge := primaryStateDescriptorChargeV5()
 	if e = a.MetadataOwner().AddPending(descriptorCharge); e != nil {
 		return selected, nil, e
 	}
-	descriptorOwned := true
-	defer func() {
-		if descriptorOwned {
-			a.MetadataOwner().RemovePending(descriptorCharge)
-		}
-	}()
+	construction.metadataCharge += descriptorCharge
 	selected, e = selectDurablePrimaryRootWithMetadataV5(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
+	runtime = construction
+	runtime.projection, runtime.slots = selected.Primary, selected.SlotPrimary
+	runtime.proofRecords, runtime.proofResources = selected.ParentRecords, selected.ParentResources
+	runtime.slotResources = selected.SlotResources
 	if e != nil {
 		return selected, nil, e
 	}
-	runtime = &primaryDurableRuntimeV5{projection: selected.Primary, slots: selected.SlotPrimary, proofRecords: selected.ParentRecords, proofResources: selected.ParentResources}
-	acquired := scratch.acquired[:0]
-	defer func() {
-		if owned {
-			for _, ref := range acquired {
-				_, drop := a.Drop(ref, nil)
-				err = errors.Join(err, drop)
-			}
-			for _, resources := range selected.SlotResources {
-				resources.Release()
-			}
-			for _, resources := range selected.ParentResources {
-				resources.Release()
-			}
-		}
-	}()
 	for slot, record := range selected.SlotRecords {
 		if record.CommitSeq == 0 {
 			return selected, nil, rootpublication.ErrResourceOwnership
@@ -486,7 +445,6 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		if !ready || e != nil {
 			return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 		}
-		acquired = append(acquired, value.bundle.Record)
 		runtime.records[slot] = value.bundle.Record
 		runtime.dataFloor[slot] = selected.SlotPrimary[slot].DataCommitSeq
 		if parent := selected.ParentRecords[slot]; parent.Record.CommitSeq != 0 {
@@ -495,54 +453,21 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			if !ready || e != nil {
 				return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 			}
-			acquired = append(acquired, proof)
 			runtime.proofs[slot] = proof
 			runtime.dataFloor[slot+2] = parent.Primary.DataCommitSeq
 		}
 	}
 	current := scratch.built[scratch.index(selected.Record.CommitSeq)].bundle.Directory
-	runtime.current = &primaryStateRootV5{a, current, generation.CommitSeq()}
-	// Each slot/proof now owns exact independent record handles. The selected
-	// current state takes one directory owner; other private directory handles go.
-	for i, seq := range sequences {
-		value := scratch.built[i]
-		if _, e = a.Drop(value.bundle.Record, nil); e != nil {
-			return selected, nil, e
-		}
-		value.bundle.Record = primaryarena.Ref{}
-		scratch.built[scratch.index(seq)] = value
-		if seq != selected.Record.CommitSeq {
-			if _, e = a.Drop(value.bundle.Directory, nil); e != nil {
-				return selected, nil, e
-			}
-			value.bundle.Directory = primaryarena.Ref{}
-			scratch.built[scratch.index(seq)] = value
-		}
+	runtime.current = &primaryStateRootV5{arena: a, ref: current, dataCommit: generation.CommitSeq()}
+	scratch.built[scratch.index(selected.Record.CommitSeq)].bundle.Directory = primaryarena.Ref{} // transfer, no second drop
+	// Finish the SAME original scratch once, after state custody is bound.
+	// A refused root drop keeps all resource edges and the first receipt.
+	a.AdoptPendingRootMetadata(current, primaryStateDescriptorChargeV5())
+	runtime.metadataCharge -= descriptorCharge
+	if e = finishPrimaryRuntimeRebuildScratchV5(runtime); e != nil {
+		return selected, nil, e
 	}
-	a.AdoptPendingRootMetadata(current, descriptorCharge)
-	descriptorOwned = false
-	owned = false
+	runtime.slotResources = [2]*rootpublication.StableResourceSet{}
+	owned, published = false, true
 	return selected, runtime, nil
-}
-
-func releasePrimaryRuntimeV5(a *primaryarena.Arena, runtime *primaryDurableRuntimeV5) {
-	if runtime == nil {
-		return
-	}
-	for _, resources := range runtime.proofResources {
-		resources.Release()
-	}
-	for _, ref := range runtime.records {
-		if ref.PageID != 0 {
-			_, _ = a.Drop(ref, nil)
-		}
-	}
-	for _, ref := range runtime.proofs {
-		if ref.PageID != 0 {
-			_, _ = a.Drop(ref, nil)
-		}
-	}
-	if runtime.current != nil {
-		_, _ = a.Drop(runtime.current.ref, nil)
-	}
 }

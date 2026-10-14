@@ -22,7 +22,16 @@ func OpenReadOnlyCapsule(path string) (*Arena, error) { return open(path, true, 
 // returned Arena with an error owns incomplete cleanup through its genuine
 // initialized metadata owner; diagnosticPath is never reopened for authority.
 func OpenCapsuleOwnedFile(file *os.File, diagnosticPath string) (*Arena, error) {
-	p, err := pager.OpenOwnedFileWithOptions(file, diagnosticPath, chunkBanks*page.PageSize, pager.OpenOptions{})
+	return openCapsuleOwnedFile(file, diagnosticPath, nil, 0)
+}
+
+// OpenCapsuleOwnedFileWithMetadata transfers the producer's pre-open child
+// capacity to the SAME underlying Pager's checked physical completion.
+func OpenCapsuleOwnedFileWithMetadata(file *os.File, diagnosticPath string, owner *retainedalloc.Owner, charge uint64) (*Arena, error) {
+	return openCapsuleOwnedFile(file, diagnosticPath, owner, charge)
+}
+func openCapsuleOwnedFile(file *os.File, diagnosticPath string, owner *retainedalloc.Owner, charge uint64) (*Arena, error) {
+	p, err := pager.OpenOwnedFileWithMetadata(file, diagnosticPath, chunkBanks*page.PageSize, pager.OpenOptions{}, owner, charge)
 	if p == nil {
 		return nil, err
 	}

@@ -408,7 +408,11 @@ func TestOuterLeafLogicalReplacementUsesExactTrackerProjection(t *testing.T) {
 
 	baseSeq := database.currentCommitSeq()
 	database.valueLogRefTracker = newValueLogRefTracker()
-	database.valueLogRefTracker.replace(map[uint32]uint64{oldValueFileID: 1, staleLeafFileID: 1}, baseSeq, false)
+	incarnation, e := captureValueLogRefIncarnation(database.idx.Load())
+	if e != nil {
+		t.Fatal(e)
+	}
+	database.valueLogRefTracker.replace(map[uint32]uint64{oldValueFileID: 1, staleLeafFileID: 1}, baseSeq, incarnation, false)
 	delta := newValueLogRefDelta()
 	defer releaseValueLogRefDelta(delta)
 	delta.outerLeafDependencyReuse = true

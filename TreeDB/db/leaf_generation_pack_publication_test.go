@@ -111,6 +111,7 @@ func openLeafGenerationPackPublicationTestDB(t *testing.T, dir string) (*DB, *re
 func closeLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rewriteWriter) {
 	t.Helper()
 	if err := db.Close(); err != nil {
+		logOriginalCleanupDiagnostic(t, err)
 		t.Fatalf("Close DB: %v", err)
 	}
 	if err := leafLog.Close(); err != nil {
@@ -121,7 +122,10 @@ func closeLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rew
 func closePoisonedLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rewriteWriter) {
 	t.Helper()
 	if err := db.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		logOriginalCleanupDiagnostic(t, err)
 		t.Fatalf("Close poisoned DB error=%v want ErrRecoveryRequired", err)
+	} else {
+		logOriginalCleanupDiagnostic(t, err)
 	}
 	if err := leafLog.Close(); err != nil {
 		t.Fatalf("Close leaf log: %v", err)
@@ -248,7 +252,7 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			}
 			for _, id := range created {
 				if db.valueLogManager.HasSegment(id) {
-					t.Fatalf("created segment %d remained registered", id)
+					t.Fatalf("created segment %d remained registered; original failure=%v", id, err)
 				}
 			}
 			staging, err := filepath.Glob(filepath.Join(LeafLogDirPath(dir), ".leaf-pack-copy-*"))

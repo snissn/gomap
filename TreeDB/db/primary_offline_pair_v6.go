@@ -76,7 +76,7 @@ func (idx *indexGen) releaseOfflineNamespaceScopeV6() error {
 		if err := idx.stableNamespaceParent.Close(); err != nil {
 			idx.stableNamespaceFailure.causes[1] = err
 			idx.stableNamespaceMetadata.CleanupFailed()
-			idx.closeFailure.causes[1] = &idx.stableNamespaceFailure
+			idx.closeFailure.retainCause(1, &idx.stableNamespaceFailure)
 			// A failed physical close already links this generation to its actual
 			// owner. Do not put its one intrusive link on a second failure list.
 			if physicalErr == nil && !idx.offlineScopeRetained && idx.offlineScopePhysicalOwner != nil {
@@ -137,14 +137,23 @@ func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexG
 	if err = jointSwapHookV6("before-offline-primary-create"); err != nil {
 		return idx, err
 	}
+	primaryCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(parent.Name()) + 1 + len(primaryNewFileName)))
+	if err != nil {
+		return idx, err
+	}
+	metadata := idx.stableNamespaceMetadata
+	if err = metadata.AddPending(primaryCharge); err != nil {
+		return idx, err
+	}
 	primaryFile, err := rootpublication.OpenStableChildFile(parent, primaryNewFileName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
+		metadata.RemovePending(primaryCharge) // No child handle was produced.
 		return idx, err
 	}
 	primaryID, err = rootpublication.StableIdentityFromFile(primaryFile)
 	observationErr := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceIndex, db.dir, "", filepath.Join(db.dir, primaryNewFileName), parent, primaryFile, "", primaryNewFileName)
 	var constructorErr error
-	idx.primary, constructorErr = primaryarena.OpenCapsuleOwnedFile(primaryFile, filepath.Join(db.dir, primaryNewFileName))
+	idx.primary, constructorErr = primaryarena.OpenCapsuleOwnedFileWithMetadata(primaryFile, primaryFile.Name(), metadata, primaryCharge)
 	err = errors.Join(err, observationErr, constructorErr)
 	if idx.primary != nil {
 		var ownerErr error
@@ -160,13 +169,21 @@ func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexG
 	if err = jointSwapHookV6("before-offline-data-create"); err != nil {
 		return idx, err
 	}
+	dataCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(parent.Name()) + 1 + len(indexNewFileName)))
+	if err != nil {
+		return idx, err
+	}
+	if err = metadata.AddPending(dataCharge); err != nil {
+		return idx, err
+	}
 	dataFile, err := rootpublication.OpenStableChildFile(parent, indexNewFileName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
+		metadata.RemovePending(dataCharge) // No child handle was produced.
 		return idx, err
 	}
 	dataID, err = rootpublication.StableIdentityFromFile(dataFile)
 	observationErr = observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceIndex, db.dir, "", filepath.Join(db.dir, indexNewFileName), parent, dataFile, "", indexNewFileName)
-	idx.pager, constructorErr = pager.OpenOwnedFileWithOptions(dataFile, filepath.Join(db.dir, indexNewFileName), chunkSize, pager.OpenOptions{})
+	idx.pager, constructorErr = pager.OpenOwnedFileWithMetadata(dataFile, dataFile.Name(), chunkSize, pager.OpenOptions{}, metadata, dataCharge)
 	err = errors.Join(err, observationErr, constructorErr)
 	if err != nil {
 		return idx, err

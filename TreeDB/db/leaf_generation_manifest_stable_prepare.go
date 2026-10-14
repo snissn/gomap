@@ -6,7 +6,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"sync"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -84,17 +88,41 @@ type LeafGenerationManifestStableObservations struct {
 // already persistent; no tree root, system root, or alternate meta is
 // published by this seam.
 type LeafGenerationManifestStablePreparedClosure struct {
-	mu           sync.Mutex
-	resources    *rootpublication.StableResourceSet
-	store        *leafGenerationManifestStore
-	resourceID   string
-	identity     rootpublication.StableIdentity
-	previousView []byte
-	revision     uint64
-	digest       [32]byte
-	observations LeafGenerationManifestStableObservations
-	consumed     bool
-	abandoned    bool
+	mu                     sync.Mutex
+	resources              *rootpublication.StableResourceSet
+	store                  *leafGenerationManifestStore
+	resourceID             string
+	identity               rootpublication.StableIdentity
+	previousView           []byte
+	revision               uint64
+	digest                 [32]byte
+	observations           LeafGenerationManifestStableObservations
+	consumed               bool
+	abandoned              bool
+	db                     *DB
+	metadata               *retainedalloc.Owner
+	metadataCharge         uint64
+	previousFile           *os.File
+	previousFileCharge     uint64
+	previousCloseAttempted bool
+	previousCloseErr       error
+	cleanupAttempted       bool
+	cleanupDone            bool
+	cleanupErr             error
+	abandonAttempted       bool
+	abandonErr             error
+	replacementFiles       [6]*os.File
+	replacementCharges     [6]uint64
+	replacementAttempted   [6]bool
+	replacementErrors      [6]error
+	creationProof          *rootpublication.StableNamespaceCreationProof
+	proofCloseAttempted    bool
+	proofCloseErr          error
+	namespaces             [3]*rootpublication.StableNamespaceToken
+	namespaceAttempted     [3]bool
+	namespaceErrors        [3]error
+	currentView            []byte
+	failure                originalDBCleanupFailure
 }
 
 // Revision returns the durable replacement manifest revision.
@@ -134,7 +162,7 @@ func (closure *LeafGenerationManifestStablePreparedClosure) TakeStableResources(
 	}
 	closure.mu.Lock()
 	defer closure.mu.Unlock()
-	if closure.consumed || closure.resources == nil {
+	if closure.consumed || closure.cleanupAttempted || closure.abandonAttempted || closure.resources == nil {
 		return nil, ErrLeafGenerationManifestStablePreparedClosureConsumed
 	}
 	resources := closure.resources
@@ -143,54 +171,289 @@ func (closure *LeafGenerationManifestStablePreparedClosure) TakeStableResources(
 	return resources, nil
 }
 
-// Release abandons untransferred authority and is idempotent.
-func (closure *LeafGenerationManifestStablePreparedClosure) Release() {
+// ReleaseWithError ends the original closure lifetime. Take transfers only the
+// Set: rollback bytes remain owned here until abandonment or this final release.
+func (closure *LeafGenerationManifestStablePreparedClosure) ReleaseWithError() error {
 	if closure == nil {
-		return
+		return nil
 	}
 	closure.mu.Lock()
-	resources := closure.resources
-	closure.resources = nil
-	closure.consumed = true
-	closure.mu.Unlock()
-	if resources != nil {
-		resources.Release()
+	if closure.cleanupAttempted {
+		err, done := closure.cleanupErr, closure.cleanupDone
+		closure.mu.Unlock()
+		if !done {
+			return rootpublication.ErrResourceOwnership
+		}
+		return err
 	}
+	if closure.abandonAttempted && !closure.abandoned && closure.abandonErr == nil {
+		closure.mu.Unlock()
+		return rootpublication.ErrResourceOwnership
+	}
+	closure.cleanupAttempted, closure.consumed = true, true
+	resources := closure.resources
+	closure.mu.Unlock()
+	var err error
+	if resources != nil {
+		err = resources.ReleaseWithError()
+	}
+	if err == nil {
+		err = closure.closeAuxiliary()
+	}
+	if err == nil {
+		err = closure.closePreviousFile()
+	}
+	if err == nil {
+		err = closure.closeReplacementFiles()
+	}
+	if err != nil {
+		return closure.retainCleanupFailure(err)
+	}
+	closure.mu.Lock()
+	clear(closure.previousView)
+	clear(closure.currentView)
+	closure.previousView, closure.currentView, closure.previousFile, closure.resources, closure.store = nil, nil, nil, nil, nil
+	owner, charge := closure.metadata, closure.metadataCharge
+	closure.metadata, closure.metadataCharge, closure.db = nil, 0, nil
+	closure.resourceID, closure.identity = "", rootpublication.StableIdentity{}
+	closure.cleanupDone = true
+	closure.mu.Unlock()
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+	return nil
 }
 
-// Abandon is an explicit alias for Release on pre-visibility failure.
+// Release preserves the original compatibility surface; selected callers check
+// ReleaseWithError, and a refusal is rooted in the existing DB error graph.
+func (closure *LeafGenerationManifestStablePreparedClosure) Release() { _ = closure.ReleaseWithError() }
 func (closure *LeafGenerationManifestStablePreparedClosure) Abandon() { closure.Release() }
 
-// abandonUnpublished removes the exact immutable revision and rolls back the
-// compatibility view only when it still names that revision. It is deliberately
-// separate from Release: the public producer seam may publish the operational
-// manifest view without constructing a durable-root candidate.
+func (closure *LeafGenerationManifestStablePreparedClosure) retainCleanupFailure(cause error) error {
+	closure.failure.retainCause(0, cause)
+	closure.mu.Lock()
+	closure.cleanupAttempted, closure.consumed = true, true
+	closure.cleanupErr, closure.cleanupDone = &closure.failure, true
+	owner, db := closure.metadata, closure.db
+	closure.mu.Unlock()
+	if owner != nil {
+		owner.CleanupFailed()
+	}
+	if db != nil {
+		db.retainOriginalCleanupError(&closure.failure)
+	}
+	return &closure.failure
+}
+
+// All original namespace/proof completion callbacks run after the store lock
+// is released. Each constituent keeps its first actual physical outcome.
+func (closure *LeafGenerationManifestStablePreparedClosure) closeAuxiliary() error {
+	var first error
+	if proof := closure.creationProof; proof != nil {
+		if !closure.proofCloseAttempted {
+			closure.proofCloseAttempted = true
+			closure.proofCloseErr = proof.ReleaseWithError()
+			if closure.proofCloseErr == nil {
+				closure.creationProof = nil
+			}
+		}
+		first = closure.proofCloseErr
+	}
+	for i, namespace := range closure.namespaces {
+		if namespace == nil {
+			continue
+		}
+		if !closure.namespaceAttempted[i] {
+			closure.namespaceAttempted[i] = true
+			closure.namespaceErrors[i] = namespace.ReleaseWithError()
+			if closure.namespaceErrors[i] == nil {
+				closure.namespaces[i] = nil
+			}
+		}
+		if first == nil {
+			first = closure.namespaceErrors[i]
+		}
+	}
+	return first
+}
+
+func (closure *LeafGenerationManifestStablePreparedClosure) openReplacementFile(index int, store *leafGenerationManifestStore, name string, flags int, mode os.FileMode) (*os.File, error) {
+	charge, err := rootpublication.StableFileMetadataCharge(uint64(len(store.parent.Name()) + 1 + len(name)))
+	if err != nil {
+		return nil, err
+	}
+	if err = closure.metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	file, err := rootpublication.OpenStableChildFile(store.parent, name, flags, mode)
+	if err != nil {
+		closure.metadata.RemovePending(charge)
+		return nil, err
+	}
+	closure.replacementFiles[index], closure.replacementCharges[index] = file, charge
+	closure.metadataCharge += charge
+	return file, nil
+}
+func (closure *LeafGenerationManifestStablePreparedClosure) closeReplacementFiles() error {
+	var first error
+	for i, file := range closure.replacementFiles {
+		if file == nil {
+			continue
+		}
+		if !closure.replacementAttempted[i] {
+			closure.replacementAttempted[i] = true
+			closure.replacementErrors[i] = file.Close()
+			if closure.replacementErrors[i] == nil {
+				closure.replacementFiles[i] = nil
+				closure.metadata.RemovePending(closure.replacementCharges[i])
+				closure.metadataCharge -= closure.replacementCharges[i]
+				closure.replacementCharges[i] = 0
+			}
+		}
+		if first == nil {
+			first = closure.replacementErrors[i]
+		}
+	}
+	return first
+}
+func (closure *LeafGenerationManifestStablePreparedClosure) closePreviousFile() error {
+	// Producer construction is unpublished; final Release owns the claimed
+	// completion. Actual file Close runs outside the closure and store locks.
+	if closure.previousFile == nil {
+		return nil
+	}
+	if closure.previousCloseAttempted {
+		return closure.previousCloseErr
+	}
+	closure.previousCloseAttempted = true
+	closure.previousCloseErr = closure.previousFile.Close()
+	if closure.previousCloseErr == nil {
+		closure.previousFile = nil
+		closure.metadata.RemovePending(closure.previousFileCharge)
+		closure.metadataCharge -= closure.previousFileCharge
+		closure.previousFileCharge = 0
+	}
+	return closure.previousCloseErr
+}
+
+// The exact previous-view handle and full buffer are admitted before opening
+// and allocating. The returned bytes are transferred once, without a clone.
+func (closure *LeafGenerationManifestStablePreparedClosure) readPreviousViewLocked(store *leafGenerationManifestStore) ([]byte, error) {
+	if store.parent == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	charge, err := rootpublication.StableFileMetadataCharge(uint64(len(store.parent.Name()) + 1 + len(leafGenerationManifestFileName)))
+	if err != nil {
+		return nil, err
+	}
+	if err := closure.metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	file, err := rootpublication.OpenStableChildFile(store.parent, leafGenerationManifestFileName, os.O_RDONLY, 0)
+	if err != nil {
+		closure.metadata.RemovePending(charge)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	closure.previousFile, closure.previousFileCharge = file, charge
+	closure.metadataCharge += charge
+	return closure.readManifestViewExactLocked(store, file, &closure.previousView)
+}
+
+// The same exact-length decoder is used for rollback and current-view evidence;
+// the buffer alias is installed in this admitted original before any read.
+func (closure *LeafGenerationManifestStablePreparedClosure) readManifestViewExactLocked(store *leafGenerationManifestStore, file *os.File, destination *[]byte) ([]byte, error) {
+	if err := rootpublication.ValidateStableChildLink(store.parent, file, leafGenerationManifestFileName); err != nil {
+		return nil, err
+	}
+	before, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() || before.Size() < 0 || uint64(before.Size()) > uint64(math.MaxInt) {
+		return nil, retainedalloc.ErrCapacity
+	}
+	bytesCharge := retainedalloc.AllocationCharge(uint64(before.Size()))
+	if err := closure.metadata.AddPending(bytesCharge); err != nil {
+		return nil, err
+	}
+	closure.metadataCharge += bytesCharge
+	*destination = make([]byte, int(before.Size()))
+	if _, err := io.ReadFull(file, *destination); err != nil {
+		return nil, err
+	}
+	var tail [1]byte
+	if n, err := file.Read(tail[:]); n != 0 || err != io.EOF {
+		return nil, errors.Join(err, rootpublication.ErrResourceConflict)
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || after.Size() != before.Size() {
+		return nil, errors.Join(err, rootpublication.ErrResourceConflict)
+	}
+	if err := rootpublication.ValidateStableChildLink(store.parent, file, leafGenerationManifestFileName); err != nil {
+		return nil, err
+	}
+	if _, err := decodeLeafGenerationManifest(*destination, leafGenerationManifestFileName); err != nil {
+		return nil, err
+	}
+	return *destination, nil
+}
+
+func (closure *LeafGenerationManifestStablePreparedClosure) readCurrentViewLocked(store *leafGenerationManifestStore) ([]byte, error) {
+	file, err := closure.openReplacementFile(3, store, leafGenerationManifestFileName, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return closure.readManifestViewExactLocked(store, file, &closure.currentView)
+}
+
+// Abandon preserves the separate unpublished namespace action after Set
+// transfer. It claims that action once; refused cleanup is never replayed.
 func (closure *LeafGenerationManifestStablePreparedClosure) abandonUnpublished() error {
 	if closure == nil {
 		return nil
 	}
 	closure.mu.Lock()
-	if closure.abandoned {
+	if closure.abandonAttempted {
+		err, done := closure.abandonErr, closure.abandoned
 		closure.mu.Unlock()
-		return nil
-	}
-	store := closure.store
-	resourceID := closure.resourceID
-	identity := closure.identity
-	revision := closure.revision
-	previousView := append([]byte(nil), closure.previousView...)
-	closure.mu.Unlock()
-	if store == nil || resourceID == "" || identity == (rootpublication.StableIdentity{}) || revision == 0 {
-		return fmt.Errorf("%w: unpublished manifest cleanup lacks exact authority", rootpublication.ErrResourceOwnership)
-	}
-	if err := store.abandonPreparedStableRevision(resourceID, identity, revision, previousView); err != nil {
+		if err == nil && !done {
+			return rootpublication.ErrResourceOwnership
+		}
 		return err
+	}
+	if closure.cleanupAttempted {
+		err := closure.cleanupErr
+		closure.mu.Unlock()
+		return errors.Join(err, rootpublication.ErrResourceOwnership)
+	}
+	closure.abandonAttempted = true
+	store, resourceID, identity, revision, previousView := closure.store, closure.resourceID, closure.identity, closure.revision, closure.previousView
+	closure.mu.Unlock()
+	var err error
+	if store == nil || resourceID == "" || identity == (rootpublication.StableIdentity{}) || revision == 0 {
+		err = fmt.Errorf("%w: unpublished manifest cleanup lacks exact authority", rootpublication.ErrResourceOwnership)
+	} else {
+		err = store.abandonPreparedStableRevision(resourceID, identity, revision, previousView, closure)
+	}
+	// The store mutex has released before any original physical completion.
+	err = errors.Join(err, closure.closeAuxiliary(), closure.closeReplacementFiles())
+	if err != nil {
+		failure := closure.retainCleanupFailure(err)
+		closure.mu.Lock()
+		closure.abandonErr = failure
+		closure.mu.Unlock()
+		return failure
 	}
 	closure.mu.Lock()
 	closure.abandoned = true
-	closure.previousView = nil
 	closure.mu.Unlock()
-	return nil
+	return closure.ReleaseWithError()
 }
 
 // PrepareLeafGenerationManifestStableClosure clones the DB-owned manifest and
@@ -245,7 +508,7 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 // candidate revision without changing the DB-visible manifest. The caller
 // must run it outside DB/write/commit/root-build locks, then either transfer
 // the returned closure into a durable-root candidate or abandon it.
-func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenerationManifest) (*LeafGenerationManifestStablePreparedClosure, *leafGenerationManifest, error) {
+func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenerationManifest) (closure *LeafGenerationManifestStablePreparedClosure, persisted *leafGenerationManifest, retErr error) {
 	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
 		return nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)
 	}
@@ -253,57 +516,73 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 	if store.mode != leafGenerationManifestStable {
 		return nil, nil, fmt.Errorf("%w: stable manifest replacement mode unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
+	owner := db.valueLogIdentityPins.MetadataOwner()
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(LeafGenerationManifestStablePreparedClosure{})))
+	if err := owner.AddPending(charge); err != nil {
+		return nil, nil, err
+	}
+	original := &LeafGenerationManifestStablePreparedClosure{db: db, store: store, metadata: owner, metadataCharge: charge}
+	original.failure.payload = original
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, original.ReleaseWithError())
+		}
+	}()
 	candidate = candidate.clone()
 	beforeContent := store.durabilityCounters.ContentSyncs.Load()
 	beforeNamespace := store.durabilityCounters.NamespaceSyncs.Load()
-	token, previousView, err := store.replaceForPreparedClosure(candidate)
+	token, _, err := store.replaceForPreparedClosure(candidate, original)
+	err = errors.Join(err, original.closeAuxiliary(), original.closePreviousFile(), original.closeReplacementFiles())
 	if err != nil {
 		if token != nil {
-			token.Release()
+			err = errors.Join(err, token.ReleaseWithError())
 		}
 		return nil, nil, err
 	}
 	if token == nil {
 		return nil, nil, fmt.Errorf("%w: stable manifest replacement returned no exact token", rootpublication.ErrUnresolvedResource)
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafGeneration)
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(owner, rootpublication.ReachabilityOuterLeafGeneration)
+	if err != nil {
+		return nil, nil, errors.Join(err, token.ReleaseWithError())
+	}
 	if err := builder.Add(token); err != nil {
-		token.Release()
-		builder.Abandon()
-		return nil, nil, err
+		return nil, nil, errors.Join(err, token.ReleaseWithError(), builder.AbandonWithError())
 	}
 	resources, err := builder.Freeze()
 	if err != nil {
-		builder.Abandon()
-		return nil, nil, err
+		return nil, nil, errors.Join(err, builder.AbandonWithError())
 	}
+	original.resources = resources
 	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
 	if captureErr != nil {
-		resources.Release()
-		return nil, nil, captureErr
+		return nil, nil, errors.Join(captureErr, resources.ReleaseWithError())
 	}
-	defer diagnostics.Close()
+
 	descriptors := diagnostics.Physical()
 	if len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafManifest || descriptors[0].Generation != candidate.ManifestRevision || descriptors[0].Digest() == ([32]byte{}) {
-		resources.Release()
-		return nil, nil, fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision)
+		closeErr := diagnostics.CloseWithError()
+		return nil, nil, errors.Join(closeErr, resources.ReleaseWithError(), fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision))
+	}
+	descriptor := descriptors[0]
+	resourceID, identity, digest := descriptor.ResourceID(), descriptor.Identity(), descriptor.Digest()
+	// The source Set still owns the same physical edge. End the diagnostic
+	// borrow before returning a closure or disposing that source edge.
+	if err := diagnostics.CloseWithError(); err != nil {
+		return nil, nil, errors.Join(err, resources.ReleaseWithError())
 	}
 	contentSyncs := store.durabilityCounters.ContentSyncs.Load() - beforeContent
 	namespaceSyncs := store.durabilityCounters.NamespaceSyncs.Load() - beforeNamespace
 	if contentSyncs == 0 || namespaceSyncs == 0 {
-		resources.Release()
-		return nil, nil, fmt.Errorf("%w: manifest replacement lacks producer durability observations", rootpublication.ErrUnresolvedResource)
+		return nil, nil, errors.Join(resources.ReleaseWithError(), fmt.Errorf("%w: manifest replacement lacks producer durability observations", rootpublication.ErrUnresolvedResource))
 	}
-	return &LeafGenerationManifestStablePreparedClosure{
-		resources:    resources,
-		store:        store,
-		resourceID:   descriptors[0].ResourceID(),
-		identity:     descriptors[0].Identity(),
-		previousView: append([]byte(nil), previousView...),
-		revision:     candidate.ManifestRevision,
-		digest:       descriptors[0].Digest(),
-		observations: LeafGenerationManifestStableObservations{
-			ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs,
-		},
-	}, candidate, nil
+	stringCharge := retainedalloc.AllocationCharge(uint64(len(resourceID))) + retainedalloc.AllocationCharge(uint64(len(identity.Platform)))
+	if err := owner.AddPending(stringCharge); err != nil {
+		return nil, nil, err
+	}
+	original.metadataCharge += stringCharge
+	resourceID, identity.Platform = strings.Clone(resourceID), strings.Clone(identity.Platform)
+	original.resourceID, original.identity, original.revision, original.digest = resourceID, identity, candidate.ManifestRevision, digest
+	original.observations = LeafGenerationManifestStableObservations{ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs}
+	return original, candidate, nil
 }

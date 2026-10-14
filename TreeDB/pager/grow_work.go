@@ -37,6 +37,7 @@ type Growth struct {
 	dirtyRevision                                                             uint64
 	dirtyCount, dirtyLow, dirtyHigh                                           int
 	primary, atomicView                                                       [][]byte
+	mappings                                                                  []mappingOwner
 	preparedView                                                              *chunkList
 	memoryOnly                                                                bool
 	verifiedOutput                                                            *verifiedBitset
@@ -45,6 +46,7 @@ type Growth struct {
 	phase, position, mapped                                                   int
 	captured, installed, cancelled                                            bool
 	failure                                                                   error
+	cleanupFailure                                                            error
 	metadata                                                                  *retainedalloc.Owner
 	metadataCharge, metadataOld                                               uint64
 }
@@ -185,10 +187,11 @@ func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b u
 		switch g.phase {
 		case 0:
 			if g.totalChunks > g.oldChunks {
-				if ok, e := pagerReserve(w, 1, uint64(g.totalChunks)*48+256); !ok || e != nil {
+				if ok, e := pagerReserve(w, 1, uint64(g.totalChunks)*(48+2*uint64(unsafe.Sizeof(mappingOwner{})))+256); !ok || e != nil {
 					return false, e
 				}
 				g.primary = make([][]byte, g.totalChunks)
+				g.mappings = make([]mappingOwner, g.totalChunks)
 				g.phase++
 			} else {
 				g.phase = 3
@@ -201,11 +204,14 @@ func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b u
 			g.phase++
 		case 2:
 			for g.position < g.oldChunks {
-				if ok, e := pagerReserve(w, 3, 192); !ok || e != nil {
+				if ok, e := pagerReserve(w, 4, 192+2*uint64(unsafe.Sizeof(mappingOwner{}))); !ok || e != nil {
 					return false, e
 				}
 				c := p.chunks[g.position]
 				g.primary[g.position] = c
+				if g.position < len(p.mappings) {
+					g.mappings[g.position] = p.mappings[g.position]
+				}
 				g.atomicView[g.position] = c
 				g.position++
 			}
@@ -320,6 +326,7 @@ func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b u
 					return false, e
 				}
 				var c []byte
+				var mapping mappingOwner
 				var e error
 				if p.memoryOnly {
 					c = make([]byte, p.chunkSize)
@@ -329,7 +336,8 @@ func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b u
 					if !g.valid(p) {
 						e = ErrGrowthStale
 					} else {
-						c, e = mmapFile(p.file.Fd(), int64(g.mapped)*p.chunkSize, int(p.chunkSize), p.mmapPopulate)
+						mapping, e = mapConstructor(p.file.Fd(), int64(g.mapped)*p.chunkSize, int(p.chunkSize), p.mmapPopulate, false)
+						c = mapping.data
 						if e == nil {
 							madviseChunk(c)
 						}
@@ -342,6 +350,7 @@ func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b u
 					return g.finishFailure(w)
 				}
 				g.primary[g.mapped] = c
+				g.mappings[g.mapped] = mapping
 				g.atomicView[g.mapped] = c
 				g.mapped++
 				if !g.valid(p) {
@@ -430,8 +439,8 @@ func (g *Growth) capture(p *Pager) error {
 		ptr := uint64(unsafe.Sizeof(uintptr(0)))
 		var next, old uint64
 		if g.totalChunks > g.oldChunks {
-			next += 2*alloc(uint64(g.totalChunks)*3*ptr) + alloc(uint64(unsafe.Sizeof(chunkList{})))
-			old += alloc(uint64(cap(p.chunks)) * 3 * ptr)
+			next += 2*alloc(uint64(g.totalChunks)*3*ptr) + alloc(uint64(unsafe.Sizeof(chunkList{}))) + alloc(uint64(g.totalChunks)*uint64(unsafe.Sizeof(mappingOwner{})))
+			old += alloc(uint64(cap(p.chunks))*3*ptr) + alloc(uint64(cap(p.mappings))*uint64(unsafe.Sizeof(mappingOwner{})))
 			if prior := p.atomicChunks.Load(); prior != nil {
 				old += alloc(uint64(unsafe.Sizeof(chunkList{})))
 				if len(p.chunks) == 0 || len(prior.data) == 0 || &p.chunks[0] != &prior.data[0] {
@@ -473,6 +482,7 @@ func (g *Growth) install(p *Pager) {
 
 	if g.primary != nil {
 		p.chunks = g.primary
+		p.mappings = g.mappings
 		p.atomicChunks.Store(g.preparedView)
 	}
 	if g.dirtyOutput != nil {
@@ -499,6 +509,7 @@ func (g *Growth) install(p *Pager) {
 	}
 	g.installed = true
 	g.primary = nil
+	g.mappings = nil
 	g.atomicView = nil
 	g.preparedView = nil
 	g.dirtyOutput = nil
@@ -520,19 +531,63 @@ func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	if g == nil || g.installed || g.cancelled {
 		return true, nil
 	}
+	if g.cleanupFailure != nil {
+		return false, g.cleanupFailure
+	}
 	for g.mapped > g.oldChunks {
-		if ok, e := pagerReserve(w, 1, 512); !ok || e != nil {
-			return false, e
-		}
 		i := g.mapped - 1
 		c := g.primary[i]
+		control := 2*uint64(unsafe.Sizeof(mappingOwner{})) + 128
 		if c != nil && !g.memoryOnly {
-			if e := munmapFile(c); e != nil {
+			m := &g.mappings[i]
+			if m.issued {
+				amount := uint64(m.remaining())
+				if w != nil {
+					available := uint64(0)
+					if w.Bytes < w.ByteLimit && w.ByteLimit-w.Bytes > control {
+						available = w.ByteLimit - w.Bytes - control
+					}
+					if amount > available {
+						amount = available
+					}
+				}
+				amount = amount / uint64(os.Getpagesize()) * uint64(os.Getpagesize())
+				if amount == 0 {
+					return false, nil
+				}
+				if ok, e := pagerReserve(w, 1, control+amount); !ok || e != nil {
+					return false, e
+				}
+				if e := unmapConstructor(m, uintptr(amount)); e != nil {
+					g.cleanupFailure = e
+					if g.metadata != nil {
+						g.metadata.CleanupFailed()
+					}
+					return false, e
+				}
+				if m.remaining() != 0 {
+					continue
+				}
+			} else {
+				if ok, e := pagerReserve(w, 1, control+uint64(len(c))); !ok || e != nil {
+					return false, e
+				}
+				if e := munmapFile(c); e != nil {
+					g.cleanupFailure = e
+					if g.metadata != nil {
+						g.metadata.CleanupFailed()
+					}
+					return false, e
+				}
+			}
+		} else {
+			if ok, e := pagerReserve(w, 1, control); !ok || e != nil {
 				return false, e
 			}
 		}
 		g.primary[i] = nil
 		g.atomicView[i] = nil
+		g.mappings[i] = mappingOwner{}
 		g.mapped--
 	}
 	if ok, e := pagerReserve(w, 1, 6*uint64(unsafe.Sizeof(Growth{}))+512); !ok || e != nil {

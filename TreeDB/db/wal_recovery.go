@@ -1064,7 +1064,7 @@ func newReplayInlineAppenderWithNextRID(db *DB, segments []logSegment, nextRID u
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
 	layout := resolveStorageLayout(db.dir)
-	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
+	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes, db.valueLogIdentityPins)
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
 	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	writer.setLeafPageLogSeqAllocator(newLeafLogSeqAllocator(leafStartSeq))

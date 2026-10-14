@@ -10022,6 +10022,7 @@ type DB struct {
 	vlogGenerationVacuumExecMaxNanos                           atomic.Uint64
 	vlogGenerationRewriteQueueFollowupBlockedUntilNS           atomic.Int64
 	bgErrMu                                                    sync.Mutex
+	bgErrRevision                                              uint64
 	bgErr                                                      error
 
 	// Backpressure state
@@ -13531,24 +13532,62 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	close(job.out)
 }
 
-func (db *DB) reportError(err error) {
+func (db *DB) retainOriginalCleanupError(err error) {
 	if err == nil {
 		return
 	}
-	if errors.Is(err, errDBClosing) {
+	for {
+		db.bgErrMu.Lock()
+		prior, revision := db.bgErr, db.bgErrRevision
+		if prior == nil {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Error methods may read DB state or report another original failure.
+		// No original edge is consumed until the unchanged root is locked again.
+		if errors.Is(prior, err) {
+			return
+		}
+		containsPrior := errors.Is(err, prior)
+		var original rootpublication.OriginalCleanupPriorBinder
+		if !containsPrior {
+			original = rootpublication.SelectOriginalCleanupPrior(err, prior)
+		}
+		db.bgErrMu.Lock()
+		if db.bgErrRevision != revision {
+			db.bgErrMu.Unlock()
+			continue
+		}
+		if containsPrior || (original != nil && original.TryLinkPriorCleanupError(prior)) {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Existing ordinary errors keep first-error semantics. Actual cleanup
+		// receipts provide the preborn edge needed to retain original custody.
+		if original == nil {
+			return
+		}
+	}
+}
+func (db *DB) reportError(err error) {
+	if err == nil || db == nil {
 		return
 	}
-	if db != nil && db.closing.Load() {
-		return
+	original := rootpublication.IsOriginalCleanupError(err)
+	if !original {
+		if errors.Is(err, errDBClosing) || db.closing.Load() {
+			return
+		}
 	}
+	// Original cleanup custody precedes notification, including during closing.
+	db.retainOriginalCleanupError(err)
 	if db.notifyError != nil {
 		db.notifyError(err)
 	}
-	db.bgErrMu.Lock()
-	if db.bgErr == nil {
-		db.bgErr = err
-	}
-	db.bgErrMu.Unlock()
 }
 
 func (db *DB) backgroundError() error {
@@ -17626,7 +17665,10 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 	}
 	ptrs, resources, err := db.appendValueLogInternal(l, dictID, dict, records, durability, capture)
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
+		if rootpublication.IsOriginalCleanupError(err) {
+			db.reportError(err)
+		}
 	}
 	return ptrs, resources, err
 }
@@ -28902,7 +28944,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 				stableInstalled = true
 				stableErr = capture.addRotation(rotation)
 			} else if rotation != nil {
-				rotation.Release()
+				stableErr = errors.Join(stableErr, rotation.ReleaseWithError())
 			}
 			rotateErr = stableErr
 		}
@@ -28945,7 +28987,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		if db.isLeafLogAppendLane(l) {
 			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 		} else {
-			w, err = valuelog.NewWriter(path, fileID)
+			w, err = valuelog.NewWriterWithMetadata(path, fileID, db.valueLogIdentityPins.MetadataOwner())
 		}
 		if err != nil {
 			return err
@@ -29035,7 +29077,7 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 	if db.isLeafLogAppendLane(l) {
 		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 	} else {
-		w, err = valuelog.NewWriter(path, fileID)
+		w, err = valuelog.NewWriterWithMetadata(path, fileID, db.valueLogIdentityPins.MetadataOwner())
 	}
 	if err != nil {
 		return err

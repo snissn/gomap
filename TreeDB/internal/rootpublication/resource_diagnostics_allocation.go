@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 	"slices"
@@ -16,6 +17,7 @@ import (
 // Generic/nil construction keeps existing detached diagnostic semantics.
 type ResourceDiagnostics struct {
 	closed         atomic.Bool
+	completed      atomic.Bool
 	allocation     *resourceAllocation
 	borrow         resourceKindBorrow
 	emptyDirectory *DependencyDirectoryV2
@@ -35,29 +37,52 @@ func (d *ResourceDiagnostics) Stats() []ResourceKindStats {
 	}
 	return d.stats
 }
-func (d *ResourceDiagnostics) Close() {
-	if d == nil || !d.closed.CompareAndSwap(false, true) {
-		return
+func (d *ResourceDiagnostics) Close() { _ = d.CloseWithError() }
+
+// CloseWithError reports the actual original last descriptor/directory action.
+// An overlapping observation does not retry or invent a terminal refusal: the
+// first original caller retains this admitted wrapper through its completion.
+func (d *ResourceDiagnostics) CloseWithError() error {
+	if d == nil {
+		return nil
+	}
+	if !d.closed.CompareAndSwap(false, true) {
+		if !d.completed.Load() {
+			return nil
+		}
+		return d.allocation.cleanupResult()
+	}
+	defer d.completed.Store(true)
+	fail := func(err error) error {
+		return d.allocation.cleanupFailed(d, err)
+	}
+	if d.emptyDirectory != nil {
+		consumed, err := d.emptyDirectory.ReleaseOutcome()
+		if consumed {
+			d.emptyDirectory = nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if !consumed {
+			return fail(ErrResourceOwnership)
+		}
+	}
+	if err := d.borrow.release(); err != nil {
+		return fail(err)
 	}
 	for i := range d.physical {
-		clear(d.physical[i].reachability)
 		d.physical[i] = StableResourcePhysicalDescriptor{}
 	}
 	clear(d.physical)
 	clear(d.stats)
-	d.physical = nil
-	d.stats = nil
-	d.borrow.release()
-	d.borrow = resourceKindBorrow{}
-	if d.emptyDirectory != nil {
-		d.emptyDirectory.Release()
-		d.emptyDirectory = nil
-	}
+	d.physical, d.stats = nil, nil
 	allocation := d.allocation
 	d.allocation = nil
 	if allocation != nil && allocation.drop() {
 		allocation.refund()
 	}
+	return nil
 }
 func diagnosticChargeAdd(total *uint64, count, width uint64) error {
 	if count > math.MaxUint64/width {
@@ -119,8 +144,7 @@ func (set *StableResourceSet) AcquirePhysicalDiagnostics() (*ResourceDiagnostics
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ResourceDiagnostics{})))
 	count := stableResourceKindViewCount(borrow.backing)
 	if err = diagnosticChargeAdd(&charge, uint64(count), uint64(unsafe.Sizeof(StableResourcePhysicalDescriptor{}))); err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	for _, view := range borrow.backing.all() {
 		rangeStableResourceLogicalIndex(view.logical, func(entry *stableResourceEntry) bool {
@@ -135,13 +159,11 @@ func (set *StableResourceSet) AcquirePhysicalDiagnostics() (*ResourceDiagnostics
 		})
 	}
 	if err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	allocation, err := newResourceAllocation(borrow.backing.allocation.owner, charge)
 	if err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	d := &ResourceDiagnostics{allocation: allocation, borrow: borrow, physical: make([]StableResourcePhysicalDescriptor, 0, count)}
 	for _, view := range borrow.backing.all() {
@@ -182,26 +204,23 @@ func (set *StableResourceSet) AcquireStats(now time.Time) (*ResourceDiagnostics,
 	count := stableResourceKindViewCount(borrow.backing)
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ResourceDiagnostics{})))
 	if err = diagnosticChargeAdd(&charge, uint64(borrow.backing.len()), uint64(unsafe.Sizeof(ResourceKindStats{}))); err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	var scratch uint64
 	if err = diagnosticChargeAdd(&scratch, uint64(count), uint64(unsafe.Sizeof((*StableNamespaceToken)(nil)))); err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	owner := borrow.backing.allocation.owner
 	allocation, err := newResourceAllocation(owner, charge)
 	if err != nil {
-		borrow.release()
-		return nil, err
+		return nil, errors.Join(err, borrow.release())
 	}
 	if err = owner.AddPending(scratch); err != nil {
-		borrow.release()
+		cleanupErr := borrow.release()
 		if allocation.drop() {
 			allocation.refund()
 		}
-		return nil, err
+		return nil, errors.Join(err, cleanupErr)
 	}
 	namespaces := make([]*StableNamespaceToken, 0, count)
 	defer func() { clear(namespaces); namespaces = nil; owner.RemovePending(scratch) }()
@@ -289,7 +308,7 @@ func (set *StableResourceSet) HasKind(kind ResourceKind) bool {
 // telemetry API. Selected construction and aggregation retain admitted metadata
 // until the copy completes. Only canonical built-in kind names may escape;
 // no selected descriptor, string backing, token or proof is returned.
-func StableResourceTelemetryStats(now time.Time, physicalOnly bool, sets ...*StableResourceSet) ([]ResourceKindStats, error) {
+func StableResourceTelemetryStats(now time.Time, physicalOnly bool, sets ...*StableResourceSet) (_ []ResourceKindStats, retErr error) {
 	var owner *retainedalloc.Owner
 	for _, set := range sets {
 		if set == nil {
@@ -320,7 +339,7 @@ func StableResourceTelemetryStats(now time.Time, physicalOnly bool, sets ...*Sta
 	if err != nil {
 		return nil, err
 	}
-	defer builder.Abandon()
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 	for _, set := range sets {
 		if set == nil {
 			continue
@@ -330,7 +349,7 @@ func StableResourceTelemetryStats(now time.Time, physicalOnly bool, sets ...*Sta
 			return nil, importErr
 		}
 		mergeErr := builder.Merge(imported)
-		imported.Release()
+		mergeErr = errors.Join(mergeErr, imported.ReleaseWithError())
 		if mergeErr != nil {
 			return nil, mergeErr
 		}
@@ -339,12 +358,12 @@ func StableResourceTelemetryStats(now time.Time, physicalOnly bool, sets ...*Sta
 	if err != nil {
 		return nil, err
 	}
-	defer view.Release()
+	defer func() { retErr = errors.Join(retErr, view.ReleaseWithError()) }()
 	diagnostics, err := view.AcquireStats(now)
 	if err != nil {
 		return nil, err
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	// The result is the pre-existing detached scalar telemetry allocation, not
 	// a selected diagnostic borrow. Validate every kind before allocating it.
 	for _, value := range diagnostics.Stats() {

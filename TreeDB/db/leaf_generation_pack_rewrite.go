@@ -1316,8 +1316,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: prepare packed promotion authority: %w", err)
 	}
 	if err := authority.captureDictionary(ctx, writer.leafDictID, writer.leafDict); err != nil {
-		_ = authority.release()
-		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed dictionary authority: %w", err)
+		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed dictionary authority: %w", errors.Join(err, authority.release()))
 	}
 	defer func() {
 		if !authority.retainedForRecovery {
@@ -1587,19 +1586,31 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		durableResources *rootpublication.StableResourceSet
 		manifestClosure  *LeafGenerationManifestStablePreparedClosure
 	)
+	defer func() {
+		if manifestClosure != nil {
+			err = errors.Join(err, manifestClosure.ReleaseWithError())
+		}
+	}()
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if publishAlloc != nil {
 			baseErr = errors.Join(baseErr, publishAlloc.Rollback())
 		}
 		if durableResources != nil {
-			durableResources.Release()
+			if releaseErr := durableResources.ReleaseWithError(); releaseErr != nil {
+				// Keep the exact refused Set/descendants in original error custody.
+				// Destructive segment cleanup cannot follow failed pin disposal.
+				db.retainOriginalCleanupError(releaseErr)
+				return 0, 0, errors.Join(baseErr, releaseErr)
+			}
 			durableResources = nil
 		}
 		// Release the candidate set and capture pins before asking the manager's
 		// deletion owner to acquire an exact-identity delete lease.
-		if releaseErr := authority.release(); releaseErr != nil {
-			baseErr = errors.Join(baseErr, releaseErr)
+		if releaseErr := authority.releaseCaptured(); releaseErr != nil {
+			return 0, 0, errors.Join(baseErr, authority.retainCleanupFailure(releaseErr))
 		}
+		// createdSegments borrows authority.promoted. Keep that original backing
+		// intact until the manager has consumed every actual deletion request.
 		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
 		if cleanupErr != nil {
 			baseErr = errors.Join(baseErr, cleanupErr)
@@ -1607,10 +1618,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if len(createdSegments) > 0 {
 			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
 			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
-				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+				baseErr = errors.Join(baseErr, cleanupErr)
 			}
 		}
-		return 0, 0, baseErr
+		if cleanupErr != nil {
+			return 0, 0, errors.Join(baseErr, authority.retainCleanupFailure(cleanupErr))
+		}
+		return 0, 0, errors.Join(baseErr, authority.release())
 	}
 	abandonManifest := func(baseErr error) error {
 		if manifestClosure == nil {
@@ -1744,29 +1759,45 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	manifestResources, manifestErr := manifestClosure.TakeStableResources()
 	if manifestErr != nil {
-		manifestClosure.Release()
+		manifestErr = errors.Join(manifestErr, manifestClosure.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
 	}
 	packedResources, resourceErr := authority.takeStableResources()
 	if resourceErr != nil {
-		manifestResources.Release()
+		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact packed resources: %w", resourceErr))
 	}
-	resourceBuilder := rootpublication.NewStableResourceSetBuilder()
+	// The prepared manifest and packed closure share the DB's original
+	// metadata owner. Import preserves the packed producer's exact physical
+	// authority while admitting the retained descriptor before construction.
+	metadata := db.valueLogIdentityPins.MetadataOwner()
+	admittedPacked, resourceErr := rootpublication.ImportStableResourceSetMetadata(metadata, packedResources)
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit exact packed resources: %w", resourceErr))
+	}
+	resourceErr = packedResources.ReleaseWithError()
+	packedResources = admittedPacked
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: release imported packed descriptor: %w", resourceErr))
+	}
+	resourceBuilder, resourceErr := rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit packed resource builder: %w", resourceErr))
+	}
 	if resourceErr = resourceBuilder.Merge(packedResources); resourceErr != nil {
-		packedResources.Release()
-		manifestResources.Release()
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact packed resources: %w", resourceErr))
 	}
 	if resourceErr = resourceBuilder.Merge(manifestResources); resourceErr != nil {
-		manifestResources.Release()
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact manifest resource: %w", resourceErr))
 	}
 	durableResources, resourceErr = resourceBuilder.Freeze()
 	if resourceErr != nil {
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: freeze packed durable resources: %w", resourceErr))
 	}
 
@@ -1935,11 +1966,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			// The alternate meta page was written and its durability outcome is
 			// ambiguous. Retain every candidate resource and fail closed until reopen.
 			db.publicationPoisoned.Store(true)
-			authority.retainForRecovery()
+			retentionErr := authority.retainForRecovery()
 			unlockPublish()
 			return 0, 0, errors.Join(
 				fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr),
-				db.commandWALPoisonedError(),
+				db.commandWALPoisonedError(), retentionErr,
 			)
 		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))

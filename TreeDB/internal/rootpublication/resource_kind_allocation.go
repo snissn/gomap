@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"iter"
 	"slices"
 	"strings"
@@ -101,16 +102,7 @@ func copyResourceKindBacking(owner *retainedalloc.Owner, source []resourceKindCe
 		cell.directoryOwned = false
 		if cell.view.directory != nil {
 			if err := cell.view.directory.Retain(); err != nil {
-				for i := range backing.cells {
-					if backing.cells[i].directoryOwned {
-						backing.cells[i].view.directory.Release()
-					}
-				}
-				clear(backing.cells)
-				backing.cells = nil
-				backing.allocation.drop()
-				backing.allocation.refund()
-				return nil, err
+				return nil, backing.abortConstruction(0, err)
 			}
 			cell.directoryOwned = true
 		}
@@ -121,48 +113,106 @@ func copyResourceKindBacking(owner *retainedalloc.Owner, source []resourceKindCe
 	if retain {
 		for i := range backing.cells {
 			if !retainStableResourceKindView(backing.cells[i].view) {
-				for j := 0; j < i; j++ {
-					releaseStableResourceKindView(backing.cells[j].view)
-				}
-				for j := range backing.cells {
-					if backing.cells[j].directoryOwned {
-						backing.cells[j].view.directory.Release()
-					}
-				}
-				clear(backing.cells)
-				backing.cells = nil
-				backing.allocation.drop()
-				backing.allocation.refund()
-				return nil, ErrResourceOwnership
+				return nil, backing.abortConstruction(i, ErrResourceOwnership)
 			}
 		}
 	}
 	slices.SortFunc(backing.cells, compareResourceKindCells)
 	return backing, nil
 }
+
+// Only the prefix retained by this constructor owns view edges. Input views
+// outside it remain borrowed from the caller. The SAME private backing retains
+// all unresolved operands on cleanup refusal; admission is refunded only after
+// actual directory/view disposal and alias clearing.
+func (backing *resourceKindBacking) abortConstruction(retainedViews int, cause error) error {
+	fail := func(err error) error {
+		return backing.allocation.cleanupFailed(backing, errors.Join(cause, err))
+	}
+	for i := 0; i < retainedViews; i++ {
+		cell := &backing.cells[i]
+		if err := releaseStableResourceKindView(cell.view); err != nil {
+			return fail(err)
+		}
+		directory := cell.view.directory
+		cell.view = stableResourceKindView{directory: directory}
+	}
+	for i := range backing.cells {
+		cell := &backing.cells[i]
+		if !cell.directoryOwned {
+			continue
+		}
+		consumed, err := cell.view.directory.ReleaseOutcome()
+		if consumed {
+			cell.directoryOwned = false
+			cell.view.directory = nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if !consumed {
+			return fail(ErrResourceOwnership)
+		}
+	}
+	clear(backing.cells)
+	backing.cells = nil
+	backing.allocation.drop()
+	backing.allocation.refund()
+	return cause
+}
+
 func compareResourceKindCells(a, b resourceKindCell) int {
 	return strings.Compare(string(a.kind), string(b.kind))
 }
 func (backing *resourceKindBacking) retain() bool {
 	return backing == nil || backing.allocation.retain()
 }
-func (backing *resourceKindBacking) release() {
-	if backing == nil || !backing.allocation.drop() {
-		return
+func (backing *resourceKindBacking) release() error {
+	if backing == nil {
+		return nil
 	}
-	// Clear the descriptor's own aliases before last-root callbacks. Generic
-	// roots retain their canonical diagnostic semantics in the shared core.
+	if err := backing.allocation.cleanupResult(); err != nil {
+		return err
+	}
+	if !backing.allocation.drop() {
+		return nil
+	}
+	fail := func(err error) error { return backing.allocation.cleanupFailed(backing, err) }
 	for i := range backing.cells {
-		cell := backing.cells[i]
-		backing.cells[i] = resourceKindCell{}
-		releaseStableResourceKindView(cell.view)
-		if cell.directoryOwned {
-			cell.view.directory.Release()
+		cell := &backing.cells[i]
+		if err := releaseOwnedResourceLogical(cell.view.logical); err != nil {
+			return fail(err)
 		}
+		cell.view.logical = nil
+		if err := releaseOwnedResourcePhysical(cell.view.physical); err != nil {
+			return fail(err)
+		}
+		cell.view.physical = nil
+		releaseOwnedResourceObligationIndex(cell.view.logicalMembership)
+		cell.view.logicalMembership = nil
+		cell.view.fields.release()
+		cell.view.fields = nil
+		if err := cell.view.root.release(); err != nil {
+			return fail(err)
+		}
+		cell.view.root = nil
+		if cell.directoryOwned {
+			consumed, err := cell.view.directory.ReleaseOutcome()
+			if consumed {
+				cell.directoryOwned = false
+				cell.view.directory = nil
+			}
+			if err != nil {
+				return fail(err)
+			}
+		}
+		*cell = resourceKindCell{}
 	}
 	backing.cells = nil
 	backing.allocation.refund()
+	return nil
 }
+
 func (backing *resourceKindBacking) find(kind ResourceKind) (stableResourceKindView, bool) {
 	if backing == nil {
 		return stableResourceKindView{}, false
@@ -187,13 +237,15 @@ func (backing *resourceKindBacking) borrow() (resourceKindBorrow, error) {
 	}
 	return resourceKindBorrow{backing: backing}, nil
 }
-func (borrow *resourceKindBorrow) release() {
-	if borrow == nil {
-		return
+func (borrow *resourceKindBorrow) release() error {
+	if borrow == nil || borrow.backing == nil {
+		return nil
 	}
 	backing := borrow.backing
+	// This borrower consumes its descriptor edge; the original allocation's
+	// receipt retains any unresolved descendant after the actual last action.
 	borrow.backing = nil
-	backing.release()
+	return backing.release()
 }
 
 // Generic callers retain canonical released diagnostic views. Selected callers
@@ -303,7 +355,7 @@ func (set *StableResourceSet) borrowSelectedKindViews() (resourceKindBorrow, err
 // passed to visit are borrowed only for that call. The callback may reenter the
 // set; the set mutex is not held while it executes. Generic descriptors preserve
 // their established token/diagnostic semantics.
-func (set *StableResourceSet) WithScopedTokens(visit func([]*StableResourceToken) error) error {
+func (set *StableResourceSet) WithScopedTokens(visit func([]*StableResourceToken) error) (retErr error) {
 	if visit == nil {
 		return ErrResourceOwnership
 	}
@@ -324,7 +376,7 @@ func (set *StableResourceSet) WithScopedTokens(visit func([]*StableResourceToken
 	if err != nil {
 		return err
 	}
-	defer borrow.release()
+	defer func() { retErr = errors.Join(retErr, borrow.release()) }()
 	owner := borrow.backing.allocation.owner
 	count := stableResourceKindViewCount(borrow.backing)
 	width := uint64(unsafe.Sizeof((*StableResourceToken)(nil)))

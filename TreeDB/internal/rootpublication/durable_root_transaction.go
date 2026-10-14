@@ -72,8 +72,11 @@ type DurableRootTransactionSpec struct {
 	Activate               func(DurableRootCallbackInput) error
 	Consume                func(DurableRootCallbackInput) error
 	Abort                  func(DurableRootCallbackInput) error
-	Fail                   func(DurableRootCallbackInput, error) error
-	PublicationProjection  any
+	// AbortComplete consumes callback payload only after BOTH original physical
+	// callback cleanup and constructor root cleanup have actually succeeded.
+	AbortComplete         func(DurableRootCallbackInput) error
+	Fail                  func(DurableRootCallbackInput, error) error
+	PublicationProjection any
 }
 
 type durableRootTransactionPhase uint8
@@ -94,31 +97,78 @@ const (
 type DurableRootTransaction struct {
 	mu sync.Mutex
 
-	input                DurableRootCallbackInput
-	activate             func(DurableRootCallbackInput) error
-	consume              func(DurableRootCallbackInput) error
-	abort                func(DurableRootCallbackInput) error
-	fail                 func(DurableRootCallbackInput, error) error
-	owner                ResourceOwnerState
-	phase                durableRootTransactionPhase
-	finishBusy           bool
-	constructionV6       *primaryTransactionConstructionV6
-	failedCleanupMu      sync.Mutex
-	failedCleanupOwner   any
-	failedCleanupNext    *DurableRootTransaction
-	failedCleanupReceipt durableRootCleanupFailureV6
+	input                  DurableRootCallbackInput
+	activate               func(DurableRootCallbackInput) error
+	consume                func(DurableRootCallbackInput) error
+	abort                  func(DurableRootCallbackInput) error
+	abortComplete          func(DurableRootCallbackInput) error
+	physicalCleanupError   error
+	physicalCleanupReceipt durableRootCleanupFailureV6
+	fail                   func(DurableRootCallbackInput, error) error
+	owner                  ResourceOwnerState
+	phase                  durableRootTransactionPhase
+	finishBusy             bool
+	constructionV6         *primaryTransactionConstructionV6
+	failedCleanupMu        sync.Mutex
+	failedCleanupOwner     any
+	failedCleanupNext      *DurableRootTransaction
+	failedCleanupReceipt   durableRootCleanupFailureV6
 }
 
 // This failure edge is embedded in the SAME admitted original transaction.
 // It records disposal custody only; existing phase/resource ownership remains
 // the sole lifecycle authority and no replacement owner is allocated.
-type durableRootCleanupFailureV6 struct{ causes [3]error }
+type durableRootCleanupFailureV6 struct {
+	mu       sync.Mutex
+	original *DurableRootTransaction
+	causes   [3]error
+}
 
+func (failure *durableRootCleanupFailureV6) LinkPriorCleanupError(prior error) {
+	if prior == nil || prior == failure || errors.Is(prior, failure) {
+		return
+	}
+	failure.TryLinkPriorCleanupError(prior)
+}
+func (failure *durableRootCleanupFailureV6) OriginalCleanupPriorAvailable() bool {
+	failure.mu.Lock()
+	defer failure.mu.Unlock()
+	return failure.causes[2] == nil
+}
+func (failure *durableRootCleanupFailureV6) TryLinkPriorCleanupError(prior error) bool {
+	failure.mu.Lock()
+	defer failure.mu.Unlock()
+	if failure.causes[2] != nil || prior == nil || prior == failure {
+		return false
+	}
+	failure.causes[2] = prior
+	return true
+}
 func (failure *durableRootCleanupFailureV6) Error() string {
 	return "original durable-root cleanup failed"
 }
-func (failure *durableRootCleanupFailureV6) Unwrap() []error { return failure.causes[:] }
-
+func (failure *durableRootCleanupFailureV6) Is(target error) bool {
+	failure.mu.Lock()
+	causes := failure.causes
+	failure.mu.Unlock()
+	for _, cause := range causes {
+		if errors.Is(cause, target) {
+			return true
+		}
+	}
+	return false
+}
+func (failure *durableRootCleanupFailureV6) As(target any) bool {
+	failure.mu.Lock()
+	causes := failure.causes
+	failure.mu.Unlock()
+	for _, cause := range causes {
+		if errors.As(cause, target) {
+			return true
+		}
+	}
+	return false
+}
 func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next *DurableRootTransaction, cause, prior error) (bool, error) {
 	transaction.failedCleanupMu.Lock()
 	defer transaction.failedCleanupMu.Unlock()
@@ -132,7 +182,10 @@ func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next
 		return false, &transaction.failedCleanupReceipt
 	}
 	transaction.failedCleanupOwner, transaction.failedCleanupNext = owner, next
+	transaction.failedCleanupReceipt.mu.Lock()
+	transaction.failedCleanupReceipt.original = transaction
 	transaction.failedCleanupReceipt.causes = [3]error{cause, ErrDurableRootOwnership, prior}
+	transaction.failedCleanupReceipt.mu.Unlock()
 	return true, &transaction.failedCleanupReceipt
 }
 
@@ -149,7 +202,7 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 			Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload,
 			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
 		},
-		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, fail: spec.Fail,
+		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
 	}, nil
 }
@@ -258,6 +311,9 @@ func (transaction *DurableRootTransaction) AbortPrivatePrimaryConstructionV6() e
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
+	if transaction.physicalCleanupError != nil {
+		return transaction.physicalCleanupError
+	}
 	if transaction.phase != durableRootConstructingV6 {
 		return nil
 	}
@@ -274,9 +330,12 @@ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState)
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	if transaction.constructionV6 != nil && transaction.constructionV6.resources != nil {
-		if transaction.constructionV6.resources.Owner() != to || transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing {
+		setOwner := transaction.constructionV6.resources.Owner()
+		if transaction.finishBusy || transaction.phase == durableRootConsumed || transaction.owner != from ||
+			(setOwner != to && !(setOwner == ResourceOwnerReleased && (transaction.phase == durableRootFinishing || transaction.physicalCleanupError != nil))) {
 			return ErrDurableRootOwnership
 		}
+		transaction.owner = to
 		return nil
 	}
 	if transaction.ownerLockedV6() != from || (transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing) || transaction.ownerLockedV6() == ResourceOwnerReleased {
@@ -292,6 +351,9 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
+	if transaction.physicalCleanupError != nil {
+		return transaction.physicalCleanupError
+	}
 	if transaction.ownerLockedV6() == ResourceOwnerReleased {
 		return nil
 	}
@@ -302,13 +364,35 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		return transaction.abortConstructionLockedV6()
 	}
 	if err := transaction.abort(transaction.input); err != nil {
-		return err
+		return transaction.recordPhysicalCleanupFailureLocked(err)
 	}
 	if transaction.isConstructedPrimaryV6() {
 		return transaction.abortConstructionLockedV6()
 	}
+	if transaction.abortComplete != nil {
+		if err := transaction.abortComplete(transaction.input); err != nil {
+			return transaction.recordPhysicalCleanupFailureLocked(err)
+		}
+	}
 	transaction.releaseOwnerLockedV6()
 	return nil
+}
+
+// The first original disposal refusal is terminal for this object. A callback
+// may already have consumed physical edges before returning the error; neither
+// Abort nor Finish/Close may replay those actions or replace the first receipt.
+func (transaction *DurableRootTransaction) recordPhysicalCleanupFailureLocked(err error) error {
+	if transaction.physicalCleanupError == nil {
+		transaction.physicalCleanupReceipt.mu.Lock()
+		transaction.physicalCleanupReceipt.original = transaction
+		transaction.physicalCleanupReceipt.causes = [3]error{err, ErrDurableRootOwnership}
+		transaction.physicalCleanupReceipt.mu.Unlock()
+		transaction.physicalCleanupError = &transaction.physicalCleanupReceipt
+		if transaction.constructionV6 != nil {
+			transaction.constructionV6.arena.MetadataOwner().CleanupFailed()
+		}
+	}
+	return transaction.physicalCleanupError
 }
 
 func (transaction *DurableRootTransaction) activateFromCoordinator() error {
@@ -381,17 +465,46 @@ func (transaction *DurableRootTransaction) failFromCoordinator(cause error) erro
 	return nil
 }
 
-func (transaction *DurableRootTransaction) releaseFromRecovery() {
+func (transaction *DurableRootTransaction) prepareFromRecovery() error {
 	if transaction == nil {
-		return
+		return nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.constructionV6 != nil {
-		transaction.releasePrimaryRecoveryLockedV6()
-	} else if transaction.ownerLockedV6() == ResourceOwnerRecovery {
-		transaction.releaseOwnerLockedV6()
+	if transaction.physicalCleanupError != nil {
+		return transaction.physicalCleanupError
 	}
+	if transaction.ownerLockedV6() != ResourceOwnerRecovery {
+		return ErrDurableRootOwnership
+	}
+	if transaction.constructionV6 != nil {
+		return transaction.preparePrimaryRecoveryLockedV6()
+	}
+	return nil
+}
+func (transaction *DurableRootTransaction) releaseFromRecovery() error {
+	if transaction == nil {
+		return nil
+	}
+	transaction.mu.Lock()
+	defer transaction.mu.Unlock()
+	if transaction.physicalCleanupError != nil {
+		return transaction.physicalCleanupError
+	}
+	if transaction.constructionV6 != nil {
+		return transaction.releasePrimaryRecoveryLockedV6()
+	}
+	if transaction.ownerLockedV6() == ResourceOwnerRecovery {
+		transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
+		transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
+		transaction.releaseOwnerLockedV6()
+		transaction.phase = durableRootConsumed
+		return nil
+	}
+	if transaction.ownerLockedV6() == ResourceOwnerReleased {
+		return nil
+	}
+	return ErrDurableRootOwnership
 }
 
 type durableRootGroupExtension struct {

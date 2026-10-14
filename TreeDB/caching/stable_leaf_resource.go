@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
@@ -21,6 +22,10 @@ type stableValueWriter interface {
 }
 
 type stableOuterLeafCapture struct {
+	cleanupFailure                                   rootpublication.OriginalReleaseFailure
+	cleanupAttempted                                 bool
+	cleanupErr                                       error
+	untransferredToken                               *rootpublication.StableResourceToken
 	db                                               *DB
 	lane                                             *lane
 	builder                                          *rootpublication.StableResourceSetBuilder
@@ -117,22 +122,22 @@ func (capture *stableOuterLeafCapture) mergeChild(child *rootpublication.StableR
 	return capture.builder.Merge(child)
 }
 
-func (capture *stableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) error {
+func (capture *stableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) (retErr error) {
 	if rotation == nil {
 		return rootpublication.ErrResourceOwnership
 	}
-	defer rotation.Release()
-	if token := rotation.TakeClosed(); token != nil {
+	defer func() { retErr = errors.Join(retErr, rotation.ReleaseWithError()) }()
+	if token := rotation.Closed; token != nil {
 		if err := capture.addToken(token); err != nil {
-			token.Release()
 			return err
 		}
+		rotation.TakeClosed()
 	}
-	if token := rotation.TakeActive(); token != nil {
+	if token := rotation.Active; token != nil {
 		if err := capture.addToken(token); err != nil {
-			token.Release()
 			return err
 		}
+		rotation.TakeActive()
 	}
 	return nil
 }
@@ -162,7 +167,11 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 		return err
 	}
 	if err := capture.addToken(token); err != nil {
-		token.Release()
+		capture.untransferredToken = token
+		if cleanupErr := token.ReleaseWithError(); cleanupErr != nil {
+			return errors.Join(err, capture.retainFailure(cleanupErr))
+		}
+		capture.untransferredToken = nil
 		return err
 	}
 	return nil
@@ -172,7 +181,13 @@ func (capture *stableOuterLeafCapture) freeze(ptrs []page.ValuePtr) (*rootpublic
 	if capture == nil || capture.builder == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
+	if capture.cleanupErr != nil {
+		return nil, capture.cleanupErr
+	}
 	for i, token := range capture.tokens {
+		if token == nil {
+			continue
+		}
 		required := false
 		for _, ptr := range ptrs {
 			if uint64(ptr.FileID) == token.Generation() {
@@ -180,44 +195,80 @@ func (capture *stableOuterLeafCapture) freeze(ptrs []page.ValuePtr) (*rootpublic
 				break
 			}
 		}
-		capture.tokens[i] = nil
 		if !required {
-			token.Release()
+			if err := token.ReleaseWithError(); err != nil {
+				return nil, capture.retainFailure(err)
+			}
+			capture.tokens[i] = nil
 			continue
 		}
 		if err := capture.builder.Add(token); err != nil {
-			token.Release()
-			capture.abandon()
-			return nil, err
+			return nil, errors.Join(err, capture.abandon())
 		}
+		// Only actual ownership transfer consumes this capture's original edge.
+		capture.tokens[i] = nil
 	}
 	capture.disposeTokens()
 	set, err := capture.builder.Freeze()
 	if err != nil {
-		capture.builder.Abandon()
+		return nil, errors.Join(err, capture.abandon())
 	}
 	capture.builder = nil
 	capture.disposeMetadata()
-	return set, err
+	return set, nil
 }
 
-func (capture *stableOuterLeafCapture) abandon() {
+func (capture *stableOuterLeafCapture) retainFailure(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	if capture.cleanupErr == nil {
+		capture.cleanupAttempted = true
+		capture.cleanupErr = capture.cleanupFailure.RetainOriginalCleanupFailure(capture, cause)
+		if capture.metadata != nil {
+			capture.metadata.CleanupFailed()
+		}
+	}
+	return capture.cleanupErr
+}
+func (capture *stableOuterLeafCapture) abandon() error {
 	if capture == nil {
-		return
+		return nil
 	}
+	if capture.cleanupAttempted {
+		return capture.cleanupErr
+	}
+	capture.cleanupAttempted = true
 	if capture.builder != nil {
-		capture.builder.Abandon()
+		if err := capture.builder.AbandonWithError(); err != nil {
+			return capture.retainFailure(err)
+		}
+		capture.builder = nil
 	}
-	capture.releaseTokens()
-	capture.builder = nil
+	if capture.untransferredToken != nil {
+		if err := capture.untransferredToken.ReleaseWithError(); err != nil {
+			return capture.retainFailure(err)
+		}
+		capture.untransferredToken = nil
+	}
+	if err := capture.releaseTokens(); err != nil {
+		return capture.retainFailure(err)
+	}
 	capture.disposeMetadata()
+	return nil
 }
-
-func (capture *stableOuterLeafCapture) releaseTokens() {
-	for _, token := range capture.tokens {
-		token.Release()
+func (capture *stableOuterLeafCapture) releaseTokens() error {
+	for i, token := range capture.tokens {
+		if token == nil {
+			continue
+		}
+		if err := token.ReleaseWithError(); err != nil {
+			return err
+		}
+		capture.tokens[i] = nil
 	}
 	capture.disposeTokens()
+	return nil
 }
 
 // disposeTokens ends the capture's array aliases; transferred entries retain

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -703,5 +704,75 @@ func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, indexReadyFileName)); !os.IsNotExist(err) {
 		t.Fatalf("parent failure published COMMIT: %v", err)
+	}
+}
+
+// The real offline producer must reserve os.File/private/name capacity before
+// the exact-parent creation, then transfer it to the original physical pagers.
+func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "physical-completion", true: "before-create-refusal"}[refuse], func(t *testing.T) {
+			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			metadata := d.idx.Load().primary.MetadataOwner()
+			idx, err := d.captureOfflinePrimaryScopeV6()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer idx.releaseOfflineNamespaceScopeV6()
+			before := metadata.Bytes()
+			budget := &primaryScratchBudget{capacity: ^uint64(0)}
+			enrolled, err := metadata.Enroll(budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer enrolled.Close()
+			admitted := metadata.Bytes()
+			if refuse {
+				budget.capacity = admitted
+			}
+			_, err = d.newOfflinePrimaryPairV6(idx, 64*1024)
+			budget.capacity = ^uint64(0)
+			if refuse {
+				if !errors.Is(err, retainedalloc.ErrCapacity) {
+					t.Fatal("child producer did not refuse before create", err)
+				}
+				for _, name := range []string{primaryNewFileName, indexNewFileName} {
+					if _, e := os.Stat(filepath.Join(d.dir, name)); !os.IsNotExist(e) {
+						t.Fatal("preadmission created child", name, e)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				primaryCharge, e := rootpublication.StableFileMetadataCharge(uint64(len(idx.stableNamespaceParent.Name()) + 1 + len(primaryNewFileName)))
+				if e != nil {
+					t.Fatal(e)
+				}
+				dataCharge, e := rootpublication.StableFileMetadataCharge(uint64(len(idx.stableNamespaceParent.Name()) + 1 + len(indexNewFileName)))
+				if e != nil {
+					t.Fatal(e)
+				}
+				if metadata.Bytes() != admitted+primaryCharge+dataCharge {
+					t.Fatal("actual physical child capacity not admitted", metadata.Bytes(), admitted, primaryCharge, dataCharge)
+				}
+				if e = idx.close(); e != nil {
+					t.Fatal(e)
+				}
+				if metadata.Bytes() != admitted {
+					t.Fatal("physical child completion did not refund", metadata.Bytes(), admitted)
+				}
+			}
+			if e := idx.releaseOfflineNamespaceScopeV6(); e != nil {
+				t.Fatal(e)
+			}
+			if metadata.Bytes() >= before {
+				t.Fatal("original scope did not dispose", metadata.Bytes(), before)
+			}
+		})
 	}
 }

@@ -13,6 +13,12 @@ func (p *Pager) startGrower() {
 	go p.growLoop()
 }
 
+// QuiesceBackgroundGrowth stops and joins the existing capacity pre-grower.
+// It consumes no physical mapping, file or metadata edge. The caller must have
+// withdrawn this pager from all write/growth admission, and must hold no pager
+// allocation/growth lock while waiting for the original worker.
+func (p *Pager) QuiesceBackgroundGrowth() { p.stopGrower() }
+
 func (p *Pager) stopGrower() {
 	if p.growStop == nil {
 		return
