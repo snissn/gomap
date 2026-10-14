@@ -14,6 +14,8 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -192,6 +194,9 @@ type Zipper struct {
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	primaryDirectory          bool
+	primaryArena              *primaryarena.Arena
+	primaryConstructorV6      func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)
 	adaptiveLeafEncoding      bool
 	maintenanceOpsPerCoalesce int
 	parallelMergePressure     ParallelMergePressureSource
@@ -1311,6 +1316,12 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 // using a different pager and allocator. Private COW maintenance uses this to
 // build an overlay tree without allocating in the live index pager.
 func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zipper {
+	arena := z.primaryArena
+	if p != z.pager {
+		// Private/replacement DATA pagers do not acquire the live arena merely
+		// by inheriting encoding preferences. Their owner attaches one explicitly.
+		arena = nil
+	}
 	return &Zipper{
 		pager:                     p,
 		allocator:                 a,
@@ -1324,6 +1335,9 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 		indexColumnarLeaves:       z.indexColumnarLeaves,
 		indexPackedValuePtr:       z.indexPackedValuePtr,
 		indexInternalBaseDelta:    z.indexInternalBaseDelta,
+		primaryDirectory:          z.primaryDirectory,
+		primaryArena:              arena,
+		primaryConstructorV6:      z.primaryConstructorV6,
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
@@ -1805,6 +1819,7 @@ const (
 )
 
 type applyRunConfig struct {
+	materializedBase   bool
 	maxParallelWorkers int
 	workerPool         *ApplyWorkerPool
 	leafPagePersister  leafPagePersistSink
@@ -1834,6 +1849,15 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 		return rootID, nil, metrics, nil
 	}
 	metrics.ZipperApplyOps = len(ops) + len(ranges)
+	if !cfg.materializedBase && rootID != 0 {
+		rootImage, readErr := z.pager.Get(rootID)
+		if readErr != nil {
+			return 0, nil, metrics, readErr
+		}
+		if z.primaryDirectory || node.NewNode(rootImage).Type() == page.PageTypePrimaryDirectory {
+			return z.applyPrimaryDirectory(rootID, ops, ranges, cfg)
+		}
+	}
 
 	scratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(scratch)
@@ -3455,6 +3479,14 @@ func deleteRangesForSpan(ranges []batch.DeleteRange, low, high []byte) []batch.D
 }
 
 func mergeMetrics(dst, src *adaptive.Metrics) {
+	dst.PrimaryDirectoryPagesRead += src.PrimaryDirectoryPagesRead
+	dst.PrimaryDirectoryPagesWritten += src.PrimaryDirectoryPagesWritten
+	dst.PrimaryComponentPagesWritten += src.PrimaryComponentPagesWritten
+	dst.PrimaryConsolidatedCells += src.PrimaryConsolidatedCells
+	dst.PrimaryBytesWritten += src.PrimaryBytesWritten
+	dst.PrimaryBankRecords += src.PrimaryBankRecords
+	dst.PrimaryBankWorkBytes += src.PrimaryBankWorkBytes
+
 	if dst == nil || src == nil {
 		return
 	}

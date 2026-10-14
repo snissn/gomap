@@ -720,3 +720,60 @@ its active frame state. No durable progress or recovery coverage is invented.
 The [production and benchmark profile audit](no-wal-fast-audit.md) records public KV and
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
+
+### Selected V6 ordinary constructor and promotion ownership
+
+Selected V6 ordinary writes construct their independently immutable logical
+directory under the existing durable-root transaction. Relaxed visibility and
+later durable promotion use that same transaction. Relaxed ACK may still precede
+durable slot selection. Explicit Sync/Checkpoint and clean Close wait for the
+actual complete durable publication.
+
+Promotion freshly selects the alternate capsule and actual current parent.
+DATA and external/PRIMARY dependency obligations remain durable before capsule
+installation, followed by the PRIMARY fence. Constructor reuse does not make
+those syncs redundant. Post-install uncertainty preserves actual prior custody,
+poisons publication, and refuses later writes until recovery. Durable report
+finishes the ordinary transaction synchronously; this ordinary callback path is
+not bounded native Accepted/Finish qualification.
+
+## Capsule-format joint vacuum durability
+
+Vacuum rebuilds private DATA/PRIMARY files, both eligible roots and their finite
+parent closures against one genuine DATA generation. Each actual external
+resource, DATA pages, PRIMARY banks and staging namespace are fenced before
+installing/fencing the two complete capsules. COMMIT file and parent are then
+synced before canonical replacement. DATA replacement, PRIMARY replacement
+and COMMIT deletion each have a separate actual parent-directory barrier.
+
+Replacement runtime and closures are prepared before COMMIT. Writer exclusion
+spans canonical rebind, deletion/barrier and in-memory installation.
+Post-COMMIT observer, cancellation, rename or barrier error retains custody
+and poisons mutation; recovery rolls forward exact identities without rollback.
+
+This maintenance protocol adds no fsync to ordinary relaxed no-WAL ACKs.
+Command-WAL WriteSync may acknowledge the durable command before sealed capsule
+frontier advances; explicit Checkpoint establishes the complete root boundary.
+Vacuum preserves each slot's actual `AppliedCommandLSN` and revision frontier.
+Ordinary maintenance is not a bounded native prune accounting witness.
+
+### Maintenance floor issuance remains separate from ordinary ACK
+
+The Store's exact floor metadata operation uses the existing ordinary batch
+Write or WriteSync route with typed producer input. This preserves earlier
+semantic Requests across the Store's own monotone floor publication; it does
+not convert an ACK into a completed source cut. Ordinary command-WAL durable
+ACK and relaxed memtable ACK boundaries are unchanged.
+
+The current private protected-floor characterization additionally performs a
+separate maintenance Checkpoint under Store exclusion. It captures original
+owner/foreign/protected-serial authority after successful floor ACK and before
+the drain, then confirms the same authority after completion. A raw Set/SetSync
+between completion and confirmation refuses issuance. The synchronous Checkpoint
+and its callbacks are ordinary unbounded work; no public bounded prune call uses
+this helper or receives free cut/sync credit from it.
+
+Owned constructed Finish retains its exact queue through charged returns after
+the resource callback completes, including terminal takeover. It cannot
+reinvoke the completed callback or finish through an ordinary nil-work waiter.
+Independent slot/parent and storage-sync obligations are unchanged.

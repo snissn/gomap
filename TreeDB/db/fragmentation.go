@@ -290,6 +290,11 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		}
 		pages++
 
+		// The directory has its own canonical heap; native node FreeSpace only
+		// interprets materialized leaf/internal layouts.
+		if n.Type() == page.PageTypePrimaryDirectory {
+			return nil
+		}
 		fill := float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
 		fillPPM := uint32(fill * 1_000_000)
 		switch n.Type() {

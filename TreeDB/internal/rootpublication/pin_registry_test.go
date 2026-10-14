@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -367,5 +368,71 @@ func BenchmarkStableResourceTokenConstructionWithIdentityPinRegistry(b *testing.
 			b.Fatal(err)
 		}
 		token.Release()
+	}
+}
+
+func TestIdentityDeleteLeaseV6ChargedFrozenChildTail(t *testing.T) {
+	dir := t.TempDir()
+	parent, e := os.Open(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer parent.Close()
+	a, e := os.Create(filepath.Join(dir, "a"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Close()
+	b, e := os.Create(filepath.Join(dir, "b"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	registry := NewIdentityPinRegistry()
+	if e = registry.RememberStableNamespaceLink(parent, a, "a"); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Link(a.Name(), filepath.Join(dir, "alias")); e != nil {
+		t.Fatal(e)
+	}
+	if e = registry.RememberStableNamespaceLink(parent, a, "alias"); e != nil {
+		t.Fatal(e)
+	}
+	if e = registry.RememberStableNamespaceLink(parent, b, "b"); e != nil {
+		t.Fatal(e)
+	}
+	identity, e := StableIdentityFromFile(a)
+	if e != nil {
+		t.Fatal(e)
+	}
+	lease, e := registry.BeginDelete(identity)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = registry.RememberStableNamespaceLink(parent, a, "alias"); !errors.Is(e, ErrResourceDeletionInProgress) {
+		t.Fatalf("deleting child accepted new proof %v", e)
+	}
+	work := &iterator.OrdinalScanWork{RecordLimit: 4, ByteLimit: 1 << 20}
+	done, p, e := lease.CommitDeletedWithWorkV6(work)
+	if done || !p || e != nil || registry.ActiveStableNamespaceLinks() != 2 {
+		t.Fatalf("exact first tail cut %v %v %v", done, p, e)
+	}
+	if known, e := registry.StableNamespaceLinkKnown(parent, b, "b"); e != nil || !known {
+		t.Fatal("unrelated proof lost", e)
+	}
+	work = &iterator.OrdinalScanWork{RecordLimit: 5, ByteLimit: 1 << 20}
+	done, _, e = lease.CommitDeletedWithWorkV6(work)
+	if !done || e != nil || registry.ActiveStableNamespaceLinks() != 1 {
+		t.Fatalf("completion %v %v", done, e)
+	}
+	work = &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
+	done, p, e = lease.CommitDeletedWithWorkV6(work)
+	if !done || p || e != nil {
+		t.Fatalf("once completion %v %v %v", done, p, e)
+	}
+	lease.Abort()
+	lease.CommitDeleted()
+	if known, e := registry.StableNamespaceLinkKnown(parent, b, "b"); e != nil || !known {
+		t.Fatal("ordinary repeat stole unrelated proof", e)
 	}
 }

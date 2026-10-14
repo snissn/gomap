@@ -26,7 +26,18 @@ TreeDB's value log is the only value storage path for values.
 - Stores either:
   - inline value bytes, or
   - a fixed-size `ValuePtr` reference into the value log.
-- Uses copy-on-write page rewrites and dual meta pages for commit visibility.
+- Uses copy-on-write page rewrites and dual complete root selectors for durability.
+- Fresh `no_wal_fast` stores select a top-level exact-key immutable delta
+  directory over a materialized DATA B-tree base, with fixed complete A/B
+  capsules in `index.db.primary`. Other fresh profiles retain DATA dual-meta
+  selection. See [selected capsule format](storage-format.md#30-selected-primary-capsules-v6-construction).
+- Capsule readers own immutable copied directory bytes and actual component
+  references. Recovery, physical export and Snapshot restore use the same
+  complete capsule authority. Vacuum commits an identity-bound private
+  DATA/PRIMARY pair under writer exclusion, retains old Snapshot owners and
+  refuses namespace cutover with independently retained physical cuts.
+  Joint recovery runs under LOCK before legacy cleanup. Native whole-cost,
+  semantic materialization progress and performance remain unqualified.
 
 ### 2.2 Value Log
 
@@ -80,6 +91,7 @@ Default root layout:
 
 - `<root>/maindb/`
   - `index.db`
+  - `index.db.primary` (selected PRIMARY format)
   - `LOCK`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
@@ -148,3 +160,80 @@ A compatible implementation should preserve:
    - commit-log replay,
    - replay log cleanup.
 5. Single-writer + multi-reader snapshot behavior.
+
+
+The selected V6 ordinary producer shares constructor-to-capsule machinery with
+the typed bounded construction API. Its directory certificate borrows the
+actual immutable arena image; its DATA certificate is reusable only for the
+identical retained generation/pager/base/system identities. The existing
+runtime and root owners retain physical custody. Typed codec output is reused
+inside the same guarded publication, while Open/recovery validate raw physical
+bytes independently. This introduces no additional ownership lifecycle or
+scheduler. Native producer admission, protected semantic floor proof and
+same-Request materialization progress are still construction obligations.
+
+### Ordinary transaction ownership from logical construction
+
+For selected V6 writes, the existing DurableRootTransaction is created by the
+ordinary zipper before its immutable logical directory and components are
+constructed. The arena bank retains that transaction as constructor
+discoverability. The visible member, candidate and later promotion refer to the
+same transaction; they do not each allocate a new control owner. After binding,
+the existing resource set's owner cell controls handoff. Independent physical
+root references are still necessary: the constructor holds one reference through
+Finish, visible state holds its own, and durable current/parent closures acquire
+their actual references at promotion.
+
+Relaxed visibility does not select a durable slot or parent. Each logical root
+remains independently immutable while later relaxed writes replace visible
+state. Fresh promotion binds the actual current parent and alternate fixed slot,
+encodes the complete three-page capsule, and retains its two closures in the
+same transaction. The existing DATA and PRIMARY dependency syncs precede capsule
+installation; the final PRIMARY fence remains separate. Durable report runs the
+same transaction's ordinary Finish, detaches constructor discoverability,
+releases the actual resource set and drops the constructor edge. Old readers
+retain their independently owned immutable roots after that detach.
+
+Ordinary Finish remains synchronous and uses ordinary resource callbacks.
+The selected experiment does not connect the native private producer or its
+typed Accepted retirement cursor. Native admission, complete accounting and a
+protected semantic-floor/materialization adapter remain unqualified.
+
+### Shared publication views and semantic producer qualification
+
+Selected V6 DB current state and visible runtime membership borrow the existing
+DurableRootTransaction's immutable publication projection. Its selected candidate,
+single-member group and owned receipt are views held inside the same construction
+owner. The actual StableResourceSet owner cell controls transferred custody.
+Independent constructor, visible-state, durable-slot, parent and reader references
+remain separate physical edges.
+
+The internal owned Finish route uses the same transaction after its actual
+resource callback completes. It detaches constructor discoverability once and
+retains an exact release queue until a charged empty observation. Terminal
+takeover retains that same receipt and queue; ordinary waiters cannot finish it
+with nil work. This component does not connect a public native prune producer.
+
+Store inputs qualify only their actual accepted logical postimage. A constant-size
+pre-compaction summary survives the ordinary batch and cache backend-bypass paths;
+existing physical flushes remain physical flushes. Raw or mixed inputs are sticky
+foreign transitions. A combiner input borrows its validated owned key copy because
+the queue can survive the caller's stop result.
+
+Protected-floor preparation separately persists the durable floor and completes
+an ordinary maintenance Checkpoint while Store commit and maintenance exclusion
+are held. Before draining it captures the exact DB incarnation, Store owner,
+foreign epoch and protected mutation serial. Confirmation refuses any change
+rather than capturing a new epoch after the drain. Exact typed floor metadata
+publications preserve earlier Requests, including a higher floor; relaxed floor
+publication alone issues no protection. The current private synchronous helper
+is characterization, not a bounded maintenance implementation.
+
+A semantic Protection or ProtectedVersion is never a physical lookup, complete
+output, resource or publication certificate. Its expected revision must come
+from an actual read and match fresh current storage. Only its own accepted exact
+deletion may advance its private protected serial; another protected mutation
+invalidates the private proof while its original Request can remain valid.
+The fresh complete-output/materialization adapter and finite same-Request rank
+remain unimplemented. Ordinary construction's full class census still exceeds
+a single 32-record return, and no complete native fit is claimed.

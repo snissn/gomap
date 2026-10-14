@@ -544,6 +544,30 @@ When the cached layer is enabled:
   collection units, derived index views, and reachable external refs until the
   read closes.
 
+A transferred private primary-proof Snapshot has one exact registered retirement
+cursor. Transfer is permitted only without exported iterators, foreground
+callbacks or a previously transferred stable-index capture. The registry makes
+pre-Accepted private custody discoverable to terminal `DB.Close`; it does not
+mirror a receipt's Finish owner. Production private capture and receipt transfer
+remain separate integration obligations. A future receipt transfer must remove
+that same registered cursor atomically, preserving its progress and ownership.
+
+Terminal Close takes an unfinished owned publication receipt or registered
+private Snapshot cursor before DATA generations, value-log manager, runtime or
+namespace teardown. It joins a running Finish callback outside coordinator and
+transaction locks, then uses fresh non-nil work to continue the same finite
+cursor. Former owners refuse after transfer. Retirement failure or an active
+private read reports an explicit Close error and retains remaining physical
+custody for a subsequent Close attempt. Reentrant Close from the terminal owner
+refuses instead of waiting on itself. Completion clears captured reader/lease
+fields; it does not invoke ordinary Snapshot finalization as hidden work.
+
+This does not add a public Snapshot-read or prune-resume guarantee after
+`DB.Close`. Independently retained physical snapshot cuts continue to hold their
+own files, namespace and immutable roots through owning DB shutdown. Ordinary
+physical DB teardown follows typed debt completion and is not itself a bounded
+prune operation.
+
 ## 6. Concurrency and Locking
 
 The internal immutable memtable foundation has separate writer-private and
@@ -840,3 +864,21 @@ causal prefixes, original retries, observation limits and failure consumption.
 The [runtime specification](fixed-peer-tcp-runtime-v1.md) defines the supported
 bounded projection, exact encoding, mandatory limits, source-record accounting,
 and untimed admitted-scan cost. Qualification remains owned by #4250.
+
+## V6 joint vacuum lifetime and failure boundary
+
+Successful vacuum publishes one new visible commit while preserving the
+independent older slot, revisions and command-WAL frontier. Both current roots
+and their finite parent closures retain exact persistent ValuePtr dependencies.
+Normal old Snapshots may survive replacement; independent physical cuts refuse
+cutover with `ErrResourcePinned`. Cut export retains actual physical handles and
+copied slot images through reuse and DB Close, without adding a normal Snapshot
+read guarantee after owning DB Close.
+
+Before COMMIT, failure may dispose only unpublished replacement custody. Once
+decision creation may have persisted bytes, errors retain the exact pair,
+root/dependency owners and remaining names, poisoning subsequent mutation with
+`ErrRecoveryRequired`. Valid synced COMMIT is irrevocable. Its identity-bound
+rollforward runs under LOCK before legacy cleanup; malformed markers refuse
+without cleanup. Namespace rebind and synced decision deletion precede writer
+admission. Ordinary relaxed and command-WAL ACK promises remain unchanged.

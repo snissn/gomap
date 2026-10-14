@@ -1,0 +1,111 @@
+// Package m7routetrace contains diagnostic-only fixed scalar observations.
+// Numeric owner identities scope events; they never retain objects or authorize work.
+package m7routetrace
+
+type Event uint64
+
+const (
+	Quantum                    Event = 0
+	Return                     Event = 1
+	RequestHealthy             Event = 2
+	RequestTerminal            Event = 3
+	Refresh                    Event = 4
+	RefreshStaleNilPreparation Event = 5
+	RefreshStalePreparation    Event = 6
+	RefreshChangedPreparation  Event = 7
+	RefreshOwnPreparation      Event = 8
+	RefreshReady               Event = 9
+	PredecessorOwnerCreated    Event = 10
+	PredecessorReturn          Event = 11
+	ConfigureRun               Event = 12
+	ConfigureRunDone           Event = 13
+	ConfigurePrefix            Event = 14
+	ConfigurePrefixDone        Event = 15
+	FloorSync                  Event = 16
+	FloorSyncReturn            Event = 17
+	NoWALSync                  Event = 18
+	NoWALPhase                 Event = 19
+	SelectorReached            Event = 20
+	SelectorGeometryFallback   Event = 21
+	SelectorCalled             Event = 22
+	SelectorShapeIneligible    Event = 23
+	SelectorCreated            Event = 24
+	SelectorPrepared           Event = 25
+	EnvelopeEntered            Event = 26
+	EnvelopeReady              Event = 27
+	ConsumeEntered             Event = 28
+	CutStarted                 Event = 29
+	LeafBound                  Event = 30
+	ComposeDone                Event = 31
+	Accepted                   Event = 32
+	Durable                    Event = 33
+	FinishEntered              Event = 34
+	FinishDone                 Event = 35
+	PublicACK                  Event = 36
+	CancelStaleScheduled       Event = 37
+	CancelChangedScheduled     Event = 38
+	CancelErrorScheduled       Event = 39
+	CancelCalled               Event = 40
+	CancelNativeDone           Event = 41
+	CancelPublicDone           Event = 42
+	ResetDiscovery             Event = 43
+	ResetRefresh               Event = 44
+	ResetCancel                Event = 45
+	CloseCursor                Event = 46
+	CloseNative                Event = 47
+	CloseBackend               Event = 48
+	PublicWriteBefore          Event = 49
+	PublicWriteAfter           Event = 50
+	EnvelopeError              Event = 51
+	ConsumeError               Event = 52
+	PublishEntered             Event = 53
+	PublishReturn              Event = 54
+	InitialConsumerRefusal     Event = 55
+	ResetDone                  Event = 56
+	NativeGroupAccepted        Event = 57
+	EventCount                       = 58
+)
+
+var EventNames = [EventCount]string{"Quantum", "Return", "RequestHealthy", "RequestTerminal", "Refresh", "RefreshStaleNilPreparation", "RefreshStalePreparation", "RefreshChangedPreparation", "RefreshOwnPreparation", "RefreshReady", "PredecessorOwnerCreated", "PredecessorReturn", "ConfigureRun", "ConfigureRunDone", "ConfigurePrefix", "ConfigurePrefixDone", "FloorSync", "FloorSyncReturn", "NoWALSync", "NoWALPhase", "SelectorReached", "SelectorGeometryFallback", "SelectorCalled", "SelectorShapeIneligible", "SelectorCreated", "SelectorPrepared", "EnvelopeEntered", "EnvelopeReady", "ConsumeEntered", "CutStarted", "LeafBound", "ComposeDone", "Accepted", "Durable", "FinishEntered", "FinishDone", "PublicACK", "CancelStaleScheduled", "CancelChangedScheduled", "CancelErrorScheduled", "CancelCalled", "CancelNativeDone", "CancelPublicDone", "ResetDiscovery", "ResetRefresh", "ResetCancel", "CloseCursor", "CloseNative", "CloseBackend", "PublicWriteBefore", "PublicWriteAfter", "EnvelopeError", "ConsumeError", "PublishEntered", "PublishReturn", "InitialConsumerRefusal", "ResetDone", "NativeGroupAccepted"}
+
+const StageCount = 17
+
+type Tuple struct{ Call, Attempt, Stage, Event, A, B, C, D uint64 }
+
+// AdmissionTuple stores only fixed diagnostic scalars. Site 0 is a failed Reserve;
+// sites 1/2 prefix entry/return, 3/4 global entry/return, 5/6 physical retirement,
+// site 7 seek state (started/delivered/cacheDone/backendDone bits, backend depth/phase, bound len/hash).
+type AdmissionTuple struct{ Call, Site, A, B, C, D, E, F uint64 }
+
+type DiagnosticKey struct {
+	Length, Hash, Nil, Truncated uint64
+	Bytes                        [64]byte
+}
+type DetailTuple struct {
+	Call, Attempt, Serial, Site, Reason uint64
+	Work                                [4]uint64
+	State                               [48]uint64
+	Keys                                [6]DiagnosticKey
+}
+
+type Snapshot struct {
+	DetailCount                     [8]uint64
+	DetailReasons                   [8][512]uint64
+	DetailTuples, DetailFinalTuples uint64
+	DetailFirst                     [96]DetailTuple
+	DetailFinalFirst                [96]DetailTuple
+	DetailLast                      [256]DetailTuple
+
+	AdmissionCount                                  [8]uint64
+	AdmissionTuples                                 uint64
+	FirstReserve                                    AdmissionTuple
+	AdmissionFirst                                  [24]AdmissionTuple
+	AdmissionLast                                   [8]AdmissionTuple
+	Counts                                          [EventCount]uint64
+	MaxStage, HighestStage, Attempts, Calls, Tuples uint64
+	CancelScheduled, CancelCompleted, Reset, Closed [StageCount]uint64
+	Actions                                         [32]uint64
+	Phases                                          [32]uint64
+	First                                           [24]Tuple
+	Last                                            [8]Tuple
+}

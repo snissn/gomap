@@ -1,6 +1,9 @@
 package freelist
 
-import "sort"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"unsafe"
+)
 
 // SnapshotPageUnusedV1 classifies bytes that an export must not read from a
 // live index. The caller must retain a snapshot registry pin at oldestCommit,
@@ -8,27 +11,61 @@ import "sort"
 // retired page at the pinned boundary remains readable; only strictly older
 // retirement can be reused. This is classification, not reuse authority.
 func (g *FreelistGenerationV1) SnapshotPageUnusedV1(id, oldestCommit uint64) (bool, error) {
+	unused, _, err := g.SnapshotPageUnusedWithWorkV1(id, oldestCommit, nil)
+	return unused, err
+}
+
+// SnapshotPageUnusedWithWorkV1 charges every immutable trie node and canonical
+// reservation-extent operand actually inspected. It never hides a full metadata
+// classifier beneath a scalar reservation. Under-admission changes no state.
+func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uint64, w *iterator.OrdinalScanWork) (bool, bool, error) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(FreelistGenerationV1{}))) {
+		return false, false, nil
+	}
 	if g == nil || oldestCommit == 0 || id < 2 || id >= g.highWater {
-		return false, ErrGenerationFormat
+		return false, false, ErrGenerationFormat
 	}
-	chunk := lookupChunk(g.root, id>>freelistChunkShift)
-	if chunk != nil {
-		offset := id & (freelistChunkSize - 1)
-		if chunk.isFree(offset) || (chunk.retired[offset] != 0 && chunk.retired[offset] < oldestCommit) {
-			return true, nil
+	n := g.root
+	for depth := 0; n != nil && depth < chunkTrieDepth; depth++ {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateNode{}))) {
+			return false, false, nil
+		}
+		n = n.child[chunkNibble(id>>freelistChunkShift, depth)]
+	}
+	if n != nil {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateNode{}))+uint64(unsafe.Sizeof(stateChunk{}))) {
+			return false, false, nil
+		}
+		chunk := n.chunk
+		if chunk != nil {
+			offset := id & (freelistChunkSize - 1)
+			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && chunk.retired[offset] < oldestCommit) {
+				return true, true, nil
+			}
 		}
 	}
-	// BeginCandidate applies these deferred retirements before allocating.
-	// The canonical reservation extents are sorted and non-overlapping, so
-	// check the containing extent without expanding it into per-page state.
-	i := sort.Search(len(g.record.Extents), func(i int) bool { return g.record.Extents[i].StartPageID > id }) - 1
-	if i >= 0 {
-		extent := g.record.Extents[i]
+	lo, hi := 0, len(g.record.Extents)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(ReservationExtentV1{}))) {
+			return false, false, nil
+		}
+		if g.record.Extents[mid].StartPageID > id {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	if lo > 0 {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(ReservationExtentV1{}))) {
+			return false, false, nil
+		}
+		extent := g.record.Extents[lo-1]
 		if id-extent.StartPageID < uint64(extent.Count) && extent.Kind == ReservationPendingMetadataRetirement {
-			return extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit, nil
+			return extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit, true, nil
 		}
 	}
-	return false, nil
+	return false, true, nil
 }
 
 // PublishedSnapshotGenerationV1 refuses allocation/publication work that could

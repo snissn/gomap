@@ -1,0 +1,24 @@
+{
+  "classification": "RECOVERED_SOURCE_CHECKPOINT_NOT_QUALIFICATION",
+  "at_utc": "2026-10-14T00:07:30.021426+00:00",
+  "branch": "codex/4878-native-recovered-20261013",
+  "base": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+  "setup": {
+    "mode": "git",
+    "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-recovered",
+    "branch": "codex/4878-native-recovered-20261013",
+    "base_sha": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+    "seed": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/integration-terminal-primary-root-20261007",
+    "fallback_reason": "ordinary Git explicitly selected",
+    "cloned_files": 0,
+    "cloned_bytes": 0
+  },
+  "frozen_bindings": 441,
+  "original_tracked_and_untracked_source_paths_verified": 9993,
+  "original_changed_paths": 78,
+  "original_untracked_paths": 99,
+  "all_changes_bound": true,
+  "source_identity": "Original complete manifest with .git/build/generated paths excluded from Git; all actual tracked and untracked source paths verified against the frozen map",
+  "protected_fixtures": "Retained separately under artifacts; not inserted into production test paths",
+  "acceptance": "No native fit/rank/full Finish, platform or performance acceptance"
+}

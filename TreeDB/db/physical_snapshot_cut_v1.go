@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -25,16 +27,20 @@ import (
 // caller must also capture the exact external dependency files before releasing
 // its higher-level storage barrier; this object exports only index.db.
 type PhysicalSnapshotCutV1 struct {
-	mu            sync.Mutex
-	file          *os.File
-	directoryLock *lockfile.Lock
-	roots         *RecoverableRootSet
-	generation    *freelist.FreelistGenerationV1
-	meta          [2][page.PageSize]byte
-	parentIDs     [2]uint64
-	parents       [2][page.PageSize]byte
-	oldest        uint64
-	state         StateToken
+	mu              sync.Mutex
+	file            *os.File
+	primaryFile     *os.File
+	primaryPages    []bool
+	primaryHeader   [page.PageSize]byte
+	primaryCapsules [2][]byte
+	directoryLock   *lockfile.Lock
+	roots           *RecoverableRootSet
+	generation      *freelist.FreelistGenerationV1
+	meta            [2][page.PageSize]byte
+	parentIDs       [2]uint64
+	parents         [2][page.PageSize]byte
+	oldest          uint64
+	state           StateToken
 }
 
 // CapturePhysicalSnapshotCutV1 requires a completed checkpoint and refuses any
@@ -103,6 +109,13 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 	if err != nil {
 		return nil, err
 	}
+	if current.primary != nil {
+		for _, floor := range current.primary.dataFloor {
+			if floor != 0 && floor < oldest {
+				oldest = floor
+			}
+		}
+	}
 	directoryLock, err := db.lock.Retain()
 	if err != nil {
 		return nil, fmt.Errorf("physical snapshot directory ownership: %w", err)
@@ -113,7 +126,7 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 		if err != nil {
 			return err
 		}
-		file, err := os.Open(source.Name())
+		file, err := rootpublication.DuplicateStableFile(source)
 		if err != nil {
 			return err
 		}
@@ -131,6 +144,9 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 		// slot's parent may already be retired below the registry boundary;
 		// retain these two bounded images while publication is excluded rather
 		// than reading reusable bytes during deferred export.
+		if current.primary != nil {
+			return nil
+		}
 		pageSource := &snapshotIndexPageStoreV1{file: file, pageCount: generation.HighWater()}
 		for slot, record := range current.slotRecord {
 			if record.CommitSeq == 0 || record.ParentRecordPageID == 0 {
@@ -146,9 +162,71 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 		}
 		return nil
 	})
+	if err == nil && current.primary != nil {
+		extent := uint64(2)
+		for _, projection := range current.primary.slots {
+			if projection.ArenaHighWater > extent {
+				extent = projection.ArenaHighWater
+			}
+		}
+		for _, proof := range current.primary.proofRecords {
+			if proof.Primary.ArenaHighWater > extent {
+				extent = proof.Primary.ArenaHighWater
+			}
+		}
+		refs := append(append([]primaryarena.Ref(nil), current.primary.records[:]...), current.primary.proofs[:]...)
+		cut.primaryPages, err = roots.idx.primary.CapturePhysicalPagesOrdinary(extent, refs)
+		if err == nil {
+			err = roots.idx.primary.Pager().WithStableResourceFile(func(source *os.File) error {
+				info, e := source.Stat()
+				if e != nil {
+					return e
+				}
+				file, e := rootpublication.DuplicateStableFile(source)
+				if e != nil {
+					return e
+				}
+				opened, e := file.Stat()
+				if e != nil || !os.SameFile(info, opened) {
+					return errors.Join(e, errors.New("treedb: primary snapshot index identity changed"), file.Close())
+				}
+				cut.primaryFile = file
+				_, e = file.ReadAt(cut.primaryHeader[:], 0)
+				if e != nil {
+					return e
+				}
+				if roots.idx.primary.CapsuleFormatV6() {
+					for slot, expected := range current.primary.capsuleImages {
+						if len(expected) == 0 {
+							continue
+						}
+						image := make([]byte, rootpublication.PrimaryCapsuleSizeV6)
+						if _, e = file.ReadAt(image, int64((2+3*slot)*page.PageSize)); e != nil {
+							return e
+						}
+						if !bytes.Equal(image, expected) {
+							return errors.New("physical capsule changed since publication")
+						}
+						view, e := rootpublication.DecodePrimaryCapsuleV6(image, uint64(slot), roots.idx.primary.UUID())
+						if e != nil {
+							return e
+						}
+						if _, e = view.ValidatePhysicalProjectionV6(roots.idx.pager, roots.idx.primary.Pager(), roots.idx.pager.PageCount(), uint64(len(cut.primaryPages))); e != nil {
+							return e
+						}
+						cut.primaryCapsules[slot] = image
+					}
+				}
+				return nil
+			})
+		}
+	}
 	if err != nil {
 		if cut.file != nil {
 			err = errors.Join(err, cut.file.Close())
+		}
+		if cut.primaryFile != nil {
+			err = errors.Join(err, cut.primaryFile.Close())
 		}
 		return nil, errors.Join(err, directoryLock.Close())
 	}
@@ -159,6 +237,48 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 func (cut *PhysicalSnapshotCutV1) StateToken() StateToken { return cut.state }
 func (cut *PhysicalSnapshotCutV1) SizeBytes() int64 {
 	return int64(cut.generation.HighWater()) * page.PageSize
+}
+
+// PrimarySizeBytes is zero for DATA-only V1 cuts. A bank cut exports its
+// independently validated companion extent and complete retained closures.
+func (cut *PhysicalSnapshotCutV1) PrimarySizeBytes() int64 {
+	return int64(len(cut.primaryPages)) * page.PageSize
+}
+func (cut *PhysicalSnapshotCutV1) WritePrimaryToContext(ctx context.Context, dst io.Writer) error {
+	if cut == nil {
+		return ErrClosed
+	}
+	cut.mu.Lock()
+	defer cut.mu.Unlock()
+	if cut.primaryFile == nil {
+		return ErrClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var buffer [page.PageSize]byte
+	for id, used := range cut.primaryPages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if id == 0 {
+			buffer = cut.primaryHeader
+		} else if id >= 2 && id < 8 && cut.primaryCapsules[(id-2)/3] != nil {
+			image := cut.primaryCapsules[(id-2)/3]
+			offset := ((id - 2) % 3) * page.PageSize
+			copy(buffer[:], image[offset:offset+page.PageSize])
+		} else if !used {
+			clear(buffer[:])
+		} else if _, err := cut.primaryFile.ReadAt(buffer[:], int64(id)*page.PageSize); err != nil {
+			return err
+		}
+		if n, err := dst.Write(buffer[:]); err != nil {
+			return err
+		} else if n != len(buffer) {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 // WriteToContext emits one sequential index image using a single page buffer.
@@ -216,9 +336,14 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 		return nil
 	}
 	err := cut.file.Close()
+	if cut.primaryFile != nil {
+		err = errors.Join(err, cut.primaryFile.Close())
+		cut.primaryFile = nil
+	}
 	cut.file = nil
 	cut.roots.Release()
 	cut.roots = nil
+	cut.primaryCapsules = [2][]byte{}
 	err = errors.Join(err, cut.directoryLock.Close())
 	cut.directoryLock = nil
 	return err
@@ -251,5 +376,11 @@ func (cut *PhysicalSnapshotCutV1) ValidateStorageDirectoryV1(directory *os.File)
 	if cut.file == nil {
 		return ErrClosed
 	}
-	return rootpublication.ValidateStableChildLink(directory, cut.file, "index.db")
+	if err := rootpublication.ValidateStableChildLink(directory, cut.file, "index.db"); err != nil {
+		return err
+	}
+	if cut.primaryFile != nil {
+		return rootpublication.ValidateStableChildLink(directory, cut.primaryFile, primaryIndexFileName)
+	}
+	return nil
 }

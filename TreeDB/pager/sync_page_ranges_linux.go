@@ -4,6 +4,7 @@ package pager
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/nativeprunemetrics"
 	"os"
 	"runtime"
 
@@ -23,6 +24,7 @@ func syncPageRangesData(file *os.File, chunks [][]byte, ranges []syncPageRange, 
 		offset := int64(r.chunk)*chunkSize + int64(r.start)
 		for len(buf) > 0 {
 			n, err := unix.Pwritev2(fd, [][]byte{buf}, offset, unix.RWF_DSYNC)
+			nativeprunemetrics.Barrier(nativeprunemetrics.DurableWrite, err)
 			runtime.KeepAlive(file)
 			runtime.KeepAlive(chunks)
 			if err == unix.EINTR {

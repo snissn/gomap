@@ -157,8 +157,8 @@ func TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync(t *testing.T) {
 		t.Fatalf("selective flush: %v", err)
 	}
 	p.mu.RLock()
-	_, lowerDirty := p.dirtyChunks[0]
-	_, upperDirty := p.dirtyChunks[1]
+	lowerDirty := p.dirtyChunks.contains(0)
+	upperDirty := p.dirtyChunks.contains(1)
 	p.mu.RUnlock()
 	if !lowerDirty || upperDirty {
 		t.Fatalf("dirty chunks after selective flush: lower=%t upper=%t", lowerDirty, upperDirty)
@@ -167,7 +167,7 @@ func TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync(t *testing.T) {
 		t.Fatalf("final sync: %v", err)
 	}
 	p.mu.RLock()
-	dirtyCount := len(p.dirtyChunks)
+	dirtyCount := p.dirtyChunks.count
 	p.mu.RUnlock()
 	if dirtyCount != 0 {
 		t.Fatalf("dirty chunks after final sync=%d want 0", dirtyCount)
@@ -198,7 +198,7 @@ func TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks(t *testi
 			t.Fatalf("Write(%d): %v", pageID, err)
 		}
 	}
-	dirtyBefore := len(p.dirtyChunks)
+	dirtyBefore := p.dirtyChunks.count
 	if dirtyBefore < 2 {
 		t.Fatalf("dirty chunks=%d want at least 2", dirtyBefore)
 	}
@@ -206,7 +206,7 @@ func TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks(t *testi
 	if err := p.SyncPages([]uint64{uint64(pagesPerChunk), 2, 1, 1, 0}); err != nil {
 		t.Fatalf("SyncPages: %v", err)
 	}
-	if got := len(p.dirtyChunks); got != dirtyBefore {
+	if got := p.dirtyChunks.count; got != dirtyBefore {
 		t.Fatalf("dirty chunks=%d want unchanged %d", got, dirtyBefore)
 	}
 	if err := p.SyncPages([]uint64{uint64(pageCount)}); !errors.Is(err, ErrPageOutOfBounds) {

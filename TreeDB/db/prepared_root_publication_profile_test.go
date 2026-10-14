@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestPreparedRootPublicationBaseProfileCountsHistoricalManifest(t *testing.T) {
@@ -16,7 +17,7 @@ func TestPreparedRootPublicationBaseProfileCountsHistoricalManifest(t *testing.T
 		}},
 		leafGenerationPendingFileIDs: []uint32{7, 8},
 		rootPublication: &rootPublicationRuntimeV1{
-			visibleMembers: map[uint64]*rootPublicationVisibleMemberV1{1: {}, 2: {}},
+			visibleMembers: map[uint64]*rootpublication.DurableRootTransaction{1: {}, 2: {}},
 			debt:           make([]*freelist.PreparedCOWCandidateV1, 3),
 			seals: []*rootPublicationSealV1{
 				{prefix: make([]*freelist.PreparedCOWCandidateV1, 2)},

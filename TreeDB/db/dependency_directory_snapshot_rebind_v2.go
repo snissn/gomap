@@ -18,13 +18,17 @@ import (
 // revisions, roots and allocator high-water, including shared slot subtrees.
 func rebindSnapshotDependencyDirectoryWithContextV2(ctx context.Context, dir, sideRoot string, p *pager.Pager, record rootpublication.DurableRootRecordV1) error {
 	tr := tree.NewWithPageLimit(p, nil, record.Directory.RootPageID, record.TotalPages)
+	return rebindSnapshotDependencyTree(ctx, dir, sideRoot, p, tr, record.Directory.PhysicalCount, func(id uint64) bool { return id >= 2 && id < record.TotalPages })
+}
+
+func rebindSnapshotDependencyTree(ctx context.Context, dir, sideRoot string, p *pager.Pager, tr *tree.Tree, count uint64, inExtent func(uint64) bool) error {
 	it := tr.Iterator(nil, nil)
 	defer it.Close()
 	location, ok := it.(*tree.Iterator)
 	if !ok {
 		return rootpublication.ErrDependencyManifestFormat
 	}
-	for physical := uint64(0); physical < record.Directory.PhysicalCount; physical++ {
+	for physical := uint64(0); physical < count; physical++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -50,7 +54,7 @@ func rebindSnapshotDependencyDirectoryWithContextV2(ctx context.Context, dir, si
 			return err
 		}
 		id, ok := location.CurrentIndexLeafPageID()
-		if !ok || id < 2 || id >= record.TotalPages {
+		if !ok || !inExtent(id) {
 			return rootpublication.ErrDependencyManifestFormat
 		}
 		image, err := p.ReadPage(id)

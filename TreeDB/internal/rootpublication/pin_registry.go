@@ -3,8 +3,10 @@ package rootpublication
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"os"
 	"sync"
+	"unsafe"
 )
 
 var (
@@ -20,6 +22,8 @@ type IdentityPinRegistry struct {
 	states               map[StableIdentity]*identityPinState
 	namespaces           map[string]bool
 	stableLinks          map[stableNamespaceLink]struct{}
+	stableLinksByChild   map[StableIdentity]map[stableNamespaceLink]struct{}
+	stableLinkNames      map[stableNamespaceName]stableNamespaceLink
 	stableDirectoryLinks map[stableNamespaceLink]stableDirectoryLinkAuthority
 	activePins           uint64
 }
@@ -30,6 +34,11 @@ type IdentityPinRegistryStats struct {
 	ActivePins                 uint64
 	ActiveIdentities           int
 	ActiveStableNamespaceLinks int
+}
+
+type stableNamespaceName struct {
+	parent StableIdentity
+	name   string
 }
 
 // stableNamespaceLink records that an exact parent/child/name binding has
@@ -69,10 +78,10 @@ type identityPinState struct {
 
 // IdentityDeleteLease excludes later pins until deletion commits or aborts.
 type IdentityDeleteLease struct {
-	registry  *IdentityPinRegistry
-	identity  StableIdentity
-	namespace string
-	once      sync.Once
+	registry        *IdentityPinRegistry
+	identity        StableIdentity
+	namespace       string
+	done, committed bool // protected by registry.mu
 }
 
 // IdentityPin owns one registry reference and is safe to release repeatedly.
@@ -493,12 +502,28 @@ func (registry *IdentityPinRegistry) RememberStableNamespaceLink(parent, child *
 	if registry.stableLinks == nil {
 		registry.stableLinks = make(map[stableNamespaceLink]struct{})
 	}
-	for prior := range registry.stableLinks {
-		if prior.parent == link.parent && prior.name == link.name && prior.child != link.child {
-			delete(registry.stableLinks, prior)
-		}
+	if state := registry.states[link.child]; state != nil && (state.deleting || state.retired) {
+		registry.mu.Unlock()
+		return ErrResourceDeletionInProgress
+	}
+	if registry.stableLinkNames == nil {
+		registry.stableLinkNames = make(map[stableNamespaceName]stableNamespaceLink)
+	}
+	if registry.stableLinksByChild == nil {
+		registry.stableLinksByChild = make(map[StableIdentity]map[stableNamespaceLink]struct{})
+	}
+	nameKey := stableNamespaceName{link.parent, link.name}
+	if prior, exists := registry.stableLinkNames[nameKey]; exists && prior != link {
+		registry.forgetStableLinkLockedV6(prior)
 	}
 	registry.stableLinks[link] = struct{}{}
+	registry.stableLinkNames[nameKey] = link
+	links := registry.stableLinksByChild[link.child]
+	if links == nil {
+		links = make(map[stableNamespaceLink]struct{})
+		registry.stableLinksByChild[link.child] = links
+	}
+	links[link] = struct{}{}
 	registry.mu.Unlock()
 	return nil
 }
@@ -514,7 +539,7 @@ func (registry *IdentityPinRegistry) ForgetStableNamespaceLink(parent, child *os
 		return err
 	}
 	registry.mu.Lock()
-	delete(registry.stableLinks, link)
+	registry.forgetStableLinkLockedV6(link)
 	registry.mu.Unlock()
 	return nil
 }
@@ -538,7 +563,7 @@ func (registry *IdentityPinRegistry) ForgetStableNamespaceLinkIdentity(parent, c
 		return fmt.Errorf("%w: empty stable child name", ErrUnresolvedResource)
 	}
 	registry.mu.Lock()
-	delete(registry.stableLinks, stableNamespaceLink{parent: parent, child: child, name: name})
+	registry.forgetStableLinkLockedV6(stableNamespaceLink{parent: parent, child: child, name: name})
 	registry.mu.Unlock()
 	return nil
 }
@@ -576,6 +601,8 @@ func (registry *IdentityPinRegistry) ClearStableNamespaceLinks() {
 	}
 	registry.mu.Lock()
 	clear(registry.stableLinks)
+	clear(registry.stableLinksByChild)
+	clear(registry.stableLinkNames)
 	authorities := make([]stableDirectoryLinkAuthority, 0, len(registry.stableDirectoryLinks))
 	for link, authority := range registry.stableDirectoryLinks {
 		authorities = append(authorities, authority)
@@ -609,39 +636,101 @@ func (lease *IdentityDeleteLease) Abort() {
 	if lease == nil || lease.registry == nil {
 		return
 	}
-	lease.once.Do(func() {
-		registry := lease.registry
-		registry.mu.Lock()
-		state := registry.states[lease.identity]
-		if state != nil {
-			state.deleting = false
-			registry.deleteIdleStateLocked(lease.identity, state)
-		}
-		delete(registry.namespaces, lease.namespace)
-		registry.mu.Unlock()
-	})
+	registry := lease.registry
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if lease.done {
+		return
+	}
+	state := registry.states[lease.identity]
+	if state != nil {
+		state.deleting = false
+		registry.deleteIdleStateLocked(lease.identity, state)
+	}
+	delete(registry.namespaces, lease.namespace)
+	lease.done = true
 }
 
 func (lease *IdentityDeleteLease) CommitDeleted() {
 	if lease == nil || lease.registry == nil {
 		return
 	}
-	lease.once.Do(func() {
-		registry := lease.registry
-		registry.mu.Lock()
-		state := registry.stateLocked(lease.identity)
-		state.deleting = false
-		state.retired = true
-		for link := range registry.stableLinks {
-			if link.child == lease.identity {
-				delete(registry.stableLinks, link)
-			}
-		}
-		registry.deleteIdleStateLocked(lease.identity, state)
-		delete(registry.namespaces, lease.namespace)
-		registry.mu.Unlock()
-	})
+	registry := lease.registry
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if lease.done {
+		return
+	}
+	state := registry.stateLocked(lease.identity)
+	state.deleting = false
+	state.retired = true
+	for link := range registry.stableLinksByChild[lease.identity] {
+		registry.forgetStableLinkLockedV6(link)
+	}
+	registry.deleteIdleStateLocked(lease.identity, state)
+	delete(registry.namespaces, lease.namespace)
+	lease.done, lease.committed = true, true
 }
 
 // Commit is the deletion-owner spelling used after a successful unlink.
 func (lease *IdentityDeleteLease) Commit() { lease.CommitDeleted() }
+
+// Three indexes address the same namespace proof. Local removal never visits
+// another identity or a prior alias population.
+func (registry *IdentityPinRegistry) forgetStableLinkLockedV6(link stableNamespaceLink) {
+	delete(registry.stableLinks, link)
+	nameKey := stableNamespaceName{link.parent, link.name}
+	if registry.stableLinkNames[nameKey] == link {
+		delete(registry.stableLinkNames, nameKey)
+	}
+	links := registry.stableLinksByChild[link.child]
+	delete(links, link)
+	if len(links) == 0 {
+		delete(registry.stableLinksByChild, link.child)
+	}
+}
+
+// CommitDeletedWithWorkV6 retains this exact delete lease until every proof for
+// its frozen child identity has been removed. Remember refuses additions while
+// deleting. Each operand is charged; no global namespace census or nil helper.
+func (lease *IdentityDeleteLease) CommitDeletedWithWorkV6(w *iterator.OrdinalScanWork) (bool, bool, error) {
+	if lease == nil {
+		return true, false, nil
+	}
+	if w == nil || lease.registry == nil {
+		return false, false, ErrResourceOwnership
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(IdentityDeleteLease{}))+2*uint64(unsafe.Sizeof(IdentityPinRegistry{}))) {
+		return false, false, nil
+	}
+	registry := lease.registry
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if lease.done {
+		if lease.committed {
+			return true, false, nil
+		}
+		return false, false, ErrResourceOwnership
+	}
+	state := registry.states[lease.identity]
+	if state == nil || !state.deleting {
+		return false, false, ErrResourceOwnership
+	}
+	progress := false
+	for link := range registry.stableLinksByChild[lease.identity] {
+		if !w.Reserve(3, 6*uint64(unsafe.Sizeof(stableNamespaceLink{}))+2*uint64(unsafe.Sizeof(stableNamespaceName{}))+uint64(len(link.name))*2) {
+			return false, progress, nil
+		}
+		registry.forgetStableLinkLockedV6(link)
+		progress = true
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(identityPinState{}))+uint64(len(lease.namespace))*2+32) {
+		return false, progress, nil
+	}
+	state.deleting = false
+	state.retired = true
+	registry.deleteIdleStateLocked(lease.identity, state)
+	delete(registry.namespaces, lease.namespace)
+	lease.done, lease.committed = true, true
+	return true, true, nil
+}

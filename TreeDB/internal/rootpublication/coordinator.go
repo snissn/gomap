@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"sort"
 	"sync"
 	"time"
@@ -105,6 +106,10 @@ type Coordinator struct {
 	durableRootLineage   DurableRootLineageID
 	durableRootSequence  uint64
 	reachabilityEpoch    uint64
+	ownedClaimWork       *iterator.OrdinalScanWork
+	ownedReportWork      *iterator.OrdinalScanWork
+	ownedPublishing      *OwnedPublicationReceiptV5
+	ownedFinish          []*OwnedPublicationReceiptV5
 }
 
 // ReachabilitySnapshot is a bounded, independently pinned view of every root
@@ -227,6 +232,9 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	if supersede && len(c.pending) == 0 {
 		return enqueueDecision{}, fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
 	}
+	if tx := candidate.DurableRoot(); tx != nil && tx.owned != nil && c.ownedClaimWork == nil {
+		return enqueueDecision{}, ErrDurableRootOwnership
+	}
 	if err := c.preflightDurableRootLocked(candidate); err != nil {
 		c.rejectedCandidates++
 		return enqueueDecision{}, err
@@ -290,7 +298,7 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		c.rejectedCandidates++
 		return enqueueDecision{}, fmt.Errorf("%w: enqueue durable-root transfer: %w", ErrInvalidCandidate, err)
 	}
-	if err := activateDurableRootGroup(candidate.durableRootGroup()); err != nil {
+	if err := activateDurableRootGroupWithWork(candidate.durableRootGroup(), c.ownedClaimWork); err != nil {
 		_ = transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCoordinator, ResourceOwnerCandidate)
 		if candidateSet := candidate.resourceSet(); candidateSet != nil {
 			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
@@ -301,11 +309,25 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	// Activation is the final fallible enqueue step. From here through pending
 	// append and visible-frontier advance the coordinator only mutates owned
 	// in-memory state and must commit the accepted debt.
+	return c.appendEnqueuedCandidateLocked(candidate), nil
+}
+
+// appendEnqueuedCandidateLocked is the one common accepted frontier/pin/debt
+// transition. Both ordinary activation and the owned frozen-set handoff reach
+// it only after their final fallible ownership step.
+func (c *Coordinator) appendEnqueuedCandidateLocked(candidate *PreparedRootCandidate) enqueueDecision {
+	return c.appendEnqueuedCandidateWithPinsLocked(candidate, nil)
+}
+func (c *Coordinator) appendEnqueuedCandidateWithPinsLocked(candidate *PreparedRootCandidate, ownedPins map[ResourceKind]uint64) enqueueDecision {
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
-	if candidateSet := candidate.resourceSet(); candidateSet != nil {
+	if ownedPins != nil {
+		for kind, count := range ownedPins {
+			c.resourceActivePins[kind] = saturatingAdd(c.resourceActivePins[kind], count)
+		}
+	} else if candidateSet := candidate.resourceSet(); candidateSet != nil {
 		candidateSet.adjustActivePinsByKind(c.resourceActivePins, true)
 	}
 	c.observeResourcePinHighWaterLocked()
@@ -323,7 +345,7 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		c.admissionWaits++
 		c.requestPublishLocked(WakeHardAdmission)
 	}
-	return enqueueDecision{sequence: candidate.frontier.commitSeq, failureGeneration: c.failureGeneration, hard: hard}, nil
+	return enqueueDecision{sequence: candidate.frontier.commitSeq, failureGeneration: c.failureGeneration, hard: hard}
 }
 
 // CaptureReachability independently pins the exact pending/recovery resource
@@ -345,6 +367,11 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
 		pending = append(pending, entry.candidate.frontier)
 		if resources := entry.candidate.resourceSet(); resources != nil {
 			sets = append(sets, resources)
+		}
+	}
+	for _, receipt := range c.ownedFinish {
+		if receipt.resourceSetV6() != nil {
+			sets = append(sets, receipt.resourceSetV6())
 		}
 	}
 	sets = append(sets, c.recoverySets...)
@@ -429,11 +456,14 @@ func transferDurableRootGroup(group durableRootGroupExtension, from, to Resource
 }
 
 func activateDurableRootGroup(group durableRootGroupExtension) error {
+	return activateDurableRootGroupWithWork(group, nil)
+}
+func activateDurableRootGroupWithWork(group durableRootGroupExtension, w *iterator.OrdinalScanWork) error {
 	if len(group.members) > 1 {
 		return ErrDurableRootOwnership
 	}
 	for _, transaction := range group.members {
-		if err := transaction.activateFromCoordinator(); err != nil {
+		if err := transaction.activateFromCoordinatorWithWork(w); err != nil {
 			return err
 		}
 	}
@@ -803,7 +833,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			return
 		}
 		group := candidate.durableRootGroup()
-		if err := consumeDurableRootGroup(group); err != nil {
+		if err := consumeDurableRootGroupWithWork(group, c.ownedReportWork); err != nil {
 			cause := errors.Join(ErrPublisherProtocol, fmt.Errorf("consume durable-root lineage: %w", err))
 			if failErr := failDurableRootGroup(group, cause); failErr != nil {
 				cause = errors.Join(cause, failErr)
@@ -824,8 +854,25 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			if set := entry.candidate.resourceSet(); set != nil {
-				set.adjustActivePinsByKind(c.resourceActivePins, false)
-				set.releaseFrom(ResourceOwnerCoordinator)
+				if receipt := c.ownedPublishing; receipt != nil && receipt.candidateV6() == entry.candidate {
+					if e := set.transfer(ResourceOwnerCoordinator, ResourceOwnerFinish); e != nil {
+						panic("root publication: validated owned resource transfer failed")
+					}
+				} else {
+					set.adjustActivePinsByKind(c.resourceActivePins, false)
+					txn := entry.candidate.DurableRoot()
+					if txn.isConstructedPrimaryV6() {
+						if err := c.finishOrdinaryPrimaryWithScopeV6(txn); err != nil {
+							c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+							c.failWaitersLocked(c.poison)
+							c.clearPublishRequestLocked()
+							c.notifyLocked()
+							return
+						}
+					} else {
+						set.releaseFrom(ResourceOwnerCoordinator)
+					}
+				}
 			}
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
@@ -875,8 +922,11 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 }
 
 func consumeDurableRootGroup(group durableRootGroupExtension) error {
+	return consumeDurableRootGroupWithWork(group, nil)
+}
+func consumeDurableRootGroupWithWork(group durableRootGroupExtension, w *iterator.OrdinalScanWork) error {
 	for _, transaction := range group.members {
-		if err := transaction.consumeFromCoordinator(); err != nil {
+		if err := transaction.consumeFromCoordinatorWithWork(w); err != nil {
 			return fmt.Errorf("sequence %d: %w", transaction.Sequence(), err)
 		}
 	}
@@ -1136,6 +1186,11 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 			sets = append(sets, set)
 		}
 	}
+	for _, receipt := range c.ownedFinish {
+		if receipt.resourceSetV6() != nil {
+			sets = append(sets, receipt.resourceSetV6())
+		}
+	}
 	union, err := unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
 	if err != nil {
 		return nil
@@ -1193,6 +1248,9 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 	if cause == nil {
 		cause = ErrPublicationStopped
 	}
+	// Owned Finish retains its exact typed cursor even before its first step.
+	// Generic recovery release cannot represent partially retired rope/token
+	// state. Terminal shutdown explicitly takes this same receipt instead.
 	for _, entry := range c.pending {
 		for _, transaction := range entry.candidate.durableRootGroup().members {
 			if transaction == nil || transaction.Owner() != ResourceOwnerCoordinator {
@@ -1216,6 +1274,11 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 	c.pending = nil
 	c.pendingBytes = 0
 	clear(c.resourceActivePins)
+	for _, receipt := range c.ownedFinish {
+		for kind, count := range receipt.pinCounts {
+			c.resourceActivePins[kind] = saturatingAdd(c.resourceActivePins[kind], count)
+		}
+	}
 	c.firstPendingAt = time.Time{}
 }
 
@@ -1286,6 +1349,9 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 		return nil, ErrRecoveryHandoffUnavailable
 	}
 	c.captureRecoveryResourcesLocked()
+	if len(c.ownedFinish) != 0 {
+		return nil, errors.Join(ErrRecoveryRequired, c.stopErr)
+	}
 	sets := append([]*StableResourceSet(nil), c.recoverySets...)
 	durableRoots := append([]*DurableRootTransaction(nil), c.recoveryDurableRoots...)
 	transferred := make([]*StableResourceSet, 0, len(sets))

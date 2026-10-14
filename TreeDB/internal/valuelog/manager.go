@@ -19,6 +19,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -64,6 +65,7 @@ type File struct {
 	// deletionAdmissions is protected by manager.mu. Eviction must retain the
 	// exact owner and parent until each admitted destructive attempt finishes.
 	deletionAdmissions int
+	ownedRetirementV6  atomic.Pointer[TerminalSetRetirementV5]
 	// The physical parent is captured with retirementIdentity, independently of
 	// an optional pin registry. A missing configured alias is not absence proof.
 	retirementParentMu       sync.Mutex
@@ -119,7 +121,9 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings           [][]byte
+	currentMappingV6       ownedMmapV6 // remapMu; constructor authority, not mmapData
+	legacyMappingV6        bool        // remapMu; unsupported for bounded live adoption
+	deadMappings           []ownedMmapV6
 	deadMappedBytes        atomic.Uint64
 	remapCount             atomic.Uint64
 	deadMappingsCount      atomic.Uint64
@@ -563,6 +567,9 @@ func (f *File) Close() error {
 	// cleanup before another Close caller can proceed to physical deletion.
 	f.closeMu.Lock()
 	defer f.closeMu.Unlock()
+	if f.ownedRetirementV6.Load() != nil {
+		return ErrLiveRetirementPhysicalV6
+	}
 	var scratch []byte
 	if !f.closed.CompareAndSwap(false, true) {
 		return nil
@@ -596,11 +603,16 @@ func (f *File) Close() error {
 
 	f.remapMu.Lock()
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil {
+	owner := f.detachMmapOwnerV6Locked(data)
+	ownedView := owner.matchesViewV6(data)
+	_ = owner.closeV6()
+	// An injected/read-only view has no pointer authority. Legacy Munmap safely
+	// rejects heap-backed and partial slices, preserving the old test contract.
+	if owner.constructor && len(data) != 0 && !ownedView {
 		_ = munmap(data)
 	}
-	for _, b := range f.deadMappings {
-		_ = munmap(b)
+	for i := range f.deadMappings {
+		_ = f.deadMappings[i].closeV6()
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)
@@ -1268,6 +1280,7 @@ func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]b
 type Set struct {
 	retentionShape      SetRetentionSizes
 	retentionKnown      bool
+	retirementFiles     []*File
 	Files               map[uint32]*File
 	RefCount            atomic.Int64
 	disableReadChecksum bool
@@ -1298,7 +1311,7 @@ func setRetentionSizes(hint int) SetRetentionSizes {
 	// directory capacity, allocator rounding and map/table headers fit within
 	// 512 bytes per requested slot plus 512 bytes of fixed overhead. This is an
 	// intentionally conservative aggregate envelope, not a map sizeof claim.
-	shape.MapEnvelope = 512 * (uint64(hint) + 1)
+	shape.MapEnvelope = 512*(uint64(hint)+1) + uint64(retirementSetCapacityV5(hint))*uint64(unsafe.Sizeof((*File)(nil)))
 
 	return shape
 }
@@ -1421,6 +1434,7 @@ type Manager struct {
 	// Channels are lazy so
 	// ordinary reads and writes acquire no extra allocation or routing cost.
 	retryStop    chan struct{}
+	retryStopped bool
 	retryWorkers sync.WaitGroup
 	closing      bool
 	closeDone    chan struct{}
@@ -1447,11 +1461,13 @@ type Manager struct {
 	currentWritableMmap         atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
-	retiredCount                int                   // tracked zombies; protected by mu
+	retiredCount                int // tracked zombies; protected by mu
+	ownedSetRetirementsV6       int
 	retirementParents           *retirementParentPool // lazy cold ownership, protected by mu
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
+	deferredDeletionSyncOwnedV6 func(*os.File, string, durabilitycut.Resource, *iterator.OrdinalScanWork) (bool, error)
 }
 
 // PreparedReadProfile reports the configuration that bounds value-log reads
@@ -1626,6 +1642,10 @@ func (m *Manager) SetDeferredDeletionSync(sync func(dir string, resource durabil
 		return
 	}
 	m.mu.Lock()
+	if m.ownedSetRetirementsV6 != 0 {
+		panic("valuelog: replacing admitted deletion callback")
+	}
+	m.deferredDeletionSyncOwnedV6 = nil
 	m.deferredDeletionSync = sync
 	m.mu.Unlock()
 }
@@ -1853,10 +1873,15 @@ func (m *Manager) Close() error {
 		m.mu.RUnlock()
 		return err
 	}
+	if m.ownedSetRetirementsV6 != 0 {
+		m.mu.Unlock()
+		return ErrLiveRetirementPhysicalV6
+	}
 	m.closeDone = make(chan struct{})
 	m.closing = true
-	if m.retryStop != nil {
+	if m.retryStop != nil && !m.retryStopped {
 		close(m.retryStop)
+		m.retryStopped = true
 	}
 	m.mu.Unlock()
 	// Retry workers and synchronous deletion admissions take mu while completing
@@ -2303,15 +2328,17 @@ func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	files := make(map[uint32]*File, len(ids))
+	set := newRetirementSetV5(len(ids))
 	shape := setRetentionSizes(len(ids))
 	for id := range ids {
 		if f := m.files[id]; f != nil && !f.IsZombie.Load() {
 			files[id] = f
 			shape.addFile(f)
+			set.retirementFiles = append(set.retirementFiles, f)
 			f.RefCount.Add(1)
 		}
 	}
-	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
+	set.Files, set.disableReadChecksum, set.retentionKnown = files, m.disableReadChecksum, true
 	set.retentionShape = shape
 	set.RefCount.Store(1)
 	return set
@@ -2336,6 +2363,7 @@ func (m *Manager) RegisteredFileRetentionSizes(id uint32) (SetRetentionSizes, bo
 // m.mu must be held (read or write).
 func (m *Manager) currentSetLocked() *Set {
 	files := make(map[uint32]*File, len(m.files))
+	s := newRetirementSetV5(len(m.files))
 	shape := setRetentionSizes(len(m.files))
 	for id, f := range m.files {
 		if f.IsZombie.Load() {
@@ -2343,12 +2371,10 @@ func (m *Manager) currentSetLocked() *Set {
 		}
 		files[id] = f
 		shape.addFile(f)
+		s.retirementFiles = append(s.retirementFiles, f)
 		f.RefCount.Add(1)
 	}
-	s := &Set{
-		Files:               files,
-		disableReadChecksum: m.disableReadChecksum,
-	}
+	s.Files, s.disableReadChecksum = files, m.disableReadChecksum
 	s.retentionKnown = true
 	s.retentionShape = shape
 	s.RefCount.Store(1)
@@ -2503,7 +2529,7 @@ func (m *Manager) startZombieRetry(f *File) {
 		return
 	}
 	m.mu.Lock()
-	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
+	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || f.ownedRetirementV6.Load() != nil || !f.retryDeletePending.CompareAndSwap(false, true) {
 		m.mu.Unlock()
 		return
 	}
@@ -2542,7 +2568,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 	for {
 		m.mu.Lock()
 		cur, exists := m.files[f.ID]
-		keepRetrying := !m.closing && exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
+		keepRetrying := !m.closing && exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() && f.ownedRetirementV6.Load() == nil
 		identity := f.retirementIdentity
 		if !keepRetrying {
 			m.mu.Unlock()
@@ -2680,7 +2706,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
-	if f.RefCount.Load() != 0 || f.deletionAdmissions != 0 {
+	if f.RefCount.Load() != 0 || f.deletionAdmissions != 0 || f.ownedRetirementV6.Load() != nil {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "evict"}
 	}
@@ -3057,6 +3083,10 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
 	}
+	if f.ownedRetirementV6.Load() != nil {
+		m.mu.Unlock()
+		return ErrLiveRetirementPhysicalV6
+	}
 	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {
 		m.mu.Unlock()
@@ -3103,6 +3133,10 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, nil
 	}
+	if f.ownedRetirementV6.Load() != nil {
+		m.mu.Unlock()
+		return false, ErrLiveRetirementPhysicalV6
+	}
 	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {
 		m.mu.Unlock()
@@ -3136,6 +3170,10 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 // Intended for recovery cleanup before any snapshots are live.
 func (m *Manager) RemoveSegmentForce(id uint32) error {
 	m.mu.Lock()
+	if m.ownedSetRetirementsV6 != 0 {
+		m.mu.Unlock()
+		return ErrLiveRetirementPhysicalV6
+	}
 	if m.closing {
 		m.mu.Unlock()
 		return nil
@@ -3144,6 +3182,10 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	if !ok {
 		m.mu.Unlock()
 		return nil
+	}
+	if f.ownedRetirementV6.Load() != nil {
+		m.mu.Unlock()
+		return ErrLiveRetirementPhysicalV6
 	}
 	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {

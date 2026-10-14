@@ -1,0 +1,89 @@
+//go:build treedb_test && m7_route_trace
+
+package m7routetrace
+
+import "sync/atomic"
+
+// Each cell contains scalars only. No source, key slice, object, root or lease survives.
+type detailCell struct{ fields [123]atomic.Uint64 }
+
+func DetailEnabled(owner uintptr) bool {
+	o := active.Load()
+	return o != nil && (owner == 0 || owner == o.owners[0] || owner == o.owners[1] || owner == o.owners[2])
+}
+func (c *detailCell) store(t DetailTuple) {
+	var v [123]uint64
+	v[0], v[1], v[2], v[3], v[4] = t.Call, t.Attempt, t.Serial, t.Site, t.Reason
+	copy(v[5:9], t.Work[:])
+	copy(v[9:57], t.State[:])
+	for i, k := range t.Keys {
+		j := 57 + i*11
+		v[j], v[j+1], v[j+2] = k.Length, k.Hash, k.Nil|k.Truncated<<1
+		for x := 0; x < 64; x++ {
+			v[j+3+x/8] |= uint64(k.Bytes[x]) << uint((x%8)*8)
+		}
+	}
+	for i, x := range v {
+		c.fields[i].Store(x)
+	}
+}
+func (c *detailCell) load() (t DetailTuple) {
+	var v [123]uint64
+	for i := range v {
+		v[i] = c.fields[i].Load()
+	}
+	t.Call, t.Attempt, t.Serial, t.Site, t.Reason = v[0], v[1], v[2], v[3], v[4]
+	copy(t.Work[:], v[5:9])
+	copy(t.State[:], v[9:57])
+	for i := range t.Keys {
+		j := 57 + i*11
+		k := &t.Keys[i]
+		k.Length, k.Hash, k.Nil, k.Truncated = v[j], v[j+1], v[j+2]&1, v[j+2]>>1
+		for x := 0; x < 64; x++ {
+			k.Bytes[x] = byte(v[j+3+x/8] >> uint((x%8)*8))
+		}
+	}
+	return
+}
+func Detail(owner uintptr, site, reason uint64, work [4]uint64, state [48]uint64, keys [6][]byte) {
+	o := active.Load()
+	if o == nil || site >= 8 || (owner != 0 && owner != o.owners[0] && owner != o.owners[1] && owner != o.owners[2]) {
+		return
+	}
+	// Owner 0 is limited to synchronous leaf/record readers on this already-scoped foreground call.
+	if owner == 0 && o.calls.Load() == 0 {
+		return
+	}
+	n := o.detailTuples.Add(1) - 1
+	t := DetailTuple{Call: o.calls.Load(), Attempt: o.attempts.Load(), Serial: n + 1, Site: site, Reason: reason, Work: work, State: state}
+	for i, k := range keys {
+		x := &t.Keys[i]
+		x.Length = uint64(len(k))
+		if k == nil {
+			x.Nil = 1
+		}
+		if len(k) > 64 {
+			x.Truncated = 1
+		}
+		x.Hash = 14695981039346656037
+		for _, c := range k {
+			x.Hash ^= uint64(c)
+			x.Hash *= 1099511628211
+		}
+		copy(x.Bytes[:], k)
+	}
+	o.detailCount[site].Add(1)
+	if reason < 512 {
+		o.detailReasons[site][reason].Add(1)
+	}
+	if n < 96 {
+		o.detailFirst[n].store(t)
+	}
+	o.detailLast[n%256].store(t)
+	if t.Call >= 512 {
+		f := o.detailFinalTuples.Add(1) - 1
+		if f < 96 {
+			o.detailFinalFirst[f].store(t)
+		}
+	}
+}

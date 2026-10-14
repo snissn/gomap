@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -67,6 +68,32 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	// Open the DB without acquiring a second lock (we already hold it).
 	d, err := openReadOnlyNoLock(opts)
 	if err != nil {
+		return err
+	}
+	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		// The selected format has one pair authority. Reuse its complete
+		// online builder under the already held exclusive offline LOCK.
+		if err = d.Close(); err != nil {
+			return err
+		}
+		opts.ReadOnly = false
+		d, err = openWithLock(opts, nil)
+		if err != nil {
+			return err
+		}
+		var leaf LeafPageLogCloser
+		if opts.IndexOuterLeavesInValueLog {
+			leaf, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{Compression: opts.ValueLog.Compression, AutoPolicy: opts.ValueLog.AutoPolicy, BlockCodec: opts.ValueLog.BlockCodec})
+			if err != nil {
+				return errors.Join(err, d.Close())
+			}
+			d.SetLeafPageLog(leaf)
+		}
+		err = d.VacuumIndexOnline(context.Background())
+		err = errors.Join(err, d.Close())
+		if leaf != nil {
+			err = errors.Join(err, leaf.Close())
+		}
 		return err
 	}
 	var maintenanceLeafLog LeafPageLogCloser
@@ -404,6 +431,23 @@ func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
 		}
 		n := node.NewNode(data)
 		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			directory, err := node.DecodePrimaryDirectory(data)
+			if err != nil {
+				return false, err
+			}
+			base, _ := directory.Base()
+			found, err := walk(base.Ref.Page)
+			if err != nil || found {
+				return found, err
+			}
+			for i := 0; i < directory.Count(); i++ {
+				entry, _ := directory.Entry(i)
+				if entry.Operand.Ref.Kind == page.ChildRefLeafLog {
+					return true, nil
+				}
+			}
+			return false, nil
 		case page.PageTypeInternal:
 			count := n.Count()
 			for i := uint16(0); i < count; i++ {

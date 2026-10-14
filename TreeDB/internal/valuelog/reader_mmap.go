@@ -292,7 +292,11 @@ func (f *File) retirePersistentMmapToDeadLocked() bool {
 		// dead-mapping list to grow without bound.
 		return false
 	}
-	f.deadMappings = append(f.deadMappings, data)
+	owner := f.detachMmapOwnerV6Locked(data)
+	if !owner.constructor {
+		f.legacyMappingV6 = true
+	}
+	f.deadMappings = append(f.deadMappings, owner)
 	f.deadMappingsCount.Add(1)
 	f.deadMappedBytes.Add(uint64(len(data)))
 	f.mmapData.Store([]byte(nil))
@@ -464,17 +468,22 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 		f.sealedLazyMmapDeniedCountCap.Store(0)
 		f.sealedLazyMmapDeniedBytesCap.Store(0)
 	}
-	b, err := mmapReadOnly(f.File, int(mapSize))
+	mapping, err := mapOwnedReadOnlyV6(f.File, int(mapSize))
 	if err != nil {
 		return false
 	}
 	// Keep the old live mapping and unsafe views unchanged on mmap failure.
 	if data != nil {
-		f.deadMappings = append(f.deadMappings, data)
+		owner := f.detachMmapOwnerV6Locked(data)
+		if !owner.constructor {
+			f.legacyMappingV6 = true
+		}
+		f.deadMappings = append(f.deadMappings, owner)
 		f.deadMappingsCount.Add(1)
 		f.deadMappedBytes.Add(uint64(len(data)))
 	}
-	f.mmapData.Store(b)
+	f.currentMappingV6 = mapping
+	f.mmapData.Store(mapping.data)
 	f.remapCount.Add(1)
 	return true
 }

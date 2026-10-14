@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -606,8 +608,11 @@ func (m *Manager) unobserveStableFileLocked(file *File) error {
 	if m == nil || m.stableResourcePins == nil || file == nil || !file.stableObserved {
 		return nil
 	}
+	if e := m.stableResourcePins.Unobserve(file.stableIdentity); e != nil {
+		return e
+	}
 	file.stableObserved = false
-	return m.stableResourcePins.Unobserve(file.stableIdentity)
+	return nil
 }
 
 func (m *Manager) stableDeleteLease(file *File) (*rootpublication.IdentityDeleteLease, error) {
@@ -804,16 +809,28 @@ func validateStableDeletePathIdentity(path string, identity rootpublication.Stab
 // borrowRetirementParent keeps an admitted operation valid through explicit
 // eviction. File membership prevents new borrows after owner release; the pool
 // keeps existing borrows indexed even after the final owner disappears.
-func borrowRetirementParent(file *File) (*os.File, func() error, error) {
+// The same direct handle acquisition is shared by ordinary and typed owners.
+// Constructor-stamped physical identities stay bound to the retained namespace.
+func borrowRetirementParentHandle(file *File, w *iterator.OrdinalScanWork) (*retirementParentHandle, bool, error) {
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(File{}))+2*uint64(unsafe.Sizeof(retirementParentHandle{}))+2*uint64(unsafe.Sizeof(retirementParentPool{}))) {
+		return nil, false, nil
+	}
 	file.retirementParentMu.Lock()
 	defer file.retirementParentMu.Unlock()
-	if file.retirementParent == nil || file.retirementParentReleased {
-		return nil, nil, fmt.Errorf("%w: missing value-log retirement parent", rootpublication.ErrUnresolvedResource)
-	}
 	parent := file.retirementParent
+	if parent == nil || file.retirementParentReleased || !rootpublication.SamePhysicalIdentity(parent.key, file.registeredParentIdentity) {
+		return nil, false, fmt.Errorf("%w: missing value-log retirement parent", rootpublication.ErrUnresolvedResource)
+	}
 	parent.pool.mu.Lock()
 	parent.borrowers++
 	parent.pool.mu.Unlock()
+	return parent, true, nil
+}
+func borrowRetirementParent(file *File) (*os.File, func() error, error) {
+	parent, _, e := borrowRetirementParentHandle(file, nil)
+	if e != nil {
+		return nil, nil, e
+	}
 	var once sync.Once
 	var releaseErr error
 	return parent.file, func() error {
@@ -826,15 +843,27 @@ func borrowRetirementParent(file *File) (*os.File, func() error, error) {
 // shared Close belongs to the caller after manager.mu is unlocked, or to the
 // last active borrow callback; no pool callback enters manager.mu.
 func releaseRetirementParent(file *File) *os.File {
+	parent, _ := releaseRetirementParentWithWorkV6(file, nil)
+	return parent
+}
+func releaseRetirementParentWithWorkV6(file *File, w *iterator.OrdinalScanWork) (*os.File, bool) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(File{}))) {
+		return nil, false
+	}
 	file.retirementParentMu.Lock()
+	defer file.retirementParentMu.Unlock()
 	parent := file.retirementParent
+	var final *os.File
+	if parent != nil {
+		var ready bool
+		final, ready = parent.dropWithWorkV6(true, w)
+		if !ready {
+			return nil, false
+		}
+	}
 	file.retirementParent = nil
 	file.retirementParentReleased = true
-	file.retirementParentMu.Unlock()
-	if parent != nil {
-		return parent.drop(true)
-	}
-	return nil
+	return final, true
 }
 
 func closeRetirementParent(parent *os.File) error {
@@ -1433,7 +1462,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	}
 	m.mu.Lock()
 	current, exists := m.files[file.ID]
-	if m.closing || !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
+	if m.closing || !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() || file.ownedRetirementV6.Load() != nil {
 		m.mu.Unlock()
 		return nil
 	}

@@ -1,0 +1,127 @@
+{
+  "schema": "mvcc-4871-execution-state-v2",
+  "date": "2026-10-13",
+  "mode": "execute-and-merge",
+  "coordinator": "/root",
+  "coordinator_model": "not exposed by harness",
+  "requested_worker_model": "gpt-6.1-sol",
+  "served_worker_model": "not separately exposed",
+  "effective_worker_budget": 2,
+  "depth": 1,
+  "parent_complete": false,
+  "main_sha": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "ordinary_recoverable_sha": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "ordinary_PR_published_sha": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+  "branch": "codex/5111-structural-repair-20261013",
+  "host": "mikers@192.168.0.111",
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "nodes": [
+    {
+      "issue": "gomap#4871",
+      "blockers": [
+        "gomap#4879"
+      ]
+    },
+    {
+      "issue": "gomap#5111",
+      "blockers": [
+        "gomap#4874",
+        "gomap#5011",
+        "gomap#5019",
+        "gomap#5036",
+        "gomap#5118"
+      ]
+    },
+    {
+      "issue": "gomap#4878",
+      "blockers": [
+        "gomap#4872",
+        "gomap#4874",
+        "gomap#5011",
+        "gomap#5019",
+        "gomap#5036",
+        "gomap#5111"
+      ]
+    },
+    {
+      "issue": "gomap#5047",
+      "blockers": [
+        "gomap#4878",
+        "gomap#5076"
+      ]
+    },
+    {
+      "issue": "gomap#4879",
+      "blockers": [
+        "gomap#4872",
+        "dgraph#36",
+        "dgraph#37",
+        "gomap#4878",
+        "gomap#5047"
+      ]
+    },
+    {
+      "issue": "dgraph#36",
+      "blockers": [
+        "gomap#4873",
+        "gomap#4874",
+        "dgraph#40"
+      ]
+    },
+    {
+      "issue": "dgraph#37",
+      "blockers": [
+        "gomap#4878",
+        "dgraph#38",
+        "gomap#5047"
+      ]
+    }
+  ],
+  "workers": [
+    {
+      "owner": "/root/mvcc_architecture_repair_sol61",
+      "node": "gomap#5111",
+      "class": "implementation-pr",
+      "state": "IN_PROGRESS",
+      "task": "Original COW build-group disposal coherent ownership repair; source-bound RED first; missing value/leaf packet not reconstructed"
+    },
+    {
+      "owner": "/root/mvcc_native_packet_recovery_sol61",
+      "node": "gomap#4878",
+      "class": "artifact-recovery",
+      "state": "COMPLETE",
+      "task": "Exact native source and protected fixtures recovered; original qualification still open"
+    }
+  ],
+  "cleanup": {
+    "worker": "/root/mvcc_released_disk_cleanup_sol61",
+    "state": "COMPLETE",
+    "deleted_database_dirs": 60,
+    "released_allocated_bytes": 2828795904,
+    "receipt_sha256": "c9dfeb577e712d34f59a14eada028a31662da7d8c4f35a1ff9914ca6ca0219b6",
+    "receipt_remote": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/cleanup/cleanup-receipt.json"
+  },
+  "protected_unavailable_source": "8f20fd204 at /workspace/scratch/1ecfdb811b25/ordinary-5111; reconcile exact source before credit/integration",
+  "guardrails": "All original caps, M0 matrices/noise/thresholds,19 groups,format/fault,physical output,cost,platform,review/latestheadCI unchanged; no native/Dgraph activation",
+  "next_checkpoint": "Original COW custody repair packet; restore native work from exact recovered source after ordinary contract stabilizes",
+  "native_recovery": {
+    "state": "RECOVERED_NOT_QUALIFIED",
+    "audit_sha256": "733c602e1843ffcfa7c799894e4b7e2a36b503afa28cfe06910484f6be872ab9",
+    "ledger_sha256": "e373b60962e0eac52bbf3e6a672f09308d24fa94b79c4f1a57716c4f271d2887",
+    "source_map_sha256": "7f609ebea843c57f8457d80c2eb91e48a945cc18489962ef5adf42e44127bef5",
+    "base": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+    "source": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/integration-terminal-primary-root-20261007",
+    "source_bindings": 441,
+    "full_manifest_entries": 9994,
+    "fixtures": [
+      {
+        "name": "bounded_prune_test.go",
+        "sha256": "e7552d4e4d192042c3de91c2305ab300aafc0670c1a59235d062b4442b712341"
+      },
+      {
+        "name": "bounded_prune_whole_current_publication_test.go",
+        "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+      }
+    ]
+  }
+}

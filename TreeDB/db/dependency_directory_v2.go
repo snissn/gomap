@@ -8,8 +8,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 // prepareDependencyDirectoryV2 runs while publication owns rootReuseMu and
@@ -51,18 +53,25 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	if err != nil {
 		return nil, nil, err
 	}
+	var alloc zipper.PageAllocator = idx.allocator
+	var bankAlloc *primaryDependencyAllocatorV5
+	if idx.primary != nil {
+		bankAlloc = &primaryDependencyAllocatorV5{idx: idx}
+		defer bankAlloc.release()
+		alloc = bankAlloc
+	}
 	var retired []uint64
 	var metrics adaptive.Metrics
 	var pagesWritten uint64
 	if root == 0 && delta.IsEmpty() {
 		iter := newOrderedRootDeltaBatchIterator(delta, false)
 		defer iter.Close()
-		root, err = bulk.BuildWithOptions(iter, idx.allocator, idx.pager, bulk.BuildOptions{LeafPrefixCompression: true})
+		root, err = bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{LeafPrefixCompression: true})
 		pagesWritten = 1 // The sole empty initial leaf.
 	} else {
 		root, retired, metrics, err = db.publishOrderedRootDeltaBatchWithAllocator(idx, root, delta, orderedRootPublishOptions{
 			leafPrefixCompression: true,
-		}, idx.allocator, idx.allocator, false)
+		}, alloc, alloc, false)
 		pagesWritten = uint64(metrics.ZipperPagerLeafPagesWritten + metrics.ZipperInternalPagesWritten)
 	}
 	db.durableRootDirectoryBytesEncoded.Add(encodedBytes)
@@ -70,6 +79,12 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	db.durableRootDirectoryPagesWritten.Add(pagesWritten)
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply dependency directory: %w", err)
+	}
+	if bankAlloc != nil {
+		if err = bankAlloc.seal(root); err != nil {
+			return nil, nil, err
+		}
+		retired = nil
 	}
 	directory, err := db.pinDependencyDirectoryV2(idx, sequence, rootpublication.DependencyDirectoryRefV2{
 		RootPageID: root, PhysicalCount: physical, LogicalCount: logical,
@@ -92,20 +107,7 @@ func (db *DB) dependencyDirectoryValidatorV2(idx *indexGen) durableDirectoryVali
 			return nil, err
 		}
 		defer directory.Release()
-		return rootpublication.RecoverDependencyDirectoryV2(directory, func(entry rootpublication.DependencyManifestEntryV1) (*rootpublication.StableResourceSet, error) {
-			return db.validateDurableDependencyEntriesV1([]rootpublication.DependencyManifestEntryV1{entry}, true)
-		}, func(file *os.File, entry rootpublication.DependencyManifestEntryV1, obligation rootpublication.StableLogicalObligation) error {
-			switch entry.Kind {
-			case rootpublication.ResourceColumnAsset, rootpublication.ResourceTypedColumnAsset, rootpublication.ResourceVectorGraphPack:
-				entry.LogicalObligations = []rootpublication.StableLogicalObligation{obligation}
-				return validateDurableDependencyContentV1(file, entry)
-			case rootpublication.ResourceDictionary, rootpublication.ResourceTemplate, rootpublication.ResourceOuterLeafPack, rootpublication.ResourceOuterLeafManifest:
-				// Directory decoding already checks exact owner/frontier/field.
-				return nil
-			default:
-				return rootpublication.ErrResourceConflict
-			}
-		})
+		return db.recoverDependencyDirectoryResourcesV2(directory)
 	}
 }
 
@@ -116,6 +118,9 @@ func (db *DB) dependencyDirectoryValidatorV2(idx *indexGen) durableDirectoryVali
 func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootpublication.DependencyDirectoryRefV2, totalPages uint64) (*rootpublication.DependencyDirectoryV2, error) {
 	if db == nil || idx == nil || idx.pager == nil || sequence == 0 {
 		return nil, rootpublication.ErrResourceOwnership
+	}
+	if idx.primary != nil && primaryarena.IsPage(ref.RootPageID) {
+		return db.pinPrimaryDependencyV5(idx, ref, idx.primary.Pager().PageCount())
 	}
 	registryID := idx.registry.Register(sequence)
 	release := func() {
@@ -130,4 +135,32 @@ func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootp
 		return nil, err
 	}
 	return directory, nil
+}
+
+func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (*rootpublication.StableResourceSet, error) {
+	return rootpublication.RecoverDependencyDirectoryV2(directory, func(entry rootpublication.DependencyManifestEntryV1) (*rootpublication.StableResourceSet, error) {
+		return db.validateDurableDependencyEntriesV1([]rootpublication.DependencyManifestEntryV1{entry}, true)
+	}, func(file *os.File, entry rootpublication.DependencyManifestEntryV1, obligation rootpublication.StableLogicalObligation) error {
+		switch entry.Kind {
+		case rootpublication.ResourceColumnAsset, rootpublication.ResourceTypedColumnAsset, rootpublication.ResourceVectorGraphPack:
+			entry.LogicalObligations = []rootpublication.StableLogicalObligation{obligation}
+			return validateDurableDependencyContentV1(file, entry)
+		case rootpublication.ResourceDictionary, rootpublication.ResourceTemplate, rootpublication.ResourceOuterLeafPack, rootpublication.ResourceOuterLeafManifest:
+			// Directory decoding already checks exact owner/frontier/field.
+			return nil
+		default:
+			return rootpublication.ErrResourceConflict
+		}
+	})
+}
+
+func (db *DB) primaryDependencyDirectoryValidatorV5(idx *indexGen) durablePrimaryDirectoryValidatorV5 {
+	return func(record rootpublication.DurablePrimaryRootRecordV5) (*rootpublication.StableResourceSet, error) {
+		directory, e := db.pinPrimaryDependencyV5(idx, record.Record.Directory, record.Primary.ArenaHighWater)
+		if e != nil {
+			return nil, e
+		}
+		defer directory.Release()
+		return db.recoverDependencyDirectoryResourcesV2(directory)
+	}
 }

@@ -46,6 +46,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	if handled, err := recoverPrimaryJointSwapV6(opts.Dir, true); handled || err != nil {
+		_ = lock.Close()
+		return nil, errors.Join(err, ErrRecoveryRequired)
+	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
 		_ = lock.Close()
@@ -154,6 +158,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := db.recover(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -183,6 +191,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 
 	initialState := &DBState{
+		primaryRoot:                db.primaryCurrentRootV5(),
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
@@ -214,6 +223,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
 		return nil, err
+	}
+	if handled, err := recoverPrimaryJointSwapV6(opts.Dir, true); handled || err != nil {
+		return nil, errors.Join(err, ErrRecoveryRequired)
 	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
@@ -318,6 +330,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := db.recover(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -347,6 +363,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 
 	initialState := &DBState{
+		primaryRoot:                db.primaryCurrentRootV5(),
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,

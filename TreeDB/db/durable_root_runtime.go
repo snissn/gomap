@@ -150,6 +150,7 @@ func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist
 }
 
 type durableRootRuntimeV1 struct {
+	primary       *primaryDurableRuntimeV5
 	meta          page.DurableMetaV1
 	record        rootpublication.DurableRootRecordV1
 	manifest      *rootpublication.DependencyManifestV1
@@ -229,6 +230,13 @@ func (db *DB) durableRootReuseCapabilityV1(current durableRootRuntimeV1) (freeli
 	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
 	if err != nil {
 		return freelist.ReuseCapability{}, err
+	}
+	if current.primary != nil {
+		for _, seq := range current.primary.dataFloor {
+			if seq != 0 && seq < oldest {
+				oldest = seq
+			}
+		}
 	}
 	return freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
 }
@@ -1662,17 +1670,18 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
-	resources       *rootpublication.StableResourceSet
-	materialize     func() error
-	syncIndex       func() error
-	sink            freelist.AppendPageSink
-	target          uint64
-	meta            page.DurableMetaV1
-	syncMeta        func() error
-	dir             string
-	indexPath       string
-	beforeMetaWrite func() error
-	beforeMetaSync  func() error
+	installAuthority func() (bool, error) // Selected complete capsule authority replaces DATA META.
+	resources        *rootpublication.StableResourceSet
+	materialize      func() error
+	syncIndex        func() error
+	sink             freelist.AppendPageSink
+	target           uint64
+	meta             page.DurableMetaV1
+	syncMeta         func() error
+	dir              string
+	indexPath        string
+	beforeMetaWrite  func() error
+	beforeMetaSync   func() error
 }
 
 type stableResourceDependencySyncPhaseV1 uint8
@@ -1690,7 +1699,7 @@ const (
 // metaMutated becomes true immediately before the one meta write, allowing a
 // live caller to distinguish retryable pre-meta failures from ambiguous ones.
 func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) (metaMutated bool, err error) {
-	if tx.sink == nil || tx.target > 1 || tx.syncIndex == nil || tx.syncMeta == nil {
+	if tx.syncIndex == nil || (tx.installAuthority == nil && (tx.sink == nil || tx.target > 1 || tx.syncMeta == nil)) {
 		return false, errors.New("invalid durable-root storage transaction")
 	}
 	if tx.resources != nil {
@@ -1718,6 +1727,9 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		return false, fmt.Errorf("sync durable-root index: %w", err)
 	}
 
+	if tx.installAuthority != nil {
+		return tx.installAuthority()
+	}
 	metaOffset := int64(tx.target) * int64(page.PageSize)
 	if tx.dir != "" {
 		if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, tx.dir, tx.indexPath, metaOffset, int64(page.PageSize)); err != nil {
@@ -2808,7 +2820,29 @@ func (db *DB) releaseDurableRootResourcesV1() {
 	db.durableRoot.slotResources = [2]*rootpublication.StableResourceSet{}
 	db.durableRoot.pending = nil
 	db.durableRoot.ambiguous = nil
+	primary := db.durableRoot.primary
+	db.durableRoot.primary = nil
 	db.durablePublishMu.Unlock()
+	if primary != nil {
+		for _, r := range primary.proofResources {
+			r.Release()
+		}
+		if idx := db.idx.Load(); idx != nil && idx.primary != nil {
+			for _, r := range primary.records {
+				if r.PageID != 0 {
+					_, _ = idx.primary.Drop(r, nil)
+				}
+			}
+			for _, r := range primary.proofs {
+				if r.PageID != 0 {
+					_, _ = idx.primary.Drop(r, nil)
+				}
+			}
+		}
+		if state := db.state.Load(); state != nil && state.primaryRoot != nil {
+			_, _ = state.primaryRoot.arena.Drop(state.primaryRoot.ref, nil)
+		}
+	}
 	for _, set := range resources {
 		set.Release()
 	}

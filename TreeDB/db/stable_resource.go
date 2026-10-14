@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -244,37 +245,43 @@ func captureStableTemplateResources(provider StableTemplateResourceProvider, sto
 }
 
 func (generation *indexGen) stableIndexNamespaceToken(dir string) (*rootpublication.StableNamespaceToken, error) {
-	if generation == nil || generation.pager == nil || dir == "" {
+	return generation.stablePagerNamespaceToken(dir, indexFileName, generation.pager)
+}
+func (generation *indexGen) stablePagerNamespaceToken(dir, name string, p *pager.Pager) (*rootpublication.StableNamespaceToken, error) {
+	if generation == nil || p == nil || dir == "" {
 		return nil, fmt.Errorf("%w: stable index namespace unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	var namespace *rootpublication.StableNamespaceToken
-	err := generation.pager.WithStableResourceFile(func(indexFile *os.File) error {
-		generation.stableNamespaceMu.Lock()
-		defer generation.stableNamespaceMu.Unlock()
-		if generation.stableNamespaceProof == nil {
-			parent, err := os.Open(dir)
-			if err != nil {
-				return err
+	err := p.WithStableResourceFile(func(file *os.File) error {
+		mutex := &generation.stableNamespaceMu
+		parent, proof := &generation.stableNamespaceParent, &generation.stableNamespaceProof
+		if name == primaryIndexFileName || name == primaryNewFileName {
+			if generation.primaryOwner == nil {
+				return rootpublication.ErrResourceOwnership
 			}
-			proof, err := rootpublication.NewStableNamespaceCreationProof(parent, indexFile, indexFileName)
-			if err != nil {
-				_ = parent.Close()
-				return err
+			mutex = &generation.primaryOwner.namespaceMu
+			parent, proof = &generation.primaryOwner.namespaceParent, &generation.primaryOwner.namespaceProof
+		}
+		mutex.Lock()
+		defer mutex.Unlock()
+		if *proof == nil {
+			f, e := os.Open(dir)
+			if e != nil {
+				return e
 			}
-			generation.stableNamespaceParent = parent
-			generation.stableNamespaceProof = proof
+			v, e := rootpublication.NewStableNamespaceCreationProof(f, file, name)
+			if e != nil {
+				f.Close()
+				return e
+			}
+			*parent, *proof = f, v
 		}
-		parentGeneration, err := rootpublication.StableNamespaceParentGeneration(generation.stableNamespaceParent)
-		if err != nil {
-			return err
+		pg, e := rootpublication.StableNamespaceParentGeneration(*parent)
+		if e != nil {
+			return e
 		}
-		namespace, err = generation.stableNamespaceProof.Bind(
-			generation.stableNamespaceParent,
-			parentGeneration,
-			indexFileName,
-			indexFileName,
-		)
-		return err
+		namespace, e = (*proof).Bind(*parent, pg, name, name)
+		return e
 	})
 	return namespace, err
 }
@@ -335,6 +342,9 @@ func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32,
 // index handle and namespace owned by this stable snapshot. The token takes
 // ownership of the snapshot maintenance pin on success.
 func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
+	return snapshot.newStablePagerResourceToken(spec, constructor, indexFileName)
+}
+func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error), name string) (*rootpublication.StableResourceToken, error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable index snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -345,14 +355,21 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	if !snapshot.stableIndexCapture || snapshot.idx == nil || snapshot.idx.pager == nil || snapshot.db == nil {
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
+	p := snapshot.idx.pager
+	if name == primaryIndexFileName || name == primaryNewFileName {
+		if snapshot.idx.primary == nil {
+			return nil, rootpublication.ErrUnresolvedResource
+		}
+		p = snapshot.idx.primary.Pager()
+	}
 	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
-		pager := snapshot.idx.pager
+		pager := p
 		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
 			return pager.SyncIndexDataWithStableFile(file)
 		}
 	}
 	database := snapshot.db
-	namespace, err := snapshot.idx.stableIndexNamespaceToken(snapshot.db.dir)
+	namespace, err := snapshot.idx.stablePagerNamespaceToken(snapshot.db.dir, name, p)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +380,7 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		leaseTransferred atomic.Bool
 	)
 	captureCounter := snapshot.stableIndexCaptureCounter
-	err = snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
+	err = p.WithStableResourceFile(func(file *os.File) error {
 		info, err := file.Stat()
 		if err != nil {
 			return err
@@ -378,7 +395,7 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		}
 		spec.File = file
 		spec.Generation = snapshot.idx.id
-		spec.DiagnosticPath = indexFileName
+		spec.DiagnosticPath = name
 		spec.Frontier.Bytes = uint64(info.Size())
 		spec.Namespace = namespace
 		spec.PinRegistry = registry
@@ -538,4 +555,8 @@ func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureDBV1(db
 		return ErrClosed
 	}
 	return lease.ValidateCommandWALStagingCaptureV1(db, lease.borrowedIntent)
+}
+
+func (snapshot *Snapshot) captureStablePrimaryIndexResource() (*rootpublication.StableResourceToken, error) {
+	return snapshot.newStablePagerResourceToken(rootpublication.StableResourceSpec{Kind: rootpublication.ResourceIndex, LogicalLane: "db/primary", ResourceID: primaryIndexFileName, Digest: sha256.Sum256([]byte("treedb/primary-bank/v1")), Reachability: rootpublication.ReachabilityIndexFile}, NewStableDBResourceToken, primaryIndexFileName)
 }

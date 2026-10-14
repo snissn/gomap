@@ -2545,12 +2545,13 @@ func (set *StableResourceSet) logicalMembershipEvidenceLocked() map[ResourceKind
 }
 
 type StableResourceSet struct {
-	extras       *stableResourceSetExtras
-	mu           sync.Mutex
-	entries      []stableResourceEntry
-	kindViews    map[ResourceKind]stableResourceKindView
-	pinHighWater map[ResourceKind]uint64
-	owner        atomic.Uint32
+	ownedRetirementV5 *StableResourceRetirementV5 // exact partial retirement authority; guarded by mu
+	extras            *stableResourceSetExtras
+	mu                sync.Mutex
+	entries           []stableResourceEntry
+	kindViews         map[ResourceKind]stableResourceKindView
+	pinHighWater      map[ResourceKind]uint64
+	owner             atomic.Uint32
 	// physicalOnly is an explicit durability/reachability capability. It carries
 	// no complete logical metadata and cannot be used for publication proofs.
 	physicalOnly bool

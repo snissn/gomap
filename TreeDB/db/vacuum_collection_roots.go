@@ -831,6 +831,11 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 				}
 			}
 			return true, nil
+		case page.PageTypePrimaryDirectory:
+			if _, err := node.DecodePrimaryDirectory(data); err != nil {
+				return false, err
+			}
+			return false, nil
 		case page.PageTypeLeaf:
 			return false, nil
 		default:

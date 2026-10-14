@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,9 +30,11 @@ type CommandWALLSNRange struct {
 }
 
 type conditionalCommitMutation struct {
-	entries    []batchpkg.Entry
-	ranges     []batchpkg.DeleteRange
-	ownerTxnID uint64
+	physicalOnly bool
+	admission    mvccadmission.Summary
+	entries      []batchpkg.Entry
+	ranges       []batchpkg.DeleteRange
+	ownerTxnID   uint64
 }
 
 func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {

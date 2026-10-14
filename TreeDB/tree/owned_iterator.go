@@ -15,6 +15,8 @@ var ErrOwnedIteratorLeafReader = errors.New("tree: bounded external-leaf reader 
 // Root depth and reconstructed keys are checked before exceeding these arrays.
 type ownedProjectionStorage struct {
 	iterator    Iterator
+	primary     primaryIterator
+	deltaLeaf   [page.PageSize]byte
 	stack       [maxTraversalDepth]CursorItem
 	nodeKey     [page.PageSize]byte
 	combinedKey [page.PageSize]byte
@@ -47,6 +49,13 @@ func (t *Tree) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(p
 	it.leafState.keyScratch = storage.combinedKey[:0]
 	it.leafState.fixedScratch = true
 	it.resetStack()
+	if selected, err := t.initPrimaryIterator(&storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, false, readLeaf, storage.deltaLeaf[:], true); selected || err != nil {
+		if err != nil {
+			it.err = err
+			return it
+		}
+		return &storage.primary
+	}
 	it.Seek(start)
 	return it
 }

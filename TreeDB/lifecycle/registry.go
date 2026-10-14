@@ -1,9 +1,12 @@
 package lifecycle
 
 import (
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"math"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 const (
@@ -99,6 +102,13 @@ func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
 	} else {
 		idx = len(r.seqs)
 		r.seqs = append(r.seqs, math.MaxUint64)
+		// Every fallback handle owns one eventual free-list slot. Allocate that
+		// capacity at registration so retirement never copies unrelated free handles.
+		if cap(r.free) < len(r.seqs) {
+			next := make([]int, len(r.free), cap(r.seqs))
+			copy(next, r.free)
+			r.free = next
+		}
 	}
 	r.seqs[idx] = seq
 	if seq < r.min {
@@ -262,4 +272,80 @@ func (r *ReaderRegistry) tryClaimFast(seq uint64, shard int) int64 {
 	r.fastShards[shard].seq.Store(seq)
 	r.fastShards[shard].count.Store(1)
 	return makeFastHandle(shard)
+}
+
+// UnregisterWithWorkV5 releases one exact registry edge without scanning minima
+// or copying unrelated slots. Registration reserves fallback free capacity.
+func (r *ReaderRegistry) UnregisterWithWorkV5(id int64, w *iterator.OrdinalScanWork) (bool, error) {
+	if r == nil || w == nil {
+		return false, errors.New("lifecycle: missing owned registry retirement")
+	}
+	records := uint64(2)
+	bytes := 2*uint64(unsafe.Sizeof(ReaderRegistry{})) + 32
+	if id < 0 {
+		records = 1
+		bytes = 2 * uint64(unsafe.Sizeof(readerRegistryShard{}))
+	}
+	if !w.Reserve(records, bytes) {
+		return false, nil
+	}
+	if id < 0 {
+		shard := int(-id - 1)
+		if shard < 0 || shard >= fastReaderShardCount {
+			return false, errors.New("lifecycle: invalid reader edge")
+		}
+		count := r.fastShards[shard].count.Add(-1)
+		if count < 0 {
+			r.fastShards[shard].count.Add(1)
+			return false, errors.New("lifecycle: missing reader edge")
+		}
+		return true, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	idx := int(id - 1)
+	if id <= 0 || idx >= len(r.seqs) || r.seqs[idx] == math.MaxUint64 || len(r.free) == cap(r.free) {
+		return false, errors.New("lifecycle: missing fallback retirement capacity")
+	}
+	old := r.seqs[idx]
+	r.seqs[idx] = math.MaxUint64
+	r.free = append(r.free, idx)
+	if old == r.min {
+		r.dirty = true
+	}
+	return true, nil
+}
+
+// RegisterOneFastWithWorkV6 attempts exactly one existing cohort cell. The
+// producer may advance its hint on a refusal; no registry scan or CAS retry is
+// hidden in this call. First publication shares MinPinnedSeq's mutex, just as
+// ordinary registration does. Joining/removal races consume a new charged call.
+func (r *ReaderRegistry) RegisterOneFastWithWorkV6(seq uint64, hint int, w *iterator.OrdinalScanWork) (int64, bool, error) {
+	if r == nil || w == nil || hint < 0 || hint >= fastReaderShardCount {
+		return 0, false, errors.New("lifecycle: invalid owned reader registration")
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(readerRegistryShard{}))) {
+		return 0, false, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	shard := &r.fastShards[hint]
+	count := shard.count.Load()
+	if count == 0 {
+		if !shard.count.CompareAndSwap(0, -1) {
+			return 0, true, nil
+		}
+		shard.seq.Store(seq)
+		shard.count.Store(1)
+		return makeFastHandle(hint), true, nil
+	}
+	if count < 0 || count >= math.MaxInt32 || shard.seq.Load() != seq {
+		return 0, true, nil
+	}
+	if !shard.count.CompareAndSwap(count, count+1) {
+		return 0, true, nil
+	}
+	// The positive count excludes recycling after the successful CAS. Claims
+	// are serialized here, so no second sequence read or rollback is required.
+	return makeFastHandle(hint), true, nil
 }

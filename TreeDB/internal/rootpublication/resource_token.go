@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
@@ -379,6 +380,8 @@ const (
 	ResourceOwnerCandidate
 	ResourceOwnerCoordinator
 	ResourceOwnerRecovery
+	// ResourceOwnerFinish owns retained native debt after the durable report.
+	ResourceOwnerFinish
 	// ResourceOwnerShared is internal immutable-chunk ownership. Published set
 	// wrappers retain/release chunk roots independently of their lifecycle phase.
 	ResourceOwnerShared
@@ -412,6 +415,9 @@ type StableResourceSpec struct {
 	// must still execute SyncThrough on the pinned identity.
 	ContentSynced bool
 	OnRelease     func()
+	// OwnedOnRelease runs only under explicit charged retirement. OnRelease remains
+	// the ordinary close/recovery route; both must retire the same custody once.
+	OwnedOnRelease func(*iterator.OrdinalScanWork) (bool, error)
 	// PinRegistry is the DB-scoped physical deletion gate. When set, token
 	// construction acquires a pin for the exact handle identity before return.
 	PinRegistry *IdentityPinRegistry
@@ -454,6 +460,7 @@ type StableResourceToken struct {
 	syncedFrontier    DurableFrontier
 	hasSyncedFrontier bool
 	onRelease         func()
+	ownedOnRelease    func(*iterator.OrdinalScanWork) (bool, error)
 	identityPin       *IdentityPin
 	owner             atomic.Uint32
 	released          atomic.Bool
@@ -468,7 +475,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 // for exact-handle clones produced inside this package. Public producers always
 // pass nil and retain the full validation/copy boundary above.
 func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation) (*StableResourceToken, error) {
-	if spec.Kind == "" || spec.ResourceID == "" || spec.Generation == 0 || spec.Reachability == "" || spec.File == nil {
+	if spec.Kind == "" || spec.ResourceID == "" || spec.Generation == 0 || spec.Reachability == "" || spec.File == nil || (spec.OwnedOnRelease != nil && spec.OnRelease == nil) {
 		return nil, fmt.Errorf("%w: incomplete resource registration", ErrUnresolvedResource)
 	}
 	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
@@ -561,7 +568,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
-		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
+		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, ownedOnRelease: spec.OwnedOnRelease, identityPin: identityPin,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -1387,6 +1394,12 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 		oldName: spec.OldName, newName: spec.NewName,
 		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
 	}, nil
+}
+
+// DuplicateStableFile retains the exact already-open physical object. The caller
+// owns the returned handle; diagnostic Name is never a namespace authority.
+func DuplicateStableFile(file *os.File) (*os.File, error) {
+	return duplicateStableFile(file)
 }
 
 // OpenStableChildFile opens or creates name relative to the exact already-open

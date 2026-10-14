@@ -52,6 +52,11 @@ func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, side
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		return fmt.Errorf("%w: durable-root snapshot rebind requires durable rename and removal namespaces", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
+	if _, err := os.Stat(filepath.Join(dir, primaryIndexFileName)); err == nil {
+		return rebindDurablePrimarySnapshotLayoutV5(ctx, dir, sideRoot)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	indexPath := filepath.Join(dir, indexFileName)
 	source, err := os.Open(indexPath)
 	if err != nil {

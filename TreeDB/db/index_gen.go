@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -21,9 +22,12 @@ import (
 type indexGen struct {
 	id uint64
 
-	pager     *pager.Pager
-	allocator *freelist.Allocator
-	zipper    *zipper.Zipper
+	primary               *primaryarena.Arena
+	primaryRecoveryLeases []*primaryDependencyLeaseV5
+	primaryOwner          *primaryArenaOwnerV5
+	pager                 *pager.Pager
+	allocator             *freelist.Allocator
+	zipper                *zipper.Zipper
 
 	registry  *lifecycle.ReaderRegistry
 	graveyard *lifecycle.Graveyard
@@ -32,6 +36,10 @@ type indexGen struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	// Failed joint COMMIT construction retains exact custody until owner teardown.
+	unpublishedSelection *durableRootSelectionV1
+	unpublishedPrimary   *primaryDurableRuntimeV5
 
 	stableNamespaceMu     sync.Mutex
 	stableNamespaceParent *os.File
@@ -61,8 +69,23 @@ func (g *indexGen) release() int32 {
 
 func (g *indexGen) close() error {
 	g.closeOnce.Do(func() {
+		if g.unpublishedPrimary != nil {
+			releasePrimaryRuntimeV5(g.primary, g.unpublishedPrimary)
+			g.unpublishedPrimary = nil
+		}
+		if g.unpublishedSelection != nil {
+			for _, r := range g.unpublishedSelection.SlotResources {
+				r.Release()
+			}
+			g.unpublishedSelection = nil
+		}
+
 		if g.pager != nil {
 			g.closeErr = g.pager.Close()
+		}
+		if g.primary != nil {
+			_, err := g.primaryOwner.release(nil)
+			g.closeErr = errors.Join(g.closeErr, err)
 		}
 		g.stableNamespaceMu.Lock()
 		if g.stableNamespaceProof != nil {

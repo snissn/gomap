@@ -3,7 +3,10 @@
 
 package pager
 
-import "golang.org/x/sys/unix"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/nativeprunemetrics"
+	"golang.org/x/sys/unix"
+)
 
 func mmapFile(fd uintptr, offset int64, length int, populate bool) ([]byte, error) {
 	flags := unix.MAP_SHARED
@@ -36,5 +39,7 @@ func msyncFile(b []byte) error {
 	if len(b) == 0 {
 		return nil
 	}
-	return unix.Msync(b, unix.MS_SYNC)
+	err := unix.Msync(b, unix.MS_SYNC)
+	nativeprunemetrics.Barrier(nativeprunemetrics.Mmap, err)
+	return err
 }

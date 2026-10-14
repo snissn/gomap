@@ -138,6 +138,26 @@ cleanup rather than treating its early closed flag as completion. Stable identit
 pins still prohibit deletion;
 shutdown does not bypass the gate or reclaim a pinned segment.
 
+Terminal owned Snapshot retirement closes value-log deletion admission and
+joins previously admitted retry workers outside the manager lock. Each Set and
+File reference decrement then uses the exact constructor-frozen file-ref list
+and a charged continuation cursor. A last zombie reference does not enqueue a
+new deletion worker or unlink a pinned path. Tracked files remain under the
+manager's physical shutdown owner until all transferred debt has completed;
+normal `Manager.Close` follows. Stable cut handles and identity pins preserve
+persistent pointer storage independently. Failure retains the same cursor and
+remaining files rather than falling back to ordinary `Release`.
+
+Ordinary Set constructors build the immutable file-ref list during their existing
+file traversal. For up to 17 requested files, the Set and tail share one
+allocation; larger closures have a separate tail allocation. The actual tail
+capacity is derived from the constructor hint (0, 1, 2, 4, 8, 17, or the larger
+hint) and included in `SetRetentionSizes.MapEnvelope`, in addition to the actual
+Set wrapper. Skipped zombies cannot shrink that retained-capacity charge.
+Manually constructed Sets lack this provenance and refuse typed terminal
+retirement. The list is metadata ownership, not a replacement for reachability
+or physical identity validation.
+
 Directory refresh leaves a tracked zombie at its original path under that
 retirement owner's control. The handle may already be closed while unlink or
 an owned retry is pending; refresh neither inspects that closed handle nor

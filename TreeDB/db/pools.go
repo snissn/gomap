@@ -86,6 +86,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
+	s.privatePrimaryOwnerV5 = false
 	s.tree.SetNegativeFilter(nil)
 	s.db = nil
 	s.idx = nil

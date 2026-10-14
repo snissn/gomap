@@ -52,6 +52,7 @@ var raftSnapshotBeforeVectorPartitionRootOpenForTest func(string)
 
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
+	"index.db.primary",
 	raftSnapshotFormatConfigFileV1,
 	"wal",
 	"value_vlog",

@@ -1,0 +1,908 @@
+{
+  "TreeDB/db/index_gen.go": [
+    {
+      "line": 49,
+      "text": "func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {"
+    },
+    {
+      "line": 62,
+      "text": "func (g *indexGen) acquire() {"
+    },
+    {
+      "line": 66,
+      "text": "func (g *indexGen) release() int32 {"
+    },
+    {
+      "line": 70,
+      "text": "func (g *indexGen) close() error {"
+    },
+    {
+      "line": 78,
+      "text": "\t\t\t\tr.Release()"
+    },
+    {
+      "line": 84,
+      "text": "\t\t\tg.closeErr = g.pager.Close()"
+    },
+    {
+      "line": 87,
+      "text": "\t\t\t_, err := g.primaryOwner.release(nil)"
+    },
+    {
+      "line": 92,
+      "text": "\t\t\tg.stableNamespaceProof.Release()"
+    },
+    {
+      "line": 96,
+      "text": "\t\t\tg.closeErr = errors.Join(g.closeErr, g.stableNamespaceParent.Close())"
+    }
+  ],
+  "TreeDB/db/primary_snapshot_capture_v6.go": [
+    {
+      "line": 16,
+      "text": "func (db *DB) capturePrivatePrimarySnapshotV6(hint int, w *iterator.OrdinalScanWork) (*primarySnapshotCustodyV5, int, bool, error) {"
+    },
+    {
+      "line": 20,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(DB{}))) {"
+    },
+    {
+      "line": 34,
+      "text": "\tif !w.Reserve(2, 32) {"
+    },
+    {
+      "line": 42,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(snapshotView{}))+2*uint64(unsafe.Sizeof(DBState{}))) {"
+    },
+    {
+      "line": 56,
+      "text": "\t\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(leafGenerationPinSet{}))) {"
+    },
+    {
+      "line": 71,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(valuelog.Set{}))) {"
+    },
+    {
+      "line": 115,
+      "text": "\t\tw.Reserve(1, vlogBytes)"
+    },
+    {
+      "line": 119,
+      "text": "\t\tw.Reserve(1, 2*uint64(unsafe.Sizeof(leafGenerationPinSet{})))"
+    },
+    {
+      "line": 122,
+      "text": "\tw.Reserve(1, wrapperBytes)"
+    },
+    {
+      "line": 137,
+      "text": "\tw.Reserve(1, linkBytes)"
+    },
+    {
+      "line": 138,
+      "text": "\tdb.stableIndexCaptures.Add(1)"
+    },
+    {
+      "line": 139,
+      "text": "\ts.stableIndexCapture = true"
+    },
+    {
+      "line": 140,
+      "text": "\ts.stableIndexCaptureCounter = &db.stableIndexCaptures"
+    },
+    {
+      "line": 151,
+      "text": "func (c *primarySnapshotCustodyV5) prepareBaseKeyProofV6(key []byte, revision page.EntryRevision, w *iterator.OrdinalScanWork) (*primaryarena.BaseKeyProofV5, bool, error) {"
+    },
+    {
+      "line": 155,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(primarySnapshotCustodyV5{}))) {"
+    }
+  ],
+  "TreeDB/db/primary_snapshot_custody_v5.go": [
+    {
+      "line": 40,
+      "text": "func claimPrimarySnapshotCustodyV5(lease *primaryBaseReadLeaseV5, w *iterator.OrdinalScanWork) (*primarySnapshotCustodyV5, bool, error) {"
+    },
+    {
+      "line": 70,
+      "text": "\tif !s.privatePrimaryOwnerV5 || len(s.iterators) != 0 || s.foregroundReadMarked || s.foregroundReadEnd != nil || s.stableIndexCaptureTransferred || s.finalized.Load() {"
+    },
+    {
+      "line": 88,
+      "text": "func (c *primarySnapshotCustodyV5) ReleaseReadPinV5(w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 99,
+      "text": "func (c *primarySnapshotCustodyV5) releaseReadPinV5(w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 128,
+      "text": "func (c *primarySnapshotCustodyV5) ReleaseLeafPinsV5(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 139,
+      "text": "func (c *primarySnapshotCustodyV5) releaseLeafPinsV5(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 239,
+      "text": "func (c *primarySnapshotCustodyV5) terminalStepV5(db *DB, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 247,
+      "text": "func (c *primarySnapshotCustodyV5) liveStepV6(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 254,
+      "text": "func (c *primarySnapshotCustodyV5) stepV6(db *DB, w *iterator.OrdinalScanWork, terminal bool) (bool, bool, error) {"
+    },
+    {
+      "line": 286,
+      "text": "\t\tcurrent := db.idx.Load() == c.snapshot.idx && c.snapshot.stableIndexCapture && c.snapshot.stableIndexCaptureCounter == &db.stableIndexCaptures"
+    },
+    {
+      "line": 307,
+      "text": "\t\tif !s.privatePrimaryOwnerV5 || len(s.iterators) != 0 || s.foregroundReadMarked || s.foregroundReadEnd != nil || s.stableIndexCaptureTransferred || s.finalized.Load() {"
+    },
+    {
+      "line": 427,
+      "text": "\t\tif s.stableIndexCapture && s.stableIndexCaptureCounter != nil && !s.stableIndexCaptureTransferred {"
+    },
+    {
+      "line": 428,
+      "text": "\t\t\ts.stableIndexCaptureCounter.Add(-1)"
+    },
+    {
+      "line": 433,
+      "text": "\t\ts.stableIndexCapture = false"
+    },
+    {
+      "line": 434,
+      "text": "\t\ts.stableIndexCaptureCounter = nil"
+    }
+  ],
+  "TreeDB/db/root_publication_activation.go": [
+    {
+      "line": 38,
+      "text": "\tvisibleMembers   map[uint64]*rootpublication.DurableRootTransaction"
+    },
+    {
+      "line": 128,
+      "text": "func publicRootPublicationErrorV1(err error) error {"
+    },
+    {
+      "line": 135,
+      "text": "func (db *DB) acquireRootPublicationBuilderV1() (*rootpublication.BuilderToken, error) {"
+    },
+    {
+      "line": 140,
+      "text": "func (db *DB) acquireRootPublicationBuilderForRuntimeV1() (*rootPublicationRuntimeV1, *rootpublication.BuilderToken, error) {"
+    },
+    {
+      "line": 157,
+      "text": "func (db *DB) acquireCommandWALPublicationBuilderV1() (*rootpublication.BuilderToken, error) {"
+    },
+    {
+      "line": 184,
+      "text": "func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResource(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {"
+    },
+    {
+      "line": 188,
+      "text": "func (runtime *rootPublicationRuntimeV1) cloneVisibleStableResourceWithMax(selector rootpublication.StableResourceSelector, maxResources int) (*rootpublication.StableResourceSet, error) {"
+    },
+    {
+      "line": 203,
+      "text": "func (runtime *rootPublicationRuntimeV1) cloneVisibleResources() (*rootpublication.StableResourceSet, error) {"
+    },
+    {
+      "line": 208,
+      "text": "func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWork() (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {"
+    },
+    {
+      "line": 212,
+      "text": "func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxResources int) (*rootpublication.StableResourceSet, rootpublication.StableResourceClosureWork, error) {"
+    },
+    {
+      "line": 233,
+      "text": "func (seal *rootPublicationSealV1) release() {"
+    },
+    {
+      "line": 249,
+      "text": "func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {"
+    },
+    {
+      "line": 270,
+      "text": "func rootPublicationFrontierV1(meta page.MetaPageBody) rootpublication.Frontier {"
+    },
+    {
+      "line": 280,
+      "text": "func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {"
+    },
+    {
+      "line": 292,
+      "text": "func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody) (*rootPublicationRuntimeV1, error) {"
+    },
+    {
+      "line": 308,
+      "text": "\t\tvisibleMembers:   make(map[uint64]*rootpublication.DurableRootTransaction),"
+    },
+    {
+      "line": 331,
+      "text": "func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpublication.RecoveryResourceHandoff, error) {"
+    },
+    {
+      "line": 343,
+      "text": "func rootPublicationLogicalCandidateIDV1(lineage rootpublication.DurableRootLineageID, generationID uint64, next page.MetaPageBody) freelist.CandidateIDV1 {"
+    },
+    {
+      "line": 360,
+      "text": "func (db *DB) prepareRootPublicationVisibleInstallV1("
+    },
+    {
+      "line": 431,
+      "text": "func (install *rootPublicationVisibleInstallV1) abort() {"
+    },
+    {
+      "line": 443,
+      "text": "func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {"
+    },
+    {
+      "line": 500,
+      "text": "\t\tpublication:       install.publication,"
+    },
+    {
+      "line": 537,
+      "text": "func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() error {"
+    },
+    {
+      "line": 573,
+      "text": "func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate("
+    },
+    {
+      "line": 739,
+      "text": "\t\tLineage: runtime.lineage, Sequence: next.CommitSeq, PreparedCOW: transactionCOW, PreparedPrimary: primary, PublicationProjection: member,"
+    },
+    {
+      "line": 746,
+      "text": "\t\t\t\tover := len(runtime.visibleMembers) >= limits.MaxVisibleMembers || len(runtime.debt) >= limits.MaxAllocatorDebt"
+    },
+    {
+      "line": 763,
+      "text": "\t\t\truntime.visibleMembers[member.sequence] = member.transaction"
+    },
+    {
+      "line": 776,
+      "text": "\t\t\tdelete(runtime.visibleMembers, member.sequence)"
+    },
+    {
+      "line": 860,
+      "text": "func (db *DB) rootPublicationDependencyBytesV1(resources *rootpublication.StableResourceSet) (uint64, error) {"
+    },
+    {
+      "line": 869,
+      "text": "func (db *DB) finalizeQueuedRootPublicationV1("
+    },
+    {
+      "line": 1115,
+      "text": "func rootPublicationSealCandidateIDV1(base durableRootRuntimeV1, next page.MetaPageBody, generationID uint64) freelist.CandidateIDV1 {"
+    },
+    {
+      "line": 1138,
+      "text": "func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate *rootpublication.PreparedRootCandidate) (err error) {"
+    },
+    {
+      "line": 1398,
+      "text": "func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSealV1) error {"
+    },
+    {
+      "line": 1462,
+      "text": "func (runtime *rootPublicationRuntimeV1) preparedSealFor(candidate *rootpublication.PreparedRootCandidate) (*rootPublicationSealV1, error) {"
+    },
+    {
+      "line": 1481,
+      "text": "func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate *rootpublication.PreparedRootCandidate) rootpublication.PublishResult {"
+    },
+    {
+      "line": 1566,
+      "text": "func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicationSealV1) (uint64, error) {"
+    },
+    {
+      "line": 1662,
+      "text": "func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublicationSealV1, cause error) {"
+    },
+    {
+      "line": 1678,
+      "text": "func (runtime *rootPublicationRuntimeV1) release() {"
+    },
+    {
+      "line": 1697,
+      "text": "func (runtime *rootPublicationRuntimeV1) visibleMember(sequence uint64) *rootPublicationVisibleMemberV1 {"
+    },
+    {
+      "line": 1698,
+      "text": "\ttransaction := runtime.visibleMembers[sequence]"
+    },
+    {
+      "line": 1702,
+      "text": "\tmember, _ := transaction.PublicationProjectionV6().(*rootPublicationVisibleMemberV1)"
+    }
+  ],
+  "TreeDB/internal/mvccadmission/protected.go": [
+    {
+      "line": 29,
+      "text": "func (c *Capability) CaptureFloorDrain(floor uint64, w *iterator.OrdinalScanWork) (*FloorDrain, bool, error) {"
+    },
+    {
+      "line": 33,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(FloorDrain{}))+2*uint64(unsafe.Sizeof(Authority{}))) {"
+    },
+    {
+      "line": 45,
+      "text": "\treturn &FloorDrain{request: Request{owner: c, foreign: a.foreign}, floor: floor, serial: a.protectedSerial}, true, nil"
+    },
+    {
+      "line": 51,
+      "text": "func (c *Capability) ConfirmDrainedFloor(d *FloorDrain, w *iterator.OrdinalScanWork) (*Protection, bool, error) {"
+    },
+    {
+      "line": 55,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(FloorDrain{}))+2*uint64(unsafe.Sizeof(Authority{}))+uint64(unsafe.Sizeof(Protection{}))) {"
+    },
+    {
+      "line": 64,
+      "text": "\tif a.closed || c.closed || a.owner != c || a.foreign != d.request.foreign || a.protectedSerial != d.serial || d.floor < a.protectedFloor {"
+    },
+    {
+      "line": 70,
+      "text": "func (p *Protection) Request() Request {"
+    },
+    {
+      "line": 76,
+      "text": "func (p *Protection) Floor() uint64 {"
+    },
+    {
+      "line": 82,
+      "text": "func (p *Protection) validateLocked(a *Authority) error {"
+    },
+    {
+      "line": 83,
+      "text": "\tif p == nil || p.request.owner == nil || p.request.owner.authority != a || a.closed || p.request.owner.closed || a.owner != p.request.owner || a.foreign != p.request.foreign || a.protectedSerial != p.serial || a.protectedFloor < p.floor {"
+    },
+    {
+      "line": 88,
+      "text": "func (p *Protection) ValidateWithWork(w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 92,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(Protection{}))+2*uint64(unsafe.Sizeof(Authority{}))) {"
+    },
+    {
+      "line": 114,
+      "text": "func (p *Protection) BindVersion(key []byte, revision page.EntryRevision, w *iterator.OrdinalScanWork) (*ProtectedVersion, bool, error) {"
+    },
+    {
+      "line": 118,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(ProtectedVersion{}))+2*uint64(len(key))) {"
+    },
+    {
+      "line": 135,
+      "text": "func (v *ProtectedVersion) MatchesCurrent(key []byte, revision page.EntryRevision, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 139,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(ProtectedVersion{}))+2*uint64(len(key))) {"
+    },
+    {
+      "line": 151,
+      "text": "func (c *Cut) ObserveProtectedDeletion(v *ProtectedVersion, key []byte, revision page.EntryRevision) error {"
+    }
+  ],
+  "TreeDB/internal/primaryarena/arena.go": [
+    {
+      "line": 453,
+      "text": "\treturn a.sealDirectoryConstructedV6(r, image, groups, record, nil, nil, w)"
+    },
+    {
+      "line": 455,
+      "text": "func (a *Arena) sealDirectoryConstructedV6(r Ref, image []byte, groups [groupCount]*Group, record *bundleRecord, owner ReadRootConstructionV6, cert **ReadRootCertificateV6, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 463,
+      "text": "\tif !reserve(w, 1+count+node.PrimaryDirectoryMaxEntries, bytes) {"
+    },
+    {
+      "line": 509,
+      "text": "\tphysical, ok, e := a.writeBundleLocked(r, image, record, w)"
+    },
+    {
+      "line": 1133,
+      "text": "\tphysical, ok, e := a.writeBundleLocked(destination, scratch, record, w)"
+    }
+  ],
+  "TreeDB/internal/primaryarena/base_proof.go": [
+    {
+      "line": 18,
+      "text": "\tBaseGenerationV5() *freelist.FreelistGenerationV1"
+    },
+    {
+      "line": 19,
+      "text": "\tBaseReadAliveV5() bool"
+    },
+    {
+      "line": 28,
+      "text": "\tgeneration   *freelist.FreelistGenerationV1"
+    },
+    {
+      "line": 41,
+      "text": "func PrepareBaseKeyProofV5(source PinnedBaseSourceV5, base node.PrimaryOperand, sequence uint64, key []byte, expected page.EntryRevision, w *iterator.OrdinalScanWork) (*BaseKeyProofV5, bool, error) {"
+    },
+    {
+      "line": 42,
+      "text": "\tcost := 2*uint64(unsafe.Sizeof(BaseKeyProofV5{})) + 2*uint64(len(key)) + 2*uint64(unsafe.Sizeof(freelist.FreelistGenerationV1{}))"
+    },
+    {
+      "line": 49,
+      "text": "\tif source == nil || !source.BaseReadAliveV5() || base.Ref.Kind != page.ChildRefPage || IsPage(base.Ref.Page) || base.Ref.Page < 2 || base.Digest == ([32]byte{}) || sequence == 0 || expected == 0 {"
+    },
+    {
+      "line": 52,
+      "text": "\tgeneration := source.BaseGenerationV5()"
+    },
+    {
+      "line": 63,
+      "text": "func (c *BaseKeyProofV5) Step(w *iterator.OrdinalScanWork) (ready, progressed bool, err error) {"
+    },
+    {
+      "line": 67,
+      "text": "\tif !reserve(w, 1, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(freelist.FreelistGenerationV1{}))+c.source.BaseReadHeaderSizeV5()) {"
+    },
+    {
+      "line": 70,
+      "text": "\tif !c.source.BaseReadAliveV5() || c.source.BaseGenerationV5() != c.generation {"
+    },
+    {
+      "line": 164,
+      "text": "\t\t\tif child.Kind != page.ChildRefPage || IsPage(child.Page) || child.Page < 2 {"
+    },
+    {
+      "line": 190,
+      "text": "func (c *BaseKeyProofV5) matches(base node.PrimaryOperand, sequence uint64, key []byte, revision page.EntryRevision, w *iterator.OrdinalScanWork) (bool, bool) {"
+    },
+    {
+      "line": 194,
+      "text": "\tif !reserve(w, 1, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(freelist.FreelistGenerationV1{}))+c.source.BaseReadHeaderSizeV5()+2*uint64(len(c.key))+2*uint64(len(key))) {"
+    },
+    {
+      "line": 197,
+      "text": "\treturn c.ready && c.source.BaseReadAliveV5() && c.source.BaseGenerationV5() == c.generation && c.base == base && c.sequence == sequence && c.revision == revision && bytes.Equal(c.key, key), true"
+    }
+  ],
+  "TreeDB/internal/rootpublication/durable_root_transaction.go": [
+    {
+      "line": 97,
+      "text": "\tdurableRootRetiringConstructorV6"
+    },
+    {
+      "line": 115,
+      "text": "\tfinishBusy     bool"
+    },
+    {
+      "line": 119,
+      "text": "func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {"
+    },
+    {
+      "line": 137,
+      "text": "func validateDurableRootTransactionSpec(spec DurableRootTransactionSpec) error {"
+    },
+    {
+      "line": 175,
+      "text": "func durableRootPayloadIsZero(payload DurableRootPayload) bool {"
+    },
+    {
+      "line": 179,
+      "text": "func (transaction *DurableRootTransaction) Owner() ResourceOwnerState {"
+    },
+    {
+      "line": 188,
+      "text": "func (transaction *DurableRootTransaction) Lineage() DurableRootLineageID {"
+    },
+    {
+      "line": 195,
+      "text": "func (transaction *DurableRootTransaction) Sequence() uint64 {"
+    },
+    {
+      "line": 202,
+      "text": "func (transaction *DurableRootTransaction) Payload() DurableRootPayload {"
+    },
+    {
+      "line": 209,
+      "text": "func (transaction *DurableRootTransaction) PreparedCOW() *freelist.PreparedCOWCandidateV1 {"
+    },
+    {
+      "line": 216,
+      "text": "func (transaction *DurableRootTransaction) PreparedPrimary() *PreparedPrimaryRootV5 {"
+    },
+    {
+      "line": 226,
+      "text": "func (transaction *DurableRootTransaction) Abort() error {"
+    },
+    {
+      "line": 230,
+      "text": "func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState) error {"
+    },
+    {
+      "line": 249,
+      "text": "func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) error {"
+    },
+    {
+      "line": 274,
+      "text": "func (transaction *DurableRootTransaction) activateFromCoordinator() error {"
+    },
+    {
+      "line": 277,
+      "text": "func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {"
+    },
+    {
+      "line": 300,
+      "text": "func (transaction *DurableRootTransaction) consumeFromCoordinator() error {"
+    },
+    {
+      "line": 303,
+      "text": "func (transaction *DurableRootTransaction) consumeFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {"
+    },
+    {
+      "line": 338,
+      "text": "func (transaction *DurableRootTransaction) finishOwned(resources *StableResourceSet, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 354,
+      "text": "\tif transaction.phase == durableRootRetiringConstructorV6 && transaction.constructionV6 != nil && !transaction.finishBusy {"
+    },
+    {
+      "line": 355,
+      "text": "\t\tready, progress, err := transaction.retireOwnedConstructorV6(w)"
+    },
+    {
+      "line": 359,
+      "text": "\tif transaction.phase != durableRootFinishing || transaction.ownerLockedV6() != ResourceOwnerFinish || transaction.finishBusy {"
+    },
+    {
+      "line": 371,
+      "text": "\ttransaction.finishBusy = true"
+    },
+    {
+      "line": 379,
+      "text": "\ttransaction.finishBusy = false"
+    },
+    {
+      "line": 387,
+      "text": "\t\ttransaction.phase = durableRootRetiringConstructorV6"
+    },
+    {
+      "line": 388,
+      "text": "\t\tready, _, err := transaction.retireOwnedConstructorV6(w)"
+    },
+    {
+      "line": 396,
+      "text": "func (transaction *DurableRootTransaction) failFromCoordinator(cause error) error {"
+    },
+    {
+      "line": 421,
+      "text": "func (transaction *DurableRootTransaction) releaseFromRecovery() {"
+    },
+    {
+      "line": 436,
+      "text": "func newDurableRootGroupExtension(transaction *DurableRootTransaction) durableRootGroupExtension {"
+    },
+    {
+      "line": 443,
+      "text": "func (group durableRootGroupExtension) union(other immutableExtension) (immutableExtension, error) {"
+    },
+    {
+      "line": 462,
+      "text": "func validateConsecutiveDurableRootTransactions(previous, next *DurableRootTransaction) error {"
+    },
+    {
+      "line": 470,
+      "text": "func sequenceOf(transaction *DurableRootTransaction) uint64 {"
+    },
+    {
+      "line": 484,
+      "text": "func (group DurableRootGroup) Len() int { return len(group.members) }"
+    },
+    {
+      "line": 486,
+      "text": "func (group DurableRootGroup) Lineage() DurableRootLineageID {"
+    },
+    {
+      "line": 493,
+      "text": "func (group DurableRootGroup) Members() []*DurableRootTransaction {"
+    },
+    {
+      "line": 497,
+      "text": "func (group DurableRootGroup) Latest() *DurableRootTransaction {"
+    }
+  ],
+  "TreeDB/internal/rootpublication/owned_publication_v5.go": [
+    {
+      "line": 35,
+      "text": "func (c *Coordinator) EnqueueOwnedBuiltAndPublishV5(candidate *PreparedRootCandidate, token *BuilderToken, w *iterator.OrdinalScanWork, publish func(*PreparedRootCandidate, *iterator.OrdinalScanWork) PublishResult) (*OwnedPublicationReceiptV5, bool, error) {"
+    },
+    {
+      "line": 61,
+      "text": "\trecords := uint64(5 + kinds)"
+    },
+    {
+      "line": 63,
+      "text": "\tif !w.Reserve(records, byteCount) {"
+    },
+    {
+      "line": 131,
+      "text": "\tresult := publish(candidate, w)"
+    },
+    {
+      "line": 143,
+      "text": "\tc.finishPublishLocked(candidate, 1, result, c.clock.Now().Sub(attempt.started))"
+    },
+    {
+      "line": 167,
+      "text": "func (c *Coordinator) enqueueOwnedFrozenLocked(candidate *PreparedRootCandidate, transaction *DurableRootTransaction, set *StableResourceSet, pinCounts map[ResourceKind]uint64, w *iterator.OrdinalScanWork) (enqueueDecision, error) {"
+    },
+    {
+      "line": 199,
+      "text": "func (c *Coordinator) FinishOwnedPublicationV5(receipt *OwnedPublicationReceiptV5, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 214,
+      "text": "func (c *Coordinator) finishOwnedReceiptV5(receipt *OwnedPublicationReceiptV5, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 224,
+      "text": "\tif !w.Reserve(uint64(2+count), 4*uint64(unsafe.Sizeof(OwnedPublicationReceiptV5{}))+2*uint64(unsafe.Sizeof(Coordinator{}))+uint64(count)*2*uint64(unsafe.Sizeof(stableResourceEntry{}))) {"
+    },
+    {
+      "line": 256,
+      "text": "func (receipt *OwnedPublicationReceiptV5) Durable() bool {"
+    },
+    {
+      "line": 264,
+      "text": "func (c *Coordinator) HasOwnedFinishV5() bool {"
+    },
+    {
+      "line": 278,
+      "text": "func (c *Coordinator) TakeTerminalOwnedFinishV5(w *iterator.OrdinalScanWork) (*TerminalOwnedFinishV5, bool, error) {"
+    },
+    {
+      "line": 282,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(Coordinator{}))) {"
+    },
+    {
+      "line": 304,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(OwnedPublicationReceiptV5{}))+uint64(unsafe.Sizeof(TerminalOwnedFinishV5{}))) {"
+    },
+    {
+      "line": 321,
+      "text": "func (owner *TerminalOwnedFinishV5) Step(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 342,
+      "text": "func (c *Coordinator) finishOwnedTransactionWithScopeV6(receipt *OwnedPublicationReceiptV5, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 355,
+      "text": "func (c *Coordinator) finishOrdinaryPrimaryWithScopeV6(txn *DurableRootTransaction) error {"
+    },
+    {
+      "line": 369,
+      "text": "func (r *OwnedPublicationReceiptV5) candidateV6() *PreparedRootCandidate {"
+    },
+    {
+      "line": 378,
+      "text": "func (r *OwnedPublicationReceiptV5) resourceSetV6() *StableResourceSet {"
+    }
+  ],
+  "TreeDB/internal/rootpublication/primary_data_certificate_v6.go": [
+    {
+      "line": 27,
+      "text": "func (c *PreparedPrimaryRootV5) DataCertificateV6() *PrimaryDataCertificateV6 {"
+    },
+    {
+      "line": 33,
+      "text": "func (c *PreparedPrimaryRootV5) ReadCertificateV6() *primaryarena.ReadRootCertificateV6 {"
+    },
+    {
+      "line": 44,
+      "text": "func NewPreparedPrimaryReadRootCertificateV6(cert *primaryarena.ReadRootCertificateV6, generation *freelist.FreelistGenerationV1, cow *freelist.PreparedCOWCandidateV1, frontier Frontier, data freelist.PageSource, previous *PrimaryDataCertificateV6, w *iterator.OrdinalScanWork) (*PreparedPrimaryRootV5, bool, error) {"
+    },
+    {
+      "line": 45,
+      "text": "\tif w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(PreparedPrimaryRootV5{}))+2*uint64(unsafe.Sizeof(primaryarena.ReadRootCertificateV6{}))) {"
+    },
+    {
+      "line": 58,
+      "text": "\tif w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(PrimaryDataCertificateV6{}))+128) {"
+    },
+    {
+      "line": 75,
+      "text": "func preparePrimaryDataCertificateV6(data freelist.PageSource, physical *pager.Pager, generation *freelist.FreelistGenerationV1, base node.PrimaryOperand, sequence, systemID uint64, w *iterator.OrdinalScanWork) (*PrimaryDataCertificateV6, bool, error) {"
+    },
+    {
+      "line": 81,
+      "text": "\t\tunused, ready, err := generation.SnapshotPageUnusedWithWorkV1(root.id, generation.CommitSeq()+1, w)"
+    },
+    {
+      "line": 97,
+      "text": "\t\t\tif w != nil && !w.Reserve(1, page.PageSize) {"
+    },
+    {
+      "line": 100,
+      "text": "\t\t\timage, err = data.ReadPage(root.id)"
+    },
+    {
+      "line": 107,
+      "text": "\t\tif w != nil && !w.Reserve(1, 2*page.PageSize+128) {"
+    }
+  ],
+  "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": [
+    {
+      "line": 34,
+      "text": "func NewPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {"
+    },
+    {
+      "line": 38,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "line": 49,
+      "text": "func (t *DurableRootTransaction) PrimaryConstructionReferenceV6() primaryarena.Ref {"
+    },
+    {
+      "line": 60,
+      "text": "func (t *DurableRootTransaction) SealPrimaryConstructionV6(image []byte, groups [1]*primaryarena.Group, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 84,
+      "text": "func (t *DurableRootTransaction) PrimaryConstructionCertificateV6() *primaryarena.ReadRootCertificateV6 {"
+    },
+    {
+      "line": 98,
+      "text": "func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransactionSpec, resources *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 102,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(DurableRootTransactionSpec{}))) {"
+    },
+    {
+      "line": 129,
+      "text": "func (t *DurableRootTransaction) ownerLockedV6() ResourceOwnerState {"
+    },
+    {
+      "line": 135,
+      "text": "func (t *DurableRootTransaction) releaseOwnerLockedV6() {"
+    },
+    {
+      "line": 142,
+      "text": "func (t *DurableRootTransaction) abortConstructionLockedV6() error {"
+    },
+    {
+      "line": 161,
+      "text": "func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {"
+    },
+    {
+      "line": 175,
+      "text": "func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, bool, error) {"
+    },
+    {
+      "line": 179,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {"
+    },
+    {
+      "line": 214,
+      "text": "func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *iterator.OrdinalScanWork) (bool, error) {"
+    },
+    {
+      "line": 218,
+      "text": "\tif !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "line": 234,
+      "text": "func (t *DurableRootTransaction) finishOrdinaryPrimaryV6(w *iterator.OrdinalScanWork) error {"
+    },
+    {
+      "line": 251,
+      "text": "\tready, err := c.arena.DetachReadRootConstructionV6(c.root, t, w)"
+    },
+    {
+      "line": 266,
+      "text": "func (t *DurableRootTransaction) isConstructedPrimaryV6() bool {"
+    },
+    {
+      "line": 273,
+      "text": "func (t *DurableRootTransaction) PublicationProjectionV6() any {"
+    },
+    {
+      "line": 279,
+      "text": "func (t *DurableRootTransaction) PublicationCandidateV6() *PreparedRootCandidate {"
+    },
+    {
+      "line": 289,
+      "text": "func (t *DurableRootTransaction) adoptPrimaryCandidateV6(candidate PreparedRootCandidate) *PreparedRootCandidate {"
+    },
+    {
+      "line": 301,
+      "text": "func (t *DurableRootTransaction) retireOwnedConstructorV6(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+    },
+    {
+      "line": 313,
+      "text": "\t\tready, err := c.arena.DropToReleaseQueue(c.root, c.finishQueue, w)"
+    },
+    {
+      "line": 321,
+      "text": "\t\tready, p, err := c.arena.ReleaseQueueStep(c.finishQueue, w)"
+    }
+  ],
+  "TreeDB/mvcc/protected_floor.go": [
+    {
+      "line": 10,
+      "text": "// independent of ordinary CommitAt acknowledgement. Its synchronous Checkpoint"
+    },
+    {
+      "line": 14,
+      "text": "func (s *Store) prepareProtectedFloor() (*mvccadmission.Protection, error) {"
+    },
+    {
+      "line": 29,
+      "text": "\tif err := s.persistDiscardFloorLocked(floor, CommitDurable); err != nil {"
+    },
+    {
+      "line": 36,
+      "text": "\tdrain, ready, err := s.admission.CaptureFloorDrain(floor, work)"
+    },
+    {
+      "line": 40,
+      "text": "\tcheckpoint, ok := s.db.(interface{ Checkpoint() error })"
+    },
+    {
+      "line": 44,
+      "text": "\tif err := checkpoint.Checkpoint(); err != nil {"
+    },
+    {
+      "line": 47,
+      "text": "\tprotection, _, err := s.admission.ConfirmDrainedFloor(drain, work)"
+    }
+  ],
+  "TreeDB/mvcc/versions.go": [
+    {
+      "line": 392,
+      "text": "\t\t\tif err := s.persistDiscardFloorLocked(timestamp, CommitDurable); err != nil {"
+    },
+    {
+      "line": 399,
+      "text": "\tif err := s.persistDiscardFloorLocked(timestamp, mode); err != nil {"
+    },
+    {
+      "line": 459,
+      "text": "\t\tif err := s.persistDiscardFloorLocked(floor, CommitDurable); err != nil {"
+    },
+    {
+      "line": 516,
+      "text": "\t\t\twriteErr = batch.WriteSync()"
+    },
+    {
+      "line": 690,
+      "text": "func (s *Store) persistDiscardFloorLocked(floor uint64, mode CommitMode) error {"
+    },
+    {
+      "line": 700,
+      "text": "\t\tSetWithMVCCInput([]byte, []byte, mvccadmission.Input) error"
+    },
+    {
+      "line": 702,
+      "text": "\t\tstageErr = qualified.SetWithMVCCInput(discardFloorKey, record, s.admission.FloorInput(discardFloorKey, record, floor))"
+    },
+    {
+      "line": 711,
+      "text": "\t\terr = batch.WriteSync()"
+    }
+  ]
+}

@@ -316,6 +316,9 @@ type ReadOnlyPrepareResult struct {
 	maxTouchedDepth        uint32
 	maxTouchedPages        uint64
 	maxTouchedOldEntries   uint64
+	primaryRouting         bool
+	primaryRouteLow        []byte
+	primaryRouteHigh       []byte
 }
 
 // PurePointOutputPageUpperBound returns a conservative count of pages a
@@ -814,6 +817,17 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	if len(ops) == 0 && len(ranges) == 0 {
 		return
 	}
+	// A directory route is a logical exact-key census, not physical span
+	// ownership. Clip at emission so retained and streamed views agree while
+	// preserving every recursive read and touched-entry count.
+	if r.primaryRouting {
+		if low == nil || bytes.Compare(low, r.primaryRouteLow) < 0 {
+			low = r.primaryRouteLow
+		}
+		if r.primaryRouteHigh != nil && (high == nil || bytes.Compare(high, r.primaryRouteHigh) > 0) {
+			high = r.primaryRouteHigh
+		}
+	}
 	span := ReadOnlyLeafSpan{
 		Ref:              ref,
 		LowKey:           r.cloneKey(low),
@@ -973,6 +987,20 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	var prepared ReadOnlyPrepareResult
 	var preparedNs uint64
 	result := ApplyResult{}
+	if rootID != 0 {
+		image, err := z.pager.Get(rootID)
+		if err != nil {
+			return result, err
+		}
+		if z.primaryDirectory || node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
+			// Ordinary span rewrites operate on a materialized tree. They may not
+			// reinterpret a directory as an internal-node layout.
+			opts.SpanNativeApply = false
+			if opts.ParallelApplyConcurrency > 1 {
+				opts.ParallelApplyConcurrency = 1
+			}
+		}
+	}
 	prepareRequested := opts.PrepareReadOnly || opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply
 	if prepareRequested {
 		result.ReadOnlyPrepareRequested = true
@@ -1174,6 +1202,56 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	}
 
 	switch oldNode.Type() {
+	case page.PageTypePrimaryDirectory:
+		if depth != 1 {
+			return node.ErrPrimaryDirectory
+		}
+		directory, err := node.DecodePrimaryDirectory(oldNode.Data())
+		if err != nil {
+			return err
+		}
+		result.Metrics.PrimaryDirectoryPagesRead++
+		base, _ := directory.Base()
+		if _, err = z.loadPrimaryOperand(base, nil, &result.Metrics, scratch); err != nil {
+			return err
+		}
+		// Directory cells are routing operands, not ordinary whole-leaf spans.
+		// This census cannot authorize the materialized-tree span executor.
+		result.ExactLeafSpans = false
+		if result.countTouchedOldEntries {
+			if result.maxTouchedOldEntries != 0 && uint64(directory.Count()) > result.maxTouchedOldEntries-result.TouchedOldLeafEntries-result.TouchedOldInternalChildren {
+				return ErrReadOnlyPrepareProfileLimit
+			}
+			result.TouchedOldInternalChildren += uint64(directory.Count())
+		}
+		if len(ranges) > 0 {
+			return z.prepareReadOnlyRecursive(base.Ref, ops, opBase, ranges, rangeBase, low, high, result, scratch, depth+1)
+		}
+		for i, op := range ops {
+			selected := base.Ref
+			entry, found := directory.Search(op.Key)
+			if found {
+				if _, err = z.loadPrimaryOperand(entry.Operand, &entry, &result.Metrics, scratch); err != nil {
+					return err
+				}
+				selected = entry.Operand.Ref
+			}
+			var next []byte
+			if i+1 < len(ops) {
+				next = ops[i+1].Key
+			} else {
+				next = high
+			}
+			result.primaryRouting = true
+			result.primaryRouteLow, result.primaryRouteHigh = op.Key, next
+			err = z.prepareReadOnlyRecursive(selected, ops[i:i+1], opBase+i, nil, rangeBase, op.Key, next, result, scratch, depth+1)
+			result.primaryRouting = false
+			result.primaryRouteLow, result.primaryRouteHigh = nil, nil
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	case page.PageTypeLeaf, 0:
 		if result.countTouchedOldEntries {
 			if result.TouchedOldLeafPages == math.MaxUint64 {
