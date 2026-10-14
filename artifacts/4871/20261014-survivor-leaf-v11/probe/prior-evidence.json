@@ -1,0 +1,72 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v8/normal.command.json",
+    "size": 606,
+    "sha256": "e32fa2ce880cad6d6c913c923168108cca16c3e4f9dd67dde86edaaa7c05bd57"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v8/normal.exit.json",
+    "size": 54,
+    "sha256": "a704e0b83ab811b81a7306c18b3295b734ae40ca61e435d12438ca908c0313b6"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v8/normal.raw.jsonl",
+    "size": 4968,
+    "sha256": "1a31dc8b110d9eb953d9f51a0c14fde51263adc1b59b9e22585dd50bd3020eeb"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v8/source-before.json",
+    "size": 818057,
+    "sha256": "d3ddd8c174458a0c09d709d5b1eff8184ab1c7e75b73c4f02e186564390c3163"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v9/normal.command.json",
+    "size": 684,
+    "sha256": "7bc52b915880a9ce9914b157ea9694de207aaf15f256022aa938f3b79c9d1718"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v9/normal.exit.json",
+    "size": 55,
+    "sha256": "71132307f45302cbdcfcedef8f94701350a28d9650915aea9db5154df80877cf"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v9/normal.raw.jsonl",
+    "size": 6426,
+    "sha256": "d82203460f9ffffc6eda72d89a1c7ca920cf8bd211a25c1cbab13d5927647655"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v9/source-before.json",
+    "size": 818267,
+    "sha256": "a72e30d4d097c37be8f2e47d16862ca97f7e164800f4506e3081aa0c80b06670"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v9/source-after.json",
+    "size": 818267,
+    "sha256": "a72e30d4d097c37be8f2e47d16862ca97f7e164800f4506e3081aa0c80b06670"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v10/normal.command.json",
+    "size": 684,
+    "sha256": "7bc52b915880a9ce9914b157ea9694de207aaf15f256022aa938f3b79c9d1718"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v10/normal.exit.json",
+    "size": 56,
+    "sha256": "45b299b90a23f493ecea27415a39446c640259a1db48967ada5770f1b81252c1"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v10/normal.raw.jsonl",
+    "size": 7812,
+    "sha256": "0b23f829cdffcd07a34b9387dc33ede27743de220f97b4426a2f4dd04ea1266a"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v10/source-before.json",
+    "size": 818314,
+    "sha256": "637b415e994b51a7d794325b8d7dc62f963b17bb8ff9d889bb14dd525e56848e"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/leaf-output-v10/source-after.json",
+    "size": 818314,
+    "sha256": "637b415e994b51a7d794325b8d7dc62f963b17bb8ff9d889bb14dd525e56848e"
+  }
+]

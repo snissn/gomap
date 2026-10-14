@@ -1,0 +1,15 @@
+{
+  "head": "e7aa8d8b5a894932d1b15306bcdd4437a983d3e6",
+  "index_sha256": "e10aa929fde7e8c7a9991ce5560ce166ee3f355c599a669e43ba617a7d105685",
+  "staged_delta": "",
+  "foreign_paths": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ]
+}

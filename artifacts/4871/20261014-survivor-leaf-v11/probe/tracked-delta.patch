@@ -1,0 +1,185 @@
+diff --git a/TreeDB/caching/native_mvcc_cow_merge_v6.go b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+index ab8b5e971..418b39177 100644
+--- a/TreeDB/caching/native_mvcc_cow_merge_v6.go
++++ b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+@@ -42,6 +42,9 @@ type nativeCOWMergeV6 struct {
+ 	lookupSource, lookupEntry              int
+ 	closeFailure                           error
+ 	cutReleased                            bool
++	cutClosing                             bool
++	cutCloseIndex                          int
++	cutBasisReleased                       bool
+ }
+ 
+ func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
+@@ -379,19 +382,89 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
+ 		m.closeIndex++
+ 	}
+ 	if !m.cutReleased {
+-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(cowReadCut{}))) {
+-			return false, nil
+-		}
+ 		cache := m.cache
+-		cache.cutMu.Lock()
+-		// Last-cut cleanup must bind its real root/basis stages, never hide the
+-		// synchronous original drain behind a scalar native reservation.
+-		if m.cut.refs <= 1 {
++		if !m.cutClosing {
++			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(cowReadCut{}))) {
++				return false, nil
++			}
++			cache.cutMu.Lock()
++			if m.cut.refs > 1 {
++				m.cut.refs--
++				m.cut = nil
++			} else if m.cut.refs == 1 {
++				// SAME original cut is no longer discoverable. This capture alone
++				// serializes its original root/retirement progress and containing charge.
++				m.cutClosing = true
++			} else {
++				cache.cutMu.Unlock()
++				return false, memtable.ErrCOWResourceWork
++			}
+ 			cache.cutMu.Unlock()
+-			return false, memtable.ErrCOWResourceWork
+ 		}
+-		m.cut.refs--
+-		m.cut = nil
++		if m.cutClosing {
++			cut := m.cut
++			for m.cutCloseIndex < len(cut.shards)+len(cut.frozen) {
++				var table *cowTable
++				if m.cutCloseIndex < len(cut.shards) {
++					table = &cut.shards[m.cutCloseIndex]
++				} else {
++					table = &cut.frozen[m.cutCloseIndex-len(cut.shards)]
++				}
++				if table.root != nil {
++					// COWRoot.Release only drops original root/generation ref edges;
++					// actual callbacks remain in SAME COWRetirement and are metered below.
++					if !w.Reserve(3, 2*uint64(unsafe.Sizeof(memtable.COWRoot{}))+2*uint64(unsafe.Sizeof(memtable.COWBudget{}))+512) {
++						return false, nil
++					}
++					root := table.root
++					*table = cowTable{}
++					m.retirement = root.Release()
++					root = nil
++				}
++				ready, err := m.retirement.DrainWithWork(w)
++				if !ready || err != nil {
++					return false, err
++				}
++				m.cutCloseIndex++
++			}
++			if !m.cutBasisReleased {
++				// The current successor cut owns the SAME backend basis for this
++				// eligible route. CAS retries are real charged attempts. Last-basis
++				// physical cleanup is a distinct unsupported class, before effects.
++				for {
++					if !w.Reserve(1, 2*uint64(unsafe.Sizeof(cowBackendBasis{}))) {
++						return false, nil
++					}
++					n := cut.basis.refs.Load()
++					if n <= 1 {
++						return false, memtable.ErrCOWResourceWork
++					}
++					if cut.basis.refs.CompareAndSwap(n, n-1) {
++						cut.basis = nil
++						m.cutBasisReleased = true
++						break
++					}
++				}
++			}
++			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*cut))+2*uint64(unsafe.Sizeof(*m))) {
++				return false, nil
++			}
++			lease := cut.lease
++			if !lease.AdmitRetentionClose(w) {
++				return false, nil
++			}
++			cut.shards, cut.frozen, cut.sources, cut.domains = nil, nil, nil, nil
++			cut.cache, cut.lease = nil, nil
++			cut.refs = 0
++			m.cut = nil
++			cut = nil
++			lease.Close()
++			lease = nil
++			// Cache containing admission stays until every original cut returns.
++			if cache.activeCuts.Add(-1) == 0 && cache.readClosed.Load() {
++				cache.lease.Close()
++			}
++		}
+ 		m.cache = nil
+ 		m.cutReleased = true
+ 		c.Snapshot = nil
+@@ -400,8 +473,8 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
+ 		m.record = node.LeafEntry{}
+ 		m.baseRecord = node.LeafEntry{}
+ 		m.lookupFile = nil
+-		cache.cutMu.Unlock()
+ 	}
++
+ 	return true, nil
+ }
+ 
+diff --git a/TreeDB/freelist/generation_v1_txn.go b/TreeDB/freelist/generation_v1_txn.go
+index 24b88c4b6..7cd46399b 100644
+--- a/TreeDB/freelist/generation_v1_txn.go
++++ b/TreeDB/freelist/generation_v1_txn.go
+@@ -323,10 +323,16 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
+ 	if id > start {
+ 		t.abandonedAppends = appendReservationRange(t.abandonedAppends, start, id-start, ReservationAbandonedAppend, 0)
+ 	}
++	t.installAppend(id)
++	return id, nil
++}
++
++// installAppend records an already selected append in the SAME transaction.
++// Work-bearing callers prove capacity and guard the original ledger first.
++func (t *FreelistTxn) installAppend(id uint64) {
+ 	t.highWater = id + 1
+ 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
+ 	t.stats.AppendAllocations++
+-	return id, nil
+ }
+ 
+ // allocateContiguousRange first tries a bounded reusable extent, then appends.
+diff --git a/TreeDB/internal/bulk/builder.go b/TreeDB/internal/bulk/builder.go
+index df45333ed..ee79b8461 100644
+--- a/TreeDB/internal/bulk/builder.go
++++ b/TreeDB/internal/bulk/builder.go
+@@ -406,15 +406,9 @@ func buildSingleLeafLogRoot(alloc Allocator, p *pager.Pager, key []byte, ptr pag
+ 	return rootID, nil
+ }
+ 
++func leafBuilderOptions(opts BuildOptions) node.BuilderOptions {
++	return node.BuilderOptions{LeafPrefixCompression: opts.LeafPrefixCompression, LeafColumnar: opts.LeafColumnar, InternalBaseDelta: opts.InternalBaseDelta, PackedValuePtr: opts.PackedValuePtr, EntryRevisions: opts.EntryRevisions}
++}
+ func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
+-	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta || opts.PackedValuePtr || opts.EntryRevisions {
+-		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+-			LeafPrefixCompression: opts.LeafPrefixCompression,
+-			LeafColumnar:          opts.LeafColumnar,
+-			InternalBaseDelta:     opts.InternalBaseDelta,
+-			PackedValuePtr:        opts.PackedValuePtr,
+-			EntryRevisions:        opts.EntryRevisions,
+-		})
+-	}
+-	return node.NewBuilder(buf, page.PageTypeLeaf)
++	return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, leafBuilderOptions(opts))
+ }
+diff --git a/TreeDB/node/builder.go b/TreeDB/node/builder.go
+index ed98a36ed..d71ccfff3 100644
+--- a/TreeDB/node/builder.go
++++ b/TreeDB/node/builder.go
+@@ -553,6 +553,10 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
+ 
+ // AddLeafEntryWithRevision appends a native revision-bearing leaf entry.
+ func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
++	return b.addLeafEntryWithRevision(key, value, flags, valPtr, revision)
++}
++
++func (b *Builder) addLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
+ 	if b.pType != page.PageTypeLeaf {
+ 		return ErrInvalidType
+ 	}

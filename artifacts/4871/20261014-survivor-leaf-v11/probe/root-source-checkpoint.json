@@ -1,0 +1,83 @@
+{
+  "at_utc": "2026-10-14T23:42:24.367356+00:00",
+  "parent": "e7aa8d8b5a894932d1b15306bcdd4437a983d3e6",
+  "packet_receipt_sha256": "c5fab675b0add9c02e4d8ed3f013d98b489826444845f8509edd6b8f287e466c",
+  "source": [
+    {
+      "path": "TreeDB/caching/native_mvcc_cow_merge_v6.go",
+      "size": 14881,
+      "sha256": "cc2c2909f1c38b2d9e3bcbf5bb8f10c1db148e522ad1a242f5ebd3528f291e53"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_leaf_output_v6.go",
+      "size": 1157,
+      "sha256": "7e677cb6909827966f4d2fbfd8dc5558e360a2f9b4cd338bbeced6096f65559c"
+    },
+    {
+      "path": "TreeDB/freelist/append_work.go",
+      "size": 5375,
+      "sha256": "0ed83dc2e9454d69fcbe90914b490fb6e230b6743156468e4a37fb0d7e2a3a25"
+    },
+    {
+      "path": "TreeDB/freelist/append_work_test.go",
+      "size": 1847,
+      "sha256": "9b4cba903bc320e7e19eb26781fd6d73bcf533c28827d1a892c50d4efa01a9a9"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "size": 29116,
+      "sha256": "8821aaaad2413246f8938b5a17a60291213b4667797d4407c07db99d6f7cb900"
+    },
+    {
+      "path": "TreeDB/internal/bulk/builder.go",
+      "size": 10437,
+      "sha256": "b33d489f16dc68fc1b8df349017340232d9c46aa31fa59c17821d9276c47d476"
+    },
+    {
+      "path": "TreeDB/internal/bulk/leaf_output_work.go",
+      "size": 3982,
+      "sha256": "e6c927fa7e8a5151b653f05e4c4bbb0e683e1e12e4d2faeb94db30538310e0d6"
+    },
+    {
+      "path": "TreeDB/mvcc/native_leaf_output_v6_test.go",
+      "size": 12058,
+      "sha256": "aa2101fdc44ee0637c0160ef196311473186d035632409df74b55a22755e0677"
+    },
+    {
+      "path": "TreeDB/node/builder.go",
+      "size": 56721,
+      "sha256": "124134e217fd6a427acd3966580a002fd64962b0b03a25763a56c222430d70ff"
+    },
+    {
+      "path": "TreeDB/node/builder_work.go",
+      "size": 2443,
+      "sha256": "a9e6d4d6765b60943130482699881f05a9d1d3caba27bd5c8a10ccb5354c6932"
+    },
+    {
+      "path": "TreeDB/node/builder_work_test.go",
+      "size": 1668,
+      "sha256": "7210ff16a5224a1240c6839e3d0686d7ebdec41a17b40b8c8744912bcf252471"
+    }
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "go_source_rows_verified": 4329,
+  "protected_fixture_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "merged": false,
+  "qualification": "Construction checkpoint only: encoder, resumed-capacity admission and both public captured-leaf probes PASS. Actual storage refuses original backing capacity before installation; no stored DATA, bounded installed-page abort, public prune, final Q32, performance or merge acceptance.",
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "a92160421b89317de9a231e1bcb68b1a4093e00b",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "all_working_source_preserved": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}
