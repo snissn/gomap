@@ -1,0 +1,70 @@
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 7cb81eb0a..5a0433f71 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -3434,6 +3434,15 @@ func (db *DB) closeAfterHooks() error {
+ 	db.clearFlushApplyReadOnlyPrepareBuffers()
+ 	db.writeMu.Unlock()
+ 
++	// The SAME native receipt can own physical Finish while its publication
++	// turn is already released. Join it before teardownMu/Stop: later capture
++	// teardown is deliberately too late for this original publication join.
++	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
++		if err := runtime.coordinator.JoinNativePublicationsV6(context.Background()); err != nil {
++			errs = append(errs, fmt.Errorf("join native root publication: %w", err))
++		}
++	}
++
+ 	// A root producer releases writeMu after transferring its immutable build to
+ 	// the durable publisher, but it keeps teardownMu for reading until enqueue,
+ 	// admission, and ordered post-work have completed. Cross the teardown gate
+diff --git a/TreeDB/internal/rootpublication/coordinator.go b/TreeDB/internal/rootpublication/coordinator.go
+index 17cec305a..2f41d6093 100644
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -101,6 +101,8 @@ type Coordinator struct {
+ 	retryAttempt           PublishAttempt
+ 	reportingAttempt       bool
+ 	activeDispatch         uint64
++	nativeDispatchV6       uint64
++	nativePublicationsV6   *NativePublicationV6
+ 
+ 	resourceCoalesces    uint64
+ 	resourceConflicts    uint64
+@@ -354,6 +356,15 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
+ 			sets = append(sets, resources)
+ 		}
+ 	}
++	// Fenced native receipts have left pending, but their original physical
++	// resources remain recovery-reachable until SAME Finish consumes them.
++	for receipt := c.nativePublicationsV6; receipt != nil; receipt = receipt.next {
++		if receipt.fenced && receipt.candidate != nil {
++			if set := receipt.candidate.resourceSet(); set != nil && set.Owner() == ResourceOwnerCoordinator {
++				sets = append(sets, set)
++			}
++		}
++	}
+ 	sets = append(sets, c.recoverySets...)
+ 	var resources *StableResourceSet
+ 	if len(sets) != 0 {
+@@ -647,6 +658,11 @@ func (c *Coordinator) endDrain(target *drainRequest) {
+ // waits for the single scheduler goroutine. It does not silently claim pending
+ // debt was durable.
+ func (c *Coordinator) Stop(ctx context.Context) error {
++	// A caller-owned Finish may be idle between bounded calls. Join its SAME
++	// original receipt before stopping the scheduler, outside coordinator locks.
++	if err := c.JoinNativePublicationsV6(ctx); err != nil {
++		return err
++	}
+ 	c.mu.Lock()
+ 	if c.stopped {
+ 		err := c.stopErr
+@@ -765,7 +781,7 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
+ 
+ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
+ 	c.mu.Lock()
+-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
++	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && !c.pendingNativeOwnedV6() && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+ 	if !ready {
+ 		c.mu.Unlock()
+ 		return false, primaryPublicationCompletionV6{}
