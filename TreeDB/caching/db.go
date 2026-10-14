@@ -8959,7 +8959,11 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
-	cow                          *cowCache
+	cow *cowCache
+	// One original cache-lifetime governor for native legacy captures. COW
+	// uses cow.budget. Every original metadata owner enrolls on this same budget.
+	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
+	nativeMVCCLimits             memtable.COWLimits
 	writeWaitForCheckpointActive atomic.Int64
 
 	mu          sync.RWMutex
@@ -12500,6 +12504,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
 	cowMode := modeStr == "cow_btree"
+	nativeMVCCLimits := opts.COWMemtableLimits
+	if nativeMVCCLimits == (memtable.COWLimits{}) {
+		nativeMVCCLimits = memtable.DefaultCOWLimits()
+	}
+	if err := nativeMVCCLimits.Validate(); err != nil {
+		return nil, err
+	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -13223,6 +13234,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
 	db.cow = cowOwner
+	db.nativeMVCCLimits = nativeMVCCLimits
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
@@ -26427,6 +26439,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	defer db.closeNativeMVCCBudgetV6()
 	// Keep actual producer governors live through the final backend checkpoint,
 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
 	if db.cow != nil {
@@ -38395,7 +38408,15 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needLaneForJournal := !b.db.disableJournal
 	reserveLane := durability == journalDurabilitySync || materializeCommandWALPointers
 	if needLaneForPointers || needLaneForJournal {
-		l, err := b.db.pickLane(reserveLane, -1)
+		preferredLane := -1
+		if b.db.cow != nil && b.db.externalCommandWAL && b.commandWALAppend != nil &&
+			!syncWrite && (durability == journalDurabilityNone || durability == journalDurabilityFlush) && needLaneForPointers && !needLaneForJournal &&
+			len(b.entries) == 1 && b.entries[0].Type == batch.OpPut && !b.entries[0].IsPtr && len(b.entries[0].Value) > 0 {
+			// Match ordinary command-WAL point placement without changing the
+			// batch producer, canonical preparation, or COW publication path.
+			preferredLane = b.db.laneForShardIndex(shardIdxs[0])
+		}
+		l, err := b.db.pickLane(reserveLane, preferredLane)
 		if err != nil {
 			unlockWriteMu()
 			return err

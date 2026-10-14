@@ -45,6 +45,7 @@ type indexGen struct {
 	wrapperMu         sync.Mutex
 	wrapperBorrows    uint64
 	physicalCompleted bool
+	closeCompleted    bool
 	failedSnapshots   *Snapshot
 
 	closeOnce sync.Once
@@ -125,19 +126,20 @@ func (g *indexGen) release() int32 {
 func (g *indexGen) close() error {
 	g.closeOnce.Do(func() {
 		defer func() {
+			g.wrapperMu.Lock()
+			g.closeCompleted = true
 			if g.closeErr != nil {
 				g.closeErr = g.originalCloseFailure(g.closeErr)
 				if g.metadata != nil {
 					g.metadata.CleanupFailed()
 				}
+				g.wrapperMu.Unlock()
 				return
 			}
 			// A successful pager/generation action is not yet successful
 			// startup Manager/LOCK cleanup. Keep the original containing
 			// payload until the SAME startup completion edge consumes it.
-			g.wrapperMu.Lock()
 			g.physicalCompleted = true
-			g.scrubAndRefundGenerationLocked()
 			g.wrapperMu.Unlock()
 		}()
 		g.clearPrimaryRecoveryLeasesV5()
@@ -222,9 +224,26 @@ func (g *indexGen) retainWrapperBorrow() {
 	g.wrapperBorrows++
 	g.wrapperMu.Unlock()
 }
-func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, err error) {
+
+// The caller consumes this by-value original completion only after clearing
+// generation aliases. No containing refund runs while wrapperMu is held.
+func (g *indexGen) releaseWrapperBorrowCompletionV6(snapshot *Snapshot, cleanupErr error) (metadata *retainedalloc.Owner, charge uint64, err error) {
 	g.wrapperMu.Lock()
+	err = cleanupErr
+	if err == nil && g.closeCompleted {
+		err = g.closeErr
+	}
 	if err != nil {
+		if snapshot == nil && cleanupErr == nil {
+			// This caller successfully disposed its own scope. Reporting an
+			// already failed physical generation does not leave a phantom
+			// scope borrow; closeFailure and metadata retain that exact debt.
+			if g.wrapperBorrows == 0 {
+				g.wrapperMu.Unlock()
+				panic("generation completed scope borrow underflow")
+			}
+			g.wrapperBorrows--
+		}
 		if snapshot != nil {
 			snapshot.generationFailedNext = g.failedSnapshots
 			g.failedSnapshots = snapshot
@@ -236,28 +255,64 @@ func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, err error) {
 		if snapshot != nil {
 			g.closeFailure.retainCause(2, err)
 		}
-		return
+		return nil, 0, err
 	}
 	g.wrapperBorrows--
-	g.scrubAndRefundGenerationLocked()
+	metadata, charge = g.detachGenerationMetadataLockedV6()
 	g.wrapperMu.Unlock()
+	return metadata, charge, nil
 }
-func (g *indexGen) scrubAndRefundGeneration() {
-	g.wrapperMu.Lock()
-	defer g.wrapperMu.Unlock()
-	g.scrubAndRefundGenerationLocked()
-}
-func (g *indexGen) scrubAndRefundGenerationLocked() {
-	if !g.physicalCompleted || g.wrapperBorrows != 0 || g.startupDB != nil || g.closeErr != nil {
-		return
+
+func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, cleanupErr error) {
+	metadata, charge, _ := g.releaseWrapperBorrowCompletionV6(snapshot, cleanupErr)
+	g = nil
+	if charge != 0 {
+		metadata.RemovePending(charge)
 	}
-	if g.metadata == nil {
-		return
+}
+
+// Close completion remains in the original wrapper borrow until the physical
+// close call has returned. The caller consumes only by-value accounting after
+// clearing its generation/discovery aliases.
+func (g *indexGen) closeWithCompletionV6() (metadata *retainedalloc.Owner, charge uint64, err error) {
+	g.retainWrapperBorrow()
+	err = g.close()
+	g.wrapperMu.Lock()
+	// This edge covers the physical call scope only. A failed close retains
+	// the SAME closeFailure payload and metadata debt, while each failed
+	// Snapshot retains its separate original wrapper borrow.
+	if g.wrapperBorrows == 0 {
+		g.wrapperMu.Unlock()
+		panic("generation Close call borrow underflow")
+	}
+	g.wrapperBorrows--
+	if err == nil {
+		metadata, charge = g.detachGenerationMetadataLockedV6()
+	}
+	g.wrapperMu.Unlock()
+	return metadata, charge, err
+}
+
+func (g *indexGen) detachGenerationMetadataCompletionV6() (metadata *retainedalloc.Owner, charge uint64, err error) {
+	g.wrapperMu.Lock()
+	if g.closeCompleted {
+		err = g.closeErr
+	}
+	if err == nil {
+		metadata, charge = g.detachGenerationMetadataLockedV6()
+	}
+	g.wrapperMu.Unlock()
+	return metadata, charge, err
+}
+
+func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uint64) {
+	if !g.physicalCompleted || g.wrapperBorrows != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
+		return nil, 0
 	}
 	metadata, charge := g.metadata, g.metadataCharge
 	g.pager, g.allocator, g.zipper = nil, nil, nil
 	g.registry, g.graveyard = nil, nil
 	g.primary, g.primaryOwner = nil, nil
 	g.metadata, g.metadataCharge = nil, 0
-	metadata.RemovePending(charge)
+	return metadata, charge
 }

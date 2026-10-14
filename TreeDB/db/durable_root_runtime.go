@@ -310,14 +310,22 @@ func (candidate *durableRootPublishCandidateV1) release() error {
 	idx, borrowed := candidate.idx, candidate.generationBorrowed
 	candidate.metadata, candidate.metadataCharge = nil, 0
 	candidate.idx, candidate.db, candidate.generationBorrowed = nil, nil, false
+	var generationOwner *retainedalloc.Owner
+	var generationCharge uint64
+	var generationErr error
+	if borrowed {
+		generationOwner, generationCharge, generationErr = idx.releaseWrapperBorrowCompletionV6(nil, nil)
+	}
+	idx = nil
+	candidate.disposalMu.Unlock()
+	candidate = nil
 	if owner != nil {
 		owner.RemovePending(charge)
 	}
-	if borrowed {
-		idx.releaseWrapperBorrow(nil, nil)
+	if generationCharge != 0 {
+		generationOwner.RemovePending(generationCharge)
 	}
-	candidate.disposalMu.Unlock()
-	return nil
+	return generationErr
 }
 
 func durableRootCandidateIDV1(current durableRootRuntimeV1, next page.MetaPageBody) freelist.CandidateIDV1 {

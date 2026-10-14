@@ -2,10 +2,12 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -123,6 +125,34 @@ func (o *rootCaptureCloseOperations) SyncThrough(*os.File, rootpublication.Durab
 
 func TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
+	original, operations, baseline := newRootCaptureCloseRefusal(t, database, path)
+	owner := database.valueLogIdentityPins.MetadataOwner()
+	file := operations.file
+	prior := errors.New("preexisting background error")
+	database.retainOriginalCleanupError(prior)
+	output := original
+	captureErr := errors.New("capture deferred cleanup failed")
+	database.finishResourceCapture(&output, &captureErr)
+	if output != nil || !errors.Is(captureErr, os.ErrClosed) {
+		t.Fatalf("error result=%p error=%v want disposed result and actual Close cause", output, captureErr)
+	}
+	retained := database.backgroundError()
+	if !errors.Is(retained, os.ErrClosed) || !errors.Is(retained, prior) {
+		t.Fatalf("existing DB error graph lost original/sibling: %v", retained)
+	}
+	if owner.Bytes() <= baseline || owner.PhysicalClosed() || operations.file != file {
+		t.Fatalf("failed original payload/refund bytes=%d baseline=%d closed=%t file=%p", owner.Bytes(), baseline, owner.PhysicalClosed(), operations.file)
+	}
+	if repeated := original.ReleaseWithError(); !errors.Is(repeated, os.ErrClosed) {
+		t.Fatalf("repeated original outcome=%v", repeated)
+	}
+	if operations.closeCalls.Load() != 1 || operations.refs.Load() != 0 {
+		t.Fatalf("physical replay calls=%d refs=%d", operations.closeCalls.Load(), operations.refs.Load())
+	}
+}
+
+func newRootCaptureCloseRefusal(t *testing.T, database *DB, path string) (*rootpublication.StableResourceSet, *rootCaptureCloseOperations, uint64) {
+	t.Helper()
 	owner := database.valueLogIdentityPins.MetadataOwner()
 	baseline := owner.Bytes()
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootCaptureCloseOperations{})))
@@ -174,23 +204,38 @@ func TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal(
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	} // genuine last physical Close refusal
-	prior := errors.New("preexisting background error")
+	return original, operations, baseline
+}
+
+// Admission refusal must still return the actual original root-set cleanup
+// outcome, rather than merely recording that physical failure in background state.
+func TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	roots, err := database.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, operations, _ := newRootCaptureCloseRefusal(t, database, path)
+	if len(roots.resources) == cap(roots.resources) {
+		t.Fatal("original fixed root storage exhausted")
+	}
+	roots.resources = append(roots.resources, original)
+	prior := errors.New("prior vacuum background failure")
 	database.retainOriginalCleanupError(prior)
-	output := original
-	captureErr := errors.New("capture deferred cleanup failed")
-	database.finishResourceCapture(&output, &captureErr)
-	if output != nil || !errors.Is(captureErr, os.ErrClosed) {
-		t.Fatalf("error result=%p error=%v want disposed result and actual Close cause", output, captureErr)
+	database.vacuumInProgress.Store(true)
+	err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Time{}, nil)
+	database.vacuumInProgress.Store(false)
+	if !errors.Is(err, ErrVacuumInProgress) || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("vacuum result=%v want admission and actual original Close refusal", err)
 	}
-	retained := database.backgroundError()
-	if !errors.Is(retained, os.ErrClosed) || !errors.Is(retained, prior) {
-		t.Fatalf("existing DB error graph lost original/sibling: %v", retained)
+	if !errors.Is(database.backgroundError(), prior) || !errors.Is(database.backgroundError(), os.ErrClosed) {
+		t.Fatalf("original sibling custody lost: %v", database.backgroundError())
 	}
-	if owner.Bytes() <= baseline || owner.PhysicalClosed() || operations.file != file {
-		t.Fatalf("failed original payload/refund bytes=%d baseline=%d closed=%t file=%p", owner.Bytes(), baseline, owner.PhysicalClosed(), operations.file)
+	if roots.metadataCharge == 0 || roots.custody == nil || operations.file == nil {
+		t.Fatal("failed original root/callback payload was scrubbed or refunded")
 	}
-	if repeated := original.ReleaseWithError(); !errors.Is(repeated, os.ErrClosed) {
-		t.Fatalf("repeated original outcome=%v", repeated)
+	if repeated := roots.ReleaseWithError(); !errors.Is(repeated, os.ErrClosed) {
+		t.Fatalf("repeated=%v", repeated)
 	}
 	if operations.closeCalls.Load() != 1 || operations.refs.Load() != 0 {
 		t.Fatalf("physical replay calls=%d refs=%d", operations.closeCalls.Load(), operations.refs.Load())

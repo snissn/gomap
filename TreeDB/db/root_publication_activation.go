@@ -338,10 +338,14 @@ func rootPublicationFrontierV1(meta page.MetaPageBody) rootpublication.Frontier 
 }
 
 func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
+	return db.initializeRootPublicationRuntimeModeV1(idx, false)
+}
+
+func (db *DB) initializeRootPublicationRuntimeModeV1(idx *indexGen, startup bool) error {
 	if db == nil || idx == nil || db.durableRoot.record.CommitSeq == 0 {
 		return errors.New("missing root-publication durable base")
 	}
-	runtime, err := newRootPublicationRuntimeV1(db, idx, db.durableRoot, db.meta)
+	runtime, err := newRootPublicationRuntimeModeV1(db, idx, db.durableRoot, db.meta, startup)
 	if err != nil {
 		return err
 	}
@@ -350,6 +354,10 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 }
 
 func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody) (*rootPublicationRuntimeV1, error) {
+	return newRootPublicationRuntimeModeV1(db, idx, durable, visible, false)
+}
+
+func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody, startup bool) (*rootPublicationRuntimeV1, error) {
 	if idx != nil && idx.primary != nil && idx.primary.CapsuleFormatV6() {
 		idx.zipper.SetPrimaryConstructorV6(rootpublication.NewPrimaryConstructionTransactionV6)
 	}
@@ -383,6 +391,7 @@ func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRunti
 	}
 	coordinator, err := rootpublication.New(rootpublication.Options{
 		Publisher:                  runtime,
+		StartupSynchronous:         startup,
 		FixedPublishDelay:          db.rootPublicationFixedDelay,
 		InitialDurableFrontier:     rootPublicationFrontierV1(visible),
 		OldestRecoverableCommitSeq: oldest,
@@ -994,10 +1003,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		memberMetadataOwned = false
 		install.metadataCharge = 0
 	} else {
+		transactionSpec.TerminalMetadataOwnerV6 = install.metadata
 		transaction, err = rootpublication.NewDurableRootTransaction(transactionSpec)
 		if err != nil {
 			return nil, false, err
 		}
+		install.metadataCharge = 0 // SAME transaction terminal node owns the admitted header.
 	}
 	member.transaction = transaction
 	preparedOwned = false
@@ -1319,7 +1330,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// and debt prefix in their fixed publisher tranche. Keep their admission
 	// token live until the coordinator has completed that work, including on
 	// command-WAL databases where ordinary commits may return after admission.
-	if opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
+	if runtime.coordinator.StartupSynchronous() || opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
 		durabilityStart := time.Now()
 		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
 			if opts.publishTiming != nil {
@@ -2011,14 +2022,22 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	runtime.metadata, runtime.metadataCharge = nil, 0
 	runtime.idx, runtime.db, runtime.generationBorrowed = nil, nil, false
 	runtime.disposalFailure.payload = nil
+	var generationOwner *retainedalloc.Owner
+	var generationCharge uint64
+	var generationErr error
+	if borrowed {
+		generationOwner, generationCharge, generationErr = idx.releaseWrapperBorrowCompletionV6(nil, nil)
+	}
+	idx = nil
+	runtime.disposalMu.Unlock()
+	runtime = nil
 	if owner != nil {
 		owner.RemovePending(charge)
 	}
-	if borrowed {
-		idx.releaseWrapperBorrow(nil, nil)
+	if generationCharge != 0 {
+		generationOwner.RemovePending(generationCharge)
 	}
-	runtime.disposalMu.Unlock()
-	return nil
+	return generationErr
 }
 
 // visibleMember is a borrowed DB projection of the actual registered owner.

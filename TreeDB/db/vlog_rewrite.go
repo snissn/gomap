@@ -3176,21 +3176,41 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		return stats, err
 	}
 
+	// Reuse the successful Open's original generation/receipt before any
+	// rewrite setup. Every return joins checked source disposal, and a hard
+	// refusal retains that exact source/Manager/LOCK without a new keeper.
+	source := d.idx.Load()
+	source.retainOfflineSourceV1(d, lock)
+	defer func() {
+		metadata, charge, completionErr := source.finishOfflineSourceV1(retErr)
+		source, d = nil, nil
+		retErr = completionErr
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+
 	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
 	var offlineScope *indexGen
 	var offlineParent *os.File
 	if capsuleRewrite {
 		offlineScope, err = d.captureOfflinePrimaryScopeV6()
 		if err != nil {
-			return stats, errors.Join(err, d.Close())
+			return stats, err
 		}
 		offlineParent = offlineScope.stableNamespaceParent
-		defer func() { retErr = errors.Join(retErr, offlineScope.releaseOfflineNamespaceScopeV6()) }()
+		defer func() {
+			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
+			offlineScope, offlineParent = nil, nil
+			retErr = errors.Join(retErr, cleanupErr)
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}()
 	}
 
 	state := d.State()
 	if state == nil {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: missing db state")
 	}
 	acquiredValueLogManager := d.valueLogManager
@@ -3199,18 +3219,20 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		d.valueLogManager.Acquire(acquiredValueLogSet)
 		defer func() {
 			if acquiredValueLogSet != nil {
-				_ = acquiredValueLogManager.Release(acquiredValueLogSet)
+				original := acquiredValueLogSet
+				acquiredValueLogSet = nil
+				cleanupErr := acquiredValueLogManager.Release(original)
+				d.retainOriginalCleanupError(cleanupErr)
+				retErr = errors.Join(retErr, cleanupErr)
 			}
 		}()
 	}
 	if state.ValueLogSet == nil || len(state.ValueLogSet.Files) == 0 {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: no value-log segments found")
 	}
 
 	beforeSegs, beforeBytes, err := valueLogSegmentStats(opts.Dir)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	stats.SegmentsBefore = beforeSegs
@@ -3219,12 +3241,10 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	reader := newValueReader(state.ValueLogSet)
 	collectionRootDescriptors, err := vacuumCollectCollectionRootDescriptors(d.Pager(), reader, state.SystemRootPageID)
 	if err != nil {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
 	collectionRootLeafLogUsage, _, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog
@@ -3237,7 +3257,6 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	}
 	nextRID, err := rewriteRIDStartScanner(segments)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	maxBytes := opts.WALMaxSegmentBytes
@@ -3256,6 +3275,15 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	}
 	layout := resolveStorageLayout(opts.Dir)
 	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes, d.valueLogIdentityPins)
+	writerCleanupAttempted := false
+	defer func() {
+		if !writerCleanupAttempted {
+			writerCleanupAttempted = true
+			cleanupErr := writer.Close()
+			d.retainOriginalCleanupError(cleanupErr)
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 	if rewriteUsesLeafLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
 	}
@@ -3272,10 +3300,8 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, rewriteUsesLeafLog)
 	if err := writer.ensureWriter(); err != nil {
-		_ = d.Close()
 		return stats, err
 	}
-	defer func() { _ = writer.Close() }()
 
 	indexPath := filepath.Join(opts.Dir, indexFileName)
 	newPath := filepath.Join(opts.Dir, indexNewFileName)
@@ -3287,16 +3313,14 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	if capsuleRewrite {
 		pair, err = d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
 		if err != nil {
-			return stats, errors.Join(err, d.Close())
+			return stats, err
 		}
 		newPager = pair.pager
 	} else {
 		if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
-			_ = d.Close()
 			return stats, err
 		}
 		if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
-			_ = d.Close()
 			return stats, err
 		}
 
@@ -3304,17 +3328,14 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		newCreated := os.IsNotExist(newStatErr)
 		newPager, err = pager.Open(newPath, opts.ChunkSize)
 		if err != nil {
-			_ = d.Close()
 			return stats, err
 		}
 		if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
 			_ = newPager.Close()
-			_ = d.Close()
 			return stats, err
 		}
 		if _, err := newPager.Alloc(2); err != nil {
 			_ = newPager.Close()
-			_ = d.Close()
 			return stats, err
 		}
 
@@ -3330,7 +3351,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	if pair != nil {
 		staging, identityErr := primaryJointDecisionForV6(offlineParent, pair, durableRootSelectionV1{})
 		if identityErr != nil {
-			return stats, errors.Join(identityErr, pair.close(), d.Close())
+			return stats, errors.Join(identityErr, pair.close())
 		}
 		defer func() {
 			closeErr := pair.close()
@@ -3346,14 +3367,12 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet)
 	if err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 	if writer.blockCompression && rewriteUsesLeafLog {
 		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
 			_ = closeReplacement()
-			_ = d.Close()
 			return stats, err
 		}
 		if leafDictID != 0 && len(leafDictBytes) > 0 {
@@ -3445,10 +3464,9 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		roots, captureErr := d.CaptureRecoverableRootSetForInspection(context.Background())
 		if captureErr != nil {
 			_ = closeReplacement()
-			_ = d.Close()
 			return stats, captureErr
 		}
-		defer roots.Release()
+		defer func() { retErr = errors.Join(retErr, d.retainResourceCleanupError(roots.ReleaseWithError())) }()
 
 		produce := func(root RecoverableRoot) (rebuilt rebuiltDurableRootV1, err error) {
 			snapshot := roots.AcquireSnapshotForRoot(root)
@@ -3457,9 +3475,10 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			}
 			defer func() {
 				if closeErr := snapshot.Close(); closeErr != nil {
-					rebuilt.resources.Release()
+					original := rebuilt.resources
 					rebuilt = rebuiltDurableRootV1{}
-					err = errors.Join(err, closeErr)
+					err = errors.Join(err, closeErr, d.releaseCapturedRootResources(original))
+					d.retainOriginalCleanupError(closeErr)
 				}
 			}()
 			descriptors, e := vacuumCollectCollectionRootDescriptors(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID)
@@ -3490,22 +3509,28 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
-			registered.Release()
+			if e = d.releaseCapturedRootResources(registered); e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
 			sourceResources, _, _, _ := roots.resourcesForRootExact(root)
 			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)
 			return rebuiltDurableRootV1{meta: meta, resources: resources}, e
 		}
 		offlineFinishOwnsCleanup = true
 		err = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, true, func() error {
+			writerCleanupAttempted = true
 			closeErr := writer.Close()
+			d.retainOriginalCleanupError(closeErr)
 			if acquiredValueLogSet != nil {
-				closeErr = errors.Join(closeErr, acquiredValueLogManager.Release(acquiredValueLogSet))
+				original := acquiredValueLogSet
 				acquiredValueLogSet = nil
+				cleanupErr := acquiredValueLogManager.Release(original)
+				d.retainOriginalCleanupError(cleanupErr)
+				closeErr = errors.Join(closeErr, cleanupErr)
 			}
 			return closeErr
 		})
 		if err != nil {
-			_ = d.Close()
 			return stats, err
 		}
 		// All selected/alternate/proof pointers now name the committed pair's
@@ -3523,7 +3548,6 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)
 	if err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 
@@ -3538,14 +3562,12 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 
 	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 
@@ -3558,36 +3580,57 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 
 	if err := writer.Sync(); err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 	durableResources, err := captureOfflineRewriteDurableResourcesV1(d, writer)
 	if err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
-	defer durableResources.Release()
+	defer func() {
+		if durableResources != nil {
+			original := durableResources
+			durableResources = nil
+			retErr = errors.Join(retErr, d.releaseCapturedRootResources(original))
+		}
+	}()
 	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
 		_ = closeReplacement()
-		_ = d.Close()
 		return stats, err
 	}
 	if runtime.GOOS != "windows" {
 		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
 			_ = closeReplacement()
-			_ = d.Close()
 			return stats, err
 		}
 	}
 	if err := newPager.Close(); err != nil {
-		_ = d.Close()
 		return stats, err
+	}
+	// Finish the original temporary durable-resource edge before source Close
+	// or canonical replacement; a failed last action cannot become late debt
+	// hidden behind a previously successful DB.Close.
+	originalResources := durableResources
+	durableResources = nil
+	cleanupErr := d.releaseCapturedRootResources(originalResources)
+	originalResources = nil
+	writerCleanupAttempted = true
+	writerErr := writer.Close()
+	d.retainOriginalCleanupError(writerErr)
+	cleanupErr = errors.Join(cleanupErr, writerErr)
+	if acquiredValueLogSet != nil {
+		original := acquiredValueLogSet
+		acquiredValueLogSet = nil
+		setErr := acquiredValueLogManager.Release(original)
+		d.retainOriginalCleanupError(setErr)
+		cleanupErr = errors.Join(cleanupErr, setErr)
+	}
+	if cleanupErr != nil {
+		return stats, cleanupErr
 	}
 	if err := d.Close(); err != nil {
 		return stats, err

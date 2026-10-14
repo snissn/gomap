@@ -31,7 +31,7 @@ type primaryRebuildScratchV5 struct {
 	sequences        [4]uint64
 	inputs           [4]rebuiltPrimaryRootV5
 	built            [4]rebuiltPrimaryOwnedRecordV5
-	privateResources [2]*rootpublication.StableResourceSet
+	privateResources [4]*rootpublication.StableResourceSet
 	count            int
 }
 
@@ -64,14 +64,14 @@ func (s *primaryRebuildScratchV5) put(seq uint64, input rebuiltPrimaryRootV5) er
 // genuine DATA generation owns every rebuilt slot/proof tree. Its sequence is
 // the earliest retained record's commit; later bank-only records retain that
 // exact generation. No old DATA generation or bank image is relabelled.
-func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
-	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil)
+func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil, leafManifest)
 }
 
 // produce is synchronous construction work. It is never stored in a root or
 // runtime: offline value-log rewrite must rewrite proof pointers with the same
 // producer as the two slots, rather than copying old value-log dependencies.
-func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error)) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
 	if idx == nil || idx.primaryOwner == nil || roots == nil {
 		return selected, nil, rootpublication.ErrResourceOwnership
 	}
@@ -99,7 +99,6 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 	if e := scratch.put(latest.meta.CommitSeq, rebuiltPrimaryRootV5{root: latest, source: source.slotRecord[source.slot]}); e != nil {
 		return selected, nil, e
 	}
-	privateResources := scratch.privateResources[:0]
 	// Only the two explicitly retained one-hop proofs participate. Their own
 	// parent fields are not followed or used for lookup or ownership.
 	for proofSlot, proof := range source.primaryProof {
@@ -126,9 +125,20 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 			return selected, nil, e
 		}
 		rebuilt.meta.LastCommitHeight = record.LastCommitHeight
-		privateResources = append(privateResources, rebuilt.resources)
 		if e = scratch.put(record.CommitSeq, rebuiltPrimaryRootV5{root: rebuilt, source: record}); e != nil {
+			return selected, nil, errors.Join(e, db.releaseCapturedRootResources(rebuilt.resources))
+		}
+		scratch.privateResources[scratch.index(record.CommitSeq)] = rebuilt.resources
+	}
+	// Proof trees can create real outer-leaf segments too. Freeze their complete
+	// original producer closure only after every retained root has been built.
+	if db.indexOuterLeavesInValueLog {
+		persisted, e := db.prepareRebuiltPrimaryLeafManifestV5(scratch, latest.meta.CommitSeq)
+		if e != nil {
 			return selected, nil, e
+		}
+		if leafManifest != nil {
+			*leafManifest = persisted
 		}
 	}
 	// Sort the fixed inputs together without an allocated map or sort closure.
@@ -283,7 +293,7 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 	if e != nil {
 		return selected, nil, e
 	}
-	defer namespace.Release()
+	defer func() { err = errors.Join(err, db.retainResourceCleanupError(namespace.ReleaseWithError())) }()
 	if a.CapsuleFormatV6() {
 		if e = p.Sync(); e != nil {
 			return selected, nil, e
@@ -470,4 +480,63 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 	runtime.slotResources = [2]*rootpublication.StableResourceSet{}
 	owned, published = false, true
 	return selected, runtime, nil
+}
+
+// prepareRebuiltPrimaryLeafManifestV5 seals one original manifest producer after
+// all retained physical trees exist. Each input receives its own checked resource
+// edge; the same admitted scratch retains those edges until construction ends.
+func (db *DB) prepareRebuiltPrimaryLeafManifestV5(s *primaryRebuildScratchV5, commit uint64) (persisted *leafGenerationManifest, err error) {
+	db.mu.RLock()
+	base := db.leafGenerationManifest
+	candidate, _, e := db.stagedLeafGenerationManifestWithPending(base, 0, commit)
+	db.mu.RUnlock()
+	if e != nil {
+		return nil, e
+	}
+	if db.leafGenerationManifestStore == nil {
+		return nil, rootpublication.ErrUnresolvedResource
+	}
+	if db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {
+		persisted = candidate.clone()
+		err = db.persistLeafGenerationManifestAndRecordLengthIndexes(persisted, nil)
+		return persisted, err
+	}
+	if db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		return nil, rootpublication.ErrNamespacePersistenceUnsupported
+	}
+	closure, persisted, e := db.prepareLeafGenerationManifestStableCandidate(candidate)
+	if e != nil {
+		return nil, e
+	}
+	defer func() { err = errors.Join(err, closure.ReleaseWithError()) }()
+	manifest, e := closure.TakeStableResources()
+	if e != nil {
+		return nil, e
+	}
+	defer func() { err = errors.Join(err, db.releaseCapturedRootResources(manifest)) }()
+	for i := 0; i < s.count; i++ {
+		original := s.inputs[i].root.resources
+		replaced, e := db.replaceDurableRootManifestResourcesV1(original, manifest)
+		if e != nil {
+			return nil, e
+		}
+		// The preborn scratch owns the successor before consuming its predecessor.
+		ownedOriginal := false
+		for j, old := range s.privateResources {
+			if old == original {
+				ownedOriginal = true
+				s.privateResources[j] = nil
+			}
+		}
+		s.privateResources[i] = replaced
+		s.inputs[i].root.resources = replaced
+		// Caller-owned slot inputs remain borrowed until that caller disposes
+		// them. Only original proof inputs belong to this scratch.
+		if ownedOriginal {
+			if e = db.releaseCapturedRootResources(original); e != nil {
+				return nil, e
+			}
+		}
+	}
+	return persisted, nil
 }

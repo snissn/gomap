@@ -5,6 +5,57 @@ This inventory binds the ordinary route extracted at
 The completion packet supplies the final source identity and command receipts;
 this document is a source/caller inventory, not a performance or review result.
 
+The first integrated 87ff generic-lifecycle normal batch is retained under
+`evidence/ordinary-5111/integrated-87ff-qualification-20261014`. It found
+a released empty directory losing its lease-history discriminator, a historical
+mmap fixture bypassing Manager file-alias birth, a construction accessor hiding
+the unresolved root during failed cleanup, and startup command-WAL replay
+entering the DATA-only publisher with selected PRIMARY capsule authority.
+These are acceptance failures, not unsupported-test waivers. The ordinary
+directory and mmap corrections have focused normal/race receipts; shared
+constructor and startup publication corrections must be integrated and tested
+before the full packet qualifies. Every allocation-group row remains open
+until its actual containing, alias, caller and final physical action evidence
+is bound to the mature integrated candidate.
+
+A released directory-backed Set retains only its scalar lease-history marker
+after successful cleanup. It cannot be reclassified as legacy flat diagnostic
+metadata when its consumed directory pointer is scrubbed. The marker belongs
+to the SAME containing Set and all selected containing admissions use actual
+`unsafe.Sizeof(StableResourceSet{})`; it adds no directory root or cleanup
+authority. Genuine generic flat diagnostic behavior remains separate.
+
+The mmap concurrency fixture reopens its original files through the production
+`Manager.RegisterSegment` constructor. That constructor admits the original
+File and creates its Manager alias edge before map publication. Tests retain
+the original simultaneous-read and replaced-handle admission assertions rather
+than overriding alias counters or suppressing underflow.
+
+Selected logical diagnostics use the original scoped kind borrow rather than
+legacy flattened descriptors. Their fixed scratch is bounded by the captured
+physical entry count and admitted before allocation on that SAME metadata
+owner. Canonical directory content, namespace, identity, frontier, exact RID,
+removal, producer deltas and complete obligation counts remain checked. The
+validator separately admits only its required matching flags and clears borrowed
+keys before refund; no borrowed logical output escapes its callback.
+
+Dictionary/template provider failures and all five stable leaf append wrappers,
+including the ChildRef batch, checked-dispose a nonnil returned original even
+when an operation also returns an error. The original DB error graph retains
+actual physical cleanup receipts, including a provider's nil-result receipt.
+An ordinary provider or validation refusal followed by successful disposal does
+not become fatal cleanup debt. Source-bound controls retain the predecessor
+dropped-result, swallowed physical error and overbroad poisoning diagnostics;
+successful cleanup and first-hard-failure custody use distinct assertions.
+
+The production authority fixtures select the actual captured producer owner
+before builder birth and use maintained metadata import across producer owners.
+Scoped physical diagnostics and token scopes finish before final pin/refund
+checks; complete logical obligations stream without inherited corpus copies.
+Their omission/retry, namespace, conflict, producer-shutdown and aggregate
+observations remain required. Focused normal/race evidence does not close any
+allocation group or replace the remaining integrated qualification.
+
 The stale-build publication witnesses are format-specific. The historical
 DATA V1 witness (generation 8) is preserved under
 `testdata/power_loss_legacy_stale_build_v1` with exact original source blobs and
@@ -370,3 +421,73 @@ the final caller already using that mutex/condition returns from completion;
 its final refund uses local owner/charge values and performs no later access to
 the containing closure. These focused controls do not qualify the pending
 native shared lifecycle integration or the complete nineteen-group gate.
+
+### Vacuum outer-leaf completion and canonical namespace custody
+
+PRIMARY rebuild uses the existing bulk outer-leaf writer and its original flush
+and segment-registration completion. Both durable slot roots and both embedded
+proof roots are built before the final leaf manifest and resource closure are
+sealed. Newly appended proof segments therefore belong to the exact published
+frontier. Replacing a scratch-owned resource predecessor consumes that edge;
+caller-owned slot resources remain borrowed and are not released by the scratch.
+
+The online joint replacement keeps its original admitted DATA parent through
+COMMIT, canonical roll-forward and marker removal. DATA and PRIMARY rebinding
+checks the retained parent's identity before releasing only the old creation
+proof. It constructs the canonical proof on that same handle and preserves any
+nonnil error result. A hard proof, Sync or Close refusal retains the original
+generation receipt, parent, proof and charge; repeated observation never replays
+the failed physical action. Successful namespace rebinding does not refund or
+close the generation's parent.
+
+The offline DATA replacement admits its original generation and physical
+parent/child handles before creation. Its existing startup receipt owns the
+source DB, replacement Pager and original LOCK until checked physical completion.
+A refused source or replacement Close returns that same fatal receipt. Successful
+siblings consume their own edges independently of another sibling's refusal.
+
+Focused normal and race controls cover those physical refusals, same-parent
+rebinding and the late-proof manifest/reopen boundary. The unchanged M4 outer-leaf
+backend cell observed index.db shrink from 393216 to 65536 bytes on the initial
+structural repair; leaf bytes grew from 73859 to 117938. This is an index-file
+observation, not a whole-root size claim or final-candidate qualification.
+Full M4, all nineteen groups, integrated native generic lifetimes, required
+platforms, current CI, independent review and matched complete-operation costs
+remain open. The read-only source's already-admitted generation now retains one
+original wrapper borrow before the first maintenance setup or replacement
+admission. Its existing startup fields retain the actual source DB, Manager and
+LOCK; the successful-Open cleanup guard is not recreated. An outer checked
+completion covers every early return, retains that same preborn fatal receipt
+on physical refusal, and clears original aliases before the caller refunds the
+by-value containing contribution after unlock. The coordinated generation-completion integration passes the selected
+32-control normal/race batch, including pre-replacement setup/admission,
+successful source drain, real physical Close refusal and concurrent original
+failure inspection. This focused caller evidence does not close the whole
+allocation, performance, platform or current-head CI gates.
+
+The same original source completion also covers `ValueLogRewriteOffline`,
+including no-segment and writer-setup refusals after read-only Open. Acquired
+Manager Set edges are marked consumed before checked Release, and the original
+rewrite Writer is closed once before source disposal. Actual physical failures
+enter the existing DB error graph and remain reachable through the original
+fatal source receipt and LOCK. A semantic refusal with successful physical
+cleanup releases the original LOCK and contributes no cleanup debt. The
+supported-profile no-segment physical-Close control has retained a genuine
+pre-change RED; its first command-WAL fixture stopped before source Open and is
+explicitly non-discriminating.
+
+Offline replacement and namespace-scope completion return the original
+MetadataOwner and consumed charge by value. The caller drops replacement,
+Pager, DB and scope aliases before refund, after the original locks are
+released. A successful physical sibling may return its own charge despite an
+operation error; a refused physical edge returns no containing refund and
+retains the first receipt. Parent-only success during another physical refusal
+refunds only the consumed parent handle, preserving the containing control.
+Completed transient generation Close-call borrows drain after the actual
+physical action, including refusal. The original failed Snapshot or maintenance
+source edge remains retained; the controls preserve their original borrow-count
+assertions. A physical namespace refusal after a successful source DB.Close
+still retains the same source generation, typed fatal receipt, LOCK and charge.
+Semantic operation errors with successful physical cleanup drain normally.
+The selected normal/race batch covers these distinctions against identical
+tested Go/module bytes; complete candidate qualification remains open.

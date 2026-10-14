@@ -871,38 +871,47 @@ func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReade
 		}
 	}
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, opts)
-	_ = sysIter.Close()
+	err = errors.Join(err, sysIter.Close())
 	if err != nil || !appendOuterLeaves {
 		return sysRoot, false, err
 	}
-	if err := db.leafPageLog.Flush(); err != nil {
+	if err := db.vacuumFinishOuterLeafBuild(newPager, sysRoot); err != nil {
 		return 0, false, err
+	}
+	return sysRoot, true, nil
+}
+
+// Complete the original outer-leaf producer before capturing a rebuilt root.
+// Both user and system materialization use this same flush/registration edge.
+func (db *DB) vacuumFinishOuterLeafBuild(newPager *pager.Pager, root uint64) error {
+	if err := db.leafPageLog.Flush(); err != nil {
+		return err
 	}
 	registered, err := db.registerLeafPageLogSegmentsForPublish()
 	if err != nil {
-		return 0, false, err
+		return err
 	}
 	if !registered {
 		if err := db.valueLogManager.Refresh(); err != nil {
-			return 0, false, err
+			return err
 		}
 		// Segment reporting is optional. Recover the exact appended leaf IDs
 		// from the rebuilt tree so manifest staging includes them too.
 		references := make(map[uint32]struct{})
-		if err := leafrefscan.WalkRoots(context.Background(), []uint64{sysRoot}, newPager.Get, nil, func(ptr page.LeafLogPtr) error {
+		if err := leafrefscan.WalkRoots(context.Background(), []uint64{root}, newPager.Get, nil, func(ptr page.LeafLogPtr) error {
 			references[ptr.ValueLogFileID()] = struct{}{}
 			return nil
 		}); err != nil {
-			return 0, false, err
+			return err
 		}
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
-			return 0, false, err
+			return err
 		}
 		for fileID := range references {
 			db.queueLeafGenerationWritableFileID(fileID)
 		}
 	}
-	return sysRoot, true, nil
+	return nil
 }
 
 type vacuumSystemRootRewriteIterator struct {

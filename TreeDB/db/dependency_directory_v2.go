@@ -134,19 +134,7 @@ func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootp
 	if idx.primary != nil && primaryarena.IsPage(ref.RootPageID) {
 		return db.pinPrimaryDependencyV5(idx, ref, idx.primary.Pager().PageCount())
 	}
-	registryID := idx.registry.Register(sequence)
-	release := func() {
-		idx.registry.Unregister(registryID)
-		if db.idx.Load() != idx {
-			db.maybeReleaseRetiredIndex(idx)
-		}
-	}
-	directory, err := rootpublication.NewDependencyDirectoryV2(idx.pager, ref, totalPages, release)
-	if err != nil {
-		release()
-		return nil, err
-	}
-	return directory, nil
+	return db.pinDataDependencyDirectoryV6(idx, sequence, ref, totalPages)
 }
 
 func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (*rootpublication.StableResourceSet, error) {

@@ -80,6 +80,9 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 			}
 		}
 	}
+	if key, value, found, eligible, err := s.cowSeekGEOneAdmitted(start, end); eligible || err != nil {
+		return key, value, found, err
+	}
 	return s.cowSeekGEMergeAdmitted(start, end)
 }
 
@@ -324,4 +327,49 @@ func (s *Snapshot) cowIteratorSources(start, end []byte, queue []memtable.Table,
 		sources = append(sources, merging.IteratorSource{Iter: disk, Priority: len(sources)})
 	}
 	return sources, nil
+}
+
+// cowSeekGEOneAdmitted compares one metadata candidate from every immutable
+// source on the retained cut. Unknown sources and physical tombstone winners
+// keep the existing full merge, including its suppression/advancement rules.
+func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, found, eligible bool, err error) {
+	queue := s.rootIterator.immutables
+	for _, source := range queue {
+		if _, ok := source.(memtable.SuccessorTable); !ok {
+			return nil, nil, false, false, nil
+		}
+	}
+	s.cowReadMu.Lock()
+	defer s.cowReadMu.Unlock()
+	w, err := s.cowWorkspaceLocked()
+	if err != nil {
+		return nil, nil, false, true, err
+	}
+	point, err := w.pointScratch()
+	if err != nil {
+		return nil, nil, false, true, err
+	}
+	disk, ok, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readLeaf)
+	if err != nil {
+		return nil, nil, false, true, err
+	}
+	best := pointSuccessorCandidate{key: disk.Key, value: disk.Value, ptr: disk.ValuePtr, flags: disk.Flags, revision: disk.Revision, priority: len(queue), found: ok}
+	for i := len(queue) - 1; i >= 0; i-- {
+		best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], start, end, nil, 0, len(queue)-1-i))
+	}
+	if !best.found {
+		return nil, nil, false, true, nil
+	}
+	if best.flags&node.FlagTombstone != 0 {
+		return nil, nil, false, false, nil
+	}
+	key = append([]byte(nil), best.key...)
+	borrowed := best.value
+	if best.flags&node.FlagPointer != 0 {
+		borrowed, err = w.read(best.ptr, false, nil)
+		if err != nil {
+			return nil, nil, false, true, err
+		}
+	}
+	return key, append([]byte(nil), borrowed...), true, true, nil
 }

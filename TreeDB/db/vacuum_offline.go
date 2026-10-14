@@ -78,15 +78,36 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		return err
 	}
 
+	// The source generation exists before maintenance writer setup and before
+	// replacement admission. Keep its SAME containing wrapper/receipt through
+	// every early return and checked physical source Close.
+	source := d.idx.Load()
+	source.retainOfflineSourceV1(d, lock)
+	defer func() {
+		metadata, charge, err := source.finishOfflineSourceV1(retErr)
+		source, d = nil, nil
+		retErr = err
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+
 	var offlineScope *indexGen
 	var offlineParent *os.File
 	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
 		offlineScope, err = d.captureOfflinePrimaryScopeV6()
 		if err != nil {
-			return errors.Join(err, d.Close())
+			return err
 		}
 		offlineParent = offlineScope.stableNamespaceParent
-		defer func() { retErr = errors.Join(retErr, offlineScope.releaseOfflineNamespaceScopeV6()) }()
+		defer func() {
+			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
+			offlineScope, offlineParent = nil, nil
+			retErr = errors.Join(retErr, cleanupErr)
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}()
 	}
 
 	var maintenanceLeafLog LeafPageLogCloser
@@ -97,7 +118,6 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 			BlockCodec:  opts.ValueLog.BlockCodec,
 		})
 		if err != nil {
-			_ = d.Close()
 			return err
 		}
 		d.SetLeafPageLog(maintenanceLeafLog)
@@ -109,12 +129,12 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
 		roots, e := d.CaptureRecoverableRootSetForInspection(context.Background())
 		if e != nil {
-			return errors.Join(e, d.Close())
+			return e
 		}
-		defer roots.Release()
+		defer func() { retErr = errors.Join(retErr, roots.ReleaseWithError()) }()
 		pair, e := d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
 		if e != nil {
-			return errors.Join(e, d.Close())
+			return e
 		}
 		newPager := pair.pager
 		produce := func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
@@ -127,12 +147,29 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 			}
 			return nil
 		})
-		return errors.Join(e, d.Close())
+		pair, newPager, produce = nil, nil, nil
+		return e
 	}
 
+	replacement, err := newStartupIndexGeneration(d, lock)
+	if err != nil {
+		return err
+	}
+	var newPager *pager.Pager
+	var alloc *pagerAllocator
+	defer func() {
+		if replacement == nil {
+			return
+		}
+		metadata, charge, completionErr := replacement.finishOfflineReplacementV1(retErr)
+		replacement, newPager, alloc = nil, nil, nil
+		retErr = completionErr
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
 	state := d.State()
 	if state == nil {
-		_ = d.Close()
 		return fmt.Errorf("vacuum: missing db state")
 	}
 	acquiredValueLogSet := state.ValueLogSet
@@ -140,7 +177,11 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		d.valueLogManager.Acquire(acquiredValueLogSet)
 		defer func() {
 			if acquiredValueLogSet != nil {
-				_ = d.valueLogManager.Release(acquiredValueLogSet)
+				releaseSet := acquiredValueLogSet
+				acquiredValueLogSet = nil
+				releaseErr := d.valueLogManager.Release(releaseSet)
+				d.retainOriginalCleanupError(releaseErr)
+				retErr = errors.Join(retErr, releaseErr)
 			}
 		}()
 	}
@@ -152,40 +193,31 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 
 	// Clean up any previous partial artifacts (best-effort).
 	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
 		return err
 	}
 	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
 		return err
 	}
 
 	_, newStatErr := os.Stat(newPath)
 	newCreated := os.IsNotExist(newStatErr)
-	newPager, err := pager.Open(newPath, opts.ChunkSize)
-	if err != nil {
-		_ = d.Close()
+	if err := replacement.openOfflineReplacementPagerV1(opts.Dir, opts.ChunkSize); err != nil {
 		return err
 	}
+	newPager = replacement.pager
 	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 
 	if _, err := newPager.Alloc(2); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 
-	alloc := &pagerAllocator{p: newPager}
+	alloc = &pagerAllocator{p: newPager}
 	reader := newValueReader(state.ValueLogSet)
 
 	collectionRootReplacements, err := vacuumRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, alloc, newPager)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 
@@ -199,14 +231,10 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	}
 	sysRoot, systemLeafAppended, err := d.vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 	if systemLeafAppended {
 		if err := maintenanceLeafLog.Sync(); err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 	}
@@ -215,23 +243,17 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if opts.IndexOuterLeavesInValueLog {
 		rootData, err := d.Pager().Get(state.RootPageID)
 		if err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 		rootNode := node.NewNode(rootData)
 		if rootNode.Type() == page.PageTypeLeaf {
 			userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
 			if err != nil {
-				_ = newPager.Close()
-				_ = d.Close()
 				return err
 			}
 		} else {
 			allLeafRefs, err := vacuumTreeAllLeafRefsIfComplete(d.Pager(), state.RootPageID)
 			if err != nil {
-				_ = newPager.Close()
-				_ = d.Close()
 				return err
 			}
 			if allLeafRefs {
@@ -240,8 +262,6 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
 			}
 			if err != nil {
-				_ = newPager.Close()
-				_ = d.Close()
 				return err
 			}
 		}
@@ -249,10 +269,8 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		userIter := tree.New(d.Pager(), reader, state.RootPageID).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		userRoot, err = bulk.BuildWithOptions(userIter, alloc, newPager, buildOpts)
-		_ = userIter.Close()
+		err = errors.Join(err, userIter.Close())
 		if err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 	}
@@ -270,14 +288,10 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		baseLeafManifest := d.leafGenerationManifest
 		d.mu.RUnlock()
 		if baseLeafManifest == nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return errors.New("vacuum: leaf generation manifest unavailable")
 		}
 		staged, err := d.stagedLeafGenerationManifestWithPendingResult(baseLeafManifest, 0, meta.CommitSeq)
 		if err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 		stagedLeafManifest = staged.manifest
@@ -285,18 +299,14 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 
 	durableResources, err := d.captureRebuiltIndexDurableResourcesV1(newPager, meta)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
-	defer func() { durableResources.Release() }()
+	defer func() { retErr = errors.Join(retErr, d.releaseCapturedRootResources(durableResources)) }()
 	if stagedLeafManifest != nil {
 		persistedManifest, preparedResources, _, err := d.prepareDurableRootManifestResourcesV1(
 			stagedLeafManifest, durableResources, nil,
 		)
 		if err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 		durableResources = preparedResources
@@ -306,61 +316,57 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	}
 	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 	if !outputHasLeafLogRefs {
 		if err := writeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 	}
 
 	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 	if fail == vacuumFailAfterNewSync {
-		_ = newPager.Close()
-		_ = d.Close()
 		return errVacuumFailpoint
 	}
 
 	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
 		return err
 	}
 	if runtime.GOOS != "windows" {
 		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
 			return err
 		}
 	}
 	if fail == vacuumFailAfterReady {
-		_ = newPager.Close()
-		_ = d.Close()
 		return errVacuumFailpoint
 	}
 
-	if err := newPager.Close(); err != nil {
-		_ = d.Close()
+	releaseResources := durableResources
+	durableResources = nil
+	if err := d.releaseCapturedRootResources(releaseResources); err != nil {
+		return err
+	}
+
+	if err := replacement.close(); err != nil {
 		return err
 	}
 	if acquiredValueLogSet != nil {
 		releaseSet := acquiredValueLogSet
 		acquiredValueLogSet = nil
 		if err := d.valueLogManager.Release(releaseSet); err != nil {
-			_ = d.Close()
+			d.retainOriginalCleanupError(err)
 			return err
 		}
 	}
-	if err := d.Close(); err != nil {
-		return err
+	metadata, charge, completionErr := replacement.finishOfflineReplacementV1(nil)
+	replacement, newPager, alloc = nil, nil, nil
+	if metadata != nil && charge != 0 {
+		metadata.RemovePending(charge)
+	}
+	if completionErr != nil {
+		return completionErr
 	}
 
 	// Swap in the new index file.

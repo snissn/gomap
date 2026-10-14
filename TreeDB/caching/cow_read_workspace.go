@@ -27,6 +27,7 @@ type cowReadCodec struct {
 type cowPointScratch struct {
 	lease     *memtable.COWExternalLease
 	key, leaf [page.PageSize]byte
+	successor tree.OwnedSuccessorScratch
 }
 
 type cowReadWorkspace struct {

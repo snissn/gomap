@@ -415,32 +415,22 @@ func recoverPrimaryJointSwapWithRegistryV6(dir string, readOnly bool, registry *
 }
 
 func (g *indexGen) rebindPrimaryJointNamespaceV6(dir string) error {
-	g.stableNamespaceMu.Lock()
-	if g.stableNamespaceProof != nil {
-		g.stableNamespaceProof.Release()
-		g.stableNamespaceProof = nil
-	}
-	if g.stableNamespaceParent != nil {
-		g.stableNamespaceParent.Close()
-		g.stableNamespaceParent = nil
-	}
-	g.stableNamespaceMu.Unlock()
-	owner := g.primaryOwner
-	if err := owner.clearNamespaceV5(); err != nil {
-		return err
-	}
 	for _, entry := range []struct {
 		name string
 		p    *pager.Pager
 	}{{indexFileName, g.pager}, {primaryIndexFileName, g.primary.Pager()}} {
-		token, e := g.stablePagerNamespaceToken(dir, entry.name, entry.p)
+		token, e := g.rebindStablePagerNamespaceToken(dir, entry.name, entry.p)
 		if e != nil {
+			if token != nil {
+				e = errors.Join(e, token.ReleaseWithError())
+			}
 			return e
 		}
-		e = token.Stabilize()
-		token.Release()
+		e = errors.Join(token.Stabilize(), token.ReleaseWithError())
 		if e != nil {
-			return e
+			g.closeFailure.retainCause(2, e)
+			g.metadata.CleanupFailed()
+			return &g.closeFailure
 		}
 	}
 	return nil

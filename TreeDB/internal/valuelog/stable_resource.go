@@ -1024,6 +1024,9 @@ func finishStableDeleteLease(lease *rootpublication.IdentityDeleteLease, deleted
 // identity captured before close. The registry lease excludes process-local
 // pin and delete races across this boundary.
 func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.StableIdentity) (deleted bool, resultErr error) {
+	if file != nil && file.nativeCallbacks.Load() {
+		return false, ErrNativeMVCCFileWork
+	}
 	if file == nil {
 		return true, nil
 	}
@@ -1546,7 +1549,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	}
 	m.mu.Lock()
 	current, exists := m.files[file.ID]
-	if m.closing || !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
+	if m.closing || !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() || file.nativeCallbacks.Load() {
 		m.mu.Unlock()
 		return nil
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -858,33 +860,86 @@ func productionAuthorityExpectedUnsupported(witness productionAuthorityWitness, 
 		errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported)
 }
 
+// Keep descriptor backing scoped to the actual admitted diagnostic edge.
+func withProductionAuthorityDiagnostics(resources *rootpublication.StableResourceSet, visit func(*rootpublication.ResourceDiagnostics) error) (retErr error) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
+	return visit(diagnostics)
+}
 func validateProductionAuthorityCapture(witness productionAuthorityWitness, resources *rootpublication.StableResourceSet) error {
 	if resources == nil || resources.Owner() != rootpublication.ResourceOwnerBuilder {
 		return fmt.Errorf("%w: real %q producer returned no builder-owned closure", rootpublication.ErrUnresolvedResource, witness.field)
 	}
-	covered := false
-	descriptors, err := resources.Descriptors()
+	return withProductionAuthorityDiagnostics(resources, func(d *rootpublication.ResourceDiagnostics) error {
+		covered := false
+		for _, descriptor := range d.Physical() {
+			if descriptor.Identity() == (rootpublication.StableIdentity{}) {
+				return fmt.Errorf("%w: %q descriptor has no physical identity", rootpublication.ErrUnresolvedResource, witness.field)
+			}
+			if descriptor.Frontier().Bytes == 0 && witness.field != rootpublication.ReachabilityCommandWALActive {
+				return fmt.Errorf("%w: %q descriptor has no physical byte frontier", rootpublication.ErrUnresolvedResource, witness.field)
+			}
+			if slices.Contains(descriptor.ReachabilityFields(), witness.field) {
+				if descriptor.Kind != witness.kind {
+					return fmt.Errorf("%w: %q descriptor kind=%q want %q", rootpublication.ErrResourceConflict, witness.field, descriptor.Kind, witness.kind)
+				}
+				covered = true
+			}
+		}
+		if !covered {
+			return fmt.Errorf("%w: real producer closure does not cover %q", rootpublication.ErrUnresolvedResource, witness.field)
+		}
+		return nil
+	})
+}
+
+// Select an actual captured producer owner before any builder allocation.
+func productionAuthorityBuilder(owner *retainedalloc.Owner, required ...rootpublication.ReachabilityField) (*rootpublication.StableResourceSetBuilder, error) {
+	if owner == nil {
+		return rootpublication.NewStableResourceSetBuilder(required...), nil
+	}
+	return rootpublication.NewStableResourceSetBuilderWithMetadata(owner, required...)
+}
+func mergeProductionAuthority(builder *rootpublication.StableResourceSetBuilder, owner *retainedalloc.Owner, original *rootpublication.StableResourceSet) error {
+	if owner == nil || original.MetadataOwner() == owner {
+		return builder.Merge(original)
+	}
+	admitted, err := rootpublication.ImportStableResourceSetMetadata(owner, original)
 	if err != nil {
 		return err
 	}
-	for _, descriptor := range descriptors {
-		if descriptor.Identity() == (rootpublication.StableIdentity{}) {
-			return fmt.Errorf("%w: %q descriptor has no physical identity", rootpublication.ErrUnresolvedResource, witness.field)
-		}
-		if descriptor.Frontier().Bytes == 0 && witness.field != rootpublication.ReachabilityCommandWALActive {
-			return fmt.Errorf("%w: %q descriptor has no physical byte frontier", rootpublication.ErrUnresolvedResource, witness.field)
-		}
-		if slices.Contains(descriptor.ReachabilityFields(), witness.field) {
-			if descriptor.Kind() != witness.kind {
-				return fmt.Errorf("%w: %q descriptor kind=%q want %q", rootpublication.ErrResourceConflict, witness.field, descriptor.Kind(), witness.kind)
+	if err = builder.Merge(admitted); err != nil {
+		return errors.Join(err, admitted.ReleaseWithError())
+	}
+	return original.ReleaseWithError()
+}
+func captureProductionAuthorityInputs(t productionAuthorityContext, witnesses []productionAuthorityWitness) (resources []*rootpublication.StableResourceSet, owner *retainedalloc.Owner, retErr error) {
+	resources = make([]*rootpublication.StableResourceSet, len(witnesses))
+	defer func() {
+		if retErr != nil {
+			for _, original := range resources {
+				retErr = errors.Join(retErr, original.ReleaseWithError())
 			}
-			covered = true
+			resources = nil
+		}
+	}()
+	for i, witness := range witnesses {
+		var err error
+		resources[i], err = witness.capture(t)
+		if err != nil {
+			return resources, nil, fmt.Errorf("capture full %q: %w", witness.field, err)
+		}
+		if err = validateProductionAuthorityCapture(witness, resources[i]); err != nil {
+			return resources, nil, err
+		}
+		if owner == nil {
+			owner = resources[i].MetadataOwner()
 		}
 	}
-	if !covered {
-		return fmt.Errorf("%w: real producer closure does not cover %q", rootpublication.ErrUnresolvedResource, witness.field)
-	}
-	return nil
+	return resources, owner, nil
 }
 
 func TestProductionAuthorityFullClosureAndAllButOneRetryMatrix(t *testing.T) {
@@ -896,7 +951,7 @@ func TestProductionAuthorityFullClosureAndAllButOneRetryMatrix(t *testing.T) {
 	if full.Owner() != rootpublication.ResourceOwnerBuilder {
 		t.Fatalf("full closure owner=%v want builder", full.Owner())
 	}
-	if got, want := productionAuthorityCoveredFields(full), productionAuthorityWitnessFields(supported); !slices.Equal(got, want) {
+	if got, want := productionAuthorityCoveredFields(t, full), productionAuthorityWitnessFields(supported); !slices.Equal(got, want) {
 		t.Fatalf("full closure fields=%q supported literal fields=%q", got, want)
 	}
 
@@ -904,24 +959,40 @@ func TestProductionAuthorityFullClosureAndAllButOneRetryMatrix(t *testing.T) {
 		omitted := omitted
 		t.Run(fmt.Sprintf("all-but-one-%02d-%s", index, omitted.field), func(t *testing.T) {
 			required := productionAuthorityWitnessFields(supported)
-			builder := rootpublication.NewStableResourceSetBuilder(required...)
-			defer builder.Abandon()
-			for _, included := range supported {
+			originals, owner, err := captureProductionAuthorityInputs(t, supported)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				for _, original := range originals {
+					if err := original.ReleaseWithError(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			builder, err := productionAuthorityBuilder(owner, required...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := builder.AbandonWithError(); err != nil {
+					t.Error(err)
+				}
+			}()
+			for includedIndex, included := range supported {
 				if included.field == omitted.field {
 					continue
 				}
-				resources, err := included.capture(t)
-				if err != nil {
-					t.Fatalf("capture included %q: %v", included.field, err)
-				}
+				resources := originals[includedIndex]
 				if err := validateProductionAuthorityCapture(included, resources); err != nil {
 					resources.Release()
 					t.Fatal(err)
 				}
-				if err := builder.Merge(resources); err != nil {
+				if err := mergeProductionAuthority(builder, owner, resources); err != nil {
 					resources.Release()
 					t.Fatalf("merge included %q: %v", included.field, err)
 				}
+				originals[includedIndex] = nil
 			}
 
 			candidate, freezeErr := builder.Freeze()
@@ -938,18 +1009,16 @@ func TestProductionAuthorityFullClosureAndAllButOneRetryMatrix(t *testing.T) {
 
 			// Freeze failure is retryable on the same builder: merge the exact real
 			// producer that was missing, then expose one complete candidate.
-			resources, err := omitted.capture(t)
-			if err != nil {
-				t.Fatalf("capture retry %q: %v", omitted.field, err)
-			}
+			resources := originals[index]
 			if err := validateProductionAuthorityCapture(omitted, resources); err != nil {
 				resources.Release()
 				t.Fatal(err)
 			}
-			if err := builder.Merge(resources); err != nil {
+			if err := mergeProductionAuthority(builder, owner, resources); err != nil {
 				resources.Release()
 				t.Fatalf("merge retry %q: %v", omitted.field, err)
 			}
+			originals[index] = nil
 			candidate, err = builder.Freeze()
 			if err != nil {
 				t.Fatalf("retry freeze %q: %v", omitted.field, err)
@@ -959,40 +1028,41 @@ func TestProductionAuthorityFullClosureAndAllButOneRetryMatrix(t *testing.T) {
 	}
 }
 
-func captureProductionFullAuthority(t productionAuthorityContext) (*rootpublication.StableResourceSet, []productionAuthorityWitness, error) {
+func captureProductionFullAuthority(t productionAuthorityContext) (result *rootpublication.StableResourceSet, supported []productionAuthorityWitness, retErr error) {
 	t.Helper()
-	supported := make([]productionAuthorityWitness, 0, len(productionAuthorityWitnesses))
+	supported = make([]productionAuthorityWitness, 0, len(productionAuthorityWitnesses))
 	for _, witness := range productionAuthorityWitnesses {
-		if witness.field == rootpublication.ReachabilityOuterLeafPackedPointer &&
-			(!rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported()) {
+		if witness.field == rootpublication.ReachabilityOuterLeafPackedPointer && (!rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported()) {
 			continue
 		}
 		supported = append(supported, witness)
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(productionAuthorityWitnessFields(supported)...)
-	for _, witness := range supported {
-		resources, err := witness.capture(t)
-		if err != nil {
-			builder.Abandon()
-			return nil, nil, fmt.Errorf("capture full %q: %w", witness.field, err)
-		}
-		if err := validateProductionAuthorityCapture(witness, resources); err != nil {
-			resources.Release()
-			builder.Abandon()
-			return nil, nil, err
-		}
-		if err := builder.Merge(resources); err != nil {
-			resources.Release()
-			builder.Abandon()
-			return nil, nil, fmt.Errorf("merge full %q: %w", witness.field, err)
-		}
-	}
-	resources, err := builder.Freeze()
+	originals, owner, err := captureProductionAuthorityInputs(t, supported)
 	if err != nil {
-		builder.Abandon()
 		return nil, nil, err
 	}
-	return resources, supported, nil
+	defer func() {
+		for _, original := range originals {
+			retErr = errors.Join(retErr, original.ReleaseWithError())
+		}
+		if retErr != nil && result != nil {
+			retErr = errors.Join(retErr, result.ReleaseWithError())
+			result = nil
+		}
+	}()
+	builder, err := productionAuthorityBuilder(owner, productionAuthorityWitnessFields(supported)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
+	for i, witness := range supported {
+		if err = mergeProductionAuthority(builder, owner, originals[i]); err != nil {
+			return nil, nil, fmt.Errorf("merge full %q: %w", witness.field, err)
+		}
+		originals[i] = nil
+	}
+	result, retErr = builder.Freeze()
+	return result, supported, retErr
 }
 
 func productionAuthorityWitnessFields(witnesses []productionAuthorityWitness) []rootpublication.ReachabilityField {
@@ -1004,13 +1074,44 @@ func productionAuthorityWitnessFields(witnesses []productionAuthorityWitness) []
 	return fields
 }
 
-func productionAuthorityCoveredFields(resources *rootpublication.StableResourceSet) []rootpublication.ReachabilityField {
-	seen := make(map[rootpublication.ReachabilityField]struct{})
-	for _, descriptor := range resources.PhysicalDescriptors() {
-		for _, field := range descriptor.ReachabilityFields() {
-			seen[field] = struct{}{}
+func observeProductionAuthority(t testing.TB, resources *rootpublication.StableResourceSet, visit func([]rootpublication.StableResourcePhysicalDescriptor, []rootpublication.ResourceKindStats)) {
+	t.Helper()
+	err := withProductionAuthorityDiagnostics(resources, func(d *rootpublication.ResourceDiagnostics) (retErr error) {
+		stats, err := resources.AcquireStats(time.Now())
+		if err != nil {
+			return err
 		}
+		defer func() { retErr = errors.Join(retErr, stats.CloseWithError()) }()
+		visit(d.Physical(), stats.Stats())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+}
+
+func productionAuthorityShape(t testing.TB, resources *rootpublication.StableResourceSet) (physical, logical int) {
+	t.Helper()
+	observeProductionAuthority(t, resources, func(descriptors []rootpublication.StableResourcePhysicalDescriptor, _ []rootpublication.ResourceKindStats) {
+		physical = len(descriptors)
+	})
+	if err := resources.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, _ rootpublication.StableLogicalObligation) error {
+		logical++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+func productionAuthorityCoveredFields(t testing.TB, resources *rootpublication.StableResourceSet) []rootpublication.ReachabilityField {
+	seen := make(map[rootpublication.ReachabilityField]struct{})
+	observeProductionAuthority(t, resources, func(descriptors []rootpublication.StableResourcePhysicalDescriptor, _ []rootpublication.ResourceKindStats) {
+		for _, descriptor := range descriptors {
+			for _, field := range descriptor.ReachabilityFields() {
+				seen[field] = struct{}{}
+			}
+		}
+	})
 	fields := make([]rootpublication.ReachabilityField, 0, len(seen))
 	for field := range seen {
 		fields = append(fields, field)
@@ -1060,7 +1161,7 @@ func (context *productionAuthorityNamespaceTestContext) shutdown() {
 
 type productionAuthorityNamespaceFileWitness struct {
 	token      *rootpublication.StableResourceToken
-	descriptor rootpublication.StableResourceDescriptor
+	descriptor rootpublication.StableResourcePhysicalDescriptor
 	path       string
 	relative   string
 	data       []byte
@@ -1086,11 +1187,11 @@ type productionAuthorityRecoveryDependency struct {
 	SHA256         string                              `json:"sha256"`
 }
 
-func productionAuthorityNamespaceWitness(root string, token *rootpublication.StableResourceToken, descriptor rootpublication.StableResourceDescriptor) (productionAuthorityNamespaceFileWitness, error) {
+func productionAuthorityNamespaceWitness(root string, token *rootpublication.StableResourceToken, descriptor rootpublication.StableResourcePhysicalDescriptor) (productionAuthorityNamespaceFileWitness, error) {
 	if token == nil || token.Namespace() == nil {
 		return productionAuthorityNamespaceFileWitness{}, fmt.Errorf("namespace witness requires a namespace-bearing token")
 	}
-	if token.Kind() != descriptor.Kind() || token.Generation() != descriptor.Generation() ||
+	if token.Kind() != descriptor.Kind || token.Generation() != descriptor.Generation ||
 		!rootpublication.SamePhysicalIdentity(token.Identity(), descriptor.Identity()) {
 		return productionAuthorityNamespaceFileWitness{}, fmt.Errorf("token/descriptor identity mismatch for %q", token.ResourceID())
 	}
@@ -1226,204 +1327,211 @@ func TestProductionAuthorityNamespaceAsymmetryVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := mustStableResourceDescriptors(t, candidate)
-	tokens := candidate.Tokens()
-	if len(descriptors) != len(tokens) || len(descriptors) == 0 {
-		t.Fatalf("full closure descriptors=%d tokens=%d", len(descriptors), len(tokens))
-	}
-	if err := candidate.SyncThrough(); err != nil {
-		t.Fatalf("sync real production authority: %v", err)
-	}
+	err = withProductionAuthorityDiagnostics(candidate, func(diagnostics *rootpublication.ResourceDiagnostics) error {
+		return candidate.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			descriptors := diagnostics.Physical()
+			if len(descriptors) != len(tokens) || len(descriptors) == 0 {
+				t.Fatalf("full closure descriptors=%d tokens=%d", len(descriptors), len(tokens))
+			}
+			if err := candidate.SyncThrough(); err != nil {
+				t.Fatalf("sync real production authority: %v", err)
+			}
 
-	witnesses := make([]productionAuthorityNamespaceFileWitness, 0, len(tokens))
-	for _, token := range tokens {
-		if token.Namespace() == nil {
-			continue
-		}
-		matchingDescriptors := make([]rootpublication.StableResourceDescriptor, 0, 1)
-		for _, descriptor := range descriptors {
-			if token.Kind() == descriptor.Kind() && token.Generation() == descriptor.Generation() &&
-				rootpublication.SamePhysicalIdentity(token.Identity(), descriptor.Identity()) {
-				matchingDescriptors = append(matchingDescriptors, descriptor)
-			}
-		}
-		if len(matchingDescriptors) != 1 {
-			t.Fatalf("namespace token kind=%q id=%q generation=%d matching descriptors=%d want 1", token.Kind(), token.ResourceID(), token.Generation(), len(matchingDescriptors))
-		}
-		witness, err := productionAuthorityNamespaceWitness(context.root, token, matchingDescriptors[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		witnesses = append(witnesses, witness)
-	}
-	if len(witnesses) == 0 {
-		t.Fatal("real producer closure carried no namespace persistence evidence")
-	}
-	slices.SortFunc(witnesses, func(left, right productionAuthorityNamespaceFileWitness) int {
-		return strings.Compare(left.relative, right.relative)
-	})
-	for index := 1; index < len(witnesses); index++ {
-		if witnesses[index-1].relative == witnesses[index].relative {
-			t.Fatalf("namespace producer paths are not one-to-one: %q", witnesses[index].relative)
-		}
-	}
-
-	manifest := productionAuthorityRecoveryManifest{Root: "new", Dependencies: make([]productionAuthorityRecoveryDependency, 0, len(witnesses))}
-	dependencies := make([]powerlossoracle.DirtyResource, 0, len(witnesses))
-	for index, witness := range witnesses {
-		token := witness.token
-		descriptor := witness.descriptor
-		dirtyID := fmt.Sprintf("%03d-%s-%s-%d", index, token.LogicalLane(), token.ResourceID(), token.Generation())
-		kind := productionAuthorityPowerLossKind(descriptor.Kind())
-		digest := sha256.Sum256(witness.data)
-		identity := token.Identity()
-		manifest.Dependencies = append(manifest.Dependencies, productionAuthorityRecoveryDependency{
-			PowerLossKind: kind, DirtyID: dirtyID,
-			ResourceKind: descriptor.Kind(), ResourceID: token.ResourceID(), LogicalLane: token.LogicalLane(),
-			Generation: descriptor.Generation(), Reachability: descriptor.ReachabilityFields(), DiagnosticPath: token.DiagnosticPath(),
-			SourceIdentity: fmt.Sprintf("%s/%d/%x/%d", identity.Platform, identity.VolumeID, identity.ObjectID, identity.Generation),
-			Path:           witness.relative, Size: len(witness.data), SHA256: fmt.Sprintf("%x", digest),
-		})
-		dependencies = append(dependencies, powerlossoracle.DirtyResource{
-			Kind: kind, ID: dirtyID, Path: witness.relative, NewName: true,
-			NamespaceDirs: []string{filepath.ToSlash(filepath.Dir(witness.relative))},
-		})
-	}
-
-	const targetPath = "production-authority-root.json"
-	oldBytes, err := productionAuthorityRecoveryBytes(productionAuthorityRecoveryManifest{Root: "old"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	newBytes, err := productionAuthorityRecoveryBytes(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(context.root, targetPath), oldBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model, err := powerlossoracle.Capture(context.root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parents := make(map[string]struct{}, len(dependencies))
-	for _, dependency := range dependencies {
-		if err := model.Unlink(dependency.Path); err != nil {
-			t.Fatal(err)
-		}
-		parents[dependency.NamespaceDirs[0]] = struct{}{}
-	}
-	parentPaths := make([]string, 0, len(parents))
-	for parent := range parents {
-		parentPaths = append(parentPaths, parent)
-	}
-	slices.Sort(parentPaths)
-	for _, parent := range parentPaths {
-		if err := model.SyncDir(parent); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for index, dependency := range dependencies {
-		if err := model.Create(dependency.Path, witnesses[index].data); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := model.Write(targetPath, newBytes); err != nil {
-		t.Fatal(err)
-	}
-
-	target := powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "all-kind-target", Path: targetPath}
-	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
-		ID: "production-authority-real-namespace", Point: powerlossoracle.AfterMetaWrite, Occurrence: 1,
-		Model: model, TargetMeta: &target, Dependencies: dependencies,
-		RequiredFamilies: []powerlossoracle.VariantFamily{
-			powerlossoracle.VariantSyncedOnly,
-			powerlossoracle.VariantTargetMetaOnly,
-			powerlossoracle.VariantOneMissingDependency,
-			powerlossoracle.VariantDataWithoutNamespace,
-			powerlossoracle.VariantNamespaceWithoutData,
-			powerlossoracle.VariantFullWriteback,
-		},
-		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
-			powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedTypedError,
-			powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedTypedError,
-			powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
-		},
-		MaxVariants: powerlossoracle.MaxVariantsPerCut,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantVariants := len(dependencies) + 3 + 2*len(dependencies)
-	if len(variants) != wantVariants || coverage.ByFamily[powerlossoracle.VariantOneMissingDependency] != len(dependencies) ||
-		coverage.ByFamily[powerlossoracle.VariantDataWithoutNamespace] != len(dependencies) ||
-		coverage.ByFamily[powerlossoracle.VariantNamespaceWithoutData] != len(dependencies) {
-		t.Fatalf("namespace variants=%d want=%d coverage=%v dependencies=%d namespace=%d",
-			len(variants), wantVariants, coverage.ByFamily, len(dependencies), len(dependencies))
-	}
-	dependencyByQualifier := make(map[string]powerlossoracle.DirtyResource, len(dependencies))
-	for _, dependency := range dependencies {
-		dependencyByQualifier[string(dependency.Kind)+"/"+dependency.ID] = dependency
-	}
-	for _, variant := range variants {
-		materialized := t.TempDir()
-		if err := variant.Model.MaterializeStable(materialized); err != nil {
-			t.Fatalf("materialize %s: %v", variant.ID, err)
-		}
-		visibleRoot, openErr := openProductionAuthorityRecoveryManifest(materialized, targetPath)
-		observation := powerlossoracle.VariantObservation{Opened: true}
-		if openErr != nil {
-			if !errors.Is(openErr, rootpublication.ErrUnresolvedResource) {
-				t.Fatalf("open %s: %v", variant.ID, openErr)
-			}
-			if visibleRoot != "" {
-				t.Fatalf("variant %s exposed root %q before resolving authority: %v", variant.ID, visibleRoot, openErr)
-			}
-			observation = powerlossoracle.VariantObservation{Result: powerlossoracle.ExpectedTypedError, TypedSentinel: "rootpublication.ErrUnresolvedResource"}
-			if variant.Family == powerlossoracle.VariantOneMissingDependency && !strings.Contains(openErr.Error(), variant.Qualifier) {
-				t.Fatalf("one-missing variant %s error=%v lacks exact omitted qualifier %q", variant.ID, openErr, variant.Qualifier)
-			}
-		} else {
-			switch visibleRoot {
-			case "old":
-				observation.Result = powerlossoracle.ExpectedOldRoot
-			case "new":
-				observation.Result = powerlossoracle.ExpectedNewRoot
-			default:
-				t.Fatalf("variant %s recovered unknown root %q", variant.ID, visibleRoot)
-			}
-		}
-		if err := powerlossoracle.ValidateVariantObservation(variant, observation, nil); err != nil {
-			t.Fatalf("validate %s: %v (visible_root=%q open_error=%v)", variant.ID, err, visibleRoot, openErr)
-		}
-		if variant.Family == powerlossoracle.VariantDataWithoutNamespace || variant.Family == powerlossoracle.VariantNamespaceWithoutData {
-			dependency, ok := dependencyByQualifier[variant.Qualifier]
-			if !ok {
-				t.Fatalf("variant %s qualifier %q has no real producer dependency", variant.ID, variant.Qualifier)
-			}
-			path := filepath.Join(materialized, filepath.FromSlash(dependency.Path))
-			_, statErr := os.Stat(path)
-			if variant.Family == powerlossoracle.VariantDataWithoutNamespace && !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("data-only variant %s path %q stat=%v want absent namespace", variant.ID, dependency.Path, statErr)
-			}
-			if variant.Family == powerlossoracle.VariantNamespaceWithoutData {
-				if statErr != nil {
-					t.Fatalf("namespace-only variant %s path %q stat=%v want present name", variant.ID, dependency.Path, statErr)
+			witnesses := make([]productionAuthorityNamespaceFileWitness, 0, len(tokens))
+			for _, token := range tokens {
+				if token.Namespace() == nil {
+					continue
 				}
-				actual, err := os.ReadFile(path)
+				matchingDescriptors := make([]rootpublication.StableResourcePhysicalDescriptor, 0, 1)
+				for _, descriptor := range descriptors {
+					if token.Kind() == descriptor.Kind && token.Generation() == descriptor.Generation &&
+						rootpublication.SamePhysicalIdentity(token.Identity(), descriptor.Identity()) {
+						matchingDescriptors = append(matchingDescriptors, descriptor)
+					}
+				}
+				if len(matchingDescriptors) != 1 {
+					t.Fatalf("namespace token kind=%q id=%q generation=%d matching descriptors=%d want 1", token.Kind(), token.ResourceID(), token.Generation(), len(matchingDescriptors))
+				}
+				witness, err := productionAuthorityNamespaceWitness(context.root, token, matchingDescriptors[0])
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(actual) != 0 {
-					t.Fatalf("namespace-only variant %s path %q bytes=%d want unstable data omitted", variant.ID, dependency.Path, len(actual))
+				witnesses = append(witnesses, witness)
+			}
+			if len(witnesses) == 0 {
+				t.Fatal("real producer closure carried no namespace persistence evidence")
+			}
+			slices.SortFunc(witnesses, func(left, right productionAuthorityNamespaceFileWitness) int {
+				return strings.Compare(left.relative, right.relative)
+			})
+			for index := 1; index < len(witnesses); index++ {
+				if witnesses[index-1].relative == witnesses[index].relative {
+					t.Fatalf("namespace producer paths are not one-to-one: %q", witnesses[index].relative)
 				}
 			}
-		}
+
+			manifest := productionAuthorityRecoveryManifest{Root: "new", Dependencies: make([]productionAuthorityRecoveryDependency, 0, len(witnesses))}
+			dependencies := make([]powerlossoracle.DirtyResource, 0, len(witnesses))
+			for index, witness := range witnesses {
+				token := witness.token
+				descriptor := witness.descriptor
+				dirtyID := fmt.Sprintf("%03d-%s-%s-%d", index, token.LogicalLane(), token.ResourceID(), token.Generation())
+				kind := productionAuthorityPowerLossKind(descriptor.Kind)
+				digest := sha256.Sum256(witness.data)
+				identity := token.Identity()
+				manifest.Dependencies = append(manifest.Dependencies, productionAuthorityRecoveryDependency{
+					PowerLossKind: kind, DirtyID: dirtyID,
+					ResourceKind: descriptor.Kind, ResourceID: token.ResourceID(), LogicalLane: token.LogicalLane(),
+					Generation: descriptor.Generation, Reachability: descriptor.ReachabilityFields(), DiagnosticPath: token.DiagnosticPath(),
+					SourceIdentity: fmt.Sprintf("%s/%d/%x/%d", identity.Platform, identity.VolumeID, identity.ObjectID, identity.Generation),
+					Path:           witness.relative, Size: len(witness.data), SHA256: fmt.Sprintf("%x", digest),
+				})
+				dependencies = append(dependencies, powerlossoracle.DirtyResource{
+					Kind: kind, ID: dirtyID, Path: witness.relative, NewName: true,
+					NamespaceDirs: []string{filepath.ToSlash(filepath.Dir(witness.relative))},
+				})
+			}
+
+			const targetPath = "production-authority-root.json"
+			oldBytes, err := productionAuthorityRecoveryBytes(productionAuthorityRecoveryManifest{Root: "old"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			newBytes, err := productionAuthorityRecoveryBytes(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(context.root, targetPath), oldBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			model, err := powerlossoracle.Capture(context.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parents := make(map[string]struct{}, len(dependencies))
+			for _, dependency := range dependencies {
+				if err := model.Unlink(dependency.Path); err != nil {
+					t.Fatal(err)
+				}
+				parents[dependency.NamespaceDirs[0]] = struct{}{}
+			}
+			parentPaths := make([]string, 0, len(parents))
+			for parent := range parents {
+				parentPaths = append(parentPaths, parent)
+			}
+			slices.Sort(parentPaths)
+			for _, parent := range parentPaths {
+				if err := model.SyncDir(parent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for index, dependency := range dependencies {
+				if err := model.Create(dependency.Path, witnesses[index].data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := model.Write(targetPath, newBytes); err != nil {
+				t.Fatal(err)
+			}
+
+			target := powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "all-kind-target", Path: targetPath}
+			variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+				ID: "production-authority-real-namespace", Point: powerlossoracle.AfterMetaWrite, Occurrence: 1,
+				Model: model, TargetMeta: &target, Dependencies: dependencies,
+				RequiredFamilies: []powerlossoracle.VariantFamily{
+					powerlossoracle.VariantSyncedOnly,
+					powerlossoracle.VariantTargetMetaOnly,
+					powerlossoracle.VariantOneMissingDependency,
+					powerlossoracle.VariantDataWithoutNamespace,
+					powerlossoracle.VariantNamespaceWithoutData,
+					powerlossoracle.VariantFullWriteback,
+				},
+				ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+					powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
+					powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedTypedError,
+					powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedTypedError,
+					powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
+					powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
+					powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
+				},
+				MaxVariants: powerlossoracle.MaxVariantsPerCut,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantVariants := len(dependencies) + 3 + 2*len(dependencies)
+			if len(variants) != wantVariants || coverage.ByFamily[powerlossoracle.VariantOneMissingDependency] != len(dependencies) ||
+				coverage.ByFamily[powerlossoracle.VariantDataWithoutNamespace] != len(dependencies) ||
+				coverage.ByFamily[powerlossoracle.VariantNamespaceWithoutData] != len(dependencies) {
+				t.Fatalf("namespace variants=%d want=%d coverage=%v dependencies=%d namespace=%d",
+					len(variants), wantVariants, coverage.ByFamily, len(dependencies), len(dependencies))
+			}
+			dependencyByQualifier := make(map[string]powerlossoracle.DirtyResource, len(dependencies))
+			for _, dependency := range dependencies {
+				dependencyByQualifier[string(dependency.Kind)+"/"+dependency.ID] = dependency
+			}
+			for _, variant := range variants {
+				materialized := t.TempDir()
+				if err := variant.Model.MaterializeStable(materialized); err != nil {
+					t.Fatalf("materialize %s: %v", variant.ID, err)
+				}
+				visibleRoot, openErr := openProductionAuthorityRecoveryManifest(materialized, targetPath)
+				observation := powerlossoracle.VariantObservation{Opened: true}
+				if openErr != nil {
+					if !errors.Is(openErr, rootpublication.ErrUnresolvedResource) {
+						t.Fatalf("open %s: %v", variant.ID, openErr)
+					}
+					if visibleRoot != "" {
+						t.Fatalf("variant %s exposed root %q before resolving authority: %v", variant.ID, visibleRoot, openErr)
+					}
+					observation = powerlossoracle.VariantObservation{Result: powerlossoracle.ExpectedTypedError, TypedSentinel: "rootpublication.ErrUnresolvedResource"}
+					if variant.Family == powerlossoracle.VariantOneMissingDependency && !strings.Contains(openErr.Error(), variant.Qualifier) {
+						t.Fatalf("one-missing variant %s error=%v lacks exact omitted qualifier %q", variant.ID, openErr, variant.Qualifier)
+					}
+				} else {
+					switch visibleRoot {
+					case "old":
+						observation.Result = powerlossoracle.ExpectedOldRoot
+					case "new":
+						observation.Result = powerlossoracle.ExpectedNewRoot
+					default:
+						t.Fatalf("variant %s recovered unknown root %q", variant.ID, visibleRoot)
+					}
+				}
+				if err := powerlossoracle.ValidateVariantObservation(variant, observation, nil); err != nil {
+					t.Fatalf("validate %s: %v (visible_root=%q open_error=%v)", variant.ID, err, visibleRoot, openErr)
+				}
+				if variant.Family == powerlossoracle.VariantDataWithoutNamespace || variant.Family == powerlossoracle.VariantNamespaceWithoutData {
+					dependency, ok := dependencyByQualifier[variant.Qualifier]
+					if !ok {
+						t.Fatalf("variant %s qualifier %q has no real producer dependency", variant.ID, variant.Qualifier)
+					}
+					path := filepath.Join(materialized, filepath.FromSlash(dependency.Path))
+					_, statErr := os.Stat(path)
+					if variant.Family == powerlossoracle.VariantDataWithoutNamespace && !errors.Is(statErr, os.ErrNotExist) {
+						t.Fatalf("data-only variant %s path %q stat=%v want absent namespace", variant.ID, dependency.Path, statErr)
+					}
+					if variant.Family == powerlossoracle.VariantNamespaceWithoutData {
+						if statErr != nil {
+							t.Fatalf("namespace-only variant %s path %q stat=%v want present name", variant.ID, dependency.Path, statErr)
+						}
+						actual, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(actual) != 0 {
+							t.Fatalf("namespace-only variant %s path %q bytes=%d want unstable data omitted", variant.ID, dependency.Path, len(actual))
+						}
+					}
+				}
+			}
+			t.Logf("real authority namespace recovery: descriptors=%d namespace_dependencies=%d generated=%d", len(descriptors), len(dependencies), len(variants))
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("real authority namespace recovery: descriptors=%d namespace_dependencies=%d generated=%d", len(descriptors), len(dependencies), len(variants))
 }
 
 func productionAuthorityPowerLossKind(kind rootpublication.ResourceKind) powerlossoracle.ResourceKind {
@@ -1461,7 +1569,10 @@ func TestProductionAuthorityLifecycleIdentityConflictMatrix(t *testing.T) {
 				resources.Release()
 				t.Fatal(err)
 			}
-			builder := rootpublication.NewStableResourceSetBuilder(witness.field)
+			builder, err := productionAuthorityBuilder(resources.MetadataOwner(), witness.field)
+			if err != nil {
+				t.Fatal(err)
+			}
 			candidate, freezeErr := builder.Freeze()
 			if candidate != nil {
 				candidate.Release()
@@ -1489,7 +1600,10 @@ func TestProductionAuthorityLifecycleIdentityConflictMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			abandonBuilder := rootpublication.NewStableResourceSetBuilder(witness.field)
+			abandonBuilder, err := productionAuthorityBuilder(abandoned.MetadataOwner(), witness.field)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := abandonBuilder.Merge(abandoned); err != nil {
 				abandoned.Release()
 				t.Fatal(err)
@@ -1514,13 +1628,17 @@ func TestProductionAuthorityLifecycleIdentityConflictMatrix(t *testing.T) {
 				second.Release()
 				t.Fatal(err)
 			}
-			conflictBuilder := rootpublication.NewStableResourceSetBuilder(witness.field)
-			if err := conflictBuilder.Merge(first); err != nil {
+			conflictOwner := first.MetadataOwner()
+			conflictBuilder, err := productionAuthorityBuilder(conflictOwner, witness.field)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := mergeProductionAuthority(conflictBuilder, conflictOwner, first); err != nil {
 				first.Release()
 				second.Release()
 				t.Fatal(err)
 			}
-			err = conflictBuilder.Merge(second)
+			err = mergeProductionAuthority(conflictBuilder, conflictOwner, second)
 			if !errors.Is(err, rootpublication.ErrResourceConflict) || second.Owner() != rootpublication.ResourceOwnerBuilder || conflictBuilder.State() != rootpublication.ResourceOwnerBuilder {
 				second.Release()
 				conflictBuilder.Abandon()
@@ -1534,23 +1652,25 @@ func TestProductionAuthorityLifecycleIdentityConflictMatrix(t *testing.T) {
 }
 
 func requireProductionAuthorityRecreatedLogicalIdentity(field rootpublication.ReachabilityField, first, second *rootpublication.StableResourceSet) error {
-	for _, left := range first.Tokens() {
-		if left.Reachability() != field {
-			continue
-		}
-		for _, right := range second.Tokens() {
-			if right.Reachability() != field || left.Kind() != right.Kind() ||
-				left.LogicalLane() != right.LogicalLane() || left.ResourceID() != right.ResourceID() ||
-				left.Generation() != right.Generation() {
-				continue
+	return first.WithScopedTokens(func(lefts []*rootpublication.StableResourceToken) error {
+		return second.WithScopedTokens(func(rights []*rootpublication.StableResourceToken) error {
+			for _, left := range lefts {
+				if left.Reachability() != field {
+					continue
+				}
+				for _, right := range rights {
+					if right.Reachability() != field || left.Kind() != right.Kind() || left.LogicalLane() != right.LogicalLane() || left.ResourceID() != right.ResourceID() || left.Generation() != right.Generation() {
+						continue
+					}
+					if rootpublication.SamePhysicalIdentity(left.Identity(), right.Identity()) {
+						return fmt.Errorf("%w: independent fixtures reused %q physical identity", rootpublication.ErrResourceConflict, field)
+					}
+					return nil
+				}
 			}
-			if rootpublication.SamePhysicalIdentity(left.Identity(), right.Identity()) {
-				return fmt.Errorf("%w: independent fixtures reused %q physical identity", rootpublication.ErrResourceConflict, field)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: independent fixtures for %q had no matching logical resource", rootpublication.ErrUnresolvedResource, field)
+			return fmt.Errorf("%w: independent fixtures for %q had no matching logical resource", rootpublication.ErrUnresolvedResource, field)
+		})
+	})
 }
 
 func TestProductionAuthorityRepeatedCapturePostShutdownPlateau(t *testing.T) {
@@ -1570,17 +1690,13 @@ func TestProductionAuthorityRepeatedCapturePostShutdownPlateau(t *testing.T) {
 						t.Fatal(err)
 					}
 					resources = captured
-					descriptors := mustStableResourceDescriptors(t, captured)
-					obligations := 0
-					for _, descriptor := range descriptors {
-						obligations += len(descriptor.LogicalObligations())
-					}
+					descriptors, obligations := productionAuthorityShape(t, captured)
 					if iteration == 0 {
-						wantDescriptors, wantObligations = len(descriptors), obligations
-					} else if len(descriptors) != wantDescriptors || obligations != wantObligations {
+						wantDescriptors, wantObligations = descriptors, obligations
+					} else if descriptors != wantDescriptors || obligations != wantObligations {
 						captured.Release()
 						resources = nil
-						t.Fatalf("repeated shape=%d/%d want %d/%d", len(descriptors), obligations, wantDescriptors, wantObligations)
+						t.Fatalf("repeated shape=%d/%d want %d/%d", descriptors, obligations, wantDescriptors, wantObligations)
 					}
 				})
 				// Returning from the nested test executes the real producer's
@@ -1635,27 +1751,64 @@ func assertProductionAuthorityReleaseToZero(t testing.TB, resources *rootpublica
 	if resources == nil {
 		t.Fatal("nil production resources")
 	}
-	descriptors := mustStableResourceDescriptors(t, resources)
+	type identity struct {
+		physical   rootpublication.StableIdentity
+		generation uint64
+	}
+	var identities []identity
+	metadata := resources.MetadataOwner()
+	var charge uint64
+	admitted := false
 	guard := resources.DeletionGuard()
-	before := resources.Stats(time.Now())
-	if len(descriptors) == 0 || len(before) == 0 {
-		resources.Release()
-		t.Fatal("production resources have no descriptor or pin observations")
-	}
-	for _, descriptor := range descriptors {
-		if err := guard.Check(descriptor.Identity(), descriptor.Generation()); !errors.Is(err, rootpublication.ErrResourcePinned) {
-			resources.Release()
-			t.Fatalf("live generation %d guard=%v want pinned", descriptor.Generation(), err)
+	err := withProductionAuthorityDiagnostics(resources, func(d *rootpublication.ResourceDiagnostics) (retErr error) {
+		stats, err := resources.AcquireStats(time.Now())
+		if err != nil {
+			return err
 		}
+		defer func() { retErr = errors.Join(retErr, stats.CloseWithError()) }()
+		before := stats.Stats()
+		if len(d.Physical()) == 0 || len(before) == 0 {
+			return errors.New("production resources have no descriptor or pin observations")
+		}
+		charge = retainedalloc.AllocationCharge(uint64(len(d.Physical())) * uint64(unsafe.Sizeof(identity{})))
+		if metadata != nil {
+			if err := metadata.AddPending(charge); err != nil {
+				return err
+			}
+		}
+		admitted = true
+		identities = make([]identity, 0, len(d.Physical()))
+		for _, descriptor := range d.Physical() {
+			if err := guard.Check(descriptor.Identity(), descriptor.Generation); !errors.Is(err, rootpublication.ErrResourcePinned) {
+				return fmt.Errorf("live generation %d guard=%v want pinned", descriptor.Generation, err)
+			}
+			identities = append(identities, identity{descriptor.Identity(), descriptor.Generation})
+		}
+		return nil
+	})
+	defer func() {
+		clear(identities)
+		identities = nil
+		if metadata != nil && admitted && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+	if err != nil {
+		t.Fatal(err)
 	}
-	resources.Release()
-	resources.Release()
+	// No diagnostic or token borrow may remain when checking final physical pins.
+	if err := resources.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if err := resources.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
 	if resources.Owner() != rootpublication.ResourceOwnerReleased {
 		t.Fatalf("released owner=%v", resources.Owner())
 	}
-	for _, descriptor := range descriptors {
-		if err := guard.Check(descriptor.Identity(), descriptor.Generation()); err != nil {
-			t.Fatalf("released generation %d remains pinned: %v", descriptor.Generation(), err)
+	for _, item := range identities {
+		if err := guard.Check(item.physical, item.generation); err != nil {
+			t.Fatalf("released generation %d remains pinned: %v", item.generation, err)
 		}
 	}
 	for _, stats := range resources.Stats(time.Now()) {
@@ -1684,14 +1837,21 @@ func TestProductionAuthorityObservationsByKindAndAggregate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, descriptor := range mustStableResourceDescriptors(t, resources) {
-				row := byKind[descriptor.Kind()]
-				if row == nil {
-					row = &observation{}
-					byKind[descriptor.Kind()] = row
+			observeProductionAuthority(t, resources, func(descriptors []rootpublication.StableResourcePhysicalDescriptor, _ []rootpublication.ResourceKindStats) {
+				for _, descriptor := range descriptors {
+					row := byKind[descriptor.Kind]
+					if row == nil {
+						row = &observation{}
+						byKind[descriptor.Kind] = row
+					}
+					row.descriptors++
 				}
-				row.descriptors++
-				row.obligations += uint64(len(descriptor.LogicalObligations()))
+			})
+			if err := resources.WalkLogicalObligations(func(descriptor rootpublication.StableResourcePhysicalDescriptor, _ rootpublication.StableLogicalObligation) error {
+				byKind[descriptor.Kind].obligations++
+				return nil
+			}); err != nil {
+				t.Fatal(err)
 			}
 			primary := byKind[witness.kind]
 			if primary == nil {
@@ -1705,18 +1865,20 @@ func TestProductionAuthorityObservationsByKindAndAggregate(t *testing.T) {
 				t.Fatal(err)
 			}
 			primary.syncLatency += time.Since(started)
-			for _, stats := range resources.Stats(time.Now()) {
-				row := byKind[stats.Kind]
-				if row == nil {
-					row = &observation{}
-					byKind[stats.Kind] = row
+			observeProductionAuthority(t, resources, func(_ []rootpublication.StableResourcePhysicalDescriptor, statsRows []rootpublication.ResourceKindStats) {
+				for _, stats := range statsRows {
+					row := byKind[stats.Kind]
+					if row == nil {
+						row = &observation{}
+						byKind[stats.Kind] = row
+					}
+					row.pinHighWater += stats.PinHighWater
+					row.activePins += stats.ActivePins
+					row.syncAttempts += stats.Syncs
+					row.physicalFileSyncs += stats.PhysicalFileSyncs
+					row.namespaceSyncs += stats.NamespaceSyncs
 				}
-				row.pinHighWater += stats.PinHighWater
-				row.activePins += stats.ActivePins
-				row.syncAttempts += stats.Syncs
-				row.physicalFileSyncs += stats.PhysicalFileSyncs
-				row.namespaceSyncs += stats.NamespaceSyncs
-			}
+			})
 			resources.Release()
 			for _, stats := range resources.Stats(time.Now()) {
 				byKind[stats.Kind].releasedPins += stats.ActivePins
@@ -1834,11 +1996,7 @@ func benchmarkProductionAuthorityConstruction(
 			context.shutdown()
 			b.Fatal(err)
 		}
-		descriptors = resources.Len()
-		obligations = 0
-		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
-			obligations += len(descriptor.LogicalObligations())
-		}
+		descriptors, obligations = productionAuthorityShape(b, resources)
 		producerFields = fields
 		productionAuthorityBenchmarkSink = descriptors
 		b.StopTimer()
@@ -1879,10 +2037,7 @@ func BenchmarkProductionAuthorityPreparedClosureCoalescing(b *testing.B) {
 }
 
 func benchmarkProductionAuthorityPreparedClosure(b *testing.B, resources *rootpublication.StableResourceSet) {
-	obligations := 0
-	for _, descriptor := range mustStableResourceDescriptors(b, resources) {
-		obligations += len(descriptor.LogicalObligations())
-	}
+	_, obligations := productionAuthorityShape(b, resources)
 	b.ReportMetric(float64(resources.Len()), "descriptors")
 	b.ReportMetric(float64(obligations), "logical-obligations")
 	b.ReportAllocs()

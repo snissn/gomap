@@ -752,6 +752,17 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 	if uint64(count) > ^uint64(0)-start {
 		return 0, fmt.Errorf("pager: page count overflow")
 	}
+
+	target := start + uint64(count)
+	// Ordinary logical allocation reuses the same guarded count install when
+	// every containing backing already covers the target. No Growth is created.
+	if ready, err := p.installCountWithinCapacity(target); ready || err != nil {
+		if err != nil {
+			return 0, err
+		}
+		p.maybeSchedulePreGrow(int64(p.localPageCount(target)) * page.PageSize)
+		return start, nil
+	}
 	g, _, e := NewGrowthForPager(p, start+uint64(count), nil)
 	if e != nil {
 		return 0, e
@@ -1178,7 +1189,12 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 	if syncErr != nil {
 		p.mu.Lock()
 		for _, idx := range toSync {
-			p.dirtyChunks.set(idx)
+			// Close may have consumed these mappings after dirty detachment.
+			// Preserve retry membership only for still-owned mapped storage;
+			// the retained handle keeps the failed durability fence retryable.
+			if idx < len(p.chunks) && len(p.chunks[idx]) != 0 && idx/64 < len(p.dirtyChunks.words) {
+				p.dirtyChunks.set(idx)
+			}
 		}
 		p.mu.Unlock()
 		return false, syncErr

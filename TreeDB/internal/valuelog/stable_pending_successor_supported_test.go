@@ -764,8 +764,11 @@ func TestStableValueLogOldCloseFailureIsFailStop(t *testing.T) {
 	appendStablePendingValue(t, writer, 1)
 	closed, active := stablePendingRegistrations(1, 2)
 	injected := errors.New("injected value-log old close failure")
+	originalFile := writer.f
+	closeCalls := 0
 	writer.closeRotateFn = func(file *os.File) error {
 		writer.closeRotateFn = nil
+		closeCalls++
 		return errors.Join(file.Close(), injected)
 	}
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
@@ -796,14 +799,34 @@ func TestStableValueLogOldCloseFailureIsFailStop(t *testing.T) {
 	if !errors.Is(err, rootpublication.ErrResourceOwnership) {
 		t.Fatalf("stable retry after fail-stop error=%v want ErrResourceOwnership", err)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+	first := writer.closeErr
+	firstFailureCount := writer.cleanupFailure.count
+	if first == nil || !errors.Is(first, injected) || closeCalls != 1 {
+		t.Fatalf("first cleanup outcome=%v calls=%d", first, closeCalls)
+	}
+	if p := &writer.failedPredecessor; p.file != originalFile || !p.attempted || !p.failed || p.fileCharge == 0 {
+		t.Fatalf("original failed predecessor custody=%+v", p)
+	}
+	if writer.metadata != registry.MetadataOwner() || writer.metadataCharge == 0 {
+		t.Fatal("failed Writer containing admission was lost")
+	}
+	if err := writer.Close(); err != first || !errors.Is(err, injected) {
+		t.Fatalf("first close=%v want original cleanup outcome %v", err, first)
+	}
+	retainedCharge := writer.metadataCharge
+	if retainedCharge == 0 || writer.failedPredecessor.file != originalFile {
+		t.Fatal("first close discarded original failed predecessor or charge")
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
 		t.Fatalf("fail-stop close retained %d identities", got)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("second close: %v", err)
+	if err := writer.Close(); err != first || !errors.Is(err, injected) {
+		t.Fatalf("second close=%v want original cleanup outcome %v", err, first)
+	}
+	if closeCalls != 1 || writer.cleanupFailure.count != firstFailureCount || writer.metadataCharge != retainedCharge ||
+		writer.failedPredecessor.file != originalFile || !writer.failedPredecessor.attempted || !writer.failedPredecessor.failed {
+		t.Fatalf("repeated close replayed/discarded failed custody: calls=%d failures=%d charge=%d predecessor=%+v",
+			closeCalls, writer.cleanupFailure.count, writer.metadataCharge, writer.failedPredecessor)
 	}
 	if _, err := os.Stat(secondPath); err != nil {
 		t.Fatalf("fail-stop close removed created successor: %v", err)

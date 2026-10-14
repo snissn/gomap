@@ -1,18 +1,19 @@
 package memtable
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"sync"
 	"unsafe"
 
-	"github.com/tidwall/btree"
+	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 )
 
 // COWView is an independently closable pin. Close races safely with Get/Seek
 // and cursor traversal. No published-header Copy or mutable traversal occurs.
 type COWView struct {
-	mu     sync.Mutex
-	root   *COWRoot
-	charge uint64
+	mu    sync.Mutex
+	root  *COWRoot
+	lease *cowViewReleaseLease
 }
 
 func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
@@ -22,7 +23,7 @@ func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 		return nil, ErrCOWClosed
 	}
 	b := r.generation.budget
-	charge, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWView{}))), extraBytes)
+	charge, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWView{})))+cowAllocation(uint64(unsafe.Sizeof(cowViewReleaseLease{}))), extraBytes)
 	if !ok {
 		return nil, ErrCOWCapacity
 	}
@@ -36,7 +37,7 @@ func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 	}
 	b.stats.Views++
 	r.refs++
-	return &COWView{root: r, charge: charge}, nil
+	return &COWView{root: r, lease: &cowViewReleaseLease{budget: b, charge: charge}}, nil
 }
 
 func (v *COWView) Get(key []byte) (COWRecord, bool, error) {
@@ -49,22 +50,44 @@ func (v *COWView) Get(key []byte) (COWRecord, bool, error) {
 	return r, ok, nil
 }
 
-func (v *COWView) Close() {
+// ReleaseWithWork transfers original generation retirement and the admitted
+// view allocation lease. The caller clears its view/cursor aliases before
+// consuming that receipt. It performs no resource callback or capacity refund.
+func (v *COWView) ReleaseWithWork(w *iterator.OrdinalScanWork) (COWRetirement, bool, error) {
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(COWView{}))+
+		2*uint64(unsafe.Sizeof(COWRoot{}))+2*uint64(unsafe.Sizeof(cowGeneration{}))+
+		2*uint64(unsafe.Sizeof(COWBudget{}))) {
+		return COWRetirement{}, false, nil
+	}
 	v.mu.Lock()
-	r := v.root
+	r, lease := v.root, v.lease
 	if r == nil {
 		v.mu.Unlock()
-		return
+		return COWRetirement{}, true, nil
 	}
-	v.root = nil
-	b := r.generation.budget
+	v.root, v.lease = nil, nil
+	v.mu.Unlock()
+	v = nil
+	retirement := r.Release()
+	r = nil
+	b := lease.budget
 	b.mu.Lock()
 	b.stats.Views--
-	b.stats.TotalBytes -= v.charge
-	b.releaseControlLocked()
+	b.stats.DeferredBytes += lease.charge
 	b.mu.Unlock()
-	v.mu.Unlock()
-	retirement := r.Release()
+	retirement.viewLease = lease
+	return retirement, true, nil
+}
+
+// Release delegates the ordinary API to the same physical retirement stages.
+func (v *COWView) Release() COWRetirement {
+	retirement, _, _ := v.ReleaseWithWork(nil)
+	return retirement
+}
+
+func (v *COWView) Close() {
+	retirement, _, _ := v.ReleaseWithWork(nil)
+	v = nil
 	retirement.Drain()
 }
 

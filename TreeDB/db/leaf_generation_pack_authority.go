@@ -84,20 +84,9 @@ func (authority *leafGenerationPackPromotionAuthority) captureDictionary(ctx con
 	if authority == nil || authority.released || authority.dictionaryResources != nil || len(authority.segments) != 0 {
 		return rootpublication.ErrResourceOwnership
 	}
-	resources, err := captureStableDictionaryResources(ctx, authority.db.stableDictionaryResourceProvider(), dictID, dictionary)
+	resources, err := captureStableDictionaryResourcesForDB(authority.db, ctx, authority.db.stableDictionaryResourceProvider(), dictID, dictionary, authority.metadata)
 	if err != nil {
 		return err
-	}
-	if resources != nil && resources.MetadataOwner() != authority.metadata {
-		admitted, importErr := rootpublication.ImportStableResourceSetMetadata(authority.metadata, resources)
-		if importErr != nil {
-			return errors.Join(importErr, resources.ReleaseWithError())
-		}
-		releaseErr := resources.ReleaseWithError()
-		if releaseErr != nil {
-			return errors.Join(releaseErr, admitted.ReleaseWithError())
-		}
-		resources = admitted
 	}
 	authority.dictionaryResources = resources
 	return nil

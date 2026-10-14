@@ -93,11 +93,15 @@ func TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund(t *testing.T) {
 	if done, err := e.CloseWorkInto(&iterator.OrdinalScanWork{}, &state); done || err != nil || e.closed.Load() || budget.bytes != before {
 		t.Fatal("zero work released capture")
 	}
+	bind := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if ready, err := state.Bind(e, &bind); !ready || err != nil {
+		t.Fatal("bind original enrollment pair", err)
+	}
 	// One record transfers the companion's exact remaining work to the external
 	// receipt and scrubs that original Enrollment; it cannot traverse its leases.
 	companion := e.companion
 	w := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
-	if done, err := e.CloseWorkInto(w, &state); done || err != nil {
+	if done, err := state.ContinueWork(w); done || err != nil {
 		t.Fatal("first bounded release", done, err)
 	}
 	if companion.owner != nil || companion.binding != nil || !companion.closed.Load() || state.companion.owner != &b {
@@ -115,7 +119,7 @@ func TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund(t *testing.T) {
 		if calls > 100 {
 			t.Fatal("capture did not finish")
 		}
-		done, err := e.CloseWorkInto(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}, &state)
+		done, err := state.ContinueWork(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
 		if err != nil {
 			t.Fatal(err)
 		}

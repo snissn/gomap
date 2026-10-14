@@ -2711,6 +2711,8 @@ type StableResourceSet struct {
 	// physicalOnly is an explicit durability/reachability capability. It carries
 	// no complete logical metadata and cannot be used for publication proofs.
 	physicalOnly bool
+	// A consumed directory lease cannot become legacy flat metadata authority.
+	releasedDirectoryLease bool
 }
 
 func (set *StableResourceSet) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -4314,6 +4316,7 @@ func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState
 	entries, views := set.entries, set.kindViews
 	emptyDirectory := set.emptyDependencyDirectoryLocked()
 	directories := set.physicalDependencyDirectoriesLocked()
+	set.releasedDirectoryLease = emptyDirectory != nil || len(directories) != 0
 	set.mu.Unlock()
 	defer func() {
 		set.mu.Lock()
@@ -4499,7 +4502,7 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			// V1 flat metadata remains immutable diagnostic evidence after its
 			// producer releases ownership. Directory reads and physical union
 			// capabilities instead depend on a live lease, even for empty roots.
-			requiresLease := physicalOnly || set.emptyDependencyDirectoryLocked() != nil || len(set.physicalDependencyDirectoriesLocked()) != 0
+			requiresLease := physicalOnly || set.releasedDirectoryLease || set.emptyDependencyDirectoryLocked() != nil || len(set.physicalDependencyDirectoriesLocked()) != 0
 			set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 				requiresLease = requiresLease || entry.logicalObligations.directory != nil
 				return !requiresLease

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"io"
 	"os"
 	"path/filepath"
@@ -1565,6 +1566,8 @@ type StableNamespaceToken struct {
 // to carry that one creation sync to later resource registration, where the
 // logical parent generation is finally known.
 type StableNamespaceCreationProof struct {
+	closeWork      namespaceProofCloseWork
+	closeMu        sync.Mutex
 	cleanupFailure ownedNamespaceCleanupFailure
 	metadata       *retainedalloc.Owner
 	metadataCharge uint64
@@ -1781,54 +1784,35 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 	if proof == nil {
 		return nil
 	}
+	proof.closeMu.Lock()
 	proof.mu.Lock()
-	defer proof.mu.Unlock()
-	if proof.released.Swap(true) {
-		return proof.cleanupErr
+	if proof.closeWork.native {
+		proof.mu.Unlock()
+		proof.closeMu.Unlock()
+		return retainedalloc.ErrWorkRequired
 	}
-	parent, persistence := proof.parent, proof.persistence
-	if persistence != nil && persistence != parent {
-		e := persistence.Close()
-		if e == nil {
-			proof.persistence = nil
-		} else {
-			if proof.metadata != nil {
-				proof.cleanupFailure.add(e)
-				proof.cleanupErr = &proof.cleanupFailure
-			} else {
-				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
-			}
+	proof.mu.Unlock()
+	var state namespaceProofReleaseState
+	state.proof = proof
+	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	for state.proof != nil {
+		ready, err := state.continueWork(false, &w, nil)
+		if err != nil {
+			proof.closeMu.Unlock()
+			return err
+		}
+		if ready {
+			break
 		}
 	}
-	if parent != nil {
-		e := parent.Close()
-		if e == nil {
-			proof.parent = nil
-			if persistence == parent {
-				proof.persistence = nil
-			}
-		} else {
-			if proof.metadata != nil {
-				proof.cleanupFailure.add(e)
-				proof.cleanupErr = &proof.cleanupFailure
-			} else {
-				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
-			}
-		}
+	// The SAME receipt has detached every proof alias. Join the original
+	// active call before refund, and never access the disposed header again.
+	proof.closeMu.Unlock()
+	proof = nil
+	if state.owner != nil {
+		state.owner.RemovePending(state.charge)
 	}
-	if proof.metadata != nil {
-		if proof.cleanupErr != nil {
-			proof.metadata.CleanupFailed()
-			return proof.cleanupErr
-		}
-		metadata, charge := proof.metadata, proof.metadataCharge
-		proof.name = ""
-		proof.adapter = nil
-		proof.metadata = nil
-		proof.metadataCharge = 0
-		metadata.RemovePending(charge)
-	}
-	return proof.cleanupErr
+	return nil
 }
 
 const (

@@ -319,16 +319,8 @@ func (v PrimaryDirectoryView) InsertPrimaryComponentWithVisit(dst []byte, id uin
 // relocating unrelated component custody. The returned view derives from the
 // complete old certificate plus the checked exact replacement, never ancestry.
 func (v PrimaryDirectoryView) ReplacePrimaryComponent(dst []byte, id uint64, e PrimaryDirectoryEntry) (PrimaryDirectoryView, error) {
-	old, found := v.Search(e.Key)
-	if !found || len(dst) != page.PageSize || id < 2 || e.ClassSlot != old.ClassSlot || !primaryComponentValid(e) || e.Revision == 0 || (e.Kind != PrimaryPut && e.Kind != PrimaryAbsence) {
-		return PrimaryDirectoryView{}, ErrPrimaryDirectory
-	}
-	copy(dst, v.data)
-	binary.LittleEndian.PutUint64(dst[:8], id)
-	rec := dst[PrimaryDirectoryRecordsOffset+int(e.ClassSlot)*PrimaryDirectoryEntrySize:][:PrimaryDirectoryEntrySize]
-	encodePrimaryComponent(rec, e)
-	page.UpdateChecksum(dst)
-	return PrimaryDirectoryView{data: dst, count: v.count, heapEnd: v.heapEnd}, nil
+	view, _, err := v.ReplacePrimaryComponentWithVisit(dst, id, e, nil)
+	return view, err
 }
 func VerifyPrimaryOperand(op PrimaryOperand, data []byte) bool {
 	return len(data) == page.PageSize && page.VerifyChecksumNonMutating(data) && sha256.Sum256(data) == op.Digest

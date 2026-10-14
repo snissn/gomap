@@ -200,7 +200,9 @@ func (p *Pager) closePhysicalWork(native bool, w *iterator.OrdinalScanWork, refu
 			p.mappings = nil
 			p.verified.Store(nil)
 			p.prefetched.Store(nil)
-			p.dirtyChunks.words = nil
+			// Membership and range hints describe the same disposed mappings.
+			// Retained publication handles still sync after this terminal detach.
+			p.dirtyChunks = dirtyChunkBits{revision: p.dirtyChunks.revision + 1}
 			p.fallback = nil
 			p.primaryBanks.Store(nil)
 			p.mu.Unlock()

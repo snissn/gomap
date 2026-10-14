@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 )
 
@@ -60,16 +61,21 @@ func (db *DB) releaseIndex(gen *indexGen) {
 	db.idxMu.Unlock()
 
 	// Ghost instead of immediate close
+	var metadata *retainedalloc.Owner
+	var charge uint64
+	var err error
 	if db.ghostManager != nil {
-		if err := db.ghostManager.add(gen); err != nil {
-			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-			db.quiesceFailedRetiredGeneration(gen)
-		}
+		metadata, charge, err = db.ghostManager.add(gen)
 	} else {
-		if err := gen.close(); err != nil {
-			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-			db.quiesceFailedRetiredGeneration(gen)
-		}
+		metadata, charge, err = gen.closeWithCompletionV6()
+	}
+	if err != nil {
+		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+		db.quiesceFailedRetiredGeneration(gen)
+	}
+	gen = nil
+	if charge != 0 {
+		metadata.RemovePending(charge)
 	}
 }
 
@@ -104,16 +110,21 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	delete(db.idxAll, gen.id)
 	db.idxMu.Unlock()
 
+	var metadata *retainedalloc.Owner
+	var charge uint64
+	var err error
 	if db.ghostManager != nil {
-		if err := db.ghostManager.add(gen); err != nil {
-			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-			db.quiesceFailedRetiredGeneration(gen)
-		}
+		metadata, charge, err = db.ghostManager.add(gen)
 	} else {
-		if err := gen.close(); err != nil {
-			db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-			db.quiesceFailedRetiredGeneration(gen)
-		}
+		metadata, charge, err = gen.closeWithCompletionV6()
+	}
+	if err != nil {
+		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+		db.quiesceFailedRetiredGeneration(gen)
+	}
+	gen = nil
+	if charge != 0 {
+		metadata.RemovePending(charge)
 	}
 }
 
@@ -145,13 +156,18 @@ func (db *DB) closeAllIndexes() error {
 	db.idxMu.Unlock()
 
 	var errs []error
-	for _, g := range gens {
+	for i, g := range gens {
 		// Current publication is already nil and writers have drained. Stop
 		// growth without consuming any physical owner or failed debt.
 		db.quiesceFailedRetiredGeneration(g)
-		if err := g.close(); err != nil {
+		metadata, charge, err := g.closeWithCompletionV6()
+		if err != nil {
 			db.retainOriginalCleanupError(g.originalCloseFailure(err))
 			errs = append(errs, err)
+		}
+		gens[i], g = nil, nil
+		if charge != 0 {
+			metadata.RemovePending(charge)
 		}
 	}
 	return errors.Join(errs...)

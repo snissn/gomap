@@ -41,6 +41,30 @@ func openMmapAdmissionFixture(t *testing.T, lane, seq uint32) (*File, page.Value
 	return f, ptr, want
 }
 
+// Reopen through the real producer so every managed File is born with its
+// original Manager alias edge. The pointer image is unchanged.
+func manageMmapAdmissionFixtures(t *testing.T, files ...*File) (*Manager, []*File) {
+	t.Helper()
+	m := &Manager{}
+	managed := make([]*File, 0, len(files))
+	for _, f := range files {
+		path, id := f.Path, f.ID
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.RegisterSegment(path, id); err != nil {
+			t.Fatal(err)
+		}
+		managed = append(managed, m.files[id])
+	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return m, managed
+}
+
 func TestMmapAdmission_RechecksBeforePublication(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap unsupported")
@@ -54,8 +78,8 @@ func TestMmapAdmission_RechecksBeforePublication(t *testing.T) {
 				withMappedLeafSealedBytesBudget(t, 1<<30)
 				a, _, _ := openMmapAdmissionFixture(t, lane, 1)
 				b, ptr, want := openMmapAdmissionFixture(t, lane, 2)
-				m := &Manager{files: map[uint32]*File{a.ID: a, b.ID: b}}
-				a.manager, b.manager = m, m
+				m, managed := manageMmapAdmissionFixtures(t, a, b)
+				a, b = managed[0], managed[1]
 				info, err := a.File.Stat()
 				if err != nil {
 					t.Fatal(err)
@@ -105,7 +129,8 @@ func TestMmapAdmission_SealedRangeGrowthUsesActualSize(t *testing.T) {
 	withMappedSealedBudget(t, 8)
 	withMappedSealedBytesBudget(t, 1)
 	f, ptr, want := openMmapAdmissionFixture(t, 0, 1)
-	f.manager = &Manager{files: map[uint32]*File{f.ID: f}}
+	_, managed := manageMmapAdmissionFixtures(t, f)
+	f = managed[0]
 	old, err := mmapReadOnly(f.File, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -173,8 +198,8 @@ func TestMmapAdmission_ConcurrentSiblingReads(t *testing.T) {
 	withMappedSealedBytesBudget(t, 1<<30)
 	a, pa, wa := openMmapAdmissionFixture(t, 0, 1)
 	b, pb, wb := openMmapAdmissionFixture(t, 0, 2)
-	m := &Manager{files: map[uint32]*File{a.ID: a, b.ID: b}}
-	a.manager, b.manager = m, m
+	m, managed := manageMmapAdmissionFixtures(t, a, b)
+	a, b = managed[0], managed[1]
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, row := range []struct {
@@ -212,7 +237,10 @@ func TestMmapAdmission_RemovedHandleCannotPublish(t *testing.T) {
 	withMappedSealedBytesBudget(t, 1<<30)
 	f, _, _ := openMmapAdmissionFixture(t, 0, 1)
 	replacement, _, _ := openMmapAdmissionFixture(t, 0, 1)
-	f.manager = &Manager{files: map[uint32]*File{f.ID: replacement}}
+	m, managed := manageMmapAdmissionFixtures(t, f)
+	f = managed[0]
+	m.files[f.ID] = replacement
+	t.Cleanup(func() { m.files[f.ID] = f })
 	if f.remapToFileSize() {
 		t.Fatal("replaced managed handle reported admission")
 	}

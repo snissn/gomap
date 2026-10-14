@@ -499,7 +499,7 @@ func (g *Growth) install(p *Pager) {
 		p.verified.Store(g.verifiedOutput)
 	}
 	if g.logical && g.targetPages > g.count {
-		p.numPages.Store(g.targetPages)
+		p.installLogicalCountLocked(g.targetPages)
 	}
 	if g.metadata != nil {
 		// New backing is now owned by Pager; source descriptor readers have ended.
@@ -600,4 +600,43 @@ func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 		owner.Remove(charge)
 	}
 	return true, nil
+}
+
+// installCountWithinCapacity is the original logical publication under the
+// same growth and pager guards. It only admits an already represented count;
+// every backing-expansion route continues through Growth.
+func (p *Pager) installCountWithinCapacity(target uint64) (bool, error) {
+	p.growMu.Lock()
+	defer p.growMu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.readOnly {
+		return false, ErrReadOnly
+	}
+	if p.closing {
+		return false, ErrGrowthClosed
+	}
+	local := p.localPageCount(target)
+	if local > math.MaxInt64/page.PageSize {
+		return false, fmt.Errorf("pager: growth size overflow")
+	}
+	if int64(local)*page.PageSize > int64(len(p.chunks))*p.chunkSize {
+		return false, nil
+	}
+	verified := p.verified.Load()
+	if verified == nil || uint64(len(verified.chunks)) < (local+verifiedChunkPages-1)/verifiedChunkPages {
+		return false, nil
+	}
+	words := (len(p.chunks) + 63) / 64
+	prefetched := p.prefetched.Load()
+	if prefetched == nil || len(prefetched.words) < words || len(p.dirtyChunks.words) < words {
+		return false, nil
+	}
+	p.installLogicalCountLocked(target)
+	return true, nil
+}
+func (p *Pager) installLogicalCountLocked(target uint64) {
+	if target > p.numPages.Load() {
+		p.numPages.Store(target)
+	}
 }

@@ -22,21 +22,10 @@ func (t *Tree) selectPrimaryOperand(data, key []byte, readLeaf func(page.LeafLog
 		op = entry.Operand
 	}
 	var n node.Node
-	if bounded && op.Ref.Kind == page.ChildRefLeafLog {
-		if readLeaf == nil {
-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, ErrOwnedIteratorLeafReader
-		}
-		image, e := readLeaf(op.Ref.Log, leafScratch[:0])
-		if e != nil {
-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, e
-		}
-		if len(image) != page.PageSize || cap(image) != page.PageSize || &image[0] != &leafScratch[:page.PageSize][0] {
-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, ErrOwnedIteratorLeafReader
-		}
-		n = *node.NewNode(image)
-	} else if err = t.loadChildRefViewInto(&n, op.Ref, true, false); err != nil {
+	if err = t.loadReadRefInto(&n, op.Ref, true, nil, leafScratch, readLeaf, bounded); err != nil {
 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, err
 	}
+
 	if !node.VerifyPrimaryOperand(op, n.Data()) {
 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, node.ErrPrimaryDirectory
 	}

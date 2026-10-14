@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/snissn/gomap/TreeDB/tree"
 	"os"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -149,4 +150,17 @@ func (s *Snapshot) OwnedUserRootEmpty() (bool, error) {
 	}
 	defer s.endRead()
 	return s.tree.OwnedUserRootEmpty()
+}
+
+// SeekGEEntryWithFixedScratch reads metadata through this already captured tree.
+// Returned bytes borrow caller-admitted scratch and this snapshot until reuse.
+func (s *Snapshot) SeekGEEntryWithFixedScratch(start, end, keyScratch, leafScratch []byte, scratch *tree.OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
+	if s == nil {
+		return node.LeafEntry{}, false, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return node.LeafEntry{}, false, err
+	}
+	defer s.endRead()
+	return s.tree.SeekGEWithFixedScratch(start, end, keyScratch, leafScratch, scratch, readLeaf)
 }
