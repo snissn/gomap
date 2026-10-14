@@ -1,0 +1,290 @@
+{
+  "state": "UNQUALIFIED_CONSTRUCTION",
+  "members": [
+    {
+      "path": "README.md",
+      "sha256": "937d93b949d769926b6b86514a5d020f3586374b76d60be0e1bc9a2077ff5354",
+      "bytes": 2746
+    },
+    {
+      "path": "baseline/TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "796c63c85d6fdc61d2f9df1929c896b0b9fc0e739f4ece8360365f755220e8c8",
+      "bytes": 46812
+    },
+    {
+      "path": "baseline/TreeDB/pager/pager.go",
+      "sha256": "6d985eac99d5375b4299542d738622402b1cba173b907b743d6c9af1e0953ac0",
+      "bytes": 44651
+    },
+    {
+      "path": "baseline/TreeDB/pager/physical_close_work.go",
+      "sha256": "d5601661ef65a1eec4465f5b5e8be8215cd2935ce54585f3cf615cc7dc76979a",
+      "bytes": 7458
+    },
+    {
+      "path": "baseline/TreeDB/pager/physical_close_work_test.go",
+      "sha256": "d11b4c922181091f680235e932cc8953b08c49e358bf00008465e1e8885863f2",
+      "bytes": 3506
+    },
+    {
+      "path": "final-normal-corrected.command.json",
+      "sha256": "d9492b2e0bd3319bdf748ab1eeaf2f4cf044a5c88976fa91933fe5f1301114cc",
+      "bytes": 903
+    },
+    {
+      "path": "final-normal-corrected.jsonl",
+      "sha256": "55d4f550c4acdf7c558e52441666645be8a332995083d086bcfd2f204a89f4b6",
+      "bytes": 14066
+    },
+    {
+      "path": "final-normal-corrected.receipt.json",
+      "sha256": "750866c623644c6c004d3760d947bf6be0a1bbc079556fdadf5a17a1f3a53e65",
+      "bytes": 1062
+    },
+    {
+      "path": "final-normal-corrected.source-after.json",
+      "sha256": "9a382d44a15afa4676b7b946c95d2ee60dd2573f74d602ca9aa0055ad8cba2e9",
+      "bytes": 541772
+    },
+    {
+      "path": "final-normal-corrected.source-before.json",
+      "sha256": "9a382d44a15afa4676b7b946c95d2ee60dd2573f74d602ca9aa0055ad8cba2e9",
+      "bytes": 541772
+    },
+    {
+      "path": "final-normal.command.json",
+      "sha256": "4bd204c1de247b8ee02029daa31a9a207607664dc335944dc6535ae58f75804b",
+      "bytes": 902
+    },
+    {
+      "path": "final-normal.jsonl",
+      "sha256": "4f22d2807a3ae9ec63f02454c780a3755cdde4ed7b7a0d010105f3e398eccc70",
+      "bytes": 14337
+    },
+    {
+      "path": "final-normal.receipt.json",
+      "sha256": "d093dc4d3a2118ace418ee160c438e7b5a5a4bdcd74a8787245d4b2169d95845",
+      "bytes": 1061
+    },
+    {
+      "path": "final-normal.source-after.json",
+      "sha256": "f0baf353b56da84b9c0cf9fc8761587fde0c46384cd4050660f160182bf8c2a8",
+      "bytes": 541772
+    },
+    {
+      "path": "final-normal.source-before.json",
+      "sha256": "f0baf353b56da84b9c0cf9fc8761587fde0c46384cd4050660f160182bf8c2a8",
+      "bytes": 541772
+    },
+    {
+      "path": "final-race.command.json",
+      "sha256": "9fef757c6144d41b24f2621c92d0c939f73aeba1aa152b86f0261c6ced06e029",
+      "bytes": 916
+    },
+    {
+      "path": "final-race.jsonl",
+      "sha256": "c9aa187f1a696a996452fa4c508bd32941f5272411643c78a378d07acaff2ed1",
+      "bytes": 14056
+    },
+    {
+      "path": "final-race.receipt.json",
+      "sha256": "e5232635fa646d89db29cb4a6ef9bfd74f535a95b83fee99a57181f6222e1e0e",
+      "bytes": 1075
+    },
+    {
+      "path": "final-race.source-after.json",
+      "sha256": "9a382d44a15afa4676b7b946c95d2ee60dd2573f74d602ca9aa0055ad8cba2e9",
+      "bytes": 541772
+    },
+    {
+      "path": "final-race.source-before.json",
+      "sha256": "9a382d44a15afa4676b7b946c95d2ee60dd2573f74d602ca9aa0055ad8cba2e9",
+      "bytes": 541772
+    },
+    {
+      "path": "first-red-source/TreeDB/pager/physical_close_work_test.go",
+      "sha256": "3c338417de92290b071ac31d83aa27ac343831920d5bb1304e9e982e21fe9224",
+      "bytes": 4897
+    },
+    {
+      "path": "import-map.json",
+      "sha256": "1c8f035e9dd1a107990ecf59ea23f3c69184be39f77816321f3ea9150a545226",
+      "bytes": 1570
+    },
+    {
+      "path": "normal.command.json",
+      "sha256": "11c0aed1ddc5c320a6e7c3093388e35124dcd3f22ba6c6a7f56a2f0d4afe8c7f",
+      "bytes": 737
+    },
+    {
+      "path": "normal.jsonl",
+      "sha256": "c8fad849c47f767439cb8252593988fc5a704f8a1d08fba02608f7e69926e978",
+      "bytes": 12337
+    },
+    {
+      "path": "normal.receipt.json",
+      "sha256": "743dfdecaf4f8536d41520d59f6eef82f1dcbf62a5c06de93618edbcf8b33259",
+      "bytes": 896
+    },
+    {
+      "path": "normal.source-after.json",
+      "sha256": "35c852f9f68b16e83dc401818e27f74d1b2898ad7229042328f9a291c8855b9a",
+      "bytes": 541772
+    },
+    {
+      "path": "normal.source-before.json",
+      "sha256": "35c852f9f68b16e83dc401818e27f74d1b2898ad7229042328f9a291c8855b9a",
+      "bytes": 541772
+    },
+    {
+      "path": "pager-restoration-red.command.json",
+      "sha256": "8b9de101db4da7dd41ad99cbff1d8d961dad1aea1a1a2b578f9b92e14e055e0d",
+      "bytes": 737
+    },
+    {
+      "path": "pager-restoration-red.jsonl",
+      "sha256": "4367868597739e8a56a41df8d06406f597df0cfba13ec06d02d075665aea1617",
+      "bytes": 12334
+    },
+    {
+      "path": "pager-restoration-red.receipt.json",
+      "sha256": "f693d7c4a7d51f58adecccad3ac6fe0cb8f7bd35b3e44cf2dcb520b9d4f60413",
+      "bytes": 896
+    },
+    {
+      "path": "pager-restoration-red.source-after.json",
+      "sha256": "35c852f9f68b16e83dc401818e27f74d1b2898ad7229042328f9a291c8855b9a",
+      "bytes": 541772
+    },
+    {
+      "path": "pager-restoration-red.source-before.json",
+      "sha256": "35c852f9f68b16e83dc401818e27f74d1b2898ad7229042328f9a291c8855b9a",
+      "bytes": 541772
+    },
+    {
+      "path": "pager-restore-red.command.json",
+      "sha256": "fbad3cdd041f538073f7585de8728a8555f36b740dd83d21f48fc72a962ea1e0",
+      "bytes": 848
+    },
+    {
+      "path": "pager-restore-red.jsonl",
+      "sha256": "b5f14bf03a1e39690426c918b7f93ea3fa7eda33fa9761b79f7e730f108ead57",
+      "bytes": 13593
+    },
+    {
+      "path": "pager-restore-red.receipt.json",
+      "sha256": "da74accfb34fdfdc2dc144f9c4e503d5fb6fa802cdf6380e08599294a85a8110",
+      "bytes": 1006
+    },
+    {
+      "path": "pager-restore-red.source-after.json",
+      "sha256": "36176d6277c88c717eb9f969fd997e776e2450ea7aee72f5ee47f8138391c355",
+      "bytes": 541772
+    },
+    {
+      "path": "pager-restore-red.source-before.json",
+      "sha256": "36176d6277c88c717eb9f969fd997e776e2450ea7aee72f5ee47f8138391c355",
+      "bytes": 541772
+    },
+    {
+      "path": "patches/TreeDB__internal__rootpublication__coordinator.go.patch",
+      "sha256": "b4544910257854c48e81c539b4aaea190ff2f07e4dd197ece1de3f821b96cd39",
+      "bytes": 950
+    },
+    {
+      "path": "patches/TreeDB__pager__pager.go.patch",
+      "sha256": "b2482f4e8c45a5b8ca6b6316676383da031f87b14893fcf8d2180703be2ab70e",
+      "bytes": 735
+    },
+    {
+      "path": "patches/TreeDB__pager__physical_close_work.go.patch",
+      "sha256": "07dca18df6dd2e74e5a6fe2ccf5427adb477ce300b0b8940e86892be6c932dee",
+      "bytes": 699
+    },
+    {
+      "path": "patches/TreeDB__pager__physical_close_work_test.go.patch",
+      "sha256": "871e61f8ec558f5d40c5262b8af64d7b55d43d7247a26ad1ad24c3a713ed9090",
+      "bytes": 3297
+    },
+    {
+      "path": "producer-red.py",
+      "sha256": "65e798d87183075f155a793d8e77a2d7f603fec884577b4b3a58a2ea5c526620",
+      "bytes": 2015
+    },
+    {
+      "path": "producer.py",
+      "sha256": "dfa552fdd7c8ca827f98807700f2dd705826a01a9876cbb39ffbad0d7a358d86",
+      "bytes": 2069
+    },
+    {
+      "path": "red.command.json",
+      "sha256": "4b49ef5d50341a2c6be07595be5640a03ec191c3285007c2f578ac9e624e9062",
+      "bytes": 849
+    },
+    {
+      "path": "red.jsonl",
+      "sha256": "1207783cc2ca03ab98c0207e3060311f83e3aef6f3fc6f2eb85e600d63484121",
+      "bytes": 19228
+    },
+    {
+      "path": "red.receipt.json",
+      "sha256": "3cf8a35ccdbd62aff73098f960c77071b613dfb1dee122c602c7d91dc6ba8d30",
+      "bytes": 1008
+    },
+    {
+      "path": "red.source-after.json",
+      "sha256": "1aaae63d8a53dcd89287e7d263fe5e44a272a95ce475e65fcbb3fb6ad57a1497",
+      "bytes": 541772
+    },
+    {
+      "path": "red.source-before.json",
+      "sha256": "1aaae63d8a53dcd89287e7d263fe5e44a272a95ce475e65fcbb3fb6ad57a1497",
+      "bytes": 541772
+    },
+    {
+      "path": "released-roots.json",
+      "sha256": "5dff611a00296eb4798a006e81c185b281c2fbedf38a7850c56df4a5158b0987",
+      "bytes": 129
+    },
+    {
+      "path": "restoration-red-source/TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "796c63c85d6fdc61d2f9df1929c896b0b9fc0e739f4ece8360365f755220e8c8",
+      "bytes": 46812
+    },
+    {
+      "path": "restoration-red-source/TreeDB/pager/pager.go",
+      "sha256": "6d985eac99d5375b4299542d738622402b1cba173b907b743d6c9af1e0953ac0",
+      "bytes": 44651
+    },
+    {
+      "path": "restoration-red-source/TreeDB/pager/physical_close_work.go",
+      "sha256": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+      "bytes": 7645
+    },
+    {
+      "path": "restoration-red-source/TreeDB/pager/physical_close_work_test.go",
+      "sha256": "59eb0f1a5adba5e4eaed25dca92cc1223f195cc80a8a034a7d09cdf38ad449b7",
+      "bytes": 6180
+    },
+    {
+      "path": "source/TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "4c0f29c8d35786be97c4b67381c5f915ed1a36b10d8cd46747c2e9e324274c51",
+      "bytes": 47063
+    },
+    {
+      "path": "source/TreeDB/pager/pager.go",
+      "sha256": "8a72339fe00ed87f82e3c8526493357af4f77839f7455cc1b645d5511c1be4a3",
+      "bytes": 44958
+    },
+    {
+      "path": "source/TreeDB/pager/physical_close_work.go",
+      "sha256": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+      "bytes": 7645
+    },
+    {
+      "path": "source/TreeDB/pager/physical_close_work_test.go",
+      "sha256": "78c97c1485fb1f3bd95e3e5c74314ca772a0f5e2b042879fd5a5e09874b4b068",
+      "bytes": 6161
+    }
+  ]
+}

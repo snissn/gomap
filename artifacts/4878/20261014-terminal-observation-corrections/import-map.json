@@ -1,0 +1,37 @@
+{
+  "baseline": "f15752957cd1f1caa6e3cfb035a8f30f25508744",
+  "rows": [
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "before_sha256": "796c63c85d6fdc61d2f9df1929c896b0b9fc0e739f4ece8360365f755220e8c8",
+      "after_sha256": "4c0f29c8d35786be97c4b67381c5f915ed1a36b10d8cd46747c2e9e324274c51",
+      "before_bytes": 46812,
+      "after_bytes": 47063,
+      "patch": "patches/TreeDB__internal__rootpublication__coordinator.go.patch"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "before_sha256": "6d985eac99d5375b4299542d738622402b1cba173b907b743d6c9af1e0953ac0",
+      "after_sha256": "8a72339fe00ed87f82e3c8526493357af4f77839f7455cc1b645d5511c1be4a3",
+      "before_bytes": 44651,
+      "after_bytes": 44958,
+      "patch": "patches/TreeDB__pager__pager.go.patch"
+    },
+    {
+      "path": "TreeDB/pager/physical_close_work.go",
+      "before_sha256": "d5601661ef65a1eec4465f5b5e8be8215cd2935ce54585f3cf615cc7dc76979a",
+      "after_sha256": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+      "before_bytes": 7458,
+      "after_bytes": 7645,
+      "patch": "patches/TreeDB__pager__physical_close_work.go.patch"
+    },
+    {
+      "path": "TreeDB/pager/physical_close_work_test.go",
+      "before_sha256": "d11b4c922181091f680235e932cc8953b08c49e358bf00008465e1e8885863f2",
+      "after_sha256": "78c97c1485fb1f3bd95e3e5c74314ca772a0f5e2b042879fd5a5e09874b4b068",
+      "before_bytes": 3506,
+      "after_bytes": 6161,
+      "patch": "patches/TreeDB__pager__physical_close_work_test.go.patch"
+    }
+  ]
+}

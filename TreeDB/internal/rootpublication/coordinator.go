@@ -831,7 +831,11 @@ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPubl
 		// pending candidates retain any failed sibling; this call releases only
 		// its scratch aliases before accounting the consumed prefix.
 		clear(candidate.durableRootGroup().members)
-		*candidate = PreparedRootCandidate{}
+		// This private coalesced descriptor owns detached immutable observations.
+		// Consume every physical-authority alias without erasing the publication
+		// observations supplied by the original Publisher API.
+		candidate.extensions = extensionSlots{}
+		candidate.durableValidated = false
 	}
 	clear(group)
 	group, candidate, attempt = nil, nil, PublishAttempt{}

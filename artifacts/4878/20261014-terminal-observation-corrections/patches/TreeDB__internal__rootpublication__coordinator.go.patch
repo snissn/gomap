@@ -1,0 +1,17 @@
+diff --git a/TreeDB/internal/rootpublication/coordinator.go b/TreeDB/internal/rootpublication/coordinator.go
+index 62bb2aeeb..d18f6bcf8 100644
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -831,7 +831,11 @@ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPubl
+ 		// pending candidates retain any failed sibling; this call releases only
+ 		// its scratch aliases before accounting the consumed prefix.
+ 		clear(candidate.durableRootGroup().members)
+-		*candidate = PreparedRootCandidate{}
++		// This private coalesced descriptor owns detached immutable observations.
++		// Consume every physical-authority alias without erasing the publication
++		// observations supplied by the original Publisher API.
++		candidate.extensions = extensionSlots{}
++		candidate.durableValidated = false
+ 	}
+ 	clear(group)
+ 	group, candidate, attempt = nil, nil, PublishAttempt{}

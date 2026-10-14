@@ -1,0 +1,4 @@
+{
+  "roots": [],
+  "reason": "All focused fixtures use testing.T.TempDir and have joined; no persistent test DB root created."
+}

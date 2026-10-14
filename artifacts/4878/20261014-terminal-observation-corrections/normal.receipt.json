@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-run",
+    "^Test(PhysicalClose|DirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier)",
+    "./TreeDB/pager"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "script_sha256": "8777d9088fe9b76e6c5b87aa4ca505bebe5a35262b27a3bc4697b7d748612a40",
+  "head": "f15752957cd1f1caa6e3cfb035a8f30f25508744",
+  "started": 1791992101.3738065,
+  "exit": 1,
+  "source_unchanged": true,
+  "finished": 1791992101.5801518,
+  "raw_sha256": "c8fad849c47f767439cb8252593988fc5a704f8a1d08fba02608f7e69926e978"
+}

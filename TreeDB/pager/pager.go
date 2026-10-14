@@ -1178,7 +1178,12 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 	if syncErr != nil {
 		p.mu.Lock()
 		for _, idx := range toSync {
-			p.dirtyChunks.set(idx)
+			// Close may have consumed these mappings after dirty detachment.
+			// Preserve retry membership only for still-owned mapped storage;
+			// the retained handle keeps the failed durability fence retryable.
+			if idx < len(p.chunks) && len(p.chunks[idx]) != 0 && idx/64 < len(p.dirtyChunks.words) {
+				p.dirtyChunks.set(idx)
+			}
 		}
 		p.mu.Unlock()
 		return false, syncErr
