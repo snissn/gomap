@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/internal/valuelog [github.com/snissn/gomap/TreeDB/internal/valuelog.test]
+TreeDB/internal/valuelog/cow_continuation_test.go:105:39: stats.Compressed undefined (type FrameStats has no field or method Compressed)
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog [build failed]
+FAIL

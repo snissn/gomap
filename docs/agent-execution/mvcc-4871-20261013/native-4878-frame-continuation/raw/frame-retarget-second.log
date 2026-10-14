@@ -1,0 +1,67 @@
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/1/1
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/1/31
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/1/4096
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/1/131071
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/1/1044480
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/2/1
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/2/31
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/2/4096
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/2/131071
+=== RUN   TestCOWBlockContinuationOriginalCodecDifferential/2/1044480
+--- PASS: TestCOWBlockContinuationOriginalCodecDifferential (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/1/1 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/1/31 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/1/4096 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/1/131071 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/1/1044480 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/2/1 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/2/31 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/2/4096 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/2/131071 (0.00s)
+    --- PASS: TestCOWBlockContinuationOriginalCodecDifferential/2/1044480 (0.00s)
+=== RUN   TestCOWLeafContinuationRealProducerFrames
+=== RUN   TestCOWLeafContinuationRealProducerFrames/0/false
+=== RUN   TestCOWLeafContinuationRealProducerFrames/0/true
+=== RUN   TestCOWLeafContinuationRealProducerFrames/1/false
+=== RUN   TestCOWLeafContinuationRealProducerFrames/1/true
+=== RUN   TestCOWLeafContinuationRealProducerFrames/2/false
+=== RUN   TestCOWLeafContinuationRealProducerFrames/2/true
+--- PASS: TestCOWLeafContinuationRealProducerFrames (0.06s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/0/false (0.01s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/0/true (0.01s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/1/false (0.02s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/1/true (0.01s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/2/false (0.01s)
+    --- PASS: TestCOWLeafContinuationRealProducerFrames/2/true (0.01s)
+=== RUN   TestCOWLeafContinuationCancelFailureAndUnsupported
+--- PASS: TestCOWLeafContinuationCancelFailureAndUnsupported (0.01s)
+=== RUN   TestCOWLeafContinuationCorruptionCapacityAndCustody
+--- PASS: TestCOWLeafContinuationCorruptionCapacityAndCustody (0.02s)
+=== RUN   TestCOWLeafContinuationNoHiddenAllocations
+--- PASS: TestCOWLeafContinuationNoHiddenAllocations (0.02s)
+=== RUN   TestCOWLeafContinuationRealDictionaryRefusal
+--- PASS: TestCOWLeafContinuationRealDictionaryRefusal (0.01s)
+=== RUN   TestCOWLeafContinuationSameFrameRetarget
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/0
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/1
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/2
+--- PASS: TestCOWLeafContinuationSameFrameRetarget (0.02s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/0 (0.01s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/1 (0.01s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/2 (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.141s
+=== RUN   TestChargedProjectionRealExternalProducerFrames
+=== RUN   TestChargedProjectionRealExternalProducerFrames/0
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-3397751880; consumer: this test process only; files/pager closed on return
+=== RUN   TestChargedProjectionRealExternalProducerFrames/1
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-4064238543; consumer: this test process only; files/pager closed on return
+=== RUN   TestChargedProjectionRealExternalProducerFrames/2
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-1785288762; consumer: this test process only; files/pager closed on return
+--- PASS: TestChargedProjectionRealExternalProducerFrames (0.04s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/0 (0.01s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/1 (0.01s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/2 (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.037s

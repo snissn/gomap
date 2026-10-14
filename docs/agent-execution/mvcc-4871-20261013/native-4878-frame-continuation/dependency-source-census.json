@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "compress_revision": "87fb149e472104f0c2fa7a961b2493c4372603dc",
+  "compress_module": "compress@v1.18.2-snissn.0.0.20260506201017-87fb149e4721",
+  "files": [
+    {
+      "path": "zstd/decoder.go",
+      "bytes": 23465,
+      "sha256": "2689610127ef4011f1964d931588056016d9cdb2d38b17c13d9ea8e80ca0afeb"
+    },
+    {
+      "path": "zstd/framedec.go",
+      "bytes": 10490,
+      "sha256": "b0dc5d1b80b3ca6e1b6295cb54785524737dc2294dcfdd0751e684870ccc36c6"
+    },
+    {
+      "path": "zstd/history.go",
+      "bytes": 2939,
+      "sha256": "66b26c000abeef01240dd594f981a2c0fd7e6e1e81628a858a8e683bc6113413"
+    },
+    {
+      "path": "zstd/blockdec.go",
+      "bytes": 18898,
+      "sha256": "d1889ce970f06cd18d2c8240df55f3d16abd5758a2caebb74ade41dbd7ee2cac"
+    },
+    {
+      "path": "zstd/fse_decoder.go",
+      "bytes": 8668,
+      "sha256": "005f20afa6bd1c58091acd7a7ea5c9500610d4a41bf7846e4ba9c59a5326be58"
+    },
+    {
+      "path": "zstd/fse_decoder_generic.go",
+      "bytes": 1816,
+      "sha256": "3345ee073bd946deef317e9a78818e1144e71d17e5e954c504e200e1934af7d4"
+    },
+    {
+      "path": "zstd/seqdec.go",
+      "bytes": 13468,
+      "sha256": "b2ea74a7161842bb0084474025f26b5375d2acbba2e5b7b25234bcfaf7efc4d7"
+    },
+    {
+      "path": "zstd/seqdec_generic.go",
+      "bytes": 6455,
+      "sha256": "26b143bc40ee4fe6c953d96443b80b4b88fcdd2586f7005d51c81b65b19333c9"
+    },
+    {
+      "path": "zstd/dict.go",
+      "bytes": 13123,
+      "sha256": "5da00cf4f69071c3cb539b24777c11e9ec3e72c32e12f679dbcd9155d84d15be"
+    },
+    {
+      "path": "huff0/huff0.go",
+      "bytes": 9125,
+      "sha256": "4cc986023fd848ce7add03fb2ee1a6908711042bc7254912bd82856c54b6ec85"
+    },
+    {
+      "path": "huff0/decompress.go",
+      "bytes": 29575,
+      "sha256": "2252d5f37da24ca8cdc7cc82a61594cd608c36f7269a728c2085fe19ce3b586d"
+    },
+    {
+      "path": "huff0/decompress_generic.go",
+      "bytes": 7721,
+      "sha256": "d924dea81e35f8211e46ad8d4298a89acd28a64821ea1f89d606772ada20be5a"
+    },
+    {
+      "path": "huff0/decompress_amd64.go",
+      "bytes": 5754,
+      "sha256": "ccf0d90b851f2f42bb4752ad772bcab64b47a4e4b5562bd077d8bbaa2f19d4ed"
+    },
+    {
+      "path": "zstd/fse_predefined.go",
+      "bytes": 5262,
+      "sha256": "3406d164c2738fdbbed4498da44e97d10f46995b70414649a238f041e7631ce6"
+    },
+    {
+      "path": "zstd/encoder.go",
+      "bytes": 18646,
+      "sha256": "24d193573e4e687d7f47bf2fe6e6305001ee991f60b36183ca073a49dddee27c"
+    },
+    {
+      "path": "zstd/encoder_options.go",
+      "bytes": 11500,
+      "sha256": "adac7c94e417030cea007d063ebbcfbe87b06c48aa230f65fb83526df825332f"
+    },
+    {
+      "path": "fse/fse.go",
+      "bytes": 4709,
+      "sha256": "65a33af76eb1adc8a02f42320ddd1cc588cefa71c073fe8a6fdcff0b202c6752"
+    },
+    {
+      "path": "fse/decompress.go",
+      "bytes": 9412,
+      "sha256": "f30d291722fa174e3961a272f054a19e52c6101a9bf52464e19c12a997bfb088"
+    }
+  ],
+  "other_dependencies": [
+    {
+      "module": "github.com/golang/snappy@v0.0.4",
+      "path": "decode_other.go",
+      "bytes": 3471,
+      "sha256": "5a9ba6d9ec2a2a11998d7876df498ff6890f45527f75aeda900c6ead61c86e12"
+    },
+    {
+      "module": "github.com/golang/snappy@v0.0.4",
+      "path": "LICENSE",
+      "bytes": 1486,
+      "sha256": "f69f157b0be75da373605dbc8bbf142e8924ee82d8f44f11bcaf351335bf98cf"
+    },
+    {
+      "module": "github.com/pierrec/lz4/v4@v4.1.22",
+      "path": "internal/lz4block/decode_other.go",
+      "bytes": 3106,
+      "sha256": "285d8ebf35b29a2ed3c06e212c9616070f94c303aa7bcbe34b2a1517c9831914"
+    },
+    {
+      "module": "github.com/pierrec/lz4/v4@v4.1.22",
+      "path": "LICENSE",
+      "bytes": 1477,
+      "sha256": "6a358d2540ca14048f02d366f23787c0a480157e58f058113f0e27168dd4e447"
+    }
+  ],
+  "gomap_active_original_sources": [
+    {
+      "path": "go.mod",
+      "blob": "9c50190970e42029aebab51af84002c17341053e",
+      "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f"
+    },
+    {
+      "path": "go.sum",
+      "blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+      "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "blob": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+      "sha256": "74c37710c36d4412887fc30b21ac5cc68a42c998608e225052628379d676496a"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "blob": "00d03afef2a16a00374d774aae6db48c65fabcce",
+      "sha256": "4dfa9b88f9aa5ecfc42c684a0d85e809a2035ad0d5bf95acd70de1b4eeae66b8"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack.go",
+      "blob": "6cb1eebf2360e79e2f4a0a586071d0bad7d091db",
+      "sha256": "9624eba9aaf40be68c87dd02620fd74165688087c43bcaca1a7e402df5082275"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/block_codec.go",
+      "blob": "a9dbd97c7c2a85980017185d08e4743ba1bdfcc0",
+      "sha256": "8b1f4b09d3602b7d22d9d3eea4f519979cc6f4782675f15bb7bf6a9116ad99ce"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_reader.go",
+      "blob": "14496f75288211f91b66fdad23c766d2672514ec",
+      "sha256": "6ecda5c7ccab087e880b2856598e91c24bebacc41e5b5511bdd84c7a1c491b6f"
+    },
+    {
+      "path": "TreeDB/caching/cow_read_workspace.go",
+      "blob": "8b657b3d7db5ce1fabfaad50c72db5fdcc832ea3",
+      "sha256": "56dc92be58a19b178bac99cdcfd72c7142928adc44bac8f4d3373b57476e4496"
+    },
+    {
+      "path": "TreeDB/internal/iterator/ordinal.go",
+      "blob": "df21e2d09205a66eba593493489156435c2e6f9e",
+      "sha256": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/dict_codec_cache.go",
+      "blob": "2a1f5dd7c24f506c05e0ff9fbe17e280f96d3b8a",
+      "sha256": "7954488ee51918526e8ff06a9026abd281579165bb8bffdc6efb2b331534e35c"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/frame_preparer.go",
+      "blob": "341c5c4b449a33244862221cf458bed96bc0e6bf",
+      "sha256": "4091f8dde31ea5e362326d8a34dfdddaaf2fe087750dc5b52982d1bde010ba96"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/valuelog.go",
+      "blob": "73020697a20dc1b6f01cfe96534a086af48005eb",
+      "sha256": "ba1d1771e3e11b9b16c5376ed3153d75dc16760ba942a090517b8e641702f298"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "blob": "bd939cf756ba3b7cd07f1629ddec84655031cb68",
+      "sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_native_window_test.go",
+      "blob": "150e0accd38e63b0d7f63b75f10f630ccb839e91",
+      "sha256": "1c121952a13c97afb5cc036d1425544c4c2f94eea5b0257e2f2e724f472d8af6"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/reader.go",
+      "blob": "c60b2cfeb977bebb0563e4689b5bc68eafed3552",
+      "sha256": "c01cfd34bd8625514d6e8220f4dcd2f82738c5f89e4bcfb337e56aa96ce49fcb"
+    },
+    {
+      "path": "TreeDB/caching/snapshot.go",
+      "blob": "08649740d8fdf79fe97b8f302f31e48c59061f9b",
+      "sha256": "a6519ced417380bd1477de25a03823455913f4d353a248d8d9d5fb974dbc108e"
+    }
+  ]
+}

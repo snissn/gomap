@@ -1,0 +1,6 @@
+=== RUN   TestChargedProjectionAllocationAdmission
+    charged_projection_test.go:662: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-907653769; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:706: raw=623984B retained=630784B; eight constructors actual=5046272B admitted=5046272B
+--- PASS: TestChargedProjectionAllocationAdmission (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.002s

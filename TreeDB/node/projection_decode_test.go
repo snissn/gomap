@@ -239,3 +239,69 @@ func TestProjectionLargePrefixGeometryIsUnfinishedNotCorruption(t *testing.T) {
 		}
 	}
 }
+
+// The existing producer emits these prefix-v2/columnar-prefix-v2 bytes. Large
+// construction images are codec differential fixtures, not a claim that the
+// DB's ordinary 4KiB leaf producer emits a larger decoded leaf.
+func TestProjectionProducerLargePrefixContinuation(t *testing.T) {
+	for _, columnar := range []bool{false, true} {
+		image := make([]byte, 60000)
+		b := NewBuilderWithOptions(image, page.PageTypeLeaf, BuilderOptions{LeafPrefixCompression: true, LeafColumnar: columnar, EntryRevisions: true})
+		keys := make([][]byte, 24)
+		for i := range keys {
+			keys[i] = append(bytes.Repeat([]byte{'p'}, 12000), byte(i))
+			flags := byte(FlagPointer)
+			if i%5 == 0 {
+				flags = FlagTombstone
+			}
+			if err := b.AddLeafEntryWithRevision(keys[i], nil, flags, page.ValuePtr{FileID: 1, Offset: uint64(100 + i), Length: 7}, page.EntryRevision(i+1)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.Finish()
+		n := NewNodeView(image)
+		for i := len(keys) - 1; i >= 0; i-- {
+			var d ProjectionDecoder
+			scratch := make([]byte, ProjectionKeyCapacity)
+			if ok, err := d.Begin(n, uint16(i), scratch, projectionWork()); !ok || err != nil {
+				t.Fatal(ok, err)
+			}
+			paused := false
+			for turn := 0; turn < 1000; turn++ {
+				work := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 8192}
+				done, err := d.Step(work)
+				if err != nil {
+					t.Fatal(columnar, i, err)
+				}
+				if d.phase == 1 && d.copied > 0 && d.copied < d.prefix+len(d.suffix) {
+					paused = true
+					copied := d.copied
+					if done, err := d.Step(&iterator.OrdinalScanWork{}); done || err != nil || d.copied != copied {
+						t.Fatal("zero allowance advanced partial key")
+					}
+					if e, _ := d.Result(); e.Key != nil {
+						t.Fatal("partial key exported")
+					}
+				}
+				if done {
+					got, _ := d.Result()
+					key, _, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(uint16(i))
+					if err != nil || !bytes.Equal(got.Key, key) || !bytes.Equal(got.Key, keys[i]) || got.ValuePtr != ptr || got.Flags != flags || got.Revision != revision {
+						t.Fatal("producer differential", columnar, i, err)
+					}
+					if i%16 != 0 && !paused {
+						t.Fatal("large reconstruction never paused")
+					}
+					break
+				}
+				if turn == 999 {
+					t.Fatal("large producer prefix stalled")
+				}
+			}
+			if !d.Cancel(projectionWork()) {
+				t.Fatal("cancel")
+			}
+		}
+		b.ReleaseScratch()
+	}
+}

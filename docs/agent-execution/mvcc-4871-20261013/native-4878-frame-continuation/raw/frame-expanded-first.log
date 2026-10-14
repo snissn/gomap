@@ -1,0 +1,51 @@
+# github.com/snissn/gomap/TreeDB/internal/valuelog [github.com/snissn/gomap/TreeDB/internal/valuelog.test]
+TreeDB/internal/valuelog/cow_continuation_test.go:242:23: cannot use b (variable of type [1]byte) as []byte value in argument to rw.ReadAt
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog [build failed]
+=== RUN   TestProjectionProducerLargePrefixContinuation
+--- PASS: TestProjectionProducerLargePrefixContinuation (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/node	0.003s
+=== RUN   TestChargedProjectionBaseDifferential
+    charged_projection_test.go:222: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1666774365; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionBaseDifferential (0.00s)
+=== RUN   TestChargedProjectionRefusalAndPartialClose
+    charged_projection_test.go:283: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2832828329; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionRefusalAndPartialClose (0.00s)
+=== RUN   TestChargedProjectionPrimaryDifferentialAndOwner
+    charged_projection_test.go:318: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1561620787; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:320: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-790325404; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionPrimaryDifferentialAndOwner (0.00s)
+=== RUN   TestChargedProjectionLargeBorrowedLeafAndCRC
+    charged_projection_test.go:549: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1126271497; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionLargeBorrowedLeafAndCRC (0.00s)
+=== RUN   TestChargedProjectionInvalidFixedPageFailsClosed
+    charged_projection_test.go:638: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3152676610; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionInvalidFixedPageFailsClosed (0.00s)
+=== RUN   TestChargedProjectionAllocationAdmission
+    charged_projection_test.go:662: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4104040381; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:706: raw=623984B retained=630784B; eight constructors actual=5046272B admitted=5046272B
+--- PASS: TestChargedProjectionAllocationAdmission (0.00s)
+=== RUN   TestChargedProjectionConcurrentSameImmutableRoot
+    charged_projection_test.go:715: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4169512361; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionConcurrentSameImmutableRoot (0.00s)
+=== RUN   TestChargedProjectionSkipsEmptyPhysicalLeaf
+    charged_projection_test.go:743: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1919926474; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionSkipsEmptyPhysicalLeaf (0.00s)
+=== RUN   TestChargedProjectionLargeProducerPrefixTurn
+    charged_projection_test.go:764: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2725775074; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:776: phase 5 base 2: tree: phased exact-backend projection reader required
+--- FAIL: TestChargedProjectionLargeProducerPrefixTurn (0.00s)
+=== RUN   TestChargedProjectionRealExternalProducerFrames
+=== RUN   TestChargedProjectionRealExternalProducerFrames/0
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-15190295; consumer: this test process only; files/pager closed on return
+=== RUN   TestChargedProjectionRealExternalProducerFrames/1
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-2173547834; consumer: this test process only; files/pager closed on return
+=== RUN   TestChargedProjectionRealExternalProducerFrames/2
+    charged_external_leaf_test.go:80: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-frame-1632924998; consumer: this test process only; files/pager closed on return
+--- PASS: TestChargedProjectionRealExternalProducerFrames (0.02s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/0 (0.01s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/1 (0.01s)
+    --- PASS: TestChargedProjectionRealExternalProducerFrames/2 (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/tree	0.029s
+FAIL

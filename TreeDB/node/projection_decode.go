@@ -6,6 +6,12 @@ import (
 	"unsafe"
 )
 
+// ProjectionKeyCapacity covers the existing encoded prefix/suffix geometry.
+// Prefix-v1/v2 and producer columnar-prefix-v2 encode each constituent in a
+// uint16; internal base-delta does likewise. This is not a new key limit.
+// Plain keys remain borrowed; no complete key is allocated/copied eagerly.
+const ProjectionKeyCapacity = 2 * int(^uint16(0))
+
 // ProjectionDecoder phases physical entry metadata and prefix reconstruction on
 // one immutable page. It uses the SAME Node layout parsers as ordinary reads;
 // it never invokes SearchLeaf or the synchronous prefix-chain decoder. Scratch

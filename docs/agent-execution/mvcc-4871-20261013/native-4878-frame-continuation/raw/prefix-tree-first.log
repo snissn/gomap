@@ -1,0 +1,11 @@
+# github.com/snissn/gomap/TreeDB/tree
+package github.com/snissn/gomap/TreeDB/tree
+	imports github.com/snissn/gomap/TreeDB/internal/valuelog from cow_leaf_projection.go
+	imports github.com/snissn/gomap/TreeDB/internal/rootpublication from manager.go
+	imports github.com/snissn/gomap/TreeDB/tree from dependency_directory_delta_v2.go: import cycle not allowed
+FAIL	github.com/snissn/gomap/TreeDB/tree [setup failed]
+=== RUN   TestProjectionProducerLargePrefixContinuation
+--- PASS: TestProjectionProducerLargePrefixContinuation (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/node	0.003s
+FAIL

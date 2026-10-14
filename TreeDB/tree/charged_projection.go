@@ -68,11 +68,11 @@ type ChargedProjection struct {
 	base                                                                                 projectionBase
 	pages                                                                                [maxTraversalDepth][page.PageSize]byte
 	deltaPage                                                                            [page.PageSize]byte
-	turnKey                                                                              [page.PageSize]byte
+	turnKey                                                                              [node.ProjectionKeyCapacity]byte
 	turnSource, skipKey                                                                  []byte
 	turnCopied                                                                           int
 	skipCurrent                                                                          bool
-	baseKey, deltaKey                                                                    [page.PageSize]byte
+	baseKey, deltaKey                                                                    [node.ProjectionKeyCapacity]byte
 	deltaDecoder                                                                         node.ProjectionDecoder
 	comparison                                                                           node.ProjectionComparison
 	directory                                                                            node.PrimaryDirectoryView
@@ -575,8 +575,8 @@ func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error) {
 			if len(c.turnSource) <= len(c.turnKey) {
 				c.skipKey = c.turnKey[:len(c.turnSource)]
 			}
-			// A key larger than fixed scratch can only be the immutable external
-			// image borrow: the decoder refuses oversized reconstructed prefixes.
+			// Reconstructed keys use the full existing uint16 prefix/suffix bound.
+			// Larger plain keys remain producer-owned immutable image borrows.
 			c.turnSource = nil
 			c.key = c.skipKey
 			c.op = ProjectionSeekGE

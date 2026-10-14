@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/internal/valuelog [github.com/snissn/gomap/TreeDB/internal/valuelog.test]
+TreeDB/internal/valuelog/cow_leaf_continuation.go:258:21: cannot use compactLeafPagePayloadHeaderSize + 32 (constant 44 of type int) as uint64 value in argument to w.Reserve
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog [build failed]
+FAIL

@@ -1,0 +1,271 @@
+// Wire grammar follows github.com/golang/snappy v0.0.4 decode_other.go
+// (Copyright 2016 The Snappy-Go Authors, BSD; COW_SNAPPY_LICENSE) and
+// github.com/pierrec/lz4/v4 v4.1.22 internal/lz4block/decode_other.go
+// (BSD; COW_LZ4_LICENSE). No upstream speculative copying is retained.
+package valuelog
+
+import (
+	"encoding/binary"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+)
+
+// COWBlockContinuation phases the SAME native Snappy/LZ4 block wire formats.
+// Libraries expose only whole-block decode; their stream APIs use other framing.
+// Original immutable input and admitted output must be disjoint and retained.
+// No format, dictionary authority, codec cache or allocation is introduced.
+type COWBlockContinuation struct {
+	input, output              []byte
+	codec                      BlockCodec
+	in, out, remaining, offset int
+	phase                      uint8
+	token                      byte
+	active                     bool
+	err                        error
+}
+
+func (d *COWBlockContinuation) Begin(codec BlockCodec, input, output []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*d))) {
+		return false, nil
+	}
+	if d.active {
+		return false, ErrCOWReadPending
+	}
+	if codec == BlockCodecLZ4 && len(input) == 0 {
+		return false, ErrCorrupt
+	}
+	if codec != BlockCodecSnappy && codec != BlockCodecLZ4 {
+		return false, ErrCOWReadUnsupported
+	}
+	if cowBuffersOverlap(input, output) {
+		return false, ErrCOWReadCapacity
+	}
+	*d = COWBlockContinuation{input: input, output: output, codec: codec, active: true}
+	if codec == BlockCodecLZ4 {
+		d.phase = 1
+	}
+	return true, nil
+}
+func (d *COWBlockContinuation) Step(w *iterator.OrdinalScanWork) (bool, error) {
+	if d.err != nil {
+		return false, d.err
+	}
+	done, err := d.step(w)
+	if err != nil {
+		d.err = err
+	}
+	return done, err
+}
+func (d *COWBlockContinuation) step(w *iterator.OrdinalScanWork) (bool, error) {
+	if !d.active {
+		return true, nil
+	}
+	if w == nil || w.Records >= w.RecordLimit || w.Bytes >= w.ByteLimit {
+		return false, nil
+	}
+	for {
+		switch d.phase {
+		case 0:
+			// Snappy's complete decoded-length varint is at most ten fixed bytes.
+			if !w.Reserve(1, 10) {
+				return false, nil
+			}
+			n, used := binary.Uvarint(d.input)
+			if used <= 0 || n > 0xffffffff || n != uint64(len(d.output)) {
+				return false, ErrCorrupt
+			}
+			d.in = used
+			d.phase = 1
+		case 1:
+			if d.in == len(d.input) {
+				if d.out != len(d.output) {
+					return false, ErrCorrupt
+				}
+				if !w.Reserve(1, 16) {
+					return false, nil
+				}
+				d.active = false
+				return true, nil
+			}
+			if !w.Reserve(1, 5) {
+				return false, nil
+			}
+			d.token = d.input[d.in]
+			d.in++
+			if d.codec == BlockCodecLZ4 {
+				d.remaining = int(d.token >> 4)
+				d.phase = 2
+				if d.remaining == 15 {
+					d.phase = 3
+				}
+				continue
+			}
+			switch d.token & 3 {
+			case 0:
+				size := int(d.token >> 2)
+				if size >= 60 {
+					count := size - 59
+					if count > len(d.input)-d.in {
+						return false, ErrCorrupt
+					}
+					var n uint32
+					for i := 0; i < count; i++ {
+						n |= uint32(d.input[d.in+i]) << uint(8*i)
+					}
+					d.in += count
+					if uint64(n)+1 > uint64(len(d.output)-d.out) {
+						return false, ErrCorrupt
+					}
+					size = int(n)
+				}
+				d.remaining = size + 1
+				d.phase = 2
+			case 1:
+				if d.in >= len(d.input) {
+					return false, ErrCorrupt
+				}
+				d.remaining = 4 + int((d.token>>2)&7)
+				d.offset = int(d.token&0xe0)<<3 | int(d.input[d.in])
+				d.in++
+				d.phase = 6
+			case 2:
+				if len(d.input)-d.in < 2 {
+					return false, ErrCorrupt
+				}
+				d.remaining = 1 + int(d.token>>2)
+				d.offset = int(binary.LittleEndian.Uint16(d.input[d.in : d.in+2]))
+				d.in += 2
+				d.phase = 6
+			case 3:
+				if len(d.input)-d.in < 4 {
+					return false, ErrCorrupt
+				}
+				d.remaining = 1 + int(d.token>>2)
+				off := binary.LittleEndian.Uint32(d.input[d.in : d.in+4])
+				if uint64(off) > uint64(d.out) {
+					return false, ErrCorrupt
+				}
+				d.offset = int(off)
+				d.in += 4
+				d.phase = 6
+			}
+		case 2:
+			if d.remaining > len(d.input)-d.in || d.remaining > len(d.output)-d.out {
+				return false, ErrCorrupt
+			}
+			if d.remaining != 0 {
+				n := cowContinuationChunk(w, d.remaining, 2)
+				if n == 0 || !w.Reserve(1, uint64(2*n)) {
+					return false, nil
+				}
+				copy(d.output[d.out:d.out+n], d.input[d.in:d.in+n])
+				d.in += n
+				d.out += n
+				d.remaining -= n
+				continue
+			}
+			if d.codec == BlockCodecSnappy {
+				d.phase = 1
+			} else {
+				d.phase = 4
+			}
+		case 3:
+			if !w.Reserve(1, 1) {
+				return false, nil
+			}
+			if d.in == len(d.input) {
+				return false, ErrCorrupt
+			}
+			n := int(d.input[d.in])
+			d.in++
+			if n > len(d.output)-d.out-d.remaining {
+				return false, ErrCorrupt
+			}
+			d.remaining += n
+			if n != 255 {
+				d.phase = 2
+			}
+		case 4:
+			if d.in == len(d.input) {
+				if d.token&15 != 0 {
+					return false, ErrCorrupt
+				}
+				d.phase = 1
+				continue
+			}
+			if !w.Reserve(1, 2) {
+				return false, nil
+			}
+			if len(d.input)-d.in < 2 {
+				return false, ErrCorrupt
+			}
+			d.offset = int(binary.LittleEndian.Uint16(d.input[d.in : d.in+2]))
+			d.in += 2
+			d.remaining = 4 + int(d.token&15)
+			d.phase = 6
+			if d.token&15 == 15 {
+				d.phase = 5
+			}
+		case 5:
+			if !w.Reserve(1, 1) {
+				return false, nil
+			}
+			if d.in == len(d.input) {
+				return false, ErrCorrupt
+			}
+			n := int(d.input[d.in])
+			d.in++
+			if n > len(d.output)-d.out-d.remaining {
+				return false, ErrCorrupt
+			}
+			d.remaining += n
+			if n != 255 {
+				d.phase = 6
+			}
+		case 6:
+			if d.offset <= 0 || d.offset > d.out || d.remaining > len(d.output)-d.out {
+				return false, ErrCorrupt
+			}
+			if d.remaining != 0 {
+				n := cowContinuationChunk(w, d.remaining, 2)
+				if n == 0 || !w.Reserve(1, uint64(2*n)) {
+					return false, nil
+				}
+				// Forward copy preserves the original codec's overlapping match semantics.
+				for i := 0; i < n; i++ {
+					d.output[d.out+i] = d.output[d.out+i-d.offset]
+				}
+				d.out += n
+				d.remaining -= n
+				continue
+			}
+			d.phase = 1
+		}
+	}
+}
+func (d *COWBlockContinuation) Cancel(w *iterator.OrdinalScanWork) bool {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*d))) {
+		return false
+	}
+	*d = COWBlockContinuation{}
+	return true
+}
+func cowContinuationChunk(w *iterator.OrdinalScanWork, n, price int) int {
+	if w == nil || w.Bytes > w.ByteLimit {
+		return 0
+	}
+	return int(min(uint64(n), min((w.ByteLimit-w.Bytes)/uint64(price), uint64(4096))))
+}
+func cowBuffersOverlap(a, b []byte) bool {
+	if cap(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	x, y := uintptr(unsafe.Pointer(unsafe.SliceData(a))), uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	return x < y+uintptr(cap(b)) && y < x+uintptr(cap(a))
+}
+
+// Full supplied backing identity is compared under the constructor reservation.
+func cowSameBacking(a, b []byte) bool {
+	return len(a) == len(b) && cap(a) == cap(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
+}

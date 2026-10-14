@@ -1,0 +1,10 @@
+=== RUN   TestCOWLeafContinuationSameFrameRetarget
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/0
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/1
+=== RUN   TestCOWLeafContinuationSameFrameRetarget/2
+--- PASS: TestCOWLeafContinuationSameFrameRetarget (0.02s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/0 (0.01s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/1 (0.01s)
+    --- PASS: TestCOWLeafContinuationSameFrameRetarget/2 (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.023s

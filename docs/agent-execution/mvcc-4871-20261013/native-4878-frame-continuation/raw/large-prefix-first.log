@@ -1,0 +1,4 @@
+=== RUN   TestProjectionProducerLargePrefixContinuation
+--- PASS: TestProjectionProducerLargePrefixContinuation (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/node	0.002s

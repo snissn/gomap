@@ -758,3 +758,51 @@ func TestChargedProjectionSkipsEmptyPhysicalLeaf(t *testing.T) {
 	}
 	projectionClose(t, c, r)
 }
+
+func TestChargedProjectionLargeProducerPrefixTurn(t *testing.T) {
+	for _, columnar := range []bool{false, true} {
+		tr, r, closeTree := projectionFixtureTree(t)
+		image := make([]byte, 60000)
+		b := node.NewBuilderWithOptions(image, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true, LeafColumnar: columnar, EntryRevisions: true})
+		for i := 0; i < 24; i++ {
+			key := append(bytes.Repeat([]byte("p"), 12000), byte(i))
+			if err := b.AddLeafEntryWithRevision(key, nil, node.FlagTombstone, page.ValuePtr{}, page.EntryRevision(i+1)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.FinishNoNode()
+		ref := page.LeafLogChildRef(page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: uint32(len(image))})
+		rootImage := make([]byte, page.PageSize)
+		rb := node.NewBuilder(rootImage, page.PageTypeInternal)
+		rb.SetPageID(tr.rootPageID)
+		if err := rb.AddInternalChildRef([]byte(""), ref); err != nil {
+			t.Fatal(err)
+		}
+		rb.FinishNoNode()
+		r.images[page.PageChildRef(tr.rootPageID)] = rootImage
+		r.images[ref] = image
+		c := projectionNew(t, tr, nil, nil, nil, r)
+		e, ok := projectionRun(t, c, ProjectionFirst, nil)
+		if !ok || e.Key[12000] != 0 {
+			t.Fatal("large first")
+		}
+		e, ok = projectionRun(t, c, ProjectionNext, nil)
+		if !ok || e.Key[12000] != 1 {
+			t.Fatal("large next")
+		}
+		e, ok = projectionRun(t, c, ProjectionPrev, nil)
+		if !ok || e.Key[12000] != 0 {
+			t.Fatal("large turn")
+		}
+		e, ok = projectionRun(t, c, ProjectionLast, nil)
+		if !ok || e.Key[12000] != 23 {
+			t.Fatal("large last")
+		}
+		e, ok = projectionRun(t, c, ProjectionPrev, nil)
+		if !ok || e.Key[12000] != 22 {
+			t.Fatal("large reverse")
+		}
+		projectionClose(t, c, r)
+		closeTree()
+	}
+}

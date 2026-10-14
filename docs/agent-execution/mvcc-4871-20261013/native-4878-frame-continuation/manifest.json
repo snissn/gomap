@@ -1,0 +1,399 @@
+{
+  "schema": 1,
+  "kind": "provisional-native-lower-external-frame-construction",
+  "issue": 4878,
+  "parent": "87b75db0f866a3cdc5cfd2ad1a9aa1f122279d0d",
+  "runtime_basis": "4f61cbbd6d0b7be5c69d9411c1344b4576f5e879",
+  "candidate_TreeDB_tree": "667e0bbd4dc35f1640801262fa28b1da18a34cc0",
+  "candidate_scope": "same tree/node plus original valuelog leaf/block codec core; no ordinary owner/pager/registry/dependency edits",
+  "branch": "codex/4878-native-traversal-20261014",
+  "full_native_qualified": false,
+  "public_activation": false,
+  "environment": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal",
+    "GOTMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal"
+  },
+  "toolchain": {
+    "path": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+    "version": "go version go1.26.4 linux/amd64"
+  },
+  "runs": [
+    {
+      "variant": "normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-v",
+        "-run",
+        "TestCOW(Block|Leaf)Continuation|TestProjection|TestChargedProjection|TestOwnedPointerProjection",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/node",
+        "./TreeDB/tree"
+      ],
+      "exit_code": 0,
+      "raw": "raw/frame-reuse-normal-final.log"
+    },
+    {
+      "variant": "safe",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-v",
+        "-tags",
+        "treedb_safe",
+        "-run",
+        "TestCOW(Block|Leaf)Continuation|TestProjection|TestChargedProjection|TestOwnedPointerProjection",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/node",
+        "./TreeDB/tree"
+      ],
+      "exit_code": 0,
+      "raw": "raw/frame-reuse-safe-final.log"
+    },
+    {
+      "variant": "race",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-v",
+        "-race",
+        "-run",
+        "TestCOW(Block|Leaf)Continuation|TestProjection|TestChargedProjection|TestOwnedPointerProjection",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/node",
+        "./TreeDB/tree"
+      ],
+      "exit_code": 0,
+      "raw": "raw/frame-reuse-race-final.log"
+    },
+    {
+      "variant": "fresh-process-allocation",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-v",
+        "-run",
+        "^TestChargedProjectionAllocationAdmission$",
+        "./TreeDB/tree"
+      ],
+      "exit_code": 0,
+      "raw": "raw/frame-reuse-allocation-final.log"
+    }
+  ],
+  "historical_raw_logs": [
+    "frame-compile-first.log",
+    "frame-expanded-first.log",
+    "frame-expanded-second.log",
+    "frame-first.log",
+    "frame-normal-final.log",
+    "frame-race-final.log",
+    "frame-retarget-first.log",
+    "frame-retarget-limits.log",
+    "frame-retarget-second.log",
+    "frame-retarget-variants.log",
+    "frame-reuse-before-raw-backing-allocation.log",
+    "frame-reuse-before-raw-backing-normal.log",
+    "frame-reuse-before-raw-backing-race.log",
+    "frame-reuse-before-raw-backing-safe.log",
+    "frame-safe-final.log",
+    "frame-second.log",
+    "frame-tree-first.log",
+    "large-prefix-first.log",
+    "prefix-tree-first.log",
+    "prefix-tree-second.log"
+  ],
+  "closure": "all listed files are hashed as actual source/packet bytes and Git blobs; TreeDB tree closes unchanged runtime source; final returned commit closes complete source-plus-packet; manifest self-hash provided outside manifest",
+  "disposable_directory_count": 170,
+  "disposable_file_bytes": 22965121,
+  "files": [
+    {
+      "path": "TreeDB/node/projection_decode.go",
+      "kind": "production",
+      "bytes": 6848,
+      "sha256": "a14621aee754bd5117870a10ff0f90da54d54c31b1c67faca0db150cb40dc471",
+      "git_blob": "58e979a3e8a6ef3cfab0fc9cb64c60fdd948cdf3"
+    },
+    {
+      "path": "TreeDB/tree/charged_projection.go",
+      "kind": "production",
+      "bytes": 30772,
+      "sha256": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+      "git_blob": "0740c878cdaacc7372c15e048f5f2c8fcc902eb2"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_block_continuation.go",
+      "kind": "production",
+      "bytes": 6948,
+      "sha256": "97a5acb1044c93cea59037222d694b246901334a923ca9ec6c81eccdca877585",
+      "git_blob": "181cc4623a4b88effdd0eae773c6cd7131cde00a"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_leaf_continuation.go",
+      "kind": "production",
+      "bytes": 14884,
+      "sha256": "ca204852d05faff10389f70c88c4b82cea35c20a8a77a9300691edda18ff2088",
+      "git_blob": "86390c9be1774b4aa2b88ab94a9ff6d65763405e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_leaf_projection.go",
+      "kind": "production",
+      "bytes": 2043,
+      "sha256": "1296a75a9db7ec4cdd8d44b3a0a0b90d30eced3bbc57eb62dc09215795d2a1a2",
+      "git_blob": "40131e80a06d2d85b438d2454247ac04355254c0"
+    },
+    {
+      "path": "TreeDB/node/projection_decode_test.go",
+      "kind": "test-harness",
+      "bytes": 9694,
+      "sha256": "84ba503ad4a473b72c841d4b9552f519fa52235015d892c5253093c365672be4",
+      "git_blob": "8c9755505b7df0e9b9f786483b6165abbeaacc52"
+    },
+    {
+      "path": "TreeDB/tree/charged_projection_test.go",
+      "kind": "test-harness",
+      "bytes": 27066,
+      "sha256": "73f54b1a6ea1683bb820a4286050775b88171f777bace35155ec62766455f6b0",
+      "git_blob": "121edf24b6320431798635d08ac8da6e65efd488"
+    },
+    {
+      "path": "TreeDB/tree/charged_external_leaf_test.go",
+      "kind": "test-harness",
+      "bytes": 6900,
+      "sha256": "67add18f14f3d7391c0d56e8ce712c81688c1bdda4d09a9ee5922520d2944a4d",
+      "git_blob": "e08ce6a9fc4194694a33d9c761583251404298dd"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_continuation_test.go",
+      "kind": "test-harness",
+      "bytes": 18012,
+      "sha256": "ab3fa482a6ef7e42fdf86d9b3574b0e80dbd9e49ca9d22df72ba53673ae4e3e9",
+      "git_blob": "95d919a09deaa5858fb79e66c9e3796b14825843"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/COW_SNAPPY_LICENSE",
+      "kind": "upstream-license",
+      "bytes": 1486,
+      "sha256": "f69f157b0be75da373605dbc8bbf142e8924ee82d8f44f11bcaf351335bf98cf",
+      "git_blob": "6050c10f4c8b4c22f50c83715f44f12419f763be"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/COW_LZ4_LICENSE",
+      "kind": "upstream-license",
+      "bytes": 1476,
+      "sha256": "fdb37e402bf5ba42e38d2e85f85517645f569962b8ae393eeb8649c73d46a780",
+      "git_blob": "c89a4df28f61019c9bb82a7fc85d7b5d397e84d0"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/construction.md",
+      "kind": "packet-artifact",
+      "bytes": 9749,
+      "sha256": "14517b3f8198b26f59f9de7cb8d90456b8557840451dec1e032f74ac8649a1c5",
+      "git_blob": "e8ce7b1766433ee33aca79bfdb8d1861bc862f5f"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/dependency-source-census.json",
+      "kind": "packet-artifact",
+      "bytes": 7080,
+      "sha256": "7ded5ef168ade61708d636efb326d1ede3b1e173fc48d411944aac50302a42a6",
+      "git_blob": "0f6f7ed034c90958f0a11b59c85c5bf97afa16e7"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/generated-fixtures.json",
+      "kind": "packet-artifact",
+      "bytes": 81726,
+      "sha256": "35a68315897f3c6a83d62b0ed3fea201d83ba8ebdc11672f0c33dcfcae16c1f7",
+      "git_blob": "6f2c44be5833d999220b97474afdc58957633f89"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-compile-first.log",
+      "kind": "packet-artifact",
+      "bytes": 355,
+      "sha256": "da1f3c3d950557e706033086dccb129048af8313f83067ddd82ee061c9c80eb2",
+      "git_blob": "90ae11c4c46eec29364336ad2a03f641ccecf486"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-expanded-first.log",
+      "kind": "packet-artifact",
+      "bytes": 5279,
+      "sha256": "bab248d8a0520ce6b37c98a55952ad08f3e7a6c8fc771021f88d115c994de4c7",
+      "git_blob": "a81e57c90c36bce9685a7ca95296a90a26feea2d"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-expanded-second.log",
+      "kind": "packet-artifact",
+      "bytes": 7894,
+      "sha256": "faf71085f5c43e7e5d25728d1260f13260b3afd9b55000afc073bc39164249b3",
+      "git_blob": "affd1498c78e68fd5732552688596edb1c90ad9c"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-first.log",
+      "kind": "packet-artifact",
+      "bytes": 318,
+      "sha256": "86530d5ca5aaafd26967ca48eaf439da53144937634fc0c4a43a628ed470eae0",
+      "git_blob": "891b96da7e53a62c3db334ccd323cf48d2748d45"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-normal-final.log",
+      "kind": "packet-artifact",
+      "bytes": 9781,
+      "sha256": "2f73042bc4ad638514551829f8be90d6ab159a4c176cdb2eee4dc289b324bc00",
+      "git_blob": "f2098ce4aae8b50d13a2fbf360dbd6df55784c5f"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-race-final.log",
+      "kind": "packet-artifact",
+      "bytes": 9784,
+      "sha256": "b8f12758e5d05b400e6973939257ec32d0490cf5ca48f43a0c1f2584ba854d8d",
+      "git_blob": "5af6bd9950f2fe545dc7e77968025cb0fd2ebd54"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-retarget-first.log",
+      "kind": "packet-artifact",
+      "bytes": 3046,
+      "sha256": "f6db829c9e380b1254efe9e85272b2111118fd81145c76c661940cedb66f5e86",
+      "git_blob": "27f6e737dfbe7bd584cd2a6e97a0d7c825f11011"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-retarget-limits.log",
+      "kind": "packet-artifact",
+      "bytes": 61,
+      "sha256": "f386d959fc1ffe2f048faea4466bab1a3016fbca8d20ec9c34ea4afb743e1f46",
+      "git_blob": "0858e72412384a51c7235b298fe1a876da618d39"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-retarget-second.log",
+      "kind": "packet-artifact",
+      "bytes": 4764,
+      "sha256": "2fa9db04cf21e019f6f468fcc2e4a6644caee32b138e785d0c3725f033a4a7a1",
+      "git_blob": "37a2b97ab9786ed8ccbb6b8ff0d8f6a4258aeb62"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-retarget-variants.log",
+      "kind": "packet-artifact",
+      "bytes": 530,
+      "sha256": "d9c2c86c6d801f83b7d3ed97cee6084060a13838b61d6d61d27d8b10b8f939b8",
+      "git_blob": "4615c808c7cd69bcdebd2202382c455a4a5bb66a"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-allocation-final.log",
+      "kind": "packet-artifact",
+      "bytes": 506,
+      "sha256": "1d6e412df96473c43d9f63389dbbeef47d22c79c6c5d6345a547f27a99470f8c",
+      "git_blob": "801991dd752d2dce6af60bd96be91e67be393823"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-before-raw-backing-allocation.log",
+      "kind": "packet-artifact",
+      "bytes": 507,
+      "sha256": "f51b348ee610d8f8c9708d7afb075e99a642ab8b35be2f46e5b0a417adfa5d1a",
+      "git_blob": "cb8f74af014b24b50f1e60731fc5b54258d1e2c5"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-before-raw-backing-normal.log",
+      "kind": "packet-artifact",
+      "bytes": 10246,
+      "sha256": "b82e9ab02dca2274c0ee5f511bfd95fa9c566fb95703a1a3a80bcbf3ed77211c",
+      "git_blob": "a591583dbfb3c0c2cab19eed545bb4c576cf61b7"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-before-raw-backing-race.log",
+      "kind": "packet-artifact",
+      "bytes": 10248,
+      "sha256": "35392cc394d6a8531b0feb936788b64916883a2f777bf871ad48866758022abd",
+      "git_blob": "b99786af312a52461a356d7fee255ea46bd87270"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-before-raw-backing-safe.log",
+      "kind": "packet-artifact",
+      "bytes": 10245,
+      "sha256": "ae955702854dc289873122f28da15b2cb297e4c985495c365f84837aa606eb1f",
+      "git_blob": "5061bc65e02b82264b91a69018f426eef903002d"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-normal-final.log",
+      "kind": "packet-artifact",
+      "bytes": 10248,
+      "sha256": "a9cf5915564b1e9c0da99b575f5a105edfefd192609f97352e19024b541f2656",
+      "git_blob": "17d45585bcdfd13074ab502d32f0e09425dadd44"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-race-final.log",
+      "kind": "packet-artifact",
+      "bytes": 10249,
+      "sha256": "2da207decbb9cf11a060605cd6f3cf55705b871609e4bcb51408986782cef480",
+      "git_blob": "e975b051135c5b477f8d0724620672cb3ecb7db7"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-reuse-safe-final.log",
+      "kind": "packet-artifact",
+      "bytes": 10245,
+      "sha256": "2e160cbe68e8974366354bfaa9039c8d404dfa199642312df0e95768ded97526",
+      "git_blob": "350213da758faade591a3d83de4e6009e7fd43ea"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-safe-final.log",
+      "kind": "packet-artifact",
+      "bytes": 9784,
+      "sha256": "65e4357fb3de2d5a8acfffcfe1f7c4418032d83d01532b247ee486f3c88ba109",
+      "git_blob": "4ed576109409c3f5b67e39d96ad74de04b3ef958"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-second.log",
+      "kind": "packet-artifact",
+      "bytes": 2682,
+      "sha256": "dde63590f8dc7aa1d8edc7aaca8c50cd48a88d9e0ba01dd63f210aaa32aa8090",
+      "git_blob": "165a50097bd9ebd6aae7af5348ca21499ac9e9fd"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/frame-tree-first.log",
+      "kind": "packet-artifact",
+      "bytes": 3936,
+      "sha256": "5c48ab58946be91d21def45c546d5cd9efe0c8c599d2d8fb7e9ecfdd564130b6",
+      "git_blob": "d388eccb13507eb8b12ece76d531f34fbd2ea80d"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/large-prefix-first.log",
+      "kind": "packet-artifact",
+      "bytes": 173,
+      "sha256": "2b8bc6e4dc92a28ada2701a3e0a77af0107b28965d4409d905ce6bbf2d4138b4",
+      "git_blob": "a8b5de4bd405f9418c43467c38b703691ed18344"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/prefix-tree-first.log",
+      "kind": "packet-artifact",
+      "bytes": 592,
+      "sha256": "b6ed5c80d667c4313b8c4e870804662a42241207a5c27e4d714a6f829491a220",
+      "git_blob": "8f942c753cf8d31ab5b1768ab176709017230507"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/raw/prefix-tree-second.log",
+      "kind": "packet-artifact",
+      "bytes": 3313,
+      "sha256": "03d81689bb44fdf1e6aa94d1a3a130469a4dddd81500220574cfdc9be85d6a12",
+      "git_blob": "be7e338341dd786237bd60c6296bfc95bab1fd9b"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-frame-continuation/zstd-hook-contract.md",
+      "kind": "packet-artifact",
+      "bytes": 21949,
+      "sha256": "cb0fd89582350670624bcfcd1dd60b51e6625354ee153f3aa1fdecaf0cbdcdb0",
+      "git_blob": "c35a1e72666e387e55d9377a7f4782db27d014c5"
+    }
+  ],
+  "license_note": "Full upstream license text preserved; LZ4 terminal blank line normalized to one final newline. Actual upstream and normalized artifact hashes are recorded separately. Source file was an independent read-only copied license; replacement affected this worktree path only."
+}
