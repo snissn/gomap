@@ -34,6 +34,46 @@ func (z *Zipper) PrimaryArena() *primaryarena.Arena { return z.primaryArena }
 func (z *Zipper) SetPrimaryConstructorV6(f func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)) {
 	z.primaryConstructorV6 = f
 }
+
+// PrimaryConstructionFailureV6 is the already admitted physical-owner sink.
+// It retains an original producer whose one disposal attempt failed.
+type PrimaryConstructionFailureV6 interface {
+	RetainPrimaryConstructionFailureV6(primaryarena.ReadRootConstructionV6, error) error
+}
+
+func (z *Zipper) SetPrimaryConstructionFailureV6(owner PrimaryConstructionFailureV6) {
+	z.primaryConstructionFailureV6 = owner
+}
+
+// SetPrimaryConstructionOutputV6 records the SAME configured producer output
+// in caller-owned custody. Use a private clone; clones do not inherit this sink.
+// Recording allocates no factory wrapper or substitute original transaction.
+func (z *Zipper) SetPrimaryConstructionOutputV6(output *primaryarena.ReadRootConstructionV6, abortErr *error) {
+	z.primaryConstructionOutputV6 = output
+	z.primaryConstructionAbortErrV6 = abortErr
+}
+
+// A failed disposal has already consumed its one attempt. The output sink
+// carries that error with the actual original, so its caller retains custody
+// without retrying a partially completed Abort.
+func (z *Zipper) abortPrimaryConstructionV6(owner primaryarena.ReadRootConstructionV6) error {
+	err := owner.Abort()
+	if err != nil && z.primaryConstructionFailureV6 != nil {
+		err = z.primaryConstructionFailureV6.RetainPrimaryConstructionFailureV6(owner, err)
+	}
+	if err != nil && z.primaryConstructionAbortErrV6 != nil {
+		*z.primaryConstructionAbortErrV6 = err
+	}
+	return err
+}
+
+func (z *Zipper) constructPrimaryV6(a *primaryarena.Arena, work *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
+	owner, ready, err := z.primaryConstructorV6(a, work)
+	if owner != nil && z.primaryConstructionOutputV6 != nil {
+		*z.primaryConstructionOutputV6 = owner
+	}
+	return owner, ready, err
+}
 func claimPrimaryComponent(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.Ref, error) {
 	c, ok, e := a.PrepareClaim(primaryarena.Component, w)
 	if !ok || e != nil {
@@ -325,7 +365,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	if z.primaryArena != nil && z.primaryArena.CapsuleFormatV6() && z.primaryConstructorV6 != nil {
 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 		var ready bool
-		constructor, ready, err = z.primaryConstructorV6(z.primaryArena, work)
+		constructor, ready, err = z.constructPrimaryV6(z.primaryArena, work)
 		metrics.PrimaryBankRecords += work.Records
 		metrics.PrimaryBankWorkBytes += work.Bytes
 		if !ready || err != nil {
@@ -333,7 +373,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		}
 		defer func() {
 			if err != nil {
-				_ = constructor.Abort()
+				err = errors.Join(err, z.abortPrimaryConstructionV6(constructor))
 			}
 		}()
 	}
@@ -589,7 +629,7 @@ func (z *Zipper) collectPrimaryBaseOld(ref page.ChildRef, key []byte, cfg applyR
 	return node.ErrPrimaryDirectory
 }
 
-func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
+func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
 	a := z.primaryArena
 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	defer func() { metrics.PrimaryBankRecords += work.Records; metrics.PrimaryBankWorkBytes += work.Bytes }()
@@ -602,7 +642,7 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 			constructor, ok = owners[0], true
 			bundle.Directory = constructor.PrimaryConstructionReferenceV6()
 		} else if z.primaryConstructorV6 != nil {
-			constructor, ok, e = z.primaryConstructorV6(a, work)
+			constructor, ok, e = z.constructPrimaryV6(a, work)
 			if ok && e == nil {
 				bundle.Directory = constructor.PrimaryConstructionReferenceV6()
 			}
@@ -629,10 +669,15 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 		}
 	}
 	success := false
+	borrowedConstructor := len(owners) > 0 && owners[0] != nil
 	defer func() {
 		if !success {
 			if constructor != nil {
-				_ = constructor.Abort()
+				// The outer Apply owns a supplied constructor. Only the
+				// local Copy/Build constructor is disposed at this boundary.
+				if !borrowedConstructor {
+					err = errors.Join(err, z.abortPrimaryConstructionV6(constructor))
+				}
 				return
 			}
 			if bundle.Record != (primaryarena.Ref{}) {

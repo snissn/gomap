@@ -161,7 +161,7 @@ func (t *DurableRootTransaction) abortConstructionLockedV6() error {
 		}
 		c.componentCount--
 	}
-	ready, err := c.arena.Drop(c.root, work)
+	ready, err := c.arena.DropReadRootConstructionV6(c.root, t, work)
 	if !ready || err != nil {
 		return errors.Join(err, ErrDurableRootOwnership)
 	}

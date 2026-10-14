@@ -187,19 +187,22 @@ type Zipper struct {
 	leafRefCache          map[page.LeafLogPtr][]byte
 	leafRefCacheScratch   *mergeScratch
 
-	leafReserveBytes          int
-	internalReserveBytes      int
-	piggybackCompaction       bool
-	leafPrefixCompression     bool
-	indexColumnarLeaves       bool
-	indexPackedValuePtr       bool
-	indexInternalBaseDelta    bool
-	primaryDirectory          bool
-	primaryArena              *primaryarena.Arena
-	primaryConstructorV6      func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)
-	adaptiveLeafEncoding      bool
-	maintenanceOpsPerCoalesce int
-	parallelMergePressure     ParallelMergePressureSource
+	leafReserveBytes              int
+	internalReserveBytes          int
+	piggybackCompaction           bool
+	leafPrefixCompression         bool
+	indexColumnarLeaves           bool
+	indexPackedValuePtr           bool
+	indexInternalBaseDelta        bool
+	primaryDirectory              bool
+	primaryArena                  *primaryarena.Arena
+	primaryConstructionOutputV6   *primaryarena.ReadRootConstructionV6
+	primaryConstructionAbortErrV6 *error
+	primaryConstructionFailureV6  PrimaryConstructionFailureV6
+	primaryConstructorV6          func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)
+	adaptiveLeafEncoding          bool
+	maintenanceOpsPerCoalesce     int
+	parallelMergePressure         ParallelMergePressureSource
 
 	scratchMu        sync.Mutex
 	applyScratch     *mergeScratch
@@ -1323,24 +1326,25 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 		arena = nil
 	}
 	return &Zipper{
-		pager:                     p,
-		allocator:                 a,
-		outerLeavesInValueLog:     z.outerLeavesInValueLog,
-		leafPageLog:               z.leafPageLog,
-		leafPageReader:            z.leafPageReader,
-		leafReserveBytes:          z.leafReserveBytes,
-		internalReserveBytes:      z.internalReserveBytes,
-		piggybackCompaction:       z.piggybackCompaction,
-		leafPrefixCompression:     z.leafPrefixCompression,
-		indexColumnarLeaves:       z.indexColumnarLeaves,
-		indexPackedValuePtr:       z.indexPackedValuePtr,
-		indexInternalBaseDelta:    z.indexInternalBaseDelta,
-		primaryDirectory:          z.primaryDirectory,
-		primaryArena:              arena,
-		primaryConstructorV6:      z.primaryConstructorV6,
-		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
-		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
-		parallelMergePressure:     z.parallelMergePressure,
+		pager:                        p,
+		allocator:                    a,
+		outerLeavesInValueLog:        z.outerLeavesInValueLog,
+		leafPageLog:                  z.leafPageLog,
+		leafPageReader:               z.leafPageReader,
+		leafReserveBytes:             z.leafReserveBytes,
+		internalReserveBytes:         z.internalReserveBytes,
+		piggybackCompaction:          z.piggybackCompaction,
+		leafPrefixCompression:        z.leafPrefixCompression,
+		indexColumnarLeaves:          z.indexColumnarLeaves,
+		indexPackedValuePtr:          z.indexPackedValuePtr,
+		indexInternalBaseDelta:       z.indexInternalBaseDelta,
+		primaryDirectory:             z.primaryDirectory,
+		primaryArena:                 arena,
+		primaryConstructorV6:         z.primaryConstructorV6,
+		primaryConstructionFailureV6: z.primaryConstructionFailureV6,
+		adaptiveLeafEncoding:         z.adaptiveLeafEncoding,
+		maintenanceOpsPerCoalesce:    z.maintenanceOpsPerCoalesce,
+		parallelMergePressure:        z.parallelMergePressure,
 	}
 }
 

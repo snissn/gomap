@@ -94,15 +94,46 @@ const (
 type DurableRootTransaction struct {
 	mu sync.Mutex
 
-	input          DurableRootCallbackInput
-	activate       func(DurableRootCallbackInput) error
-	consume        func(DurableRootCallbackInput) error
-	abort          func(DurableRootCallbackInput) error
-	fail           func(DurableRootCallbackInput, error) error
-	owner          ResourceOwnerState
-	phase          durableRootTransactionPhase
-	finishBusy     bool
-	constructionV6 *primaryTransactionConstructionV6
+	input                DurableRootCallbackInput
+	activate             func(DurableRootCallbackInput) error
+	consume              func(DurableRootCallbackInput) error
+	abort                func(DurableRootCallbackInput) error
+	fail                 func(DurableRootCallbackInput, error) error
+	owner                ResourceOwnerState
+	phase                durableRootTransactionPhase
+	finishBusy           bool
+	constructionV6       *primaryTransactionConstructionV6
+	failedCleanupMu      sync.Mutex
+	failedCleanupOwner   any
+	failedCleanupNext    *DurableRootTransaction
+	failedCleanupReceipt durableRootCleanupFailureV6
+}
+
+// This failure edge is embedded in the SAME admitted original transaction.
+// It records disposal custody only; existing phase/resource ownership remains
+// the sole lifecycle authority and no replacement owner is allocated.
+type durableRootCleanupFailureV6 struct{ causes [3]error }
+
+func (failure *durableRootCleanupFailureV6) Error() string {
+	return "original durable-root cleanup failed"
+}
+func (failure *durableRootCleanupFailureV6) Unwrap() []error { return failure.causes[:] }
+
+func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next *DurableRootTransaction, cause, prior error) (bool, error) {
+	transaction.failedCleanupMu.Lock()
+	defer transaction.failedCleanupMu.Unlock()
+	if owner == nil || cause == nil {
+		return false, ErrDurableRootOwnership
+	}
+	if transaction.failedCleanupOwner != nil {
+		if transaction.failedCleanupOwner != owner {
+			return false, ErrDurableRootOwnership
+		}
+		return false, &transaction.failedCleanupReceipt
+	}
+	transaction.failedCleanupOwner, transaction.failedCleanupNext = owner, next
+	transaction.failedCleanupReceipt.causes = [3]error{cause, ErrDurableRootOwnership, prior}
+	return true, &transaction.failedCleanupReceipt
 }
 
 func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
@@ -214,6 +245,26 @@ func (transaction *DurableRootTransaction) PreparedPrimary() *PreparedPrimaryRoo
 // Enqueue is not accepted.
 func (transaction *DurableRootTransaction) Abort() error {
 	return transaction.abortFrom(ResourceOwnerBuilder)
+}
+
+// AbortPrivatePrimaryConstructionV6 disposes only this transaction's original
+// unbound construction. BindPrimaryVisibilityV6 changes the existing phase
+// after acquiring the state edge and detaching constructor discovery. That
+// transfer is authoritative even when later candidate/publication work fails.
+// No group may abort the transaction after that boundary.
+func (transaction *DurableRootTransaction) AbortPrivatePrimaryConstructionV6() error {
+	if transaction == nil {
+		return nil
+	}
+	transaction.mu.Lock()
+	defer transaction.mu.Unlock()
+	if transaction.phase != durableRootConstructingV6 {
+		return nil
+	}
+	if transaction.constructionV6 == nil || transaction.ownerLockedV6() != ResourceOwnerBuilder {
+		return ErrDurableRootOwnership
+	}
+	return transaction.abortConstructionLockedV6()
 }
 
 func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState) error {

@@ -23,6 +23,8 @@ type primaryArenaOwnerV5 struct {
 	failedPagerOperations   *stablePagerOwnedOperations
 	failedDataGenerations   *indexGen
 	failedSnapshots         *Snapshot
+	failedBuildGroups       *RootPublicationBuildGroup
+	failedTransactions      *rootpublication.DurableRootTransaction
 	cleanupErr              error
 	closeFailure            primaryCleanupFailureV5
 	namespaceFailure        primaryCleanupFailureV5
@@ -154,6 +156,7 @@ func (generation *indexGen) sharePrimaryArenaV5(source *indexGen) error {
 	generation.primary = owner.arena
 	generation.zipper.SetPrimaryArena(owner.arena)
 	generation.zipper.SetPrimaryConstructorV6(rootpublication.NewPrimaryConstructionTransactionV6)
+	generation.zipper.SetPrimaryConstructionFailureV6(owner)
 	return nil
 }
 
@@ -195,4 +198,26 @@ func (owner *primaryArenaOwnerV5) retainFailedSnapshot(snapshot *Snapshot, err e
 	owner.failedSnapshots = snapshot
 	owner.cleanupErr = &snapshot.primaryFailure
 	owner.arena.MetadataOwner().CleanupFailed()
+}
+
+// Retain the exact original after failed disposal. The original transaction
+// embeds its own admitted edge and receipt; resources/phase are not replaced.
+func (owner *primaryArenaOwnerV5) retainFailedTransactionV6(transaction *rootpublication.DurableRootTransaction, cause error) error {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	linked, receipt := transaction.RetainFailedCleanupV6(owner, owner.failedTransactions, cause, owner.cleanupErr)
+	if linked {
+		owner.failedTransactions = transaction
+		owner.cleanupErr = receipt
+	}
+	owner.arena.MetadataOwner().CleanupFailed()
+	return receipt
+}
+
+func (owner *primaryArenaOwnerV5) RetainPrimaryConstructionFailureV6(construction primaryarena.ReadRootConstructionV6, cause error) error {
+	original, ok := construction.(*rootpublication.DurableRootTransaction)
+	if !ok {
+		return errors.Join(cause, rootpublication.ErrDurableRootOwnership)
+	}
+	return owner.retainFailedTransactionV6(original, cause)
 }
