@@ -1,0 +1,1728 @@
+diff --git a/TreeDB/db/primary_arena_owner_v5.go b/TreeDB/db/primary_arena_owner_v5.go
+index 9b31ae902..c583280dd 100644
+--- a/TreeDB/db/primary_arena_owner_v5.go
++++ b/TreeDB/db/primary_arena_owner_v5.go
+@@ -23,6 +23,8 @@ type primaryArenaOwnerV5 struct {
+ 	failedPagerOperations   *stablePagerOwnedOperations
+ 	failedDataGenerations   *indexGen
+ 	failedSnapshots         *Snapshot
++	failedBuildGroups       *RootPublicationBuildGroup
++	failedTransactions      *rootpublication.DurableRootTransaction
+ 	cleanupErr              error
+ 	closeFailure            primaryCleanupFailureV5
+ 	namespaceFailure        primaryCleanupFailureV5
+@@ -154,6 +156,7 @@ func (generation *indexGen) sharePrimaryArenaV5(source *indexGen) error {
+ 	generation.primary = owner.arena
+ 	generation.zipper.SetPrimaryArena(owner.arena)
+ 	generation.zipper.SetPrimaryConstructorV6(rootpublication.NewPrimaryConstructionTransactionV6)
++	generation.zipper.SetPrimaryConstructionFailureV6(owner)
+ 	return nil
+ }
+ 
+@@ -196,3 +199,25 @@ func (owner *primaryArenaOwnerV5) retainFailedSnapshot(snapshot *Snapshot, err e
+ 	owner.cleanupErr = &snapshot.primaryFailure
+ 	owner.arena.MetadataOwner().CleanupFailed()
+ }
++
++// Retain the exact original after failed disposal. The original transaction
++// embeds its own admitted edge and receipt; resources/phase are not replaced.
++func (owner *primaryArenaOwnerV5) retainFailedTransactionV6(transaction *rootpublication.DurableRootTransaction, cause error) error {
++	owner.mu.Lock()
++	defer owner.mu.Unlock()
++	linked, receipt := transaction.RetainFailedCleanupV6(owner, owner.failedTransactions, cause, owner.cleanupErr)
++	if linked {
++		owner.failedTransactions = transaction
++		owner.cleanupErr = receipt
++	}
++	owner.arena.MetadataOwner().CleanupFailed()
++	return receipt
++}
++
++func (owner *primaryArenaOwnerV5) RetainPrimaryConstructionFailureV6(construction primaryarena.ReadRootConstructionV6, cause error) error {
++	original, ok := construction.(*rootpublication.DurableRootTransaction)
++	if !ok {
++		return errors.Join(cause, rootpublication.ErrDurableRootOwnership)
++	}
++	return owner.retainFailedTransactionV6(original, cause)
++}
+diff --git a/TreeDB/db/root_publication_activation.go b/TreeDB/db/root_publication_activation.go
+index 9ba10bdfc..18e28d8a3 100644
+--- a/TreeDB/db/root_publication_activation.go
++++ b/TreeDB/db/root_publication_activation.go
+@@ -358,10 +358,24 @@ func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRunti
+ 		return nil, err
+ 	}
+ 	runtime.coordinator = coordinator
++	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
++		idx.zipper.SetPrimaryConstructionFailureV6(runtime)
++	}
+ 	success = true
+ 	return runtime, nil
+ }
+ 
++// The existing runtime bridges failed physical custody to DB admission. The
++// SAME primary owner remains the sole owner of the original failed transaction.
++func (runtime *rootPublicationRuntimeV1) RetainPrimaryConstructionFailureV6(original primaryarena.ReadRootConstructionV6, cause error) error {
++	if runtime == nil || runtime.idx == nil || runtime.idx.primaryOwner == nil {
++		return errors.Join(cause, rootpublication.ErrResourceOwnership)
++	}
++	retained := runtime.idx.primaryOwner.RetainPrimaryConstructionFailureV6(original, cause)
++	runtime.db.publicationPoisoned.Store(true)
++	return errors.Join(retained, ErrRecoveryRequired)
++}
++
+ func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpublication.RecoveryResourceHandoff, error) {
+ 	if runtime == nil || runtime.coordinator == nil {
+ 		return nil, nil
+@@ -625,9 +639,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 	indexBytes uint64,
+ 	timing *CommandWALPublishTiming,
+ 	limits *PreparedRootPublicationLimits,
+-) (_ *rootpublication.PreparedRootCandidate, err error) {
++) (_ *rootpublication.PreparedRootCandidate, transferred bool, err error) {
+ 	if runtime == nil || runtime.db == nil || runtime.idx == nil || install == nil {
+-		return nil, errors.New("missing visible root candidate input")
++		return nil, false, errors.New("missing visible root candidate input")
+ 	}
+ 	visibleCloneStart := time.Now()
+ 	visibleResources, visibleWork, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
+@@ -638,7 +652,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		timing.FinalizeCandidateResourceWork.Add(visibleWork)
+ 	}
+ 	if err != nil {
+-		return nil, fmt.Errorf("clone visible root resource closure: %w", err)
++		return nil, false, fmt.Errorf("clone visible root resource closure: %w", err)
+ 	}
+ 	visibleResourcesOwned := true
+ 	defer func() {
+@@ -650,17 +664,17 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 	var prepared *freelist.PreparedCOWCandidateV1
+ 	liveGeneration := runtime.idx.allocator.COWGenerationV1()
+ 	if liveGeneration == nil {
+-		return nil, errors.New("missing actual DATA generation")
++		return nil, false, errors.New("missing actual DATA generation")
+ 	}
+ 	profile := runtime.idx.allocator.COWPrepareProfileV1()
+ 	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || profile.AllocatedPages != 0 || profile.ChangedChunks != 0
+ 	if dataChanged {
+ 		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
+ 		if err != nil {
+-			return nil, err
++			return nil, false, err
+ 		}
+ 		if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+-			return nil, errors.New("missing live COW generation for visible root")
++			return nil, false, errors.New("missing live COW generation for visible root")
+ 		}
+ 		generationID := liveGeneration.GenerationID() + 1
+ 		retirements := make([]freelist.COWRetirementV1, 0, 1)
+@@ -688,7 +702,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 			timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
+ 		}
+ 		if err != nil {
+-			return nil, fmt.Errorf("prepare visible root COW generation: %w", err)
++			return nil, false, fmt.Errorf("prepare visible root COW generation: %w", err)
+ 		}
+ 
+ 	}
+@@ -706,14 +720,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		}
+ 	}()
+ 	if runtime.db.testFailDurableRootAfterCOWPrepare.Load() {
+-		return nil, errTestDurableRootAfterCOWPrepareFailpoint
++		return nil, false, errTestDurableRootAfterCOWPrepareFailpoint
+ 	}
+ 	generation := liveGeneration
+ 	if prepared != nil {
+ 		generation = prepared.Candidate().Generation()
+ 	}
+ 	if generation == nil {
+-		return nil, errors.New("visible root COW candidate has no generation")
++		return nil, false, errors.New("visible root COW candidate has no generation")
+ 	}
+ 	if indexBytes == 0 && prepared != nil {
+ 		pageCount := uint64(prepared.Candidate().PageCount())
+@@ -737,16 +751,16 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 			work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 			owner, ready, err := runtime.idx.primary.ReadRootConstructionOwnerV6(next.UserRootPageID, work)
+ 			if !ready || err != nil {
+-				return nil, err
++				return nil, false, err
+ 			}
+ 			var valid bool
+ 			transaction, valid = owner.(*rootpublication.DurableRootTransaction)
+ 			if !valid {
+-				return nil, rootpublication.ErrDurableRootOwnership
++				return nil, false, rootpublication.ErrDurableRootOwnership
+ 			}
+ 			cert := transaction.PrimaryConstructionCertificateV6()
+ 			if cert == nil {
+-				return nil, rootpublication.ErrDurableRootOwnership
++				return nil, false, rootpublication.ErrDurableRootOwnership
+ 			}
+ 			bundle.Directory = cert.Reference()
+ 			runtime.mu.Lock()
+@@ -761,18 +775,23 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		} else {
+ 			bundle, ok, e = runtime.idx.primary.TakePublicationBundle(next.UserRootPageID, nil)
+ 			if !ok || e != nil {
+-				return nil, e
++				return nil, false, e
+ 			}
+ 			primary, ok, e = prepareSelectedPrimaryRoot(runtime.idx.primary, bundle, generation, prepared, rootPublicationFrontierV1(next), runtime.idx.pager, nil)
+ 		}
+ 		if !ok || e != nil {
+-			runtime.idx.primary.Drop(bundle.Directory, nil)
+-			runtime.idx.primary.Drop(bundle.Record, nil)
+-			return nil, e
++			if transaction == nil {
++				_, directoryErr := runtime.idx.primary.Drop(bundle.Directory, nil)
++				_, recordErr := runtime.idx.primary.Drop(bundle.Record, nil)
++				e = errors.Join(e, directoryErr, recordErr)
++			}
++			// The original capsule constructor still owns its exact edge.
++			// Its creating group/copy caller disposes it; never raw-Drop it.
++			return nil, false, e
+ 		}
+ 		if runtime.idx.primary.CapsuleFormatV6() {
+ 			if e = runtime.idx.primary.AdmitRootMetadata(bundle.Directory, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))); e != nil {
+-				return nil, e
++				return nil, false, e
+ 			}
+ 		}
+ 		install.primaryRoot = &primaryStateRootV5{runtime.idx.primary, bundle.Directory, generation.CommitSeq()}
+@@ -781,7 +800,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 	if transaction != nil {
+ 		memberMetadata = primaryVisibleMetadataV6()
+ 		if e := runtime.idx.primary.MetadataOwner().AddPending(memberMetadata); e != nil {
+-			return nil, e
++			return nil, false, e
+ 		}
+ 	}
+ 	memberMetadataOwned := memberMetadata != 0
+@@ -799,7 +818,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 	err = runtime.reserveVisibleCapacity(prepared != nil)
+ 	runtime.mu.Unlock()
+ 	if err != nil {
+-		return nil, err
++		return nil, false, err
+ 	}
+ 
+ 	transactionCOW := prepared
+@@ -898,14 +917,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 		ready, e := transaction.BindPrimaryVisibilityV6(transactionSpec, resources, work)
+ 		if !ready || e != nil {
+-			return nil, errors.Join(e, rootpublication.ErrDurableRootOwnership)
++			return nil, false, errors.Join(e, rootpublication.ErrDurableRootOwnership)
+ 		}
+ 		memberMetadataOwned = false
+ 		install.metadataCharge = 0
+ 	} else {
+ 		transaction, err = rootpublication.NewDurableRootTransaction(transactionSpec)
+ 		if err != nil {
+-			return nil, err
++			return nil, false, err
+ 		}
+ 	}
+ 	member.transaction = transaction
+@@ -921,10 +940,16 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		DurableRoot:     transaction,
+ 	})
+ 	if err != nil {
+-		_ = transaction.Abort()
+-		return nil, err
++		if abortErr := transaction.Abort(); abortErr != nil {
++			runtime.db.publicationPoisoned.Store(true)
++			if runtime.idx.primaryOwner != nil {
++				abortErr = runtime.idx.primaryOwner.retainFailedTransactionV6(transaction, abortErr)
++			}
++			return nil, true, errors.Join(err, abortErr, ErrRecoveryRequired)
++		}
++		return nil, false, err
+ 	}
+-	return candidate, nil
++	return candidate, true, nil
+ }
+ 
+ // rootPublicationDependencyBytesV1 runs under durablePublishMu and rootReuseMu,
+@@ -955,7 +980,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 	opts finalizeCommitOptions,
+ 	inlinePrepareGuard *finalizeCommitPrepareGuard,
+ 	releaseDurablePublish func(),
+-) (finalizeCommitPost, error) {
++) (retPost finalizeCommitPost, retErr error) {
+ 	candidateBuildStart := time.Now()
+ 	var candidateTiming CommandWALPublishTiming
+ 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
+@@ -965,24 +990,55 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 	// Each publication owns an independently complete PRIMARY construction.
+ 	// System-only changes copy the immutable directory; bulk/manual DATA
+ 	// builders enter the same construction boundary as zipper mutations.
+-	var copiedPrimary uint64
++	var copiedPrimary primaryarena.ReadRootConstructionV6
++	var copiedAbortErr error
++	var copiedLegacy uint64
++	defer func() {
++		if copiedLegacy != 0 {
++			bundle, ready, _ := idx.primary.TakePublicationBundle(copiedLegacy, nil)
++			if ready {
++				_, _ = idx.primary.Drop(bundle.Directory, nil)
++				_, _ = idx.primary.Drop(bundle.Record, nil)
++			}
++		}
++	}()
++	defer func() {
++		if copiedPrimary == nil {
++			return
++		}
++		if copiedAbortErr == nil {
++			copiedAbortErr = copiedPrimary.Abort()
++		}
++		if copiedAbortErr != nil {
++			// Dispose was attempted once by its original producer or here. Preserve
++			// that exact object; do not retry an incomplete action or refund its debt.
++			if original, ok := copiedPrimary.(*rootpublication.DurableRootTransaction); ok {
++				copiedAbortErr = idx.primaryOwner.retainFailedTransactionV6(original, copiedAbortErr)
++			}
++			db.publicationPoisoned.Store(true)
++			retErr = errors.Join(retErr, copiedAbortErr, ErrRecoveryRequired)
++		}
++	}()
+ 	if idx.primary != nil {
+ 		var id uint64
+ 		var err error
++		z := idx.zipper.CloneWithAllocator(idx.allocator)
++		z.SetPrimaryConstructionOutputV6(&copiedPrimary, &copiedAbortErr)
+ 		switch {
+ 		case next.UserRootPageID == db.meta.UserRootPageID:
+-			id, err = idx.zipper.CopyPrimaryRoot(next.UserRootPageID)
++			id, err = z.CopyPrimaryRoot(next.UserRootPageID)
+ 		case !primaryarena.IsPage(next.UserRootPageID):
+-			id, err = idx.zipper.BuildPrimaryRoot(next.UserRootPageID, next.CommitSeq)
++			id, err = z.BuildPrimaryRoot(next.UserRootPageID, next.CommitSeq)
+ 		}
+ 		if err != nil {
+ 			return post, prePublishErr(err)
+ 		}
+ 		if id != 0 {
+-			next.UserRootPageID, newUserRootID, copiedPrimary = id, id, id
++			next.UserRootPageID, newUserRootID = id, id
++			if copiedPrimary == nil {
++				copiedLegacy = id
++			}
+ 		}
+-		// PRIMARY retirement belongs to its owned construction/closure, never
+-		// the DATA allocator, even when a legacy tree walk collected both.
+ 		dataRetired := retired[:0]
+ 		for _, id := range retired {
+ 			if !primaryarena.IsPage(id) {
+@@ -991,22 +1047,6 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 		}
+ 		retired = dataRetired
+ 	}
+-	defer func() {
+-		if copiedPrimary != 0 {
+-			work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+-			if owner, ready, _ := idx.primary.ReadRootConstructionOwnerV6(copiedPrimary, work); ready {
+-				_ = owner.Abort()
+-				return
+-			}
+-			// A failed pre-transfer candidate leaves the private pair here. A
+-			// transaction which took it has already assumed abort/release custody.
+-			bundle, ready, _ := idx.primary.TakePublicationBundle(copiedPrimary, nil)
+-			if ready {
+-				_, _ = idx.primary.Drop(bundle.Directory, nil)
+-				_, _ = idx.primary.Drop(bundle.Record, nil)
+-			}
+-		}
+-	}()
+ 	visibleBaseCloneStart := time.Now()
+ 	maxVisibleResources := -1
+ 	if opts.preparedLimits != nil {
+@@ -1097,20 +1137,29 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 	if forced := db.testRootPublicationDependencyBytes.Load(); forced != 0 {
+ 		dependencyBytes = forced
+ 	}
+-	candidate, err := runtime.prepareVisibleCandidate(
++	candidate, transferred, err := runtime.prepareVisibleCandidate(
+ 		next, retired, resources, install,
+ 		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
+ 	)
++	if transferred {
++		copiedPrimary = nil
++		copiedLegacy = 0
++		resourcesOwned = false
++		installOwned = false
++	}
+ 	if err != nil {
+ 		return post, prePublishErr(err)
+ 	}
+-	copiedPrimary = 0
+-	resourcesOwned = false
+-	installOwned = false
+ 	candidateOwned := true
+ 	defer func() {
+ 		if candidateOwned {
+-			_ = candidate.Abandon()
++			if abandonErr := candidate.Abandon(); abandonErr != nil {
++				if idx.primaryOwner != nil {
++					abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
++				}
++				db.publicationPoisoned.Store(true)
++				retErr = errors.Join(retErr, abandonErr, ErrRecoveryRequired)
++			}
+ 		}
+ 	}()
+ 
+@@ -1145,6 +1194,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 	if enqueueErr != nil {
+ 		enqueueErr = publicRootPublicationErrorV1(enqueueErr)
+ 		if abandonErr := candidate.Abandon(); abandonErr != nil {
++			if idx.primaryOwner != nil {
++				abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
++			}
+ 			enqueueErr = errors.Join(enqueueErr, abandonErr, ErrRecoveryRequired)
+ 			db.publicationPoisoned.Store(true)
+ 		}
+@@ -1577,6 +1629,19 @@ func (runtime *rootPublicationRuntimeV1) preparedSealFor(candidate *rootpublicat
+ 	return seal, nil
+ }
+ 
++// emitPrimaryAuthorityCutV6 labels the authority role on the actual three-page
++// PRIMARY slot. The pinned identity is the SAME physical publication operand.
++func (runtime *rootPublicationRuntimeV1) emitPrimaryAuthorityCutV6(seal *rootPublicationSealV1, point durabilitycut.Point) error {
++	if !durabilitycut.Enabled() {
++		return nil
++	}
++	return seal.primary.token.WithPinnedFile(func(file *os.File) error {
++		return durabilitycut.EmitStableRange(point, durabilitycut.ResourceMeta, runtime.db.dir,
++			filepath.Join(runtime.db.dir, primaryIndexFileName), file,
++			int64(2+seal.target*3)*int64(page.PageSize), 3*int64(page.PageSize))
++	})
++}
++
+ // Publish performs only stable I/O and the post-I/O allocator/durable-state
+ // transition. No DB write, commit, root-build, or preparation lock is held
+ // across executeDurableRootStorageTransactionV1.
+@@ -1593,21 +1658,35 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate
+ 	var installAuthority func() (bool, error)
+ 	if seal.primary != nil && seal.primary.promotion != nil {
+ 		installAuthority = func() (bool, error) {
++			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaWrite); e != nil {
++				return false, e
++			}
+ 			if db.testFailWriteMeta.Load() {
+ 				return false, errTestWriteMetaFailpoint
+ 			}
+ 			if e := ctx.Err(); e != nil {
+ 				return false, e
+ 			}
+-			// The exact slot may have changed once physical installation starts.
+-			// Any install/fence failure retains the complete recovery custody.
++			// Installation begins here. Every later failure is ambiguous.
+ 			_, _, e := seal.idx.primary.Pager().WritePrimaryCapsuleWithFenceV6(2+seal.target*3, seal.primary.promotion.Image, func() error {
++				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaWrite); e != nil {
++					return e
++				}
++				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaSync); e != nil {
++					return e
++				}
+ 				if db.testFailSyncMeta.Load() {
+ 					return errTestSyncMetaFailpoint
+ 				}
+ 				return ctx.Err()
+ 			}, nil)
+-			return true, e
++			if e != nil {
++				return true, e
++			}
++			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaSync); e != nil {
++				return true, e
++			}
++			return true, nil
+ 		}
+ 	}
+ 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+diff --git a/TreeDB/db/root_publication_build_group.go b/TreeDB/db/root_publication_build_group.go
+index 0e26a8af7..83e3a1839 100644
+--- a/TreeDB/db/root_publication_build_group.go
++++ b/TreeDB/db/root_publication_build_group.go
+@@ -8,11 +8,17 @@ import (
+ 
+ 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+ 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
++	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"github.com/snissn/gomap/TreeDB/zipper"
+ )
+ 
++type privatePrimaryConstructionV6 interface {
++	primaryarena.ReadRootConstructionV6
++	AbortPrivatePrimaryConstructionV6() error
++}
++
+ // RootPublicationBuildGroup stages a logical cached apply across bounded
+ // backend batches. Intermediate batches build private COW roots only. The final
+ // batch transfers one complete root into one PreparedRootCandidate.
+@@ -32,6 +38,15 @@ type RootPublicationBuildGroup struct {
+ 	registered    bool
+ 	capturedBasis *Snapshot
+ 
++	// Only original factory outputs enter these two custody cells. baseRoot is
++	// borrowed and never enters them. A failed disposal preserves both originals.
++	primaryCurrent      primaryarena.ReadRootConstructionV6
++	primaryNext         primaryarena.ReadRootConstructionV6
++	primaryNextAbortErr error
++	cleanupErr          error
++	primaryFailedNext   *RootPublicationBuildGroup
++	primaryFailure      primaryCleanupFailureV5
++
+ 	baseRoot    uint64
+ 	currentRoot uint64
+ 	systemRoot  uint64
+@@ -262,6 +277,7 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
+ 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+ 	}
+ 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
++	z.SetPrimaryConstructionOutputV6(&group.primaryNext, &group.primaryNextAbortErr)
+ 	var (
+ 		newRoot   uint64
+ 		retired   []uint64
+@@ -310,6 +326,18 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
+ 	group.mergeValueLogRefDeltaLocked(delta)
+ 	releaseValueLogRefDelta(delta)
+ 	group.recordVacuumMutationLocked(entries, ranges)
++	// The successor has sealed its real closure, including genuine edges to
++	// surviving predecessor components. Only now can its private predecessor
++	// relinquish the original construction edge.
++	if group.primaryNext != nil {
++		if group.primaryNext.PrimaryConstructionReferenceV6().PageID != newRoot {
++			return rootpublication.ErrDurableRootOwnership
++		}
++		if err := group.disposePrimaryLocked(&group.primaryCurrent); err != nil {
++			return err
++		}
++		group.primaryCurrent, group.primaryNext = group.primaryNext, nil
++	}
+ 	group.currentRoot = newRoot
+ 	group.retired = append(group.retired, retired...)
+ 	mergeOrderedRootPublishMetrics(&group.metrics, metrics)
+@@ -458,10 +486,53 @@ func (group *RootPublicationBuildGroup) writeBatch(b *Batch, syncWrite bool, max
+ 	return errors.Join(err, cleanupErr)
+ }
+ 
++// disposePrimaryLocked uses the original transaction's phase as the transfer
++// receipt. A Bind/Detach-owned candidate is untouched; failed Abort keeps this
++// exact constructor and all remaining physical custody in the original cell.
++func (group *RootPublicationBuildGroup) disposePrimaryLocked(owner *primaryarena.ReadRootConstructionV6) error {
++	if *owner == nil {
++		return nil
++	}
++	original, ok := (*owner).(privatePrimaryConstructionV6)
++	if !ok {
++		return rootpublication.ErrDurableRootOwnership
++	}
++	if err := original.AbortPrivatePrimaryConstructionV6(); err != nil {
++		return err
++	}
++	*owner = nil
++	return nil
++}
++
+ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
+-	if group == nil || group.closed {
++	if group == nil {
+ 		return nil
+ 	}
++	if group.closed {
++		return group.cleanupErr
++	}
++	var primaryErr error
++	if group.primaryNextAbortErr != nil {
++		primaryErr = group.primaryNextAbortErr
++	} else {
++		primaryErr = group.disposePrimaryLocked(&group.primaryNext)
++	}
++	if primaryErr == nil {
++		primaryErr = group.disposePrimaryLocked(&group.primaryCurrent)
++	}
++	if primaryErr != nil {
++		group.failed = true
++		group.closed = true
++		// The same physical owner retains the exact group, DATA tracker, pins,
++		// and failed original constructors before caller serialization is released.
++		group.cleanupErr = group.retainPrimaryFailureLocked(primaryErr)
++		if group.capturedBasis != nil {
++			group.capturedBasis.endRead()
++			group.capturedBasis = nil
++		}
++		group.releaseBuildLocksLocked()
++		return group.cleanupErr
++	}
+ 	if group.capturedBasis != nil {
+ 		group.capturedBasis.endRead()
+ 		group.capturedBasis = nil
+@@ -487,6 +558,11 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
+ 		group.db.releasePendingValueLogAppendFileIDCounts(release)
+ 		group.pinnedValueLogSegments = nil
+ 	}
++	group.releaseBuildLocksLocked()
++	return cleanupErr
++}
++
++func (group *RootPublicationBuildGroup) releaseBuildLocksLocked() {
+ 	group.releaseWriteLocked()
+ 	group.releaseDurablePublishLocked()
+ 	if group.builder != nil {
+@@ -497,7 +573,22 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
+ 		group.teardownLocked = false
+ 		group.db.teardownMu.RUnlock()
+ 	}
+-	return cleanupErr
++}
++
++// Failure custody extends the existing original physical-owner chain. It
++// neither refunds unresolved charge nor introduces another cleanup lifecycle.
++func (group *RootPublicationBuildGroup) retainPrimaryFailureLocked(err error) error {
++	group.db.publicationPoisoned.Store(true)
++	group.primaryFailure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
++	owner := group.idx.primaryOwner
++	owner.mu.Lock()
++	defer owner.mu.Unlock()
++	group.primaryFailedNext = owner.failedBuildGroups
++	owner.failedBuildGroups = group
++	group.primaryFailure.causes[2] = owner.cleanupErr
++	owner.cleanupErr = &group.primaryFailure
++	owner.arena.MetadataOwner().CleanupFailed()
++	return &group.primaryFailure
+ }
+ 
+ // Accepted reports the existing publication receipt independently of write or
+diff --git a/TreeDB/db/root_publication_build_group_primary_v6_test.go b/TreeDB/db/root_publication_build_group_primary_v6_test.go
+new file mode 100644
+index 000000000..e470812aa
+--- /dev/null
++++ b/TreeDB/db/root_publication_build_group_primary_v6_test.go
+@@ -0,0 +1,343 @@
++package db
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"testing"
++	"time"
++	"unsafe"
++
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
++	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/tree"
++)
++
++func groupPrimaryOwnerV6(t *testing.T, g *RootPublicationBuildGroup) *rootpublication.DurableRootTransaction {
++	t.Helper()
++	owner, ready, err := g.idx.primary.ReadRootConstructionOwnerV6(g.currentRoot, &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)})
++	if !ready || err != nil {
++		t.Fatalf("original constructor: %v %v", ready, err)
++	}
++	txn, ok := owner.(*rootpublication.DurableRootTransaction)
++	if !ok {
++		t.Fatalf("owner is %T", owner)
++	}
++	return txn
++}
++
++func groupPrimaryWriteV6(t *testing.T, db *DB, g *RootPublicationBuildGroup, n int, final bool) {
++	t.Helper()
++	b := db.NewPhysicalBatch().(*Batch)
++	defer b.Close()
++	if err := b.Set([]byte(fmt.Sprintf("private-%d", n)), []byte("value")); err != nil {
++		t.Fatal(err)
++	}
++	if err := b.SetRootPublicationBuildGroup(g, final); err != nil {
++		t.Fatal(err)
++	}
++	if err := b.Write(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// These are the original production transactions returned by the ordinary
++// zipper, not independently constructed stand-ins or scalar accounting probes.
++func TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff(t *testing.T) {
++	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	if err := db.SetSync([]byte("borrowed"), []byte("base")); err != nil {
++		t.Fatal(err)
++	}
++	basis := db.AcquireSnapshot()
++	defer basis.Close()
++	g, err := db.BeginRootPublicationBuildGroupFromSnapshot(basis)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer g.Close()
++	var prior *rootpublication.DurableRootTransaction
++	for n := 0; n < 4; n++ {
++		groupPrimaryWriteV6(t, db, g, n, false)
++		current := groupPrimaryOwnerV6(t, g)
++		if current.Owner() != rootpublication.ResourceOwnerBuilder {
++			t.Fatal("private constructor lost custody")
++		}
++		if prior != nil && prior.Owner() != rootpublication.ResourceOwnerReleased {
++			t.Fatal("superseded original constructor retained custody")
++		}
++		prior = current
++	}
++	groupPrimaryWriteV6(t, db, g, 4, true)
++	if prior.Owner() != rootpublication.ResourceOwnerReleased {
++		t.Fatal("final Apply retained predecessor constructor")
++	}
++	if !g.Accepted() {
++		t.Fatal("final group not accepted")
++	}
++	if err := g.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if got, err := basis.Get([]byte("borrowed")); err != nil || !bytes.Equal(got, []byte("base")) {
++		t.Fatalf("borrowed base %q %v", got, err)
++	}
++	if got, err := basis.Get([]byte("private-0")); !errors.Is(err, tree.ErrKeyNotFound) || got != nil {
++		t.Fatalf("basis changed %q %v", got, err)
++	}
++	runtime := db.rootPublication
++	runtime.mu.Lock()
++	member := runtime.visibleMember(db.State().CommitSeq)
++	runtime.mu.Unlock()
++	if member == nil || member.transaction == nil || member.transaction.Owner() != rootpublication.ResourceOwnerCoordinator {
++		t.Fatal("final original transaction did not transfer")
++	}
++	final := member.transaction
++	if err := db.Checkpoint(); err != nil {
++		t.Fatal(err)
++	}
++	if final.Owner() != rootpublication.ResourceOwnerReleased {
++		t.Fatal("same final transaction not finished")
++	}
++	for n := 0; n < 5; n++ {
++		if got, err := db.Get([]byte(fmt.Sprintf("private-%d", n))); err != nil || !bytes.Equal(got, []byte("value")) {
++			t.Fatalf("surviving component %d %q %v", n, got, err)
++		}
++	}
++}
++
++func TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader(t *testing.T) {
++	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	if err := db.SetSync([]byte("borrowed"), []byte("base")); err != nil {
++		t.Fatal(err)
++	}
++	basis := db.AcquireSnapshot()
++	defer basis.Close()
++	g, err := db.BeginRootPublicationBuildGroupFromSnapshot(basis)
++	if err != nil {
++		t.Fatal(err)
++	}
++	groupPrimaryWriteV6(t, db, g, 0, false)
++	original := groupPrimaryOwnerV6(t, g)
++	if err := g.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err := g.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if original.Owner() != rootpublication.ResourceOwnerReleased {
++		t.Fatal("unfinished original constructor retained custody")
++	}
++	if got, err := basis.Get([]byte("borrowed")); err != nil || !bytes.Equal(got, []byte("base")) {
++		t.Fatalf("borrowed reader %q %v", got, err)
++	}
++	if got, err := db.Get([]byte("private-0")); err != nil || got != nil {
++		t.Fatalf("abandoned root published %q %v", got, err)
++	}
++}
++
++// A surviving bank reader owns its immutable root and component closure; it
++// must not retain the released mutable transaction descriptor after Abort.
++func TestPrimaryConstructionV6AbortDetachesRetainedReader(t *testing.T) {
++	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	a := db.idx.Load().primary
++	id, err := db.idx.Load().zipper.CopyPrimaryRoot(db.State().RootPageID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++	owner, ready, err := a.ReadRootConstructionOwnerV6(id, w)
++	if !ready || err != nil {
++		t.Fatal(ready, err)
++	}
++	ref := owner.PrimaryConstructionReferenceV6()
++	if ready, err := a.Acquire(ref, w); !ready || err != nil {
++		t.Fatal(ready, err)
++	}
++	defer a.Drop(ref, nil)
++	if err := owner.Abort(); err != nil {
++		t.Fatal(err)
++	}
++	if retained, ready, err := a.ReadRootConstructionOwnerV6(id, w); ready || retained != nil || err != primaryarena.ErrStale {
++		t.Fatal("released descriptor retained by immutable reader", ready, err)
++	}
++	if _, ready, err := a.BorrowReadRootCertificateV6(ref, w); !ready || err != nil {
++		t.Fatal("reader root lost", ready, err)
++	}
++}
++
++// Invalidating the original root's edge injects a genuine original-transaction
++// Abort refusal. The failed transaction and DATA tracker stay on the SAME
++// original physical owner, while Close releases serialization and teardown.
++func TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt(t *testing.T) {
++	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	basis := db.AcquireSnapshot()
++	g, err := db.BeginRootPublicationBuildGroupFromSnapshot(basis)
++	if err != nil {
++		t.Fatal(err)
++	}
++	b := db.NewPhysicalBatch().(*Batch)
++	for n := 0; n < 64; n++ {
++		if err := b.Set([]byte(fmt.Sprintf("materialized-%03d", n)), []byte("value")); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := b.SetRootPublicationBuildGroup(g, false); err != nil {
++		t.Fatal(err)
++	}
++	if err := b.Write(); err != nil {
++		t.Fatal(err)
++	}
++	if err := b.Close(); err != nil {
++		t.Fatal(err)
++	}
++	original := groupPrimaryOwnerV6(t, g)
++	ref := original.PrimaryConstructionReferenceV6()
++	owner := g.idx.primaryOwner
++	if want := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))); owner.metadataCharge != want {
++		t.Fatalf("containing owner admitted %d, want %d", owner.metadataCharge, want)
++	}
++	pending := owner.arena.MetadataOwner().Bytes()
++	pages := g.tracker.Pages()
++	if len(pages) == 0 {
++		t.Fatal("fault fixture did not build actual DATA debt")
++	}
++	// Consume the exact original root edge to force the production Abort's stale
++	// reference refusal; do not substitute a fake transaction or disposal hook.
++	if ready, err := owner.arena.Drop(ref, nil); !ready || err != nil {
++		t.Fatal(ready, err)
++	}
++	err = g.Close()
++	if !errors.Is(err, rootpublication.ErrDurableRootOwnership) {
++		t.Fatalf("failed Abort %v", err)
++	}
++	if g.primaryCurrent != original || original.PrimaryConstructionReferenceV6() != ref || original.Owner() != rootpublication.ResourceOwnerBuilder {
++		t.Fatal("original failed custody lost")
++	}
++	if owner.failedBuildGroups != g || !g.registered || g.idx == nil || g.tracker == nil {
++		t.Fatal("group/pins/tracker debt lost")
++	}
++	if got := g.tracker.Pages(); len(got) != len(pages) {
++		t.Fatal("DATA refunded after failed original Abort")
++	}
++	if owner.arena.MetadataOwner().Bytes() < pending {
++		t.Fatal("failed constructor metadata refunded")
++	}
++	if again := g.Close(); again != err {
++		t.Fatal("Close lost original failure receipt")
++	}
++	// A captured basis read and every serialization lock must be released even
++	// though exact resource custody survives. This also checks shutdown ordering.
++	done := make(chan error, 1)
++	go func() {
++		basis.Close()
++		db.writeMu.Lock()
++		db.writeMu.Unlock()
++		db.durablePublishMu.Lock()
++		db.durablePublishMu.Unlock()
++		done <- db.Close()
++	}()
++	select {
++	case closeErr := <-done:
++		if !errors.Is(closeErr, rootpublication.ErrDurableRootOwnership) {
++			t.Fatalf("shutdown lost debt %v", closeErr)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("failed disposal deadlocked shutdown")
++	}
++	if owner.metadataCharge == 0 || owner.arena == nil || owner.arena.MetadataOwner().Bytes() == 0 {
++		t.Fatal("physical-last-owner failure refunded debt")
++	}
++}
++
++// A failing successor cannot dispose its still-needed predecessor or DATA
++// closure. Both custody cells contain the SAME original production objects.
++func TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor(t *testing.T) {
++	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	g, err := db.BeginRootPublicationBuildGroup()
++	if err != nil {
++		t.Fatal(err)
++	}
++	first := db.NewPhysicalBatch().(*Batch)
++	for n := 0; n < 64; n++ {
++		if err := first.Set([]byte(fmt.Sprintf("first-%03d", n)), []byte("value")); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := first.SetRootPublicationBuildGroup(g, false); err != nil {
++		t.Fatal(err)
++	}
++	if err := first.Write(); err != nil {
++		t.Fatal(err)
++	}
++	_ = first.Close()
++	predecessor := groupPrimaryOwnerV6(t, g)
++	pages := g.tracker.Pages()
++	var successor *rootpublication.DurableRootTransaction
++	g.idx.zipper.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++		output, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
++		if ready && err == nil {
++			successor = output.(*rootpublication.DurableRootTransaction)
++			if ready, err := a.Drop(successor.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
++				t.Fatal(ready, err)
++			}
++		}
++		return output, ready, err
++	})
++	second := db.NewPhysicalBatch().(*Batch)
++	if err := second.Set([]byte("successor"), []byte("value")); err != nil {
++		t.Fatal(err)
++	}
++	if err := second.SetRootPublicationBuildGroup(g, false); err != nil {
++		t.Fatal(err)
++	}
++	err = second.Write()
++	_ = second.Close()
++	err = errors.Join(err, g.Close())
++	if !errors.Is(err, rootpublication.ErrDurableRootOwnership) || !errors.Is(err, ErrRecoveryRequired) {
++		t.Fatalf("failed successor %v", err)
++	}
++	if g.primaryCurrent != predecessor || g.primaryNext != successor || predecessor.Owner() != rootpublication.ResourceOwnerBuilder || successor.Owner() != rootpublication.ResourceOwnerBuilder {
++		t.Fatal("failed successor released an original custody cell")
++	}
++	if len(g.tracker.Pages()) < len(pages) || !g.registered || g.idx.primaryOwner.failedBuildGroups != g || g.idx.primaryOwner.failedTransactions != successor {
++		t.Fatalf("failed successor lost original closure: pages=%d prior=%d registered=%v failedGroup=%p group=%p failedTxn=%p successor=%p", len(g.tracker.Pages()), len(pages), g.registered, g.idx.primaryOwner.failedBuildGroups, g, g.idx.primaryOwner.failedTransactions, successor)
++	}
++	if !db.publicationPoisoned.Load() {
++		t.Fatal("failed cleanup left write admission open")
++	}
++	if err := g.Close(); !errors.Is(err, rootpublication.ErrDurableRootOwnership) {
++		t.Fatalf("repeat close %v", err)
++	}
++	done := make(chan error, 1)
++	go func() { done <- db.Close() }()
++	select {
++	case err := <-done:
++		if !errors.Is(err, rootpublication.ErrDurableRootOwnership) {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("failed next deadlocked shutdown")
++	}
++	if g.idx.primaryOwner.metadataCharge == 0 || predecessor.Owner() != rootpublication.ResourceOwnerBuilder {
++		t.Fatal("failed physical owner refunded originals")
++	}
++}
+diff --git a/TreeDB/db/root_publication_primary_cleanup_v6_test.go b/TreeDB/db/root_publication_primary_cleanup_v6_test.go
+new file mode 100644
+index 000000000..82a612c65
+--- /dev/null
++++ b/TreeDB/db/root_publication_primary_cleanup_v6_test.go
+@@ -0,0 +1,200 @@
++package db
++
++import (
++	"errors"
++	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/page"
++	"os"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++)
++
++// Observe the SAME original producer, then consume its real root edge. This
++// injects production Seal/Abort refusals without a fake constructor or hook
++// replacing Abort. The physical owner must discover all sibling failures.
++func TestPrimaryConstructionV6OriginalSiblingFailureCustody(t *testing.T) {
++	for _, path := range []string{"apply", "copy", "build"} {
++		t.Run(path, func(t *testing.T) {
++			database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer database.Close()
++			idx := database.idx.Load()
++			var original *rootpublication.DurableRootTransaction
++			idx.zipper.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++				output, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
++				if !ready || err != nil {
++					return output, ready, err
++				}
++				original = output.(*rootpublication.DurableRootTransaction)
++				if ready, err := a.Drop(original.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
++					t.Fatal(ready, err)
++				}
++				return output, true, nil
++			})
++			switch path {
++			case "apply":
++				batch := database.NewPhysicalBatch().(*Batch)
++				defer batch.Close()
++				if err := batch.Set([]byte("failed-original"), []byte("value")); err != nil {
++					t.Fatal(err)
++				}
++				err = batch.Write()
++			case "copy":
++				_, err = idx.zipper.CopyPrimaryRoot(database.State().RootPageID)
++			case "build":
++				_, err = idx.zipper.BuildPrimaryRoot(database.State().RootPageID, database.State().CommitSeq)
++			}
++			if !errors.Is(err, rootpublication.ErrDurableRootOwnership) {
++				t.Fatalf("actual original failure %v", err)
++			}
++			if original == nil || idx.primaryOwner.failedTransactions != original || original.Owner() != rootpublication.ResourceOwnerBuilder {
++				t.Fatal("original sibling failure was orphaned or refunded")
++			}
++			if original.PrimaryConstructionReferenceV6() == (primaryarena.Ref{}) {
++				t.Fatal("original construction erased")
++			}
++			if closeErr := database.Close(); !errors.Is(closeErr, rootpublication.ErrDurableRootOwnership) {
++				t.Fatalf("shutdown lost original error: %v", closeErr)
++			}
++			if idx.primaryOwner.metadataCharge == 0 || idx.primaryOwner.arena.MetadataOwner().Bytes() == 0 {
++				t.Fatal("failed physical last-owner refunded")
++			}
++		})
++	}
++}
++
++// The production candidate has already Bound/Detached its SAME original. An
++// activation refusal followed by a genuine original Abort refusal must retain
++// candidate resources; the caller's prepare-error defers cannot release them.
++func TestPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T) {
++	database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	idx := database.idx.Load()
++	var original *rootpublication.DurableRootTransaction
++	idx.zipper.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++		output, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
++		if ready && err == nil {
++			original = output.(*rootpublication.DurableRootTransaction)
++		}
++		return output, ready, err
++	})
++	database.testFailDurableRootVisibleInstall.Store(true)
++	database.testDurableRootCandidatePreparedHook = func() {
++		if original == nil || original.Owner() != rootpublication.ResourceOwnerCandidate {
++			t.Fatal("actual candidate not admitted")
++		}
++		if ready, err := idx.primary.Drop(original.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
++			t.Fatal(ready, err)
++		}
++	}
++	batch := database.NewPhysicalBatch().(*Batch)
++	if err := batch.Set([]byte("bound-failure"), []byte("value")); err != nil {
++		t.Fatal(err)
++	}
++	err = batch.Write()
++	_ = batch.Close()
++	if !errors.Is(err, rootpublication.ErrDurableRootOwnership) || !errors.Is(err, ErrRecoveryRequired) {
++		t.Fatalf("production abandon failure %v", err)
++	}
++	if idx.primaryOwner.failedTransactions != original || original.Owner() != rootpublication.ResourceOwnerCandidate {
++		t.Fatal("candidate original or its resources refunded")
++	}
++	if original.PreparedPrimary() == nil {
++		t.Fatal("original bound resources/projection erased")
++	}
++	done := make(chan error, 1)
++	go func() { done <- database.Close() }()
++	select {
++	case err := <-done:
++		if !errors.Is(err, rootpublication.ErrDurableRootOwnership) {
++			t.Fatalf("shutdown lost original %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("bound failure deadlocked teardown")
++	}
++	if idx.primaryOwner.metadataCharge == 0 || idx.primaryOwner.arena.MetadataOwner().Bytes() == 0 {
++		t.Fatal("failed bound original refunded")
++	}
++}
++
++// The authority role belongs to the exact pinned PRIMARY three-page slot,
++// not a fictional write to the DATA pager's legacy one-page metadata slot.
++func TestPrimaryConstructionV6AuthorityCutsUseActualPrimary(t *testing.T) {
++	database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++	var mu sync.Mutex
++	var points []durabilitycut.Point
++	var observationErr error
++	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
++		if event.Root != database.dir || event.Resource != durabilitycut.ResourceMeta {
++			return nil
++		}
++		mu.Lock()
++		defer mu.Unlock()
++		expectedPath := filepath.Join(database.dir, primaryIndexFileName)
++		if event.Path != expectedPath || event.StablePath == nil || event.Length != 3*int64(page.PageSize) ||
++			(event.Offset != 2*int64(page.PageSize) && event.Offset != 5*int64(page.PageSize)) {
++			observationErr = errors.New("authority cut did not name actual PRIMARY slot")
++			return observationErr
++		}
++		pinned, err := event.StablePath.Stat()
++		if err != nil {
++			observationErr = err
++			return err
++		}
++		actual, err := os.Stat(expectedPath)
++		if err != nil {
++			observationErr = err
++			return err
++		}
++		if !os.SameFile(pinned, actual) {
++			observationErr = errors.New("authority used a different file identity")
++			return observationErr
++		}
++		points = append(points, event.Point)
++		return nil
++	})
++	observerActive := true
++	defer func() {
++		if observerActive {
++			restore()
++		}
++	}()
++	batch := database.NewPhysicalBatch().(*Batch)
++	if err := batch.Set([]byte("authority"), []byte("value")); err != nil {
++		t.Fatal(err)
++	}
++	err = batch.WriteSync()
++	_ = batch.Close()
++	restore()
++	observerActive = false
++	if err != nil {
++		t.Fatal(err)
++	}
++	mu.Lock()
++	defer mu.Unlock()
++	if observationErr != nil {
++		t.Fatal(observationErr)
++	}
++	want := []durabilitycut.Point{durabilitycut.BeforeMetaWrite, durabilitycut.AfterMetaWrite, durabilitycut.BeforeMetaSync, durabilitycut.AfterMetaSync}
++	if len(points) != len(want) {
++		t.Fatalf("authority points %v", points)
++	}
++	for n := range want {
++		if points[n] != want[n] {
++			t.Fatalf("authority point order %v", points)
++		}
++	}
++}
+diff --git a/TreeDB/internal/primaryarena/read_root_construction_release_v6.go b/TreeDB/internal/primaryarena/read_root_construction_release_v6.go
+new file mode 100644
+index 000000000..fb5c7e460
+--- /dev/null
++++ b/TreeDB/internal/primaryarena/read_root_construction_release_v6.go
+@@ -0,0 +1,33 @@
++package primaryarena
++
++import (
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"unsafe"
++)
++
++// DropReadRootConstructionV6 removes the original transaction alias and its
++// root edge together. A surviving immutable reader keeps only the bank and
++// closure, so releasing the transaction descriptor cannot refund a live alias.
++// An already detached bank belongs to a bound transaction; its original root
++// edge may still be dropped by that SAME transaction's abort/finish path.
++// Refusal leaves both alias and edge unchanged.
++func (a *Arena) DropReadRootConstructionV6(ref Ref, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (bool, error) {
++	bytes := 2*uint64(unsafe.Sizeof(bank{})) + 2*uint64(unsafe.Sizeof(ReleaseQueue{}))
++	if !reserve(w, 2, bytes) {
++		return false, nil
++	}
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	b := a.valid(ref)
++	if b == nil || owner == nil || (b.construction != nil && b.construction != owner) {
++		return false, ErrStale
++	}
++	b.refs--
++	b.construction = nil
++	if b.refs == 0 {
++		a.enqueueOn(&a.ordinaryRelease, Local(ref.PageID), b)
++	}
++	a.counters.RootDrops++
++	a.counters.Bytes += bytes
++	return true, nil
++}
+diff --git a/TreeDB/internal/rootpublication/durable_root_transaction.go b/TreeDB/internal/rootpublication/durable_root_transaction.go
+index 1718ee14c..cc41ab3f8 100644
+--- a/TreeDB/internal/rootpublication/durable_root_transaction.go
++++ b/TreeDB/internal/rootpublication/durable_root_transaction.go
+@@ -94,15 +94,46 @@ const (
+ type DurableRootTransaction struct {
+ 	mu sync.Mutex
+ 
+-	input          DurableRootCallbackInput
+-	activate       func(DurableRootCallbackInput) error
+-	consume        func(DurableRootCallbackInput) error
+-	abort          func(DurableRootCallbackInput) error
+-	fail           func(DurableRootCallbackInput, error) error
+-	owner          ResourceOwnerState
+-	phase          durableRootTransactionPhase
+-	finishBusy     bool
+-	constructionV6 *primaryTransactionConstructionV6
++	input                DurableRootCallbackInput
++	activate             func(DurableRootCallbackInput) error
++	consume              func(DurableRootCallbackInput) error
++	abort                func(DurableRootCallbackInput) error
++	fail                 func(DurableRootCallbackInput, error) error
++	owner                ResourceOwnerState
++	phase                durableRootTransactionPhase
++	finishBusy           bool
++	constructionV6       *primaryTransactionConstructionV6
++	failedCleanupMu      sync.Mutex
++	failedCleanupOwner   any
++	failedCleanupNext    *DurableRootTransaction
++	failedCleanupReceipt durableRootCleanupFailureV6
++}
++
++// This failure edge is embedded in the SAME admitted original transaction.
++// It records disposal custody only; existing phase/resource ownership remains
++// the sole lifecycle authority and no replacement owner is allocated.
++type durableRootCleanupFailureV6 struct{ causes [3]error }
++
++func (failure *durableRootCleanupFailureV6) Error() string {
++	return "original durable-root cleanup failed"
++}
++func (failure *durableRootCleanupFailureV6) Unwrap() []error { return failure.causes[:] }
++
++func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next *DurableRootTransaction, cause, prior error) (bool, error) {
++	transaction.failedCleanupMu.Lock()
++	defer transaction.failedCleanupMu.Unlock()
++	if owner == nil || cause == nil {
++		return false, ErrDurableRootOwnership
++	}
++	if transaction.failedCleanupOwner != nil {
++		if transaction.failedCleanupOwner != owner {
++			return false, ErrDurableRootOwnership
++		}
++		return false, &transaction.failedCleanupReceipt
++	}
++	transaction.failedCleanupOwner, transaction.failedCleanupNext = owner, next
++	transaction.failedCleanupReceipt.causes = [3]error{cause, ErrDurableRootOwnership, prior}
++	return true, &transaction.failedCleanupReceipt
+ }
+ 
+ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
+@@ -216,6 +247,26 @@ func (transaction *DurableRootTransaction) Abort() error {
+ 	return transaction.abortFrom(ResourceOwnerBuilder)
+ }
+ 
++// AbortPrivatePrimaryConstructionV6 disposes only this transaction's original
++// unbound construction. BindPrimaryVisibilityV6 changes the existing phase
++// after acquiring the state edge and detaching constructor discovery. That
++// transfer is authoritative even when later candidate/publication work fails.
++// No group may abort the transaction after that boundary.
++func (transaction *DurableRootTransaction) AbortPrivatePrimaryConstructionV6() error {
++	if transaction == nil {
++		return nil
++	}
++	transaction.mu.Lock()
++	defer transaction.mu.Unlock()
++	if transaction.phase != durableRootConstructingV6 {
++		return nil
++	}
++	if transaction.constructionV6 == nil || transaction.ownerLockedV6() != ResourceOwnerBuilder {
++		return ErrDurableRootOwnership
++	}
++	return transaction.abortConstructionLockedV6()
++}
++
+ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState) error {
+ 	if transaction == nil {
+ 		return nil
+diff --git a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+index b92cbc22d..f4ac9e76d 100644
+--- a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
++++ b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+@@ -161,7 +161,7 @@ func (t *DurableRootTransaction) abortConstructionLockedV6() error {
+ 		}
+ 		c.componentCount--
+ 	}
+-	ready, err := c.arena.Drop(c.root, work)
++	ready, err := c.arena.DropReadRootConstructionV6(c.root, t, work)
+ 	if !ready || err != nil {
+ 		return errors.Join(err, ErrDurableRootOwnership)
+ 	}
+diff --git a/TreeDB/zipper/primary_construction_failure_v6_test.go b/TreeDB/zipper/primary_construction_failure_v6_test.go
+new file mode 100644
+index 000000000..609f98083
+--- /dev/null
++++ b/TreeDB/zipper/primary_construction_failure_v6_test.go
+@@ -0,0 +1,121 @@
++package zipper
++
++import (
++	"errors"
++	"path/filepath"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/batch"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/pager"
++)
++
++// Fault injection wraps the SAME real constructor, leaving its actual root and
++// component custody unchanged until the test explicitly removes the fault.
++type failingPrimaryConstructorV6 struct {
++	primaryarena.ReadRootConstructionV6
++	sealErr, abortErr error
++	abortCalls        int
++}
++
++func (c *failingPrimaryConstructorV6) SealPrimaryConstructionV6([]byte, [1]*primaryarena.Group, *iterator.OrdinalScanWork) (bool, error) {
++	return false, c.sealErr
++}
++func (c *failingPrimaryConstructorV6) Abort() error {
++	c.abortCalls++
++	if c.abortErr != nil {
++		return c.abortErr
++	}
++	return c.ReadRootConstructionV6.Abort()
++}
++
++func TestPrimaryConstructionV6SiblingFailureDisposal(t *testing.T) {
++	for _, kind := range []string{"apply", "copy", "build"} {
++		t.Run(kind, func(t *testing.T) {
++			dir := t.TempDir()
++			p, err := pager.Open(filepath.Join(dir, "index.db"), 256*page.PageSize)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer p.Close()
++			if _, err := p.Alloc(3); err != nil {
++				t.Fatal(err)
++			}
++			image, err := p.GetForWrite(2)
++			if err != nil {
++				t.Fatal(err)
++			}
++			b := node.NewBuilderWithOptions(image, page.PageTypeLeaf, node.BuilderOptions{EntryRevisions: true})
++			b.SetPageID(2)
++			b.FinishNoNode()
++			a, err := primaryarena.OpenCapsule(filepath.Join(dir, "index.db.primary"))
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer a.Close()
++			if err := a.SetMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5); err != nil {
++				t.Fatal(err)
++			}
++			if err := p.AttachPrimaryBankPager(a.Pager()); err != nil {
++				t.Fatal(err)
++			}
++			z := New(p, &MockAllocator{p: p})
++			z.SetPrimaryArena(a)
++			z.SetPrimaryConstructorV6(rootpublication.NewPrimaryConstructionTransactionV6)
++			id, err := z.BuildPrimaryRoot(2, 1)
++			if err != nil {
++				t.Fatal(err)
++			}
++			w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++			originalBase, ready, err := a.ReadRootConstructionOwnerV6(id, w)
++			if !ready || err != nil {
++				t.Fatal(ready, err)
++			}
++			defer originalBase.Abort()
++			sealErr, abortErr := errors.New("original seal failure"), errors.New("original Abort failure")
++			var original *failingPrimaryConstructorV6
++			z.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++				c, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
++				if ready && err == nil {
++					original = &failingPrimaryConstructorV6{ReadRootConstructionV6: c, sealErr: sealErr, abortErr: abortErr}
++					return original, true, nil
++				}
++				return c, ready, err
++			})
++			switch kind {
++			case "apply":
++				ops := batch.New(nil, page.PageSize)
++				defer ops.Close()
++				if err := ops.SetOps([]batch.Entry{{Type: batch.OpPut, Key: []byte("new"), Value: []byte("value"), Revision: 2}}); err != nil {
++					t.Fatal(err)
++				}
++				_, _, _, err = z.Apply(id, ops)
++			case "copy":
++				_, err = z.CopyPrimaryRoot(id)
++			case "build":
++				_, err = z.BuildPrimaryRoot(2, 1)
++			}
++			if !errors.Is(err, sealErr) || !errors.Is(err, abortErr) {
++				t.Fatalf("original disposal failure lost: %v", err)
++			}
++			if original == nil || original.abortCalls != 1 {
++				t.Fatalf("original constructor disposed %v times", original)
++			}
++			txn, ok := original.ReadRootConstructionV6.(*rootpublication.DurableRootTransaction)
++			if !ok || txn.Owner() != rootpublication.ResourceOwnerBuilder || txn.PrimaryConstructionReferenceV6() == (primaryarena.Ref{}) {
++				t.Fatal("failed original custody lost")
++			}
++			original.abortErr = nil
++			if err := original.Abort(); err != nil {
++				t.Fatal(err)
++			}
++			if txn.Owner() != rootpublication.ResourceOwnerReleased {
++				t.Fatal("same original did not dispose after fault removal")
++			}
++		})
++	}
++}
+diff --git a/TreeDB/zipper/primary_directory.go b/TreeDB/zipper/primary_directory.go
+index 47df125e6..2884af825 100644
+--- a/TreeDB/zipper/primary_directory.go
++++ b/TreeDB/zipper/primary_directory.go
+@@ -34,6 +34,46 @@ func (z *Zipper) PrimaryArena() *primaryarena.Arena { return z.primaryArena }
+ func (z *Zipper) SetPrimaryConstructorV6(f func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)) {
+ 	z.primaryConstructorV6 = f
+ }
++
++// PrimaryConstructionFailureV6 is the already admitted physical-owner sink.
++// It retains an original producer whose one disposal attempt failed.
++type PrimaryConstructionFailureV6 interface {
++	RetainPrimaryConstructionFailureV6(primaryarena.ReadRootConstructionV6, error) error
++}
++
++func (z *Zipper) SetPrimaryConstructionFailureV6(owner PrimaryConstructionFailureV6) {
++	z.primaryConstructionFailureV6 = owner
++}
++
++// SetPrimaryConstructionOutputV6 records the SAME configured producer output
++// in caller-owned custody. Use a private clone; clones do not inherit this sink.
++// Recording allocates no factory wrapper or substitute original transaction.
++func (z *Zipper) SetPrimaryConstructionOutputV6(output *primaryarena.ReadRootConstructionV6, abortErr *error) {
++	z.primaryConstructionOutputV6 = output
++	z.primaryConstructionAbortErrV6 = abortErr
++}
++
++// A failed disposal has already consumed its one attempt. The output sink
++// carries that error with the actual original, so its caller retains custody
++// without retrying a partially completed Abort.
++func (z *Zipper) abortPrimaryConstructionV6(owner primaryarena.ReadRootConstructionV6) error {
++	err := owner.Abort()
++	if err != nil && z.primaryConstructionFailureV6 != nil {
++		err = z.primaryConstructionFailureV6.RetainPrimaryConstructionFailureV6(owner, err)
++	}
++	if err != nil && z.primaryConstructionAbortErrV6 != nil {
++		*z.primaryConstructionAbortErrV6 = err
++	}
++	return err
++}
++
++func (z *Zipper) constructPrimaryV6(a *primaryarena.Arena, work *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++	owner, ready, err := z.primaryConstructorV6(a, work)
++	if owner != nil && z.primaryConstructionOutputV6 != nil {
++		*z.primaryConstructionOutputV6 = owner
++	}
++	return owner, ready, err
++}
+ func claimPrimaryComponent(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.Ref, error) {
+ 	c, ok, e := a.PrepareClaim(primaryarena.Component, w)
+ 	if !ok || e != nil {
+@@ -325,7 +365,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges
+ 	if z.primaryArena != nil && z.primaryArena.CapsuleFormatV6() && z.primaryConstructorV6 != nil {
+ 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 		var ready bool
+-		constructor, ready, err = z.primaryConstructorV6(z.primaryArena, work)
++		constructor, ready, err = z.constructPrimaryV6(z.primaryArena, work)
+ 		metrics.PrimaryBankRecords += work.Records
+ 		metrics.PrimaryBankWorkBytes += work.Bytes
+ 		if !ready || err != nil {
+@@ -333,7 +373,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges
+ 		}
+ 		defer func() {
+ 			if err != nil {
+-				_ = constructor.Abort()
++				err = errors.Join(err, z.abortPrimaryConstructionV6(constructor))
+ 			}
+ 		}()
+ 	}
+@@ -589,7 +629,7 @@ func (z *Zipper) collectPrimaryBaseOld(ref page.ChildRef, key []byte, cfg applyR
+ 	return node.ErrPrimaryDirectory
+ }
+ 
+-func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
++func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
+ 	a := z.primaryArena
+ 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 	defer func() { metrics.PrimaryBankRecords += work.Records; metrics.PrimaryBankWorkBytes += work.Bytes }()
+@@ -602,7 +642,7 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
+ 			constructor, ok = owners[0], true
+ 			bundle.Directory = constructor.PrimaryConstructionReferenceV6()
+ 		} else if z.primaryConstructorV6 != nil {
+-			constructor, ok, e = z.primaryConstructorV6(a, work)
++			constructor, ok, e = z.constructPrimaryV6(a, work)
+ 			if ok && e == nil {
+ 				bundle.Directory = constructor.PrimaryConstructionReferenceV6()
+ 			}
+@@ -629,10 +669,15 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
+ 		}
+ 	}
+ 	success := false
++	borrowedConstructor := len(owners) > 0 && owners[0] != nil
+ 	defer func() {
+ 		if !success {
+ 			if constructor != nil {
+-				_ = constructor.Abort()
++				// The outer Apply owns a supplied constructor. Only the
++				// local Copy/Build constructor is disposed at this boundary.
++				if !borrowedConstructor {
++					err = errors.Join(err, z.abortPrimaryConstructionV6(constructor))
++				}
+ 				return
+ 			}
+ 			if bundle.Record != (primaryarena.Ref{}) {
+diff --git a/TreeDB/zipper/zipper.go b/TreeDB/zipper/zipper.go
+index d69040357..c8438533a 100644
+--- a/TreeDB/zipper/zipper.go
++++ b/TreeDB/zipper/zipper.go
+@@ -187,19 +187,22 @@ type Zipper struct {
+ 	leafRefCache          map[page.LeafLogPtr][]byte
+ 	leafRefCacheScratch   *mergeScratch
+ 
+-	leafReserveBytes          int
+-	internalReserveBytes      int
+-	piggybackCompaction       bool
+-	leafPrefixCompression     bool
+-	indexColumnarLeaves       bool
+-	indexPackedValuePtr       bool
+-	indexInternalBaseDelta    bool
+-	primaryDirectory          bool
+-	primaryArena              *primaryarena.Arena
+-	primaryConstructorV6      func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)
+-	adaptiveLeafEncoding      bool
+-	maintenanceOpsPerCoalesce int
+-	parallelMergePressure     ParallelMergePressureSource
++	leafReserveBytes              int
++	internalReserveBytes          int
++	piggybackCompaction           bool
++	leafPrefixCompression         bool
++	indexColumnarLeaves           bool
++	indexPackedValuePtr           bool
++	indexInternalBaseDelta        bool
++	primaryDirectory              bool
++	primaryArena                  *primaryarena.Arena
++	primaryConstructionOutputV6   *primaryarena.ReadRootConstructionV6
++	primaryConstructionAbortErrV6 *error
++	primaryConstructionFailureV6  PrimaryConstructionFailureV6
++	primaryConstructorV6          func(*primaryarena.Arena, *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error)
++	adaptiveLeafEncoding          bool
++	maintenanceOpsPerCoalesce     int
++	parallelMergePressure         ParallelMergePressureSource
+ 
+ 	scratchMu        sync.Mutex
+ 	applyScratch     *mergeScratch
+@@ -1323,24 +1326,25 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
+ 		arena = nil
+ 	}
+ 	return &Zipper{
+-		pager:                     p,
+-		allocator:                 a,
+-		outerLeavesInValueLog:     z.outerLeavesInValueLog,
+-		leafPageLog:               z.leafPageLog,
+-		leafPageReader:            z.leafPageReader,
+-		leafReserveBytes:          z.leafReserveBytes,
+-		internalReserveBytes:      z.internalReserveBytes,
+-		piggybackCompaction:       z.piggybackCompaction,
+-		leafPrefixCompression:     z.leafPrefixCompression,
+-		indexColumnarLeaves:       z.indexColumnarLeaves,
+-		indexPackedValuePtr:       z.indexPackedValuePtr,
+-		indexInternalBaseDelta:    z.indexInternalBaseDelta,
+-		primaryDirectory:          z.primaryDirectory,
+-		primaryArena:              arena,
+-		primaryConstructorV6:      z.primaryConstructorV6,
+-		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
+-		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
+-		parallelMergePressure:     z.parallelMergePressure,
++		pager:                        p,
++		allocator:                    a,
++		outerLeavesInValueLog:        z.outerLeavesInValueLog,
++		leafPageLog:                  z.leafPageLog,
++		leafPageReader:               z.leafPageReader,
++		leafReserveBytes:             z.leafReserveBytes,
++		internalReserveBytes:         z.internalReserveBytes,
++		piggybackCompaction:          z.piggybackCompaction,
++		leafPrefixCompression:        z.leafPrefixCompression,
++		indexColumnarLeaves:          z.indexColumnarLeaves,
++		indexPackedValuePtr:          z.indexPackedValuePtr,
++		indexInternalBaseDelta:       z.indexInternalBaseDelta,
++		primaryDirectory:             z.primaryDirectory,
++		primaryArena:                 arena,
++		primaryConstructorV6:         z.primaryConstructorV6,
++		primaryConstructionFailureV6: z.primaryConstructionFailureV6,
++		adaptiveLeafEncoding:         z.adaptiveLeafEncoding,
++		maintenanceOpsPerCoalesce:    z.maintenanceOpsPerCoalesce,
++		parallelMergePressure:        z.parallelMergePressure,
+ 	}
+ }
+ 
+diff --git a/docs/agent-execution/mvcc-4871-20261013/ordinary-primary-custody.md b/docs/agent-execution/mvcc-4871-20261013/ordinary-primary-custody.md
+new file mode 100644
+index 000000000..1500a8065
+--- /dev/null
++++ b/docs/agent-execution/mvcc-4871-20261013/ordinary-primary-custody.md
+@@ -0,0 +1,111 @@
++# Original ordinary PRIMARY construction custody (#5111)
++
++This snapshot repairs original COW constructor custody and production PRIMARY
++failure-cut instrumentation on published base
++`54893f48cb2a7a195b1b89198a39c87a9a1919c4`. The SAME DurableRootTransaction,
++registry, resource-owner cell and primaryArenaOwnerV5 remain authoritative.
++No new transaction scheduler, WAL, publication lifecycle or accounting discount
++is introduced. Public command-WAL backend selection is a subsequent packet.
++
++## Source-bound defect
++
++Immutable original inquiry operands at
++`a468b6be387f03ea5393311196f82af91df4f972` under
++`docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014`
++were recovered byte-for-byte; all 19 manifest entries verified. Rebinding only
++absolute overlay paths reproduces three superseded original transactions with
++PRIMARY Pending=7680 after public Close. The same inquiry against this snapshot
++drains PRIMARY, registry and public accounting to zero. This is instrumented
++original-object diagnostic evidence, not uninstrumented performance acceptance.
++Its original transaction overlay replaces the new atomic alias-detach method;
++product tests separately prove that method using actual production objects.
++
++## Custody and failure contract
++
++* Borrowed basis roots never enter the two private custody cells. The private
++  zipper clone records the SAME configured factory output in those cells;
++  it allocates no per-Apply factory closure or replacement transaction.
++* A predecessor is disposed only after the successful successor seals its
++  genuine immutable component closure. Shared components retain actual edges.
++* Bind/Detach changes the existing transaction phase and transfers authority.
++  Private group cleanup cannot abort a bound, accepted or released transaction.
++  Existing acceptance remains irreversible and observable after Close.
++* Original Abort atomically removes the mutable construction alias and its
++  root edge. Surviving immutable readers retain the bank/component closure.
++  Refusal changes neither alias nor edge; physical release drives refunds.
++* Apply owns its supplied original; Copy/Build own their local original. Failed
++  disposal is attempted once and its actual error propagates. The caller retains
++  the exact output and error, rather than retrying a partially completed Abort.
++* After failed-next disposal, group cleanup stops before disposing its current
++  predecessor. The SAME physical owner retains the group, both originals,
++  remaining DATA tracker debt, registry and necessary pins. It releases the
++  captured basis read and serialization/builder/teardown locks; repeated Close
++  returns the retained receipt and shutdown cannot refund failed physical debt.
++* Sibling producer and activation consumer failures retain the exact original
++  transaction on a preborn intrusive edge in the SAME physical owner. The
++  existing runtime closes DB write admission. An explicit transfer receipt stops
++  outer preparation defers from releasing bound candidate custody after failure.
++  Completed cleanup steps stay completed; remaining original resources and debt
++  stay retained, with no replacement owner or deferred second cleanup lifecycle.
++
++Owner and transaction size-based admission includes their enlarged containing
++objects. Disposal lock order is group -> transaction -> arena. Failure linking
++separately takes physical-owner -> transaction failure-edge mutex; it never
++acquires the transaction lifecycle mutex or calls resource cleanup. Physical
++owner shutdown drops its mutex before arena close, never takes the group mutex,
++and reports retained cleanup errors. Ordinary release work is not claimed as
++bounded native reclamation.
++
++## Actual authority cuts
++
++The existing PRIMARY authority callback writes a fixed three-page capsule into
++slot 2 or 5 of `index.db.primary`. BeforeMetaWrite runs before that actual write
++and returns mutated=false on refusal. Existing beforeFence runs AfterMetaWrite
++and BeforeMetaSync after the complete install. AfterMetaSync runs only after
++successful actual fence. All later failures remain mutated=true/ambiguous.
++ResourceMeta denotes the authority role and carries the pinned PRIMARY file
++identity and actual byte range. No fictional DATA metadata write is emitted.
++The disabled observer exits before constructing the event path/closure.
++
++## Snapshot validation
++
++Raw operands, source bindings and receipts are in the issue-owned sibling
++`evidence/ordinary-5111` directory. Final focused commands use Go 1.26.4,
++GOWORK=off, GOMAXPROCS=2 and task-owned TMPDIR.
++
++| Receipt prefix | Evidence |
++| --- | --- |
++| original-red | Original public-close diagnostic RED: three originals, Pending7680 |
++| product-red | Product supersession/abandonment/retained-reader REDs |
++| custody-original-diagnostic | Rebound immutable inquiry normal, final Pending0 |
++| custody-original-diagnostic-race | Same original-object inquiry race |
++| custody-cut-normal | Actual original group/sibling/bound-failure/authority tests and all 36 existing public cut rows |
++| custody-cut-race | Same focused tests and all 36 public cut rows under race |
++| baseline-known-public-cuts | Exact548 original four NoWAL meta cut REDs; repaired by actual authority hooks |
++| baseline-leaf-race | Exact548 no-rotated-leaf RED at cow_public_review_regression_test.go:308 |
++| final-affected-race | Broader race passes internal/db seams, retains that leaf RED |
++| final-affected-normal | Full normal internal suites pass; db package 240s timeout late in existing standalone leaf test |
++| baseline-standalone-normal / candidate-standalone-normal | Isolated late-timeout test passes on exact baseline and candidate |
++| dispatch-diagnostic | Merged command-WAL harness has zero original constructor dispatch; diagnostic, not cost acceptance |
++
++The source-bound baseline leaf RED is not a waiver of the required caller/leaf
++lifetime gate. Broader qualification and existing numeric/platform/matrix/fault
++and performance gates remain required after the coherent selection packet.
++
++The merged public cost harness leaves IndexPrimaryDirectory unset. Foreground
++C1/C3 composite cuts deliberately need no backend PRIMARY constructor;
++DirtyCheckpoint zero dispatch identifies the actual selection gap. The public
++Options type already aliases db.Options, so the option is publicly settable.
++No new foreground publisher, forced checkpoint on ACK, prepared WaitThrough
++removal or performance claim is part of this snapshot.
++
++## Unavailable source and remaining integration
++
++The unpublished 31-file `8f20fd204` packet is unavailable and has no verified
++path inventory here. These independently repaired group/zipper/transaction/
++arena-owner/activation seams may overlap it; exact-byte reconciliation is
++required if recovered. No missing source was reconstructed, credited or
++replaced from prose. Value/leaf cleanup code remains untouched. Native recovered
++bytes, native bounded pruning acceptance, production command-WAL selection,
++successor basis/path proof, mature public lifetime and retained cost gates are
++separate remaining obligations. This snapshot is not PR5127 acceptance.

@@ -1,0 +1,8 @@
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast
+    cow_public_review_regression_test.go:308: no rotated leaf segment
+--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (0.14s)
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.14s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.149s
+FAIL

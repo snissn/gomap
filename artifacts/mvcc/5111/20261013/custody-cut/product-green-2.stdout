@@ -1,0 +1,6 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/root_publication_build_group_primary_v6_test.go:196:41: owner.arena.MetadataOwner().Snapshot undefined (type *retainedalloc.Owner has no field or method Snapshot)
+TreeDB/db/root_publication_build_group_primary_v6_test.go:216:33: owner.arena.MetadataOwner().Snapshot undefined (type *retainedalloc.Owner has no field or method Snapshot)
+TreeDB/db/root_publication_build_group_primary_v6_test.go:241:84: owner.arena.MetadataOwner().Snapshot undefined (type *retainedalloc.Owner has no field or method Snapshot)
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL
