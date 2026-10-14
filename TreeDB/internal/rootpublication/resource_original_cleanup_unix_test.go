@@ -64,22 +64,28 @@ func TestImportedOriginalObservationKeepsFailedLastPhysicalCustody(t *testing.T)
 	if err = unix.Close(int(token.pinned.Fd())); err != nil {
 		t.Fatal(err)
 	}
-	sibling.Release()
+	receipt := sibling.ReleaseWithError()
+	if !errors.Is(receipt, unix.EBADF) {
+		t.Fatalf("original source-root cleanup outcome lost: %v", receipt)
+	}
 	if !errors.Is(registry.CleanupError(), unix.EBADF) {
 		t.Fatalf("original close failure lost: %v", registry.CleanupError())
 	}
 	if registry.failedPinned == nil || registry.MetadataOwner().Bytes() == 0 {
 		t.Fatal("original failed backing lost")
 	}
-	if owner.Bytes() != 0 {
-		t.Fatal("independent adapter backing survived disposal")
+	// The adapter still refers to the SAME unresolved source root and its
+	// original receipt. Its containing/alias storage cannot refund on refusal.
+	if owner.Bytes() == 0 {
+		t.Fatal("unresolved original adapter/source-root debt refunded")
 	}
+	adapterBefore := owner.Bytes()
 	before := registry.MetadataOwner().Bytes()
 	sibling.Release()
 	source.Release()
 	token.Release()
 	registry.Close()
-	if registry.MetadataOwner().Bytes() != before || !errors.Is(registry.CleanupError(), unix.EBADF) {
+	if owner.Bytes() != adapterBefore || registry.MetadataOwner().Bytes() != before || !errors.Is(registry.CleanupError(), unix.EBADF) {
 		t.Fatal("failure retried or refunded")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -56,9 +57,15 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lock.Close() }()
+	defer func() {
+		if !recoveryCleanupOwnsLockV6(retErr, lock) {
+			retErr = errors.Join(retErr, lock.Close())
+		}
+	}()
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	defer valueLogIdentityPins.Close()
 
-	if err := recoverIndexSwap(opts.Dir); err != nil {
+	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
 		return err
 	}
 	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
@@ -66,7 +73,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	}
 
 	// Open the DB without acquiring a second lock (we already hold it).
-	d, err := openReadOnlyNoLock(opts)
+	d, err := openReadOnlyNoLockWithRegistryV6(opts, valueLogIdentityPins, lock)
 	if err != nil {
 		return err
 	}

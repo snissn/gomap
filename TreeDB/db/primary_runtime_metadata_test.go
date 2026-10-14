@@ -17,11 +17,19 @@ func TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow(t *testin
 		t.Fatal(err)
 	}
 	defer a.Close()
-	runtime := &rootPublicationRuntimeV1{idx: &indexGen{primary: a}}
-	before := a.MetadataOwner().Bytes()
+	owner := a.MetadataOwner()
+	before := owner.Bytes()
+	headerCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationRuntimeV1{})))
+	if err := owner.AddPending(headerCharge); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &rootPublicationRuntimeV1{idx: &indexGen{primary: a}, metadata: owner, metadataCharge: headerCharge}
 	var values []*rootPublicationVisibleMemberV1
 	if err := growPrimaryRuntimeSlice(runtime, &values, 1); err != nil {
 		t.Fatal(err)
+	}
+	if owner.Bytes() <= before+headerCharge {
+		t.Fatal("actual runtime owner did not admit backing")
 	}
 	member := &rootPublicationVisibleMemberV1{}
 	values = append(values, member)
@@ -48,7 +56,11 @@ func TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow(t *testin
 	charge := retainedalloc.AllocationCharge(uint64(cap(values)) * uint64(unsafe.Sizeof((*rootPublicationVisibleMemberV1)(nil))))
 	clear(values[:cap(values)])
 	values = nil
-	a.MetadataOwner().RemovePending(charge)
+	if runtime.metadataCharge != headerCharge+charge {
+		t.Fatal("runtime containing/backing charge mismatch")
+	}
+	owner.RemovePending(runtime.metadataCharge)
+	runtime.metadata, runtime.metadataCharge = nil, 0
 	if a.MetadataOwner().Bytes() != before {
 		t.Fatal("runtime backing cleanup changed original baseline")
 	}

@@ -1587,6 +1587,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		durableResources *rootpublication.StableResourceSet
 		manifestClosure  *LeafGenerationManifestStablePreparedClosure
 	)
+	defer func() {
+		if manifestClosure != nil {
+			err = errors.Join(err, manifestClosure.ReleaseWithError())
+		}
+	}()
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if publishAlloc != nil {
 			baseErr = errors.Join(baseErr, publishAlloc.Rollback())
@@ -1744,7 +1749,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	manifestResources, manifestErr := manifestClosure.TakeStableResources()
 	if manifestErr != nil {
-		manifestClosure.Release()
+		err = errors.Join(err, manifestClosure.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
 	}
 	packedResources, resourceErr := authority.takeStableResources()

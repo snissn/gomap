@@ -3,6 +3,7 @@ package templatedb
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -80,7 +81,7 @@ func (s *Store) CaptureTemplateResourcesWithMetadata(ctx context.Context, templa
 	}
 	return s.captureTemplateResources(ctx, templateID, metadata)
 }
-func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64, metadata *retainedalloc.Owner) (_ *rootpublication.StableResourceSet, retErr error) {
 	if s == nil || s.kv == nil {
 		return nil, errStoreUnavailable
 	}
@@ -122,7 +123,7 @@ func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64,
 	snapshotOwned := false
 	defer func() {
 		if !snapshotOwned {
-			_ = snapshot.Close()
+			retErr = errors.Join(retErr, snapshot.Close())
 		}
 	}()
 
@@ -161,7 +162,7 @@ func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64,
 			return nil, err
 		}
 	}
-	defer builder.Abandon()
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
 		MetadataOwner: metadata,
@@ -182,7 +183,7 @@ func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64,
 	// later builder/value-log operation fails.
 	snapshotOwned = true
 	if err := addTemplateStableResourceToken(builder, indexToken, templateStableIndexRole); err != nil {
-		indexToken.Release()
+		err = errors.Join(err, indexToken.ReleaseWithError())
 		return nil, fmt.Errorf("templatedb: add template %d index: %w", templateID, err)
 	}
 
@@ -218,7 +219,7 @@ func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64,
 			return nil, fmt.Errorf("templatedb: capture template %d value-log: %w", templateID, err)
 		}
 		if err := addTemplateStableResourceToken(builder, valueLogToken, templateStableValueLogRole); err != nil {
-			valueLogToken.Release()
+			err = errors.Join(err, valueLogToken.ReleaseWithError())
 			return nil, fmt.Errorf("templatedb: add template %d value-log: %w", templateID, err)
 		}
 	}
@@ -228,13 +229,13 @@ func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64,
 		return nil, fmt.Errorf("templatedb: freeze template %d resources: %w", templateID, err)
 	}
 	if err := validateCapturedTemplatePhysicalClosure(resources, entry.Pointer); err != nil {
-		resources.Release()
+		err = errors.Join(err, resources.ReleaseWithError())
 		return nil, fmt.Errorf("templatedb: validate template %d physical closure: %w", templateID, err)
 	}
 	return resources, nil
 }
 
-func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) (retErr error) {
 	if resources == nil {
 		return fmt.Errorf("%w: template capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
@@ -243,7 +244,7 @@ func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableRe
 	if captureErr != nil {
 		return captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceTemplate {
 			return fmt.Errorf("%w: template closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)

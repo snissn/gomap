@@ -201,6 +201,7 @@ func (it *snapshotBoundIterator) Close() error {
 		}
 		if it.inner != nil {
 			it.closeErr = it.inner.Close()
+			it.inner = nil
 		}
 		owner := it.owner
 		it.owner = nil

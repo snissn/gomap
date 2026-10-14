@@ -117,7 +117,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer s.Close()
+	defer s.Close() // original panic unwind; synchronous outcomes join below
 	values := make([][]byte, len(keys))
 	for i, key := range keys {
 		v, err := s.Get(key)
@@ -125,11 +125,11 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, joinCOWCleanupError(err, s.Close())
 		}
 		values[i] = v
 	}
-	return values, nil
+	return values, s.Close()
 }
 
 type cowOwnedIterator struct {
@@ -152,7 +152,7 @@ func (db *DB) cowIterator(start, end []byte) (merging.Iterator, error) {
 	}
 	it, err := s.bindNewIterator(func() (merging.Iterator, error) { return s.buildIteratorLocked(start, end, false) })
 	if err != nil {
-		_ = s.Close()
+		err = joinCOWCleanupError(err, s.Close())
 		lease.Close()
 		return nil, err
 	}
@@ -160,7 +160,15 @@ func (db *DB) cowIterator(start, end []byte) (merging.Iterator, error) {
 }
 
 func (it *cowOwnedIterator) Close() error {
-	it.once.Do(func() { it.err = errors.Join(it.Iterator.Close(), it.snapshot.Close()); it.lease.Close() })
+	it.once.Do(func() {
+		it.err = joinCOWCleanupError(it.Iterator.Close(), it.snapshot.Close())
+		// The bound child excludes its active reads before returning. The
+		// original basis owns any physical failure; this wrapper detaches its
+		// consumed Snapshot alias before refunding its independent allocation.
+		it.snapshot = nil
+		it.lease.Close()
+		it.lease = nil
+	})
 	return it.err
 }
 
@@ -181,8 +189,12 @@ func (it *cowMergeIterator) Close() error {
 	it.once.Do(func() {
 		it.err = errors.Join(it.err, it.Iterator.Close())
 		it.workspace.close()
+		it.workspace = nil
+		it.snapshot = nil
+		it.Iterator = nil // only the closed bound wrapper exposes this private child
 		it.value = nil
 		it.lease.Close()
+		it.lease = nil
 	})
 	return it.err
 }

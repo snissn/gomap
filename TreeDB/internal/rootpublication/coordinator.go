@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 type Options struct {
@@ -824,7 +826,6 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			if set := entry.candidate.resourceSet(); set != nil {
-				set.adjustActivePinsByKind(c.resourceActivePins, false)
 				if txn := entry.candidate.DurableRoot(); txn.isConstructedPrimaryV6() {
 					if err := c.finishOrdinaryPrimaryWithScopeV6(txn); err != nil {
 						c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
@@ -834,7 +835,13 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 						return
 					}
 				} else {
-					set.releaseFrom(ResourceOwnerCoordinator)
+					if err := set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins); err != nil {
+						c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+						c.failWaitersLocked(c.poison)
+						c.clearPublishRequestLocked()
+						c.notifyLocked()
+						return
+					}
 				}
 			}
 		}
@@ -1227,16 +1234,18 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 	}
 	c.pending = nil
 	c.pendingBytes = 0
-	clear(c.resourceActivePins)
 	c.firstPendingAt = time.Time{}
 }
 
 // RecoveryResourceHandoff owns pins retained after shutdown or ambiguous
 // publication. Reopen/recovery consumes the evidence and then releases it.
 type RecoveryResourceHandoff struct {
-	sets         []*StableResourceSet
-	durableRoots []*DurableRootTransaction
-	once         sync.Once
+	sets           []*StableResourceSet
+	durableRoots   []*DurableRootTransaction
+	once           sync.Once
+	failure        originalReleaseFailure
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
 }
 
 func (handoff *RecoveryResourceHandoff) Len() int {
@@ -1269,20 +1278,52 @@ func (handoff *RecoveryResourceHandoff) DurableRoots() []*DurableRootTransaction
 	return append([]*DurableRootTransaction(nil), handoff.durableRoots...)
 }
 
-func (handoff *RecoveryResourceHandoff) Release() {
+// Release is the compatibility wrapper; production disposal uses its actual
+// checked outcome. The original handoff and embedded receipt retain every
+// unresolved sibling after the first physical refusal.
+func (handoff *RecoveryResourceHandoff) Release() { _ = handoff.ReleaseWithError() }
+func (handoff *RecoveryResourceHandoff) ReleaseWithError() error {
 	if handoff == nil {
-		return
+		return nil
 	}
 	handoff.once.Do(func() {
-		for _, set := range handoff.sets {
-			set.releaseFrom(ResourceOwnerRecovery)
+		fail := func(err error) {
+			handoff.failure.original, handoff.failure.causes[0] = handoff, err
+			if handoff.metadata != nil {
+				handoff.metadata.CleanupFailed()
+			}
 		}
 		for _, transaction := range handoff.durableRoots {
-			transaction.releaseFromRecovery()
+			if err := transaction.prepareFromRecovery(); err != nil {
+				fail(err)
+				return
+			}
 		}
-		handoff.sets = nil
-		handoff.durableRoots = nil
+		for i, set := range handoff.sets {
+			if err := set.releaseFrom(ResourceOwnerRecovery); err != nil {
+				fail(err)
+				return
+			}
+			handoff.sets[i] = nil
+		}
+		for i, transaction := range handoff.durableRoots {
+			if err := transaction.releaseFromRecovery(); err != nil {
+				fail(err)
+				return
+			}
+			handoff.durableRoots[i] = nil
+		}
+		handoff.sets, handoff.durableRoots = nil, nil
+		owner, charge := handoff.metadata, handoff.metadataCharge
+		handoff.metadata, handoff.metadataCharge = nil, 0
+		if owner != nil {
+			owner.RemovePending(charge)
+		}
 	})
+	if handoff.failure.causes[0] != nil {
+		return &handoff.failure
+	}
+	return nil
 }
 
 // TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
@@ -1298,32 +1339,74 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 		return nil, ErrRecoveryHandoffUnavailable
 	}
 	c.captureRecoveryResourcesLocked()
-	sets := append([]*StableResourceSet(nil), c.recoverySets...)
-	durableRoots := append([]*DurableRootTransaction(nil), c.recoveryDurableRoots...)
-	transferred := make([]*StableResourceSet, 0, len(sets))
-	for _, set := range sets {
+	// Transfer the existing retained slice backing; no second recovery arrays
+	// or ownership lifecycle are created merely to retain a failure receipt.
+	sets, durableRoots := c.recoverySets, c.recoveryDurableRoots
+	var metadata *retainedalloc.Owner
+	for _, transaction := range durableRoots {
+		transaction.mu.Lock()
+		if transaction.constructionV6 != nil {
+			metadata = transaction.constructionV6.arena.MetadataOwner()
+		}
+		transaction.mu.Unlock()
+		if metadata != nil {
+			break
+		}
+	}
+	if metadata == nil {
+		for _, set := range sets {
+			if set != nil && set.metadata != nil {
+				metadata = set.metadata.owner
+				break
+			}
+		}
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(RecoveryResourceHandoff{})))
+	if metadata != nil {
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	admitted := metadata != nil
+	defer func() {
+		if admitted {
+			metadata.RemovePending(charge)
+		}
+	}()
+	for i, set := range sets {
+		if set.Owner() == ResourceOwnerReleased {
+			continue
+		}
 		if err := set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
-			for i := len(transferred) - 1; i >= 0; i-- {
-				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for j := i - 1; j >= 0; j-- {
+				if sets[j].Owner() == ResourceOwnerRecovery {
+					_ = sets[j].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+				}
 			}
 			return nil, fmt.Errorf("%w: recovery ownership transfer: %w", ErrResourceOwnership, err)
 		}
-		transferred = append(transferred, set)
 	}
-	transferredRoots := make([]*DurableRootTransaction, 0, len(durableRoots))
-	for _, transaction := range durableRoots {
+	for i, transaction := range durableRoots {
 		if err := transaction.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
-			for i := len(transferredRoots) - 1; i >= 0; i-- {
-				_ = transferredRoots[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for j := i - 1; j >= 0; j-- {
+				_ = durableRoots[j].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
 			}
-			for i := len(transferred) - 1; i >= 0; i-- {
-				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for _, set := range sets {
+				if set.Owner() == ResourceOwnerRecovery {
+					_ = set.transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+				}
 			}
 			return nil, fmt.Errorf("%w: durable-root recovery ownership transfer: %w", ErrDurableRootOwnership, err)
 		}
-		transferredRoots = append(transferredRoots, transaction)
 	}
-	c.recoverySets = nil
-	c.recoveryDurableRoots = nil
-	return &RecoveryResourceHandoff{sets: transferred, durableRoots: transferredRoots}, nil
+	handoff := &RecoveryResourceHandoff{sets: sets, durableRoots: durableRoots, metadata: metadata}
+	if metadata != nil {
+		handoff.metadataCharge = charge
+	}
+	c.recoverySets, c.recoveryDurableRoots = nil, nil
+	// Pending contributions have genuinely moved to recovery custody. Failed
+	// backing remains charged by its original graph, separate from this telemetry.
+	clear(c.resourceActivePins)
+	admitted = false
+	return handoff, nil
 }

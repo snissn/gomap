@@ -37,15 +37,21 @@ type rootPublicationRuntimeV1 struct {
 
 	mu sync.Mutex
 
-	coordinator      *rootpublication.Coordinator
-	visibleResources *rootpublication.StableResourceSet
-	visibleMembers   []*rootPublicationVisibleMemberV1
-	metadataCharge   uint64
-	visibleHead      int
-	debt             []*freelist.PreparedCOWCandidateV1
-	seals            []*rootPublicationSealV1
-	activeSeal       *rootPublicationSealV1
-	poison           error
+	coordinator        *rootpublication.Coordinator
+	visibleResources   *rootpublication.StableResourceSet
+	visibleMembers     []*rootPublicationVisibleMemberV1
+	metadataCharge     uint64
+	metadata           *retainedalloc.Owner
+	generationBorrowed bool
+	disposalMu         sync.Mutex
+	disposalAttempted  bool
+	disposalErr        error
+	disposalFailure    originalDBCleanupFailure
+	visibleHead        int
+	debt               []*freelist.PreparedCOWCandidateV1
+	seals              []*rootPublicationSealV1
+	activeSeal         *rootPublicationSealV1
+	poison             error
 	// Borrowed immutable proof; runtime.idx and live generation own its physical lifetime.
 	primaryDataCertificateV6 *rootpublication.PrimaryDataCertificateV6
 }
@@ -70,6 +76,9 @@ type rootPublicationVisibleMemberV1 struct {
 // visibility boundary. Preparation resolves the value-log set and leaf view;
 // activate performs only bounded in-memory swaps and bookkeeping.
 type rootPublicationVisibleInstallV1 struct {
+	metadata         *retainedalloc.Owner
+	abortAttempted   bool
+	abortFailure     originalDBCleanupFailure
 	metadataCharge   uint64
 	visibleHead      int
 	primaryRoot      *primaryStateRootV5
@@ -111,23 +120,27 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	metadataCharge uint64
-	primary        *primaryPublicationSealV5
-	latestSequence uint64
-	groupLength    int
-	idx            *indexGen
-	base           rootPublicationSealBaseV1
-	next           page.MetaPageBody
-	resources      *rootpublication.StableResourceSet
-	manifest       *rootpublication.DependencyManifestV1
-	prepared       *freelist.PreparedCOWCandidateV1
-	prefix         []*freelist.PreparedCOWCandidateV1
-	token          *rootpublication.StableResourceToken
-	record         rootpublication.DurableRootRecordV1
-	meta           page.DurableMetaV1
-	target         uint64
-	materialized   bool
-	released       bool
+	disposalMu      sync.Mutex
+	disposalErr     error
+	disposalFailure originalDBCleanupFailure
+	metadata        *retainedalloc.Owner
+	metadataCharge  uint64
+	primary         *primaryPublicationSealV5
+	latestSequence  uint64
+	groupLength     int
+	idx             *indexGen
+	base            rootPublicationSealBaseV1
+	next            page.MetaPageBody
+	resources       *rootpublication.StableResourceSet
+	manifest        *rootpublication.DependencyManifestV1
+	prepared        *freelist.PreparedCOWCandidateV1
+	prefix          []*freelist.PreparedCOWCandidateV1
+	token           *rootpublication.StableResourceToken
+	record          rootpublication.DurableRootRecordV1
+	meta            page.DurableMetaV1
+	target          uint64
+	materialized    bool
+	released        bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -238,31 +251,59 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 	return resources, work, nil
 }
 
-func (seal *rootPublicationSealV1) release() {
-	if seal == nil || seal.released {
-		return
+func (seal *rootPublicationSealV1) release() error {
+	if seal == nil {
+		return nil
+	}
+	seal.disposalMu.Lock()
+	defer seal.disposalMu.Unlock()
+	if seal.released {
+		return seal.disposalErr
 	}
 	seal.released = true
+	var first error
 	if seal.primary != nil {
-		seal.primary.release()
+		first = seal.primary.release()
+		if first == nil {
+			seal.primary = nil
+		}
 	}
-	seal.resources.Release()
-	seal.resources = nil
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
+	// A refused physical root preparation leaves its exact resource edges intact.
+	if first == nil {
+		if err := seal.resources.ReleaseWithError(); err != nil {
+			first = err
+		} else {
+			seal.resources = nil
+		}
+		if err := seal.token.ReleaseWithError(); err != nil {
+			if first == nil {
+				first = err
+			}
+		} else {
+			seal.token = nil
+		}
 	}
-	// Physical shutdown does not end runtime projection lifetimes.
-	seal.primary = nil
+	if first != nil {
+		seal.disposalFailure.payload = seal
+		seal.disposalFailure.retainCause(0, first)
+		seal.disposalErr = &seal.disposalFailure
+		if seal.metadata != nil {
+			seal.metadata.CleanupFailed()
+		}
+		return seal.disposalErr
+	}
 	seal.prefix = nil
 	seal.manifest.ReleaseOwnedMetadataV1()
 	seal.manifest = nil
 	seal.prepared = nil
 	seal.base = rootPublicationSealBaseV1{}
-	if seal.metadataCharge != 0 {
-		seal.idx.primary.MetadataOwner().RemovePending(seal.metadataCharge)
-		seal.metadataCharge = 0
+	owner, charge := seal.metadata, seal.metadataCharge
+	seal.metadata, seal.metadataCharge = nil, 0
+	seal.idx = nil
+	if owner != nil {
+		owner.RemovePending(charge)
 	}
+	return nil
 }
 
 func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
@@ -321,29 +362,24 @@ func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRunti
 	if err != nil {
 		return nil, fmt.Errorf("clone initial visible root resources: %w", err)
 	}
-	var metadataCharge uint64
+	metadata := db.valueLogIdentityPins.MetadataOwner()
 	if idx.primary != nil {
-		metadataCharge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationRuntimeV1{})))
-		if err = idx.primary.MetadataOwner().AddPending(metadataCharge); err != nil {
-			baseResources.Release()
-			return nil, err
-		}
+		metadata = idx.primary.MetadataOwner()
 	}
-	success := false
-	defer func() {
-		if !success && idx.primary != nil {
-			idx.primary.MetadataOwner().RemovePending(metadataCharge)
-		}
-	}()
+	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationRuntimeV1{})))
+	if err = metadata.AddPending(metadataCharge); err != nil {
+		return nil, errors.Join(err, baseResources.ReleaseWithError())
+	}
 	runtime := &rootPublicationRuntimeV1{
 		db: db, idx: idx, lineage: rootPublicationLineageIDV1(db, idx, durable),
-		visibleResources: baseResources,
-		metadataCharge:   metadataCharge,
+		visibleResources: baseResources, metadataCharge: metadataCharge, metadata: metadata,
+		generationBorrowed: true,
 	}
+	runtime.disposalFailure.payload = runtime
+	idx.retainWrapperBorrow()
 	oldest, err := oldestRecoverableSlotCommitV1(durable.slotCommit)
 	if err != nil {
-		baseResources.Release()
-		return nil, err
+		return nil, errors.Join(err, runtime.release())
 	}
 	coordinator, err := rootpublication.New(rootpublication.Options{
 		Publisher:                  runtime,
@@ -354,14 +390,12 @@ func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRunti
 		DurableRootSequence:        durable.record.CommitSeq,
 	})
 	if err != nil {
-		baseResources.Release()
-		return nil, err
+		return nil, errors.Join(err, runtime.release())
 	}
 	runtime.coordinator = coordinator
 	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
 		idx.zipper.SetPrimaryConstructionFailureV6(runtime)
 	}
-	success = true
 	return runtime, nil
 }
 
@@ -415,28 +449,28 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	leafManifest *leafGenerationManifest,
 	leafManifestRawFileIDs []uint32,
 	opts finalizeCommitOptions,
-) (*rootPublicationVisibleInstallV1, error) {
-	var metadataCharge uint64
+) (_ *rootPublicationVisibleInstallV1, retErr error) {
+	metadata := db.valueLogIdentityPins.MetadataOwner()
 	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
-		metadataCharge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{})))
-		if err := idx.primary.MetadataOwner().AddPending(metadataCharge); err != nil {
-			return nil, err
-		}
+		metadata = idx.primary.MetadataOwner()
+	}
+	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{})))
+	if err := metadata.AddPending(metadataCharge); err != nil {
+		return nil, err
 	}
 	install := &rootPublicationVisibleInstallV1{
-		metadataCharge: metadataCharge,
-		db:             db, idx: idx, next: next, post: post, negativeCoverage: opts.negativeCoverage,
-		commandWALPublish:           opts.commandWALPublish,
+		metadata: metadata, metadataCharge: metadataCharge, db: db, idx: idx, next: next,
+		oldUserRootID: oldUserRootID, newUserRootID: newUserRootID, post: post,
+		negativeCoverage: opts.negativeCoverage, commandWALPublish: opts.commandWALPublish,
 		skipConditionalRootConflict: opts.skipConditionalRootConflict,
-		oldUserRootID:               oldUserRootID,
-		newUserRootID:               newUserRootID,
-		recordVacuumMutation:        opts.recordVacuumMutation,
-		conditionalMutation:         opts.conditionalMutation,
+		recordVacuumMutation:        opts.recordVacuumMutation, conditionalMutation: opts.conditionalMutation,
 	}
 	abort := true
 	defer func() {
 		if abort {
-			install.abort()
+			if cleanupErr := install.abort(); cleanupErr != nil {
+				retErr = errors.Join(retErr, cleanupErr)
+			}
 		}
 	}()
 
@@ -479,26 +513,41 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.post.drainLeafGenerationPending = true
 	}
 	install.post.commitSeq = next.CommitSeq
+	install.post.vlogRefIndexID = install.idx.id
 	install.post.sync = syncWrite
 	abort = false
 	return install, nil
 }
 
-func (install *rootPublicationVisibleInstallV1) abort() {
+func (install *rootPublicationVisibleInstallV1) abort() error {
 	if install == nil || install.activated {
-		return
+		return nil
 	}
-	install.vlogRefCounts = nil
+	if install.abortAttempted {
+		if install.abortFailure.causes[0] != nil {
+			return &install.abortFailure
+		}
+		return nil
+	}
+	install.abortAttempted = true
+	if install.valueLogSet != nil && install.db != nil && install.db.valueLogManager != nil {
+		// Release consumes the original Set/file reference edges even on error.
+		// Keep the exact payload/first receipt on refusal, and never Release again.
+		if err := install.db.valueLogManager.Release(install.valueLogSet); err != nil {
+			install.abortFailure.payload, install.abortFailure.causes[0] = install, err
+			install.metadata.CleanupFailed()
+			install.db.retainOriginalCleanupError(&install.abortFailure)
+			return &install.abortFailure
+		}
+		install.valueLogSet = nil
+	}
+	install.releaseReferenceCountEvidence()
 	if install.metadataCharge != 0 {
-		charge := install.metadataCharge
-		install.metadataCharge = 0
-		install.idx.primary.MetadataOwner().RemovePending(charge)
+		owner, charge := install.metadata, install.metadataCharge
+		install.metadata, install.metadataCharge = nil, 0
+		owner.RemovePending(charge)
 	}
-	if install.valueLogSet == nil || install.db == nil || install.db.valueLogManager == nil {
-		return
-	}
-	_ = install.db.valueLogManager.Release(install.valueLogSet)
-	install.valueLogSet = nil
+	return nil
 }
 
 func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {
@@ -516,7 +565,8 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	}
 	if scanned := install.vlogRefCounts; scanned != nil && (scanned.idx != install.idx ||
 		scanned.commitSeq != install.next.CommitSeq || scanned.userRootID != install.next.UserRootPageID ||
-		scanned.systemRootID != install.next.SystemRootPageID || scanned.counts == nil) {
+		scanned.systemRootID != install.next.SystemRootPageID || scanned.counts.metadata == nil ||
+		scanned.incarnation.indexID != install.idx.id || !scanned.incarnation.valid()) {
 		db.mu.Unlock()
 		return errors.New("root-publication scanned reference counts do not match candidate")
 	}
@@ -607,9 +657,14 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 			// its successful activation makes those counts current; aborted or
 			// stale candidates must leave the tracker untouched. This work stays
 			// ordered by durablePublishMu, like incremental delta application.
-			db.valueLogRefTracker.replace(scanned.counts, install.next.CommitSeq, true)
+			if scanned.commitSeq != install.next.CommitSeq || scanned.idx != install.idx || scanned.incarnation.indexID != install.idx.id || !scanned.incarnation.valid() {
+				db.valueLogRefTracker.invalidate()
+				reportErr = errors.New("value-log ref candidate incarnation mismatch")
+			} else {
+				db.valueLogRefTracker.replaceOwned(&scanned.counts, scanned.commitSeq, scanned.incarnation, true)
+			}
 		} else if install.post.vlogRefDelta != nil {
-			if err := db.valueLogRefTracker.applyDelta(install.post.commitSeq, install.post.vlogRefDelta); err != nil {
+			if err := db.valueLogRefTracker.applyDelta(install.post.commitSeq, install.idx.id, install.post.vlogRefDelta); err != nil {
 				db.valueLogRefTracker.invalidate()
 				reportErr = err
 			}
@@ -618,7 +673,7 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 		}
 		install.post.vlogRefTrackerAdvanced = true
 	}
-	install.vlogRefCounts = nil
+	install.releaseReferenceCountEvidence()
 	install.post.kickPrune = db.pruner.Enabled()
 	install.post.doPrune = !install.post.kickPrune
 	if !install.skipConditionalRootConflict {
@@ -741,10 +796,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	next.FreelistHeadID = 0
 	install.next = next
 	install.post.commitSeq = next.CommitSeq
+	install.post.vlogRefIndexID = install.idx.id
 	var primary *rootpublication.PreparedPrimaryRootV5
 	var transaction *rootpublication.DurableRootTransaction
 	if runtime.idx.primary != nil {
 		var bundle primaryarena.PublicationBundle
+		var certificate *primaryarena.ReadRootCertificateV6
 		var ok bool
 		var e error
 		if runtime.idx.primary.CapsuleFormatV6() {
@@ -762,6 +819,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			if cert == nil {
 				return nil, false, rootpublication.ErrDurableRootOwnership
 			}
+			certificate = cert
 			bundle.Directory = cert.Reference()
 			runtime.mu.Lock()
 			previous := runtime.primaryDataCertificateV6
@@ -794,7 +852,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				return nil, false, e
 			}
 		}
-		install.primaryRoot = &primaryStateRootV5{runtime.idx.primary, bundle.Directory, generation.CommitSeq()}
+		install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: bundle.Directory, dataCommit: generation.CommitSeq(), certificate: certificate}
 	}
 	var memberMetadata uint64
 	if transaction != nil {
@@ -879,11 +937,6 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
-			member.install.abort()
-			if !member.install.activated {
-				member.resources.Release()
-				member.resources = nil
-			}
 			if member.primary != nil {
 				var e error
 				if member.primary.Bundle().Record != (primaryarena.Ref{}) {
@@ -899,7 +952,26 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				}
 			}
 			if member.prepared != nil {
-				return runtime.idx.allocator.AbortCOWCandidateV1(member.prepared)
+				if err := runtime.idx.allocator.AbortCOWCandidateV1(member.prepared); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		AbortComplete: func(input rootpublication.DurableRootCallbackInput) error {
+			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+				return rootpublication.ErrDurableRootOwnership
+			}
+			// Observe the SAME transaction's final physical abort, including its
+			// original constructor root. No callback evidence is refunded earlier.
+			if !member.install.activated {
+				if err := member.resources.ReleaseWithError(); err != nil {
+					return err
+				}
+				member.resources = nil
+			}
+			if err := member.install.abort(); err != nil {
+				return err
 			}
 			return nil
 		},
@@ -1061,6 +1133,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	defer visibleBase.Release()
 
 	var scanned candidateValueLogRefCountsV1
+	defer scanned.counts.close()
 	resources, err := db.captureDurableRootResourcesFromBaseWithRefCountsV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
 		opts.durableResourceRequirements, opts.durableResourceMutation,
@@ -1103,16 +1176,23 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("prepare queued visible root: %w", err))
 	}
-	if scanned.counts != nil {
+	if scanned.counts.metadata != nil {
 		// Retain evidence only after a fallback scan, keeping the ordinary
 		// publication's scratch value on the stack.
+		owner := db.valueLogIdentityPins.MetadataOwner()
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(candidateValueLogRefCountsV1{})))
+		if err := owner.AddPending(charge); err != nil {
+			return post, prePublishErr(errors.Join(err, install.abort()))
+		}
 		captured := scanned
+		captured.counts = scanned.counts.take()
+		captured.metadata, captured.metadataCharge = owner, charge
 		install.vlogRefCounts = &captured
 	}
 	installOwned := true
 	defer func() {
 		if installOwned {
-			install.abort()
+			retErr = errors.Join(retErr, install.abort())
 		}
 	}()
 
@@ -1520,6 +1600,17 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
+	sealCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) +
+		retainedalloc.AllocationCharge(uint64(len(runtime.debt)+1)*uint64(unsafe.Sizeof(uintptr(0))))
+	if err := runtime.metadata.AddPending(sealCharge); err != nil {
+		return err
+	}
+	sealTransferred := false
+	defer func() {
+		if !sealTransferred {
+			runtime.metadata.RemovePending(sealCharge)
+		}
+	}()
 	prefix := append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...)
 	prefix = append(prefix, prepared)
 	if err := growPrimaryRuntimeSlice(runtime, &runtime.debt, len(runtime.debt)+1); err != nil {
@@ -1533,6 +1624,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	preparedOwned = false
 	seal := &rootPublicationSealV1{
+		metadata: runtime.metadata, metadataCharge: sealCharge,
 		latestSequence: member.next.CommitSeq, groupLength: group.Len(),
 		idx: runtime.idx, base: rootPublicationSealBaseV1{
 			slotCommit: base.slotCommit, slotResources: base.slotResources,
@@ -1541,9 +1633,11 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
 		target: target,
 	}
+	seal.disposalFailure.payload = seal
 	runtime.debt = append(runtime.debt, prepared)
 	runtime.seals = append(runtime.seals, seal)
 	runtime.activeSeal = seal
+	sealTransferred = true
 	releaseResources = false
 	releaseToken = false
 	return nil
@@ -1808,11 +1902,6 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	db.durableRoot = current
 	db.metaPageID = seal.target
 	seal.resources = nil
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
-	}
-	seal.released = true
 	clear(runtime.debt[:len(seal.prefix)])
 	remainingDebt := copy(runtime.debt, runtime.debt[len(seal.prefix):])
 	clear(runtime.debt[remainingDebt:])
@@ -1821,9 +1910,7 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	keptSeals := runtime.seals[:0]
 	for _, candidateSeal := range runtime.seals {
 		if candidateSeal == seal || candidateSeal.latestSequence <= seal.latestSequence {
-			if candidateSeal != seal {
-				retiredSeals = append(retiredSeals, candidateSeal)
-			}
+			retiredSeals = append(retiredSeals, candidateSeal)
 			continue
 		}
 		keptSeals = append(keptSeals, candidateSeal)
@@ -1835,11 +1922,18 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	db.rootReuseMu.Unlock()
 	db.durablePublishMu.Unlock()
 
-	previousResources.Release()
+	var cleanupErr error
 	for _, retired := range retiredSeals {
-		retired.release()
+		if err := retired.release(); err != nil {
+			db.retainOriginalCleanupError(err)
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
 	}
-	return oldest, nil
+	if err := previousResources.ReleaseWithError(); err != nil {
+		db.retainOriginalCleanupError(err)
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	return oldest, cleanupErr
 }
 
 func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublicationSealV1, cause error) {
@@ -1858,30 +1952,73 @@ func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublication
 	}
 }
 
-func (runtime *rootPublicationRuntimeV1) release() {
+// The coordinator is stopped before terminal disposal. Physical callbacks do
+// not call runtime.release; the private completion mutex serializes only this
+// original outcome, outside runtime.mu and the DB publication locks.
+func (runtime *rootPublicationRuntimeV1) release() error {
 	if runtime == nil {
-		return
+		return nil
+	}
+	runtime.disposalMu.Lock()
+	if runtime.disposalAttempted {
+		err := runtime.disposalErr
+		runtime.disposalMu.Unlock()
+		return err
+	}
+	runtime.disposalAttempted = true
+	runtime.mu.Lock()
+	seals, visibleResources := runtime.seals, runtime.visibleResources
+	runtime.mu.Unlock()
+	var first error
+	for _, seal := range seals {
+		if err := seal.release(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if first == nil {
+		if err := visibleResources.ReleaseWithError(); err != nil {
+			first = err
+		}
+	}
+	if first != nil {
+		runtime.disposalFailure.retainCause(0, first)
+		runtime.disposalErr = &runtime.disposalFailure
+		if runtime.metadata != nil {
+			runtime.metadata.CleanupFailed()
+		}
+		err := runtime.disposalErr
+		db := runtime.db
+		runtime.disposalMu.Unlock()
+		// Publish the SAME original graph before it leaves DB discovery.
+		db.retainOriginalCleanupError(err)
+		return err
 	}
 	runtime.mu.Lock()
-	visibleResources := runtime.visibleResources
 	runtime.visibleResources = nil
-	seals := runtime.seals
+	clear(runtime.seals)
 	runtime.seals = nil
 	runtime.activeSeal = nil
+	clear(runtime.visibleMembers)
 	runtime.visibleMembers = nil
 	runtime.visibleHead = 0
+	clear(runtime.debt)
 	runtime.debt = nil
 	runtime.primaryDataCertificateV6 = nil
-	metadataCharge := runtime.metadataCharge
-	runtime.metadataCharge = 0
+	runtime.coordinator = nil
 	runtime.mu.Unlock()
-	visibleResources.Release()
-	for _, seal := range seals {
-		seal.release()
+	owner, charge := runtime.metadata, runtime.metadataCharge
+	idx, borrowed := runtime.idx, runtime.generationBorrowed
+	runtime.metadata, runtime.metadataCharge = nil, 0
+	runtime.idx, runtime.db, runtime.generationBorrowed = nil, nil, false
+	runtime.disposalFailure.payload = nil
+	if owner != nil {
+		owner.RemovePending(charge)
 	}
-	if runtime.idx.primary != nil {
-		runtime.idx.primary.MetadataOwner().RemovePending(metadataCharge)
+	if borrowed {
+		idx.releaseWrapperBorrow(nil, nil)
 	}
+	runtime.disposalMu.Unlock()
+	return nil
 }
 
 // visibleMember is a borrowed DB projection of the actual registered owner.
@@ -1915,4 +2052,18 @@ func (runtime *rootPublicationRuntimeV1) removeVisibleMember(sequence uint64) {
 	copy(runtime.visibleMembers[i:], runtime.visibleMembers[i+1:])
 	runtime.visibleMembers[len(runtime.visibleMembers)-1] = nil
 	runtime.visibleMembers = runtime.visibleMembers[:len(runtime.visibleMembers)-1]
+}
+
+func (install *rootPublicationVisibleInstallV1) releaseReferenceCountEvidence() {
+	if install.vlogRefCounts == nil {
+		return
+	}
+	evidence := install.vlogRefCounts
+	owner, charge := evidence.metadata, evidence.metadataCharge
+	evidence.counts.close()
+	*evidence = candidateValueLogRefCountsV1{}
+	install.vlogRefCounts = nil
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
 }

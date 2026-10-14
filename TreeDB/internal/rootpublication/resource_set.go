@@ -872,6 +872,8 @@ type StableResourceSetBuilder struct {
 	required       map[ReachabilityField]struct{}
 	closed         bool
 	abandoned      bool
+	abandonDone    bool
+	abandonErr     error // Sticky outcome on this original builder; no cleanup replay.
 	state          ResourceOwnerState
 	indexed        *stableResourceBuilderIndexedState
 }
@@ -2587,27 +2589,54 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 	return set, nil
 }
 
-func (builder *StableResourceSetBuilder) Abandon() {
+func (builder *StableResourceSetBuilder) Abandon() { _ = builder.AbandonWithError() }
+
+// AbandonWithError consumes this builder edge once. The original containing
+// allocation and outgoing payload remain charged while callbacks run and after
+// refusal. Reentrant/repeated calls never replay those callbacks; the original
+// in-flight call remains responsible for reporting its final physical outcome.
+func (builder *StableResourceSetBuilder) AbandonWithError() error {
 	if builder == nil {
-		return
+		return nil
 	}
 	builder.mu.Lock()
 	if builder.closed || builder.abandoned {
+		err := builder.abandonErr
+		if builder.abandoned && !builder.abandonDone {
+			err = ErrResourceOwnership
+		}
 		builder.mu.Unlock()
-		return
+		return err
 	}
-	entries := builder.entries
-	views := builder.kindViews
-	builder.entries = nil
-	builder.kindViews = nil
+	entries, views := builder.entries, builder.kindViews
 	builder.abandoned = true
 	builder.state = ResourceOwnerReleased
-	builder.disposeSelectedBuilderLocked()
 	builder.mu.Unlock()
-	releaseStableResourceKindViews(views)
-	for _, entry := range entries {
-		entry.token.releaseFrom(ResourceOwnerBuilder)
+	err := releaseStableResourceKindViews(views)
+	if err == nil {
+		for i := range entries {
+			if entries[i].token == nil {
+				continue
+			}
+			if err = entries[i].token.releaseFrom(ResourceOwnerBuilder); err != nil {
+				break
+			}
+			entries[i].token = nil
+		}
 	}
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	builder.abandonDone = true
+	if err != nil {
+		if builder.metadata != nil {
+			err = builder.metadata.cleanupFailed(builder, err)
+		}
+		builder.abandonErr = err
+		return err
+	}
+	builder.entries, builder.kindViews = nil, nil
+	builder.disposeSelectedBuilderLocked()
+	return nil
 }
 
 func cloneStableResourceEntries(entries []stableResourceEntry) []stableResourceEntry {
@@ -2669,14 +2698,16 @@ func (set *StableResourceSet) logicalMembershipEvidenceLocked() map[ResourceKind
 }
 
 type StableResourceSet struct {
-	metadata     *resourceAllocation
-	selected     bool
-	extras       *stableResourceSetExtras
-	mu           sync.Mutex
-	entries      []stableResourceEntry
-	kindViews    *resourceKindBacking
-	pinHighWater map[ResourceKind]uint64
-	owner        atomic.Uint32
+	cleanupFailure originalReleaseFailure
+	cleanupDone    atomic.Bool
+	metadata       *resourceAllocation
+	selected       bool
+	extras         *stableResourceSetExtras
+	mu             sync.Mutex
+	entries        []stableResourceEntry
+	kindViews      *resourceKindBacking
+	pinHighWater   map[ResourceKind]uint64
+	owner          atomic.Uint32
 	// physicalOnly is an explicit durability/reachability capability. It carries
 	// no complete logical metadata and cannot be used for publication proofs.
 	physicalOnly bool
@@ -4255,55 +4286,96 @@ func (set *StableResourceSet) transfer(from, to ResourceOwnerState) error {
 	return nil
 }
 
-func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) {
+func (set *StableResourceSet) releaseResult() error {
+	if !set.cleanupDone.Load() {
+		return ErrResourceOwnership
+	}
+	if set.cleanupFailure.causes[0] != nil {
+		return &set.cleanupFailure
+	}
+	return nil
+}
+func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) error {
+	return set.releaseFromWithActivePins(owner, nil)
+}
+
+// The caller owns counts under the existing coordinator mutex. Its pending
+// contribution ends at this SAME Set edge consumption, not before root disposal.
+func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState, counts map[ResourceKind]uint64) (err error) {
 	if set == nil {
-		return
+		return nil
 	}
 	set.mu.Lock()
 	if !set.owner.CompareAndSwap(uint32(owner), uint32(ResourceOwnerReleased)) {
 		set.mu.Unlock()
-		return
+		return set.releaseResult()
 	}
-	// entries is immutable after Freeze. Retain the diagnostic evidence after
-	// release so concurrent readers never race a destructive slice update and
-	// PinHighWater remains observable after ActivePins falls to zero.
-	entries := set.entries
-	if !set.selected {
-		entries = append([]stableResourceEntry(nil), set.entries...)
-	}
-	views := set.kindViews
+	set.adjustActivePinsByKindLocked(counts, false)
+	entries, views := set.entries, set.kindViews
 	emptyDirectory := set.emptyDependencyDirectoryLocked()
 	directories := set.physicalDependencyDirectoriesLocked()
-	if set.selected {
-		set.entries, set.kindViews, set.extras, set.pinHighWater = nil, nil, nil, nil
-		set.disposeSelectedWrapperLocked()
-	}
 	set.mu.Unlock()
-	for _, directory := range directories {
-		directory.Release()
+	defer func() {
+		set.mu.Lock()
+		if err != nil {
+			set.cleanupFailure.original, set.cleanupFailure.causes[0] = set, err
+			if set.metadata != nil {
+				set.metadata.owner.CleanupFailed()
+			}
+			err = &set.cleanupFailure
+		} else if set.selected {
+			set.entries, set.kindViews, set.extras, set.pinHighWater = nil, nil, nil, nil
+			set.disposeSelectedWrapperLocked()
+		}
+		set.cleanupDone.Store(true)
+		set.mu.Unlock()
+	}()
+	// Independent directory edges do not own the physical token rope. Complete
+	// them before scrub/refund; original selected extras stay on refusal.
+	for i, directory := range directories {
+		consumed, cleanup := directory.ReleaseOutcome()
+		if consumed {
+			directories[i] = nil
+		}
+		if cleanup != nil {
+			return cleanup
+		}
 	}
 	if emptyDirectory != nil {
-		emptyDirectory.Release()
+		consumed, cleanup := emptyDirectory.ReleaseOutcome()
+		if consumed {
+			set.mu.Lock()
+			set.extras.empty = nil
+			set.mu.Unlock()
+		}
+		if cleanup != nil {
+			return cleanup
+		}
 	}
 	if views != nil {
-		releaseStableResourceKindViews(views)
-		return
+		return releaseStableResourceKindViews(views)
 	}
 	for _, entry := range entries {
-		entry.token.releaseFrom(owner)
+		if err = entry.token.releaseFrom(owner); err != nil {
+			return err
+		}
 	}
+	return nil
 }
-
-func (set *StableResourceSet) Release() {
+func (set *StableResourceSet) Release() { _ = set.ReleaseWithError() }
+func (set *StableResourceSet) ReleaseWithError() error {
 	if set == nil {
-		return
+		return nil
 	}
 	switch set.Owner() {
 	case ResourceOwnerBuilder:
-		set.releaseFrom(ResourceOwnerBuilder)
+		return set.releaseFrom(ResourceOwnerBuilder)
 	case ResourceOwnerRecovery:
-		set.releaseFrom(ResourceOwnerRecovery)
+		return set.releaseFrom(ResourceOwnerRecovery)
+	case ResourceOwnerReleased:
+		return set.releaseResult()
 	}
+	return nil
 }
 
 func stableLogicalObligationCommitmentsEqual(left, right map[ReachabilityField]stableLogicalObligationCommitment) bool {
@@ -4754,15 +4826,21 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 // adjustActivePinsByKind updates a coordinator-owned aggregate without
 // allocating per-set statistics. A pending candidate contributes one active
 // pin per live resource entry, matching Stats.ActivePins. The coordinator owns
-// every set while it is pending, so additions at enqueue and subtractions just
-// before release form an exact running total.
+// every set while it is pending, so additions at enqueue and subtractions at
+// actual Set consumption or recovery transfer form an exact running total.
 func (set *StableResourceSet) adjustActivePinsByKind(counts map[ResourceKind]uint64, add bool) {
 	if set == nil || counts == nil {
 		return
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
-	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+	set.adjustActivePinsByKindLocked(counts, add)
+}
+func (set *StableResourceSet) adjustActivePinsByKindLocked(counts map[ResourceKind]uint64, add bool) {
+	if counts == nil {
+		return
+	}
+	visit := func(entry *stableResourceEntry) bool {
 		token := activeEntryToken(*entry)
 		if token == nil {
 			return true
@@ -4799,7 +4877,22 @@ func (set *StableResourceSet) adjustActivePinsByKind(counts map[ResourceKind]uin
 			counts[kind]--
 		}
 		return true
-	})
+	}
+	// Release holds set.mu and owns these exact private descriptors after the
+	// successful owner CAS; public Released readers remain inadmissible.
+	if set.kindViews != nil {
+		for _, view := range set.kindViews.all() {
+			if !rangeStableResourceLogicalIndex(view.logical, visit) {
+				return
+			}
+		}
+	} else {
+		for i := range set.entries {
+			if !visit(&set.entries[i]) {
+				return
+			}
+		}
+	}
 }
 
 func (set *StableResourceSet) validateResolved() error {

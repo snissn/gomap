@@ -276,10 +276,10 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rebuiltOlderRootIndexAuthorityV1(resources, identity, generation) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, identity, generation); err != nil || !authoritative {
 		t.Fatal("exact index authority rejected")
 	}
-	if rebuiltOlderRootIndexAuthorityV1(resources, identity, generation+1) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, identity, generation+1); err != nil || authoritative {
 		t.Fatal("mismatched index generation accepted")
 	}
 	other, err := os.Create(filepath.Join(dir, "other.db"))
@@ -291,14 +291,14 @@ func TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rebuiltOlderRootIndexAuthorityV1(resources, otherIdentity, generation) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(resources, otherIdentity, generation); err != nil || authoritative {
 		t.Fatal("mismatched physical index accepted")
 	}
 	missingNamespace := projectionResourceSetV1(t,
 		projectionResourceFixtureV1{rootpublication.ResourceIndex, rootpublication.ReachabilityIndexFile, nil},
 	)
 	defer missingNamespace.Release()
-	if rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1) {
+	if authoritative, err := rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1); err != nil || authoritative {
 		t.Fatal("index without exact namespace authority accepted")
 	}
 }

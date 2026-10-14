@@ -224,17 +224,18 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases(t *
 	}
 	defer input.close()
 	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	defer got.countRecords.close()
 	if err != nil {
 		t.Fatalf("shared audit: %v", err)
 	}
-	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("ref counts mismatch: combined=%v standalone=%v", got.valueLogRefCounts, wantRefs)
+	if !reflect.DeepEqual(got.countRecords.toMap(), wantRefs) {
+		t.Fatalf("ref counts mismatch: combined=%v standalone=%v", got.countRecords.toMap(), wantRefs)
 	}
 	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
 		t.Fatalf("live bytes mismatch: combined=%v standalone=%v", got.valueLogLiveBytesBySegment, wantLive)
 	}
-	if got.valueLogRefCounts[base.FileID] != 3 {
-		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[base.FileID])
+	if got.countRecords.toMap()[base.FileID] != 3 {
+		t.Fatalf("grouped alias refs=%d want 3", got.countRecords.toMap()[base.FileID])
 	}
 	if got.valueLogLiveBytesBySegment[base.FileID] != (int64(recordLen) + 4) {
 		t.Fatalf("grouped live bytes=%d want physical record=%d", got.valueLogLiveBytesBySegment[base.FileID], int64(recordLen)+4)
@@ -330,11 +331,12 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	}
 	defer input.close()
 	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	defer got.countRecords.close()
 	if err != nil {
 		t.Fatalf("shared protected audit: %v", err)
 	}
-	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+	if !reflect.DeepEqual(got.countRecords.toMap(), wantRefs) {
+		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.countRecords.toMap(), wantRefs)
 	}
 	if !reflect.DeepEqual(got.valueLogReferencedSegments, valueLogRefSetFromCounts(wantRefs)) {
 		t.Fatalf("referenced segments mismatch: shared=%v legacy=%v", got.valueLogReferencedSegments, valueLogRefSetFromCounts(wantRefs))
@@ -342,17 +344,17 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
 		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
 	}
-	if got.valueLogRefCounts[grouped.FileID] != 3 {
-		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[grouped.FileID])
+	if got.countRecords.toMap()[grouped.FileID] != 3 {
+		t.Fatalf("grouped alias refs=%d want 3", got.countRecords.toMap()[grouped.FileID])
 	}
 	if got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen) + 4) {
 		t.Fatalf("grouped live bytes=%d want physical record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
 	}
-	if _, ok := got.valueLogRefCounts[protectedOrdinary.FileID]; ok {
-		t.Fatalf("protected ordinary segment %d entered maintenance projection: %v", protectedOrdinary.FileID, got.valueLogRefCounts)
+	if _, ok := got.countRecords.toMap()[protectedOrdinary.FileID]; ok {
+		t.Fatalf("protected ordinary segment %d entered maintenance projection: %v", protectedOrdinary.FileID, got.countRecords.toMap())
 	}
-	if _, ok := got.valueLogRefCounts[protectedSystem[0].FileID]; ok {
-		t.Fatalf("protected system segment %d entered maintenance projection: %v", protectedSystem[0].FileID, got.valueLogRefCounts)
+	if _, ok := got.countRecords.toMap()[protectedSystem[0].FileID]; ok {
+		t.Fatalf("protected system segment %d entered maintenance projection: %v", protectedSystem[0].FileID, got.countRecords.toMap())
 	}
 	leafOpts := leafGenerationPackFromPlanPlanOptions(compactStorageLeafPackFromPlanOptions(
 		opts,
@@ -374,6 +376,7 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	}
 	defer unprotectedInput.close()
 	unprotected, err := db.scanCompactStorageAudit(context.Background(), unprotectedInput)
+	defer unprotected.countRecords.close()
 	if err != nil {
 		t.Fatalf("shared unprotected audit: %v", err)
 	}
@@ -393,6 +396,7 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 			t.Fatalf("acquire %s-only audit input: %v", projection.name, err)
 		}
 		protectedOnly, scanErr := db.scanCompactStorageAudit(context.Background(), protectedInput)
+		defer protectedOnly.countRecords.close()
 		protectedInput.close()
 		if scanErr != nil {
 			t.Fatalf("shared %s-only audit: %v", projection.name, scanErr)
@@ -492,11 +496,12 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReus
 	}
 	defer input.close()
 	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	defer got.countRecords.close()
 	if err != nil {
 		t.Fatalf("shared audit: %v", err)
 	}
-	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+	if !reflect.DeepEqual(got.countRecords.toMap(), wantRefs) {
+		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.countRecords.toMap(), wantRefs)
 	}
 	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
 		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
@@ -504,11 +509,11 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReus
 	if wantRefs[grouped.FileID] <= 3 {
 		t.Fatalf("fixture did not create repeated maintenance projections: refs=%d", wantRefs[grouped.FileID])
 	}
-	if got.valueLogRefCounts[grouped.FileID] != wantRefs[grouped.FileID] || got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen)+4) {
-		t.Fatalf("grouped projection mismatch: refs=%d want=%d live=%d record=%d", got.valueLogRefCounts[grouped.FileID], wantRefs[grouped.FileID], got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
+	if got.countRecords.toMap()[grouped.FileID] != wantRefs[grouped.FileID] || got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen)+4) {
+		t.Fatalf("grouped projection mismatch: refs=%d want=%d live=%d record=%d", got.countRecords.toMap()[grouped.FileID], wantRefs[grouped.FileID], got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
 	}
-	if _, ok := got.valueLogRefCounts[protected[0].FileID]; ok {
-		t.Fatalf("protected-only segment %d entered value-log projection: %v", protected[0].FileID, got.valueLogRefCounts)
+	if _, ok := got.countRecords.toMap()[protected[0].FileID]; ok {
+		t.Fatalf("protected-only segment %d entered value-log projection: %v", protected[0].FileID, got.countRecords.toMap())
 	}
 	if got.counters.MemoHits == 0 {
 		t.Fatalf("expected current collection roots to reuse user-root subtree memo: %+v", got.counters)
@@ -647,6 +652,7 @@ func TestCompactStorageAudit_CountsValuePointersInsideOuterLeafPages(t *testing.
 	}
 	defer input.close()
 	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	defer got.countRecords.close()
 	if err != nil {
 		t.Fatalf("shared audit: %v", err)
 	}
@@ -654,8 +660,8 @@ func TestCompactStorageAudit_CountsValuePointersInsideOuterLeafPages(t *testing.
 	if wantRefs[fileID] != records {
 		t.Fatalf("legacy refs for file %d=%d want %d", fileID, wantRefs[fileID], records)
 	}
-	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("outer-leaf ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+	if !reflect.DeepEqual(got.countRecords.toMap(), wantRefs) {
+		t.Fatalf("outer-leaf ref counts mismatch: shared=%v legacy=%v", got.countRecords.toMap(), wantRefs)
 	}
 }
 

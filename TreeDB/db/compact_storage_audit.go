@@ -15,6 +15,7 @@ import (
 )
 
 type compactStorageAuditKey struct {
+	RefIncarnation             valueLogRefIncarnation
 	CommitSeq                  uint64
 	RootPageID                 uint64
 	SystemRootPageID           uint64
@@ -26,12 +27,17 @@ type compactStorageAuditKey struct {
 
 type compactStorageAuditCounters = CompactStorageAuditStats
 
-type compactStorageAuditRaw struct {
-	valueLogRefCounts          map[uint32]uint64
+// The original session retains only non-count audit evidence. Admitted count
+// backing moves into the tracker at revalidation, never into a second cache.
+type compactStorageAuditCachedRaw struct {
 	valueLogReferencedSegments map[uint32]struct{}
 	valueLogLiveBytesBySegment map[uint32]int64
 	leafGenerationLive         leafGenerationLiveScanStats
 	counters                   compactStorageAuditCounters
+}
+type compactStorageAuditRaw struct {
+	countRecords valueLogRefCounts
+	compactStorageAuditCachedRaw
 }
 
 var errCompactStorageAuditProtectedBasisDrift = errors.New("compact storage protected basis drift")
@@ -72,7 +78,7 @@ func (in *compactStorageAuditInput) close() {
 type compactStorageAuditSession struct {
 	valid bool
 	key   compactStorageAuditKey
-	raw   compactStorageAuditRaw
+	raw   compactStorageAuditCachedRaw
 }
 
 func (s *compactStorageAuditSession) close() {}
@@ -138,6 +144,10 @@ func (db *DB) acquireCompactStorageAuditInputAttempt(opts CompactStorageOptions,
 		return nil, errCompactStorageAuditProtectedBasisDrift
 	}
 	state := snap.state
+	incarnation, captureErr := captureValueLogRefIncarnation(snap.idx)
+	if captureErr != nil {
+		return nil, errors.Join(captureErr, snap.Close())
+	}
 	return &compactStorageAuditInput{
 		db:                     db,
 		snap:                   snap,
@@ -147,6 +157,7 @@ func (db *DB) acquireCompactStorageAuditInputAttempt(opts CompactStorageOptions,
 		protectedSystemRootIDs: protectedAfter.systemRootIDs,
 		protectedBasis:         protectedAfter,
 		key: compactStorageAuditKey{
+			RefIncarnation:             incarnation,
 			CommitSeq:                  state.CommitSeq,
 			RootPageID:                 state.RootPageID,
 			SystemRootPageID:           state.SystemRootPageID,
@@ -441,6 +452,7 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		return compactStorageAuditRaw{}, fmt.Errorf("compact storage audit: missing input")
 	}
 	result, err := db.maintenanceReachabilityScan(ctx, in.snap, maintenanceReachabilityScanOptions{
+		CountMetadata: db.valueLogRefTracker.metadata,
 		Collectors: maintenanceReachabilityValueLogRefCounts |
 			maintenanceReachabilityValueLogLiveBytes |
 			maintenanceReachabilityLeafGenerationTotals,
@@ -448,11 +460,13 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		ProtectedSystemRootIDs: in.protectedSystemRootIDs,
 	})
 	raw := compactStorageAuditRaw{
-		valueLogRefCounts:          result.valueLogRefCounts,
-		valueLogReferencedSegments: result.valueLogReferencedSegments,
-		valueLogLiveBytesBySegment: result.valueLogLiveBytesBySegment,
-		leafGenerationLive:         result.leafGenerationLive,
-		counters:                   result.counters,
+		countRecords: result.countRecords.take(),
+		compactStorageAuditCachedRaw: compactStorageAuditCachedRaw{
+			valueLogReferencedSegments: result.valueLogReferencedSegments,
+			valueLogLiveBytesBySegment: result.valueLogLiveBytesBySegment,
+			leafGenerationLive:         result.leafGenerationLive,
+			counters:                   result.counters,
+		},
 	}
 	if err == nil {
 		runCompactStorageSharedAuditScanHook(raw.counters)
@@ -460,7 +474,7 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 	return raw, err
 }
 
-func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts CompactStorageOptions, raw compactStorageAuditRaw, attempt int) (bool, error) {
+func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts CompactStorageOptions, raw *compactStorageAuditRaw, attempt int) (bool, error) {
 	if db.compactStorageAuditBeforeRevalidate != nil {
 		db.compactStorageAuditBeforeRevalidate(attempt)
 	}
@@ -472,7 +486,7 @@ func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts C
 
 	db.writeMu.RLock()
 	stateBefore := db.state.Load()
-	stateBeforeValid := compactStorageAuditStateMatches(stateBefore, in.key) &&
+	stateBeforeValid := db.compactStorageAuditCurrentMatches(stateBefore, in.key) &&
 		db.leafPageLogVersion == protectedBefore.leafPageLogVersion
 	db.writeMu.RUnlock()
 	if !stateBeforeValid {
@@ -491,10 +505,12 @@ func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts C
 	db.writeMu.Lock()
 	db.mu.Lock()
 	state := db.state.Load()
-	valid := compactStorageAuditStateMatches(state, in.key) &&
+	valid := db.compactStorageAuditCurrentMatches(state, in.key) &&
 		db.leafPageLogVersion == protectedAfter.leafPageLogVersion
 	if valid && db.valueLogRefTracker != nil {
-		db.valueLogRefTracker.replace(raw.valueLogRefCounts, in.key.CommitSeq, true)
+		if raw.countRecords.metadata != nil {
+			db.valueLogRefTracker.replaceOwned(&raw.countRecords, in.key.CommitSeq, in.key.RefIncarnation, true)
+		}
 	}
 	db.mu.Unlock()
 	db.writeMu.Unlock()
@@ -526,11 +542,12 @@ func (db *DB) compactStorageSharedAudit(ctx context.Context, opts CompactStorage
 		}
 		var raw compactStorageAuditRaw
 		if session != nil && session.valid && session.key == in.key {
-			raw = session.raw
+			raw.compactStorageAuditCachedRaw = session.raw
 			aggregate.StructuralReuseHits++
 		} else {
 			raw, err = db.scanCompactStorageAudit(ctx, in)
 			if err != nil {
+				raw.countRecords.close()
 				in.close()
 				return nil, compactStorageAuditRaw{}, aggregate, err
 			}
@@ -545,19 +562,22 @@ func (db *DB) compactStorageSharedAudit(ctx context.Context, opts CompactStorage
 		if len(in.snap.leafGenerationIDs) > 0 {
 			in.snap.releaseLeafGenerationPins()
 		}
-		valid, err := db.compactStorageAuditRevalidate(in, opts, raw, attempt)
+		valid, err := db.compactStorageAuditRevalidate(in, opts, &raw, attempt)
 		if err != nil {
+			raw.countRecords.close()
 			in.close()
 			return nil, compactStorageAuditRaw{}, aggregate, err
 		}
 		if valid {
+			raw.countRecords.close()
 			if session != nil {
 				session.valid = true
 				session.key = in.key
-				session.raw = raw
+				session.raw = raw.compactStorageAuditCachedRaw
 			}
 			return in, raw, aggregate, nil
 		}
+		raw.countRecords.close()
 		in.close()
 		if attempt == 0 {
 			aggregate.RevalidationRetries++
@@ -915,4 +935,13 @@ func (db *DB) compactStorageLeafGenerationGCFromAudit(ctx context.Context, in *c
 		stats.BytesEligible += leafGenerationRecordBytesTotal(gen, filePaths, db.reportError)
 	}
 	return stats, nil
+}
+
+func (db *DB) compactStorageAuditCurrentMatches(state *DBState, key compactStorageAuditKey) bool {
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.state != state || view.idx == nil || view.idx.id != key.RefIncarnation.indexID || !compactStorageAuditStateMatches(state, key) {
+		return false
+	}
+	incarnation, err := captureValueLogRefIncarnation(view.idx)
+	return err == nil && incarnation == key.RefIncarnation
 }

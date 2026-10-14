@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"unsafe"
 )
@@ -107,7 +108,7 @@ func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObl
 
 // Physical selection is a synchronous caller-owned proof. The only new scratch
 // is exact found membership, admitted alongside the source borrow and output.
-func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSet, r StableLogicalObligationRequirements, removed []StableLogicalObligation, excluded []ResourceKind, work StableResourceClosureWork, selectedKind ResourceKind, selected []StableIdentity) (*StableResourceSet, StableResourceClosureWork, error) {
+func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSet, r StableLogicalObligationRequirements, removed []StableLogicalObligation, excluded []ResourceKind, work StableResourceClosureWork, selectedKind ResourceKind, selected []StableIdentity) (output *StableResourceSet, outputWork StableResourceClosureWork, retErr error) {
 	if removed == nil {
 		if err := validateBorrowedRequirements(r); err != nil {
 			return nil, work, err
@@ -128,7 +129,15 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 	if err != nil {
 		return nil, work, err
 	}
-	defer borrow.release()
+	defer func() {
+		if err := borrow.release(); err != nil {
+			if output != nil {
+				err = errors.Join(err, output.ReleaseWithError())
+				output = nil
+			}
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 	owner := borrow.backing.allocation.owner
 
 	var physicalFound []bool
@@ -151,7 +160,7 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 	if err != nil {
 		return nil, work, err
 	}
-	defer builder.Abandon()
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 	var buildErr error
 	for _, cell := range borrow.backing.cells {
 		rangeStableResourceLogicalIndex(cell.view.logical, func(entry *stableResourceEntry) bool {
@@ -305,7 +314,7 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 // obligation is inspected; duplicate actual references are rejected exactly,
 // including references owned by different physical resources. No maps/index
 // walk scratch or detached diagnostics are created.
-func validateSelectedResourceRequirements(source *StableResourceSet, r StableLogicalObligationRequirements, work StableResourceClosureWork) (StableResourceClosureWork, error) {
+func validateSelectedResourceRequirements(source *StableResourceSet, r StableLogicalObligationRequirements, work StableResourceClosureWork) (_ StableResourceClosureWork, retErr error) {
 	if err := validateBorrowedRequirements(r); err != nil {
 		return work, err
 	}
@@ -325,7 +334,7 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 	if err != nil {
 		return work, err
 	}
-	defer borrow.release()
+	defer func() { retErr = errors.Join(retErr, borrow.release()) }()
 	allocation, err := newResourceAllocation(borrow.backing.allocation.owner, retainedalloc.AllocationCharge(uint64(len(r.Obligations))))
 	if err != nil {
 		return work, err

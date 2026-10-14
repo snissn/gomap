@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
@@ -14,6 +15,10 @@ import (
 )
 
 type rewriteStableOuterLeafCapture struct {
+	cleanupFailure                                                                     rootpublication.OriginalReleaseFailure
+	cleanupAttempted                                                                   bool
+	cleanupErr                                                                         error
+	untransferredToken                                                                 *rootpublication.StableResourceToken
 	writer                                                                             *rewriteWriter
 	builder                                                                            *rootpublication.StableResourceSetBuilder
 	tokens                                                                             []*rootpublication.StableResourceToken
@@ -48,8 +53,7 @@ func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Cont
 		return fmt.Errorf("%w: dictionary %d has no stable resource closure", rootpublication.ErrUnresolvedResource, dictID)
 	}
 	if err := capture.builder.Merge(resources); err != nil {
-		resources.Release()
-		return err
+		return errors.Join(err, resources.ReleaseWithError())
 	}
 	capture.dictionaryIDs = append(capture.dictionaryIDs, dictID)
 	return nil
@@ -80,8 +84,7 @@ func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(stor
 		return err
 	}
 	if err := capture.builder.Merge(resources); err != nil {
-		resources.Release()
-		return err
+		return errors.Join(err, resources.ReleaseWithError())
 	}
 	capture.templateIDs = append(capture.templateIDs, templateID)
 	return nil
@@ -174,22 +177,22 @@ func (capture *rewriteStableOuterLeafCapture) add(token *rootpublication.StableR
 	return nil
 }
 
-func (capture *rewriteStableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) error {
+func (capture *rewriteStableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) (retErr error) {
 	if rotation == nil {
 		return rootpublication.ErrResourceOwnership
 	}
-	defer rotation.Release()
-	if token := rotation.TakeClosed(); token != nil {
+	defer func() { retErr = errors.Join(retErr, rotation.ReleaseWithError()) }()
+	if token := rotation.Closed; token != nil {
 		if err := capture.add(token); err != nil {
-			token.Release()
 			return err
 		}
+		rotation.TakeClosed()
 	}
-	if token := rotation.TakeActive(); token != nil {
+	if token := rotation.Active; token != nil {
 		if err := capture.add(token); err != nil {
-			token.Release()
 			return err
 		}
+		rotation.TakeActive()
 	}
 	return nil
 }
@@ -217,7 +220,7 @@ func (capture *rewriteStableOuterLeafCapture) captureRotation(writer *valuelog.W
 	rotation, err := writer.RotateToWithStableResources(nextPath, nextFileID, syncCurrent, closed, active)
 	if err != nil {
 		if rotation != nil {
-			rotation.Release()
+			err = joinOriginalWriterCleanup(err, rotation.ReleaseWithError())
 		}
 		return valuelog.RotationInstalled(err), err
 	}
@@ -251,7 +254,11 @@ func (capture *rewriteStableOuterLeafCapture) captureCurrent() error {
 		return err
 	}
 	if err := capture.add(token); err != nil {
-		token.Release()
+		capture.untransferredToken = token
+		if cleanupErr := token.ReleaseWithError(); cleanupErr != nil {
+			return errors.Join(err, capture.retainFailure(cleanupErr))
+		}
+		capture.untransferredToken = nil
 		return err
 	}
 	return nil
@@ -261,7 +268,13 @@ func (capture *rewriteStableOuterLeafCapture) freeze(ptrs []page.LeafLogPtr) (*r
 	if capture == nil || capture.builder == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
+	if capture.cleanupErr != nil {
+		return nil, capture.cleanupErr
+	}
 	for i, token := range capture.tokens {
+		if token == nil {
+			continue
+		}
 		required := false
 		for _, ptr := range ptrs {
 			if uint64(ptr.ValueLogFileID()) == token.Generation() {
@@ -269,44 +282,80 @@ func (capture *rewriteStableOuterLeafCapture) freeze(ptrs []page.LeafLogPtr) (*r
 				break
 			}
 		}
-		capture.tokens[i] = nil
 		if !required {
-			token.Release()
+			if err := token.ReleaseWithError(); err != nil {
+				return nil, capture.retainFailure(err)
+			}
+			capture.tokens[i] = nil
 			continue
 		}
 		if err := capture.builder.Add(token); err != nil {
-			token.Release()
-			capture.abandon()
-			return nil, err
+			return nil, errors.Join(err, capture.abandon())
 		}
+		// Only actual ownership transfer consumes this capture's original edge.
+		capture.tokens[i] = nil
 	}
 	capture.disposeTokens()
 	set, err := capture.builder.Freeze()
 	if err != nil {
-		capture.builder.Abandon()
+		return nil, errors.Join(err, capture.abandon())
 	}
 	capture.builder = nil
 	capture.disposeMetadata()
-	return set, err
+	return set, nil
 }
 
-func (capture *rewriteStableOuterLeafCapture) abandon() {
+func (capture *rewriteStableOuterLeafCapture) retainFailure(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	if capture.cleanupErr == nil {
+		capture.cleanupAttempted = true
+		capture.cleanupErr = capture.cleanupFailure.RetainOriginalCleanupFailure(capture, cause)
+		if capture.metadata != nil {
+			capture.metadata.CleanupFailed()
+		}
+	}
+	return capture.cleanupErr
+}
+func (capture *rewriteStableOuterLeafCapture) abandon() error {
 	if capture == nil {
-		return
+		return nil
 	}
+	if capture.cleanupAttempted {
+		return capture.cleanupErr
+	}
+	capture.cleanupAttempted = true
 	if capture.builder != nil {
-		capture.builder.Abandon()
+		if err := capture.builder.AbandonWithError(); err != nil {
+			return capture.retainFailure(err)
+		}
+		capture.builder = nil
 	}
-	capture.releaseTokens()
-	capture.builder = nil
+	if capture.untransferredToken != nil {
+		if err := capture.untransferredToken.ReleaseWithError(); err != nil {
+			return capture.retainFailure(err)
+		}
+		capture.untransferredToken = nil
+	}
+	if err := capture.releaseTokens(); err != nil {
+		return capture.retainFailure(err)
+	}
 	capture.disposeMetadata()
+	return nil
 }
-
-func (capture *rewriteStableOuterLeafCapture) releaseTokens() {
-	for _, token := range capture.tokens {
-		token.Release()
+func (capture *rewriteStableOuterLeafCapture) releaseTokens() error {
+	for i, token := range capture.tokens {
+		if token == nil {
+			continue
+		}
+		if err := token.ReleaseWithError(); err != nil {
+			return err
+		}
+		capture.tokens[i] = nil
 	}
 	capture.disposeTokens()
+	return nil
 }
 
 // reserveID retains only the producer dedup keys. Growth admits the full new

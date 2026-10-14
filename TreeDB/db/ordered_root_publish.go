@@ -1937,7 +1937,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
 		return
 	}
-	trackValueLogRefs = trackValueLogRefs && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(db.currentCommitSeq()) && !opts.outerLeavesInValueLog
+	trackValueLogRefs = trackValueLogRefs && db.valueLogRefTracker != nil && db.canTrackValueLogRefs(db.currentCommitSeq()) && !opts.outerLeavesInValueLog
 	if baseRoot != 0 {
 		rootTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), baseRoot)
 		collectBasePageIDs := func() ([]uint64, error) {

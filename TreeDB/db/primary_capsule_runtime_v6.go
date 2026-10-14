@@ -31,7 +31,17 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	if e != nil {
 		return e
 	}
-	charge := retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))
+	charge := retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6) + primaryStateDescriptorChargeV5()
+	runtimeCharge := primaryRuntimeDescriptorChargeV5()
+	if e = a.MetadataOwner().AddPending(runtimeCharge); e != nil {
+		return e
+	}
+	runtimeOwned := false
+	defer func() {
+		if !runtimeOwned {
+			a.MetadataOwner().RemovePending(runtimeCharge)
+		}
+	}()
 	if e = a.AdmitRootMetadata(b.Directory, charge); e != nil {
 		return e
 	}
@@ -46,6 +56,14 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	}
 	if ok, e := a.BindReadRootDependencyV6(b.Directory, primaryCapsuleDependencyEdgeV6(r), nil); !ok || e != nil {
 		return e
+	}
+	// b still owns this exact immutable producer bank throughout validation.
+	certificate, ready, e := a.BorrowReadRootCertificateV6(b.Directory, nil)
+	if e != nil {
+		return e
+	}
+	if !ready || certificate == nil || certificate.Arena() != a || certificate.Reference() != b.Directory {
+		return rootpublication.ErrResourceOwnership
 	}
 	if e = p.Sync(); e != nil {
 		return e
@@ -79,7 +97,9 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	}
 	db.installDurableRootSelectionV1(durableRootSelectionV1{Slot: 0, Meta: meta, Record: actual.Record, Freelist: g, Manifest: m, SlotCommits: [2]uint64{r.CommitSeq, 0}, SlotMetas: [2]page.DurableMetaV1{meta, {}}, SlotRecords: [2]rootpublication.DurableRootRecordV1{actual.Record, {}}, SlotResources: [2]*rootpublication.StableResourceSet{resources, nil}})
 	db.meta.UserRootPageID = b.Directory.PageID
-	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: actual.Primary, slots: [2]rootpublication.PrimaryProjectionV5{actual.Primary, {}}, records: [2]primaryarena.Ref{b.Directory, {}}, dataFloor: [4]uint64{g.CommitSeq()}, current: &primaryStateRootV5{a, b.Directory, g.CommitSeq()}, capsuleImages: [2][]byte{image, nil}, capsuleViews: [2]rootpublication.PrimaryCapsuleViewV6{view, {}}}
+	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: actual.Primary, slots: [2]rootpublication.PrimaryProjectionV5{actual.Primary, {}}, records: [2]primaryarena.Ref{b.Directory, {}}, dataFloor: [4]uint64{g.CommitSeq()}, current: &primaryStateRootV5{arena: a, ref: b.Directory, dataCommit: g.CommitSeq(), certificate: certificate}, capsuleImages: [2][]byte{image, nil}, capsuleViews: [2]rootpublication.PrimaryCapsuleViewV6{view, {}}}
+	bindReservedPrimaryRuntimeV5(db.durableRoot.primary, a)
+	runtimeOwned = true
 	return nil
 }
 
@@ -198,6 +218,8 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 		return e
 	}
 	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion}}
+	seal.metadata = runtime.idx.primary.MetadataOwner()
+	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)
 	runtime.activeSeal = seal
 	transferred = true

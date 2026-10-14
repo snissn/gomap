@@ -17,5 +17,5 @@ func (c *Coordinator) finishOrdinaryPrimaryWithScopeV6(txn *DurableRootTransacti
 		}
 		defer scope.LeaveOwnedFinishCallbackV6()
 	}
-	return txn.finishOrdinaryPrimaryV6(w)
+	return txn.finishOrdinaryPrimaryV6(w, c.resourceActivePins)
 }

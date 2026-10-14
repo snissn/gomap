@@ -673,19 +673,51 @@ func (set *RecoverableRootSet) acquireSnapshotForRoot(root RecoverableRoot, dura
 	if snapshot.idx.primary != nil {
 		ref, ready, e := snapshot.idx.primary.BorrowDirectory(root.UserRootPageID, nil)
 		if e != nil || !ready {
-			_ = snapshot.Close()
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
+			return nil
+		}
+		// Rebinding uses preborn storage inside the SAME admitted Snapshot;
+		// there is no extra heap wrapper or bank-owned allocation per capture.
+		// set still retains this exact historical bank during producer binding.
+		rebound := &snapshot.primaryRebindRoot
+		*rebound = primaryStateRootV5{arena: snapshot.idx.primary, ref: ref}
+		if e = bindPrimaryReadRootCertificateV6(rebound); e != nil {
+			*rebound = primaryStateRootV5{}
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
 			return nil
 		}
 		ready, e = snapshot.idx.primary.Acquire(ref, nil)
 		if e != nil || !ready {
-			_ = snapshot.Close()
+			*rebound = primaryStateRootV5{}
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
 			return nil
 		}
 		if snapshot.primaryRoot != nil {
-			_, _ = snapshot.primaryRoot.arena.Drop(snapshot.primaryRoot.ref, nil)
+			consumed, dropErr := snapshot.primaryRoot.arena.Drop(snapshot.primaryRoot.ref, nil)
+			if !consumed && dropErr == nil {
+				dropErr = rootpublication.ErrResourceOwnership
+			}
+			if dropErr != nil {
+				// Preserve the SAME original Snapshot and both operands after the
+				// first actual refusal. Its finalizer must not replay that Drop.
+				if consumed {
+					snapshot.primaryRoot = rebound
+				}
+				snapshot.primaryRebindErr = dropErr
+				if closeErr := snapshot.Close(); closeErr != nil {
+					set.db.retainOriginalCleanupError(closeErr)
+				}
+				return nil
+			}
 		}
-		snapshot.primaryRoot = &primaryStateRootV5{arena: snapshot.idx.primary, ref: ref}
-		state.primaryRoot = snapshot.primaryRoot
+		snapshot.primaryRoot = rebound
+		state.primaryRoot = rebound
 	}
 	state.CommitSeq = root.CommitSeq
 	state.RootPageID = root.UserRootPageID

@@ -1040,15 +1040,15 @@ func setValueLogPointer(t *testing.T, db *DB, key []byte, ptr page.ValuePtr) {
 
 func TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance(t *testing.T) {
 	tracker := newValueLogRefTracker()
-	tracker.replace(map[uint32]uint64{12: 1}, 6, true)
+	tracker.replace(map[uint32]uint64{12: 1}, 6, valueLogRefIncarnation{}, true)
 	observedRevision := tracker.revisionSnapshot()
 	advanced := make(chan struct{})
 	go func() {
-		tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+		tracker.replace(map[uint32]uint64{11: 1}, 7, valueLogRefIncarnation{}, true)
 		close(advanced)
 	}()
 	<-advanced
-	if tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+	if tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, valueLogRefIncarnation{}, true, observedRevision) {
 		t.Fatal("GC fallback replaced tracker after concurrent sequence advance")
 	}
 	refs, ok := tracker.referencedSet(7)
@@ -1062,9 +1062,9 @@ func TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance(t *testing.
 
 func TestValueLogRefTracker_GCReplaceRepairsUnchangedStaleAheadState(t *testing.T) {
 	tracker := newValueLogRefTracker()
-	tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+	tracker.replace(map[uint32]uint64{11: 1}, 7, valueLogRefIncarnation{}, true)
 	observedRevision := tracker.revisionSnapshot()
-	if !tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+	if !tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, valueLogRefIncarnation{}, true, observedRevision) {
 		t.Fatal("unchanged stale-ahead tracker was not repaired")
 	}
 	refs, ok := tracker.referencedSet(6)

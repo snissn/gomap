@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -46,7 +47,7 @@ func (s *Store) CaptureDictionaryResourcesWithMetadata(ctx context.Context, dict
 	}
 	return s.captureDictionaryResources(ctx, dictID, metadata)
 }
-func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, metadata *retainedalloc.Owner) (_ *rootpublication.StableResourceSet, retErr error) {
 	if s == nil || s.backend == nil {
 		return nil, errStoreUnavailable
 	}
@@ -64,7 +65,7 @@ func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, m
 	snapshotOwned := false
 	defer func() {
 		if !snapshotOwned {
-			_ = snapshot.Close()
+			retErr = errors.Join(retErr, snapshot.Close())
 		}
 	}()
 
@@ -100,7 +101,7 @@ func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, m
 			return nil, err
 		}
 	}
-	defer builder.Abandon()
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
 		MetadataOwner: metadata,
@@ -119,7 +120,7 @@ func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, m
 	}
 	snapshotOwned = true
 	if err := addDictionaryStableResourceToken(builder, indexToken, dictionaryStableIndexRole); err != nil {
-		indexToken.Release()
+		err = errors.Join(err, indexToken.ReleaseWithError())
 		return nil, fmt.Errorf("dictdb: add dictionary %d index: %w", dictID, err)
 	}
 
@@ -159,7 +160,7 @@ func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, m
 			return nil, fmt.Errorf("dictdb: capture dictionary %d value-log: %w", dictID, tokenErr)
 		}
 		if addErr := addDictionaryStableResourceToken(builder, token, dictionaryStableValueLogRole); addErr != nil {
-			token.Release()
+			addErr = errors.Join(addErr, token.ReleaseWithError())
 			return nil, fmt.Errorf("dictdb: add dictionary %d value-log: %w", dictID, addErr)
 		}
 	}
@@ -169,13 +170,13 @@ func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, m
 		return nil, fmt.Errorf("dictdb: freeze dictionary %d resources: %w", dictID, err)
 	}
 	if err := validateCapturedDictionaryPhysicalClosure(resources, entry.Flags&node.FlagPointer != 0); err != nil {
-		resources.Release()
+		err = errors.Join(err, resources.ReleaseWithError())
 		return nil, fmt.Errorf("dictdb: validate dictionary %d physical closure: %w", dictID, err)
 	}
 	return resources, nil
 }
 
-func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) (retErr error) {
 	if resources == nil {
 		return fmt.Errorf("%w: dictionary capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
@@ -184,7 +185,7 @@ func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.Stable
 	if captureErr != nil {
 		return captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceDictionary {
 			return fmt.Errorf("%w: dictionary closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)

@@ -55,21 +55,34 @@ func cloneOwnedResourcePhysical(root *stableResourcePhysicalIndexNode, count int
 func (node *stableResourcePhysicalIndexNode) retainAllocation() bool {
 	return node == nil || node.allocation.retain()
 }
-func releaseOwnedResourcePhysical(node *stableResourcePhysicalIndexNode) {
-	if node == nil || !node.allocation.drop() {
-		return
+func releaseOwnedResourcePhysical(node *stableResourcePhysicalIndexNode) error {
+	if node == nil {
+		return nil
 	}
-	left, right := node.left, node.right
-	node.left, node.right = nil, nil
+	if err := node.allocation.cleanupResult(); err != nil {
+		return err
+	}
+	if !node.allocation.drop() {
+		return nil
+	}
 	for i, entry := range node.entries {
+		if err := entry.releaseBacking(); err != nil {
+			return node.allocation.cleanupFailed(node, err)
+		}
 		node.entries[i] = nil
-		entry.releaseBacking()
 	}
 	node.entries = nil
+	if err := releaseOwnedResourcePhysical(node.left); err != nil {
+		return node.allocation.cleanupFailed(node, err)
+	}
+	node.left = nil
+	if err := releaseOwnedResourcePhysical(node.right); err != nil {
+		return node.allocation.cleanupFailed(node, err)
+	}
+	node.right = nil
 	node.key = stablePhysicalIdentityKey{}
-	releaseOwnedResourcePhysical(left)
-	releaseOwnedResourcePhysical(right)
 	node.allocation.refund()
+	return nil
 }
 
 // insertOwnedResourcePhysical owns the returned root; input remains retained

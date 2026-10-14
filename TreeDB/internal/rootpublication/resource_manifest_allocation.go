@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"unsafe"
@@ -250,12 +251,20 @@ func (manifest *DependencyManifestV1) WithEntriesV1(visit func([]DependencyManif
 	return visit(out)
 }
 
-func (set *StableResourceSet) ownedDependencyManifestV1() (*DependencyManifestV1, DependencyManifestBuildWorkV1, error) {
+func (set *StableResourceSet) ownedDependencyManifestV1() (result *DependencyManifestV1, resultWork DependencyManifestBuildWorkV1, retErr error) {
 	borrow, err := set.borrowSelectedKindViews()
 	if err != nil {
 		return nil, DependencyManifestBuildWorkV1{}, err
 	}
-	defer borrow.release()
+	defer func() {
+		if err := borrow.release(); err != nil {
+			if result != nil {
+				result.ReleaseOwnedMetadataV1()
+				result = nil
+			}
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 	owner := borrow.backing.allocation.owner
 	count := stableResourceKindViewCount(borrow.backing)
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyManifestV1{}))) + retainedalloc.AllocationCharge(uint64(count)*uint64(unsafe.Sizeof((*dependencyManifestEncodedEntryV1)(nil))))

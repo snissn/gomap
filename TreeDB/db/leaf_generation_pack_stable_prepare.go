@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -104,15 +109,26 @@ type LeafGenerationPackStableObservations struct {
 // physical children after the production staging promotion, but before any
 // root or alternate-meta publication makes their pointers reachable.
 type LeafGenerationPackStablePreparedClosure struct {
-	mu           sync.Mutex
-	resources    *rootpublication.StableResourceSet
-	segments     []LeafPageLogSegment
-	promoted     []rewriteCreatedSegment
-	cleanupDir   *os.File
-	cleanupPins  *rootpublication.IdentityPinRegistry
-	pointers     []page.LeafLogPtr
-	observations LeafGenerationPackStableObservations
-	consumed     bool
+	mu                   sync.Mutex
+	resources            *rootpublication.StableResourceSet
+	segments             []LeafPageLogSegment
+	promoted             []rewriteCreatedSegment
+	cleanupDir           *os.File
+	cleanupPins          *rootpublication.IdentityPinRegistry
+	pointers             []page.LeafLogPtr
+	observations         LeafGenerationPackStableObservations
+	consumed             bool
+	db                   *DB
+	metadata             *retainedalloc.Owner
+	metadataCharge       uint64
+	attempted            bool
+	done                 bool
+	cleanupErr           error
+	failure              originalDBCleanupFailure
+	cleanupChild         *os.File
+	cleanupChildCharge   uint64
+	parentCloseAttempted bool
+	parentCloseErr       error
 }
 
 // Pointers returns a copy of the packed pointers covered by the closure.
@@ -145,59 +161,109 @@ func (closure *LeafGenerationPackStablePreparedClosure) Observations() LeafGener
 	return closure.observations
 }
 
-// TakeStableResources transfers exact-handle authority exactly once.
+// Take transfers only after the SAME retained cleanup parent closes successfully.
+// Failure preserves the original Set, parent, pins and arrays; no action retries.
 func (closure *LeafGenerationPackStablePreparedClosure) TakeStableResources() (*rootpublication.StableResourceSet, error) {
 	if closure == nil {
 		return nil, ErrLeafGenerationPackStablePreparedClosureConsumed
 	}
 	closure.mu.Lock()
-	defer closure.mu.Unlock()
-	if closure.consumed || closure.resources == nil {
-		return nil, ErrLeafGenerationPackStablePreparedClosureConsumed
+	if closure.attempted || closure.consumed || closure.resources == nil {
+		err := closure.cleanupErr
+		closure.mu.Unlock()
+		return nil, errors.Join(err, ErrLeafGenerationPackStablePreparedClosureConsumed)
 	}
+	closure.attempted = true
+	closure.mu.Unlock()
+	if err := closure.closeCleanupParent(); err != nil {
+		return nil, closure.retainCleanupFailure(err)
+	}
+	closure.mu.Lock()
 	resources := closure.resources
-	closure.resources = nil
-	cleanupDir := closure.cleanupDir
-	closure.cleanupDir = nil
-	closure.cleanupPins = nil
-	closure.promoted = nil
-	closure.consumed = true
-	if cleanupDir != nil {
-		// The retained directory handle exists only so pre-transfer abandonment
-		// can remove exact promoted children. After ownership transfer, cleanup
-		// belongs to the recipient of the stable resources.
-		_ = cleanupDir.Close()
-	}
+	closure.resources, closure.promoted, closure.cleanupPins = nil, nil, nil
+	closure.consumed, closure.attempted, closure.done = true, false, false
+	closure.mu.Unlock()
 	return resources, nil
 }
 
-// Release abandons untransferred authority, removes its promoted but still
-// unreachable children, and is idempotent. Once TakeStableResources succeeds,
-// the recipient owns both the authority and the promoted files, so Release no
-// longer removes them.
+// Release consumes only original cleanup edges. A refusal retains this SAME
+// preborn containing object in DB.bgErr before any metadata contribution refund.
 func (closure *LeafGenerationPackStablePreparedClosure) Release() error {
 	if closure == nil {
 		return nil
 	}
 	closure.mu.Lock()
-	resources := closure.resources
-	closure.resources = nil
-	promoted := closure.promoted
-	closure.promoted = nil
-	cleanupDir := closure.cleanupDir
-	closure.cleanupDir = nil
-	cleanupPins := closure.cleanupPins
-	closure.cleanupPins = nil
-	closure.consumed = true
+	if closure.attempted {
+		err, done := closure.cleanupErr, closure.done
+		closure.mu.Unlock()
+		if !done {
+			return rootpublication.ErrResourceOwnership
+		}
+		return err
+	}
+	closure.attempted = true
+	resources, consumed := closure.resources, closure.consumed
 	closure.mu.Unlock()
 	if resources != nil {
-		resources.Release()
+		if err := resources.ReleaseWithError(); err != nil {
+			return closure.retainCleanupFailure(err)
+		}
+		closure.mu.Lock()
+		closure.resources = nil
+		closure.mu.Unlock()
 	}
-	return cleanupLeafGenerationPackStablePreparedSegments(cleanupDir, promoted, cleanupPins)
+	if !consumed {
+		if err := cleanupLeafGenerationPackStablePreparedSegmentsWithCustody(closure.cleanupDir, closure.promoted, closure.cleanupPins, closure); err != nil {
+			return closure.retainCleanupFailure(err)
+		}
+	}
+	if err := closure.closeCleanupParent(); err != nil {
+		return closure.retainCleanupFailure(err)
+	}
+	closure.mu.Lock()
+	clear(closure.segments)
+	clear(closure.promoted)
+	clear(closure.pointers)
+	closure.resources, closure.segments, closure.promoted, closure.pointers, closure.cleanupPins = nil, nil, nil, nil, nil
+	owner, charge := closure.metadata, closure.metadataCharge
+	closure.metadata, closure.metadataCharge, closure.db = nil, 0, nil
+	closure.consumed, closure.done = true, true
+	closure.mu.Unlock()
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+	return nil
 }
-
-// Abandon is an explicit alias for Release on pre-visibility failure.
 func (closure *LeafGenerationPackStablePreparedClosure) Abandon() error { return closure.Release() }
+
+func (closure *LeafGenerationPackStablePreparedClosure) retainCleanupFailure(cause error) error {
+	closure.failure.retainCause(0, cause)
+	closure.mu.Lock()
+	closure.cleanupErr, closure.done = &closure.failure, true
+	db, owner := closure.db, closure.metadata
+	closure.mu.Unlock()
+	if owner != nil {
+		owner.CleanupFailed()
+	}
+	if db != nil {
+		db.retainOriginalCleanupError(&closure.failure)
+	}
+	return &closure.failure
+}
+func (closure *LeafGenerationPackStablePreparedClosure) closeCleanupParent() error {
+	if closure.cleanupDir == nil {
+		return nil
+	}
+	if closure.parentCloseAttempted {
+		return closure.parentCloseErr
+	}
+	closure.parentCloseAttempted = true
+	closure.parentCloseErr = closure.cleanupDir.Close()
+	if closure.parentCloseErr == nil {
+		closure.cleanupDir = nil
+	}
+	return closure.parentCloseErr
+}
 
 func cleanupLeafGenerationPackStablePreparedSegments(parent *os.File, promoted []rewriteCreatedSegment, registry *rootpublication.IdentityPinRegistry) error {
 	err := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent, promoted, registry)
@@ -215,6 +281,9 @@ func cleanupLeafGenerationPackStablePreparedSegments(parent *os.File, promoted [
 // preserve cleanup authority after an ambiguous attempt can retain the same
 // exact directory handle and retry during DB teardown.
 func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.File, promoted []rewriteCreatedSegment, registry *rootpublication.IdentityPinRegistry) error {
+	return cleanupLeafGenerationPackStablePreparedSegmentsWithCustody(parent, promoted, registry, nil)
+}
+func cleanupLeafGenerationPackStablePreparedSegmentsWithCustody(parent *os.File, promoted []rewriteCreatedSegment, registry *rootpublication.IdentityPinRegistry, custody *LeafGenerationPackStablePreparedClosure) error {
 	if parent == nil {
 		if len(promoted) == 0 {
 			return nil
@@ -242,9 +311,14 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 		segment rewriteCreatedSegment
 		name    string
 	}
-	proofsPendingDeletionSync := make([]namespaceProof, 0, len(promoted))
+	var proofsPendingDeletionSync []namespaceProof
+	if custody == nil {
+		proofsPendingDeletionSync = make([]namespaceProof, 0, len(promoted))
+	}
 	queueProofAfterDeletionSync := func(segment rewriteCreatedSegment, name string) {
-		proofsPendingDeletionSync = append(proofsPendingDeletionSync, namespaceProof{segment: segment, name: name})
+		if custody == nil {
+			proofsPendingDeletionSync = append(proofsPendingDeletionSync, namespaceProof{segment: segment, name: name})
+		}
 	}
 	for _, segment := range promoted {
 		name := filepath.Base(segment.path)
@@ -252,7 +326,39 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, fmt.Errorf("%w: incomplete promoted packed segment", rootpublication.ErrUnresolvedResource))
 			continue
 		}
+		var childCharge uint64
+		if custody != nil {
+			var err error
+			childCharge, err = rootpublication.StableFileMetadataCharge(uint64(len(parent.Name()) + 1 + len(name)))
+			if err != nil {
+				return err
+			}
+			if err := custody.metadata.AddPending(childCharge); err != nil {
+				return err
+			}
+			custody.metadataCharge += childCharge
+		}
 		child, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
+		if custody != nil && err != nil {
+			custody.metadata.RemovePending(childCharge)
+			custody.metadataCharge -= childCharge
+		}
+		if custody != nil && child != nil {
+			custody.cleanupChild, custody.cleanupChildCharge = child, childCharge
+		}
+		closeChild := func() error {
+			if child == nil {
+				return nil
+			}
+			err := child.Close()
+			if err == nil && custody != nil {
+				custody.cleanupChild = nil
+				custody.metadata.RemovePending(custody.cleanupChildCharge)
+				custody.metadataCharge -= custody.cleanupChildCharge
+				custody.cleanupChildCharge = 0
+			}
+			return err
+		}
 		if err != nil {
 			if os.IsNotExist(err) {
 				queueProofAfterDeletionSync(segment, name)
@@ -264,24 +370,33 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 		identity, identityErr := rootpublication.StableIdentityFromFile(child)
 		linkErr := rootpublication.ValidateStableChildLink(parent, child, name)
 		if identityErr != nil || linkErr != nil || !rootpublication.SamePhysicalIdentity(identity, segment.identity) {
-			_ = child.Close()
+			closeErr := closeChild()
+			if custody != nil && closeErr != nil {
+				return errors.Join(identityErr, linkErr, closeErr, ErrRecoveryRequired)
+			}
 			if identityErr == nil && linkErr == nil {
 				forgetProof(segment, name)
 				identityErr = fmt.Errorf("%w: promoted packed path %q was rebound", rootpublication.ErrResourceConflict, name)
 			}
-			errs = append(errs, errors.Join(identityErr, linkErr, ErrRecoveryRequired))
+			errs = append(errs, errors.Join(identityErr, linkErr, closeErr, ErrRecoveryRequired))
 			continue
 		}
 		if err := rootpublication.RemoveStableChildFile(parent, name); err != nil {
-			_ = child.Close()
-			errs = append(errs, fmt.Errorf("unlink promoted packed segment %q: %w", name, err))
+			closeErr := closeChild()
+			if custody != nil {
+				return errors.Join(err, closeErr, ErrRecoveryRequired)
+			}
+			errs = append(errs, errors.Join(closeErr, fmt.Errorf("unlink promoted packed segment %q: %w", name, err)))
 			continue
 		}
 		queueProofAfterDeletionSync(segment, name)
 		if err := observeNamespaceMutation(durabilitycut.NamespaceUnlink, durabilitycut.ResourceOuterLeaf, diagnosticDir, segment.path, ""); err != nil {
 			errs = append(errs, err)
 		}
-		if err := child.Close(); err != nil {
+		if err := closeChild(); err != nil {
+			if custody != nil {
+				return errors.Join(err, ErrRecoveryRequired)
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -300,12 +415,18 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			deletionNamespaceSynced = true
 		}
 	}
-	if deletionNamespaceSynced {
+	if deletionNamespaceSynced && (custody == nil || len(errs) == 0) {
 		// The positive-link proof remains recovery authority until the exact
 		// deletion namespace is durably established. Retiring it immediately
 		// after unlink would create an authority gap if this sync were ambiguous.
-		for _, proof := range proofsPendingDeletionSync {
-			forgetProof(proof.segment, proof.name)
+		if custody != nil {
+			for _, segment := range promoted {
+				forgetProof(segment, filepath.Base(segment.path))
+			}
+		} else {
+			for _, proof := range proofsPendingDeletionSync {
+				forgetProof(proof.segment, proof.name)
+			}
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -317,7 +438,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 	return nil
 }
 
-func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure(promoted []rewriteCreatedSegment, pointers []page.LeafLogPtr, contentSyncs uint64, stagingRoot string) (*LeafGenerationPackStablePreparedClosure, error) {
+func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure(original *LeafGenerationPackStablePreparedClosure, promoted []rewriteCreatedSegment, pointers []page.LeafLogPtr, contentSyncs uint64, stagingRoot string) (closure *LeafGenerationPackStablePreparedClosure, retErr error) {
 	if authority == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
@@ -364,7 +485,7 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if captureErr != nil {
 		return fail(captureErr)
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceOuterLeafPack {
 			continue
@@ -407,7 +528,7 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if statsErr != nil {
 		return fail(statsErr)
 	}
-	defer statistics.Close()
+	defer func() { retErr = errors.Join(retErr, statistics.CloseWithError()) }()
 	for _, stats := range statistics.Stats() {
 		if stats.Kind == rootpublication.ResourceOuterLeafPack {
 			namespaceSyncs += stats.NamespaceSyncs
@@ -416,25 +537,69 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if contentSyncs == 0 || namespaceSyncs == 0 {
 		return fail(fmt.Errorf("%w: packed closure lacks producer durability observations", rootpublication.ErrUnresolvedResource))
 	}
+	if err := statistics.CloseWithError(); err != nil {
+		return fail(err)
+	}
+	if err := diagnostics.CloseWithError(); err != nil {
+		return fail(err)
+	}
+	charge, chargeErr := packPreparedPayloadCharge(promoted, pointers)
+	if chargeErr != nil {
+		return fail(chargeErr)
+	}
+	if err := original.metadata.AddPending(charge); err != nil {
+		return fail(err)
+	}
+	original.metadataCharge += charge
 	segments := make([]LeafPageLogSegment, len(promoted))
+	ownedPromoted := make([]rewriteCreatedSegment, len(promoted))
 	for i := range promoted {
-		segments[i] = LeafPageLogSegment{Path: promoted[i].path, FileID: promoted[i].fileID}
+		ownedPromoted[i] = promoted[i]
+		ownedPromoted[i].path = strings.Clone(promoted[i].path)
+		segments[i] = LeafPageLogSegment{Path: ownedPromoted[i].path, FileID: promoted[i].fileID}
 	}
-	closure := &LeafGenerationPackStablePreparedClosure{
-		resources:   authority.resources,
-		segments:    segments,
-		promoted:    append([]rewriteCreatedSegment(nil), promoted...),
-		cleanupDir:  authority.destinationParent,
-		cleanupPins: authority.db.valueLogIdentityPins,
-		pointers:    append([]page.LeafLogPtr(nil), pointers...),
-		observations: LeafGenerationPackStableObservations{
-			Segments: uint64(len(promoted)), ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs,
-			NamespaceObligations: namespaceObligations,
-		},
+	original.resources, original.segments, original.promoted = authority.resources, segments, ownedPromoted
+	original.cleanupDir, original.cleanupPins = authority.destinationParent, authority.db.valueLogIdentityPins
+	original.pointers = make([]page.LeafLogPtr, len(pointers))
+	copy(original.pointers, pointers)
+	original.observations = LeafGenerationPackStableObservations{
+		Segments: uint64(len(promoted)), ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs,
+		NamespaceObligations: namespaceObligations,
 	}
+	closure = original
 	authority.resources = nil
 	authority.destinationParent = nil
 	return closure, nil
+}
+
+func packPreparedPayloadCharge(promoted []rewriteCreatedSegment, pointers []page.LeafLogPtr) (uint64, error) {
+	var total uint64
+	add := func(count uint64, size uint64) error {
+		if size != 0 && count > math.MaxUint64/size {
+			return retainedalloc.ErrCapacity
+		}
+		charge := retainedalloc.AllocationCharge(count * size)
+		if charge > math.MaxUint64-total {
+			return retainedalloc.ErrCapacity
+		}
+		total += charge
+		return nil
+	}
+	if err := add(uint64(len(promoted)), uint64(unsafe.Sizeof(LeafPageLogSegment{}))); err != nil {
+		return 0, err
+	}
+	if err := add(uint64(len(promoted)), uint64(unsafe.Sizeof(rewriteCreatedSegment{}))); err != nil {
+		return 0, err
+	}
+	if err := add(uint64(len(pointers)), uint64(unsafe.Sizeof(page.LeafLogPtr{}))); err != nil {
+		return 0, err
+	}
+	for _, segment := range promoted {
+		if err := add(uint64(len(segment.path)), 1); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 // PrepareLeafGenerationPackStableClosure uses the production rewrite writer
@@ -457,6 +622,18 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	owner := db.valueLogIdentityPins.MetadataOwner()
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(LeafGenerationPackStablePreparedClosure{})))
+	if err := owner.AddPending(charge); err != nil {
+		return nil, err
+	}
+	original := &LeafGenerationPackStablePreparedClosure{db: db, metadata: owner, metadataCharge: charge}
+	original.failure.payload = original
+	defer func() {
+		if closure == nil {
+			retErr = errors.Join(retErr, original.Release())
+		}
+	}()
 	runLeafGenerationPackStableBeforeCaptureAdmissionTestHook()
 	captureLease, err := db.AcquireStableResourceCaptureLease()
 	if err != nil {
@@ -506,7 +683,7 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	if err := os.MkdirAll(stagingLeafDir, 0o700); err != nil {
 		return nil, err
 	}
-	writer = newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
+	writer = newRewriteWriter(layout.valueVLogDir, 0, 0, 0, db.valueLogIdentityPins)
 	writer.ConfigureLeafLog(stagingLeafDir, rewriteLeafLogLaneID, leafStartSeq)
 	writer.configureLeafStaging(stagingRoot)
 	writer.setLeafPageLogSeqAllocator(seqAlloc)
@@ -546,7 +723,7 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	if !mutated || len(promoted) == 0 {
 		return nil, fmt.Errorf("%w: packed promotion prepared no physical children", rootpublication.ErrUnresolvedResource)
 	}
-	closure, retErr = authority.takeStablePreparedClosure(promoted, pointers, contentSyncs, stagingRoot)
+	closure, retErr = authority.takeStablePreparedClosure(original, promoted, pointers, contentSyncs, stagingRoot)
 	if retErr == nil {
 		runLeafGenerationPackStablePreparedClosureTestHook()
 	}

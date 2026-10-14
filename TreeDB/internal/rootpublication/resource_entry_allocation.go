@@ -41,16 +41,22 @@ func newResourceEntryBacking(owner *retainedalloc.Owner, count int) (*resourceEn
 func (entry *stableResourceEntry) retainBacking() bool {
 	return entry == nil || entry.backing == nil || entry.backing.allocation.retain()
 }
-func (entry *stableResourceEntry) releaseBacking() {
-	if entry != nil && entry.backing != nil {
-		entry.backing.release()
+func (entry *stableResourceEntry) releaseBacking() error {
+	if entry == nil || entry.backing == nil {
+		return nil
 	}
+	return entry.backing.release()
 }
-func (backing *resourceEntryBacking) release() {
-	if backing == nil || !backing.allocation.drop() {
-		return
+func (backing *resourceEntryBacking) release() error {
+	if backing == nil {
+		return nil
 	}
-	// No remaining rope or metadata index may read these immutable entries.
+	if err := backing.allocation.cleanupResult(); err != nil {
+		return err
+	}
+	if !backing.allocation.drop() {
+		return nil
+	}
 	for i := range backing.entries {
 		entry := &backing.entries[i]
 		if entry.outgoing != nil {
@@ -58,12 +64,16 @@ func (backing *resourceEntryBacking) release() {
 			entry.outgoing = nil
 		}
 		if entry.tokenMetadataOwned {
-			entry.token.releaseMetadata()
+			if err := entry.token.releaseMetadata(); err != nil {
+				return backing.allocation.cleanupFailed(backing, err)
+			}
+			entry.tokenMetadataOwned = false
 		}
 	}
 	clear(backing.entries)
 	backing.entries = nil
 	backing.allocation.refund()
+	return nil
 }
 
 // Bind keeps the token's immutable descriptor allocation independently of its

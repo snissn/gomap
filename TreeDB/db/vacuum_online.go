@@ -580,24 +580,35 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		return err
 	}
 
+	// Admit the SAME replacement containing generation before its Pager
+	// exists, for both DATA-only and PRIMARY layouts.
+	replacementGen, err := newIndexGenWithMetadata(db.nextIndexID(), nil, nil, nil, db.valueLogIdentityPins.MetadataOwner())
+	if err != nil {
+		return err
+	}
 	_, newStatErr := os.Stat(newPath)
 	newCreated := os.IsNotExist(newStatErr)
 	newPager, err := pager.Open(newPath, db.chunkSize)
 	if err != nil {
-		return err
+		return errors.Join(err, replacementGen.close())
 	}
+	replacementGen.pager = newPager
 	if err := observeCreatedPersistentFile(db.dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-		_ = newPager.Close()
-		return err
+		cleanupErr := replacementGen.close()
+		if cleanupErr != nil {
+			db.retainOriginalCleanupError(replacementGen.originalCloseFailure(cleanupErr))
+			db.quiesceFailedRetiredGeneration(replacementGen)
+		}
+		return errors.Join(err, cleanupErr)
 	}
 	jointCommitted := false
 	var replacementSelection *durableRootSelectionV1
 	var replacementRuntime *rootPublicationRuntimeV1
-	var replacementGen *indexGen
 	var replacementPrimary *primaryDurableRuntimeV5
 	defer func() {
 		if replacementPrimary != nil {
-			releasePrimaryRuntimeV5(replacementGen.primary, replacementPrimary)
+			cleanupErr := db.releaseOriginalPrimaryRuntimeV5(replacementGen.primary, replacementPrimary)
+			err = errors.Join(err, cleanupErr)
 		}
 	}()
 	var pendingDiagnosticResources *rootpublication.StableResourceSet
@@ -626,24 +637,36 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			db.publicationPoisoned.Store(true)
 			retErr = errors.Join(retErr, ErrRecoveryRequired, handoffErr)
 		}
-		replacementRuntime.release()
-		handoff.Release()
-	}()
-	closeNewPager := func() {
-		if replacementGen != nil {
-			_ = replacementGen.close()
-		} else {
-			_ = newPager.Close()
+		retErr = errors.Join(retErr, replacementRuntime.release())
+		if err := handoff.ReleaseWithError(); err != nil {
+			db.retainOriginalCleanupError(err)
+			retErr = errors.Join(retErr, ErrRecoveryRequired, err)
 		}
+	}()
+	var replacementCleanupErr error
+	defer func() { retErr = errors.Join(retErr, replacementCleanupErr) }()
+	closeNewPager := func() error {
+		err := replacementGen.close()
+		if err != nil && replacementCleanupErr == nil {
+			replacementCleanupErr = err
+			db.retainOriginalCleanupError(replacementGen.originalCloseFailure(err))
+			db.quiesceFailedRetiredGeneration(replacementGen)
+		}
+		return err
 	}
 	cleanupNewPager := func() {
 		if jointCommitted {
 			return
 		}
-		closeNewPager()
+		primaryCreated := replacementGen.primary != nil && replacementGen.primary.CapsuleFormatV6()
+		// Refused actual disposal is not authorization to unlink its original
+		// operands or discard containing failure custody.
+		if closeNewPager() != nil {
+			return
+		}
 		_ = removePersistentFileBestEffort(db.dir, newPath, durabilitycut.ResourceIndex)
 		_ = removePersistentFileBestEffort(db.dir, readyPath, durabilitycut.ResourceIndex)
-		if replacementGen != nil && replacementGen.primary != nil && replacementGen.primary.CapsuleFormatV6() {
+		if primaryCreated {
 			_ = removePersistentFileBestEffort(db.dir, filepath.Join(db.dir, primaryNewFileName), durabilitycut.ResourceIndex)
 		}
 	}
@@ -678,6 +701,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	newAlloc.SetFreelistRegion(db.freelistRegionPages, db.freelistRegionRadius)
 
 	newZ := zipper.New(newPager, newAlloc)
+	replacementGen.allocator, replacementGen.zipper = newAlloc, newZ
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
@@ -694,7 +718,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	db.idxMu.Unlock()
 	newZ.SetParallelMergePressureSource(parallelMergePressureSource)
 	if oldGen != nil && oldGen.primary != nil {
-		replacementGen = newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
 		if oldGen.primary.CapsuleFormatV6() {
 			primaryPath := filepath.Join(db.dir, primaryNewFileName)
 			if err := removePersistentFileBestEffort(db.dir, primaryPath, durabilitycut.ResourceIndex); err != nil {
@@ -1459,9 +1482,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return finalSyncErr
 		}
-		if replacementGen == nil {
-			replacementGen = newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
-		}
 		var selectionErr error
 		if replacementGen.primary == nil {
 			selected, selectionErr = selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
@@ -1665,6 +1685,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 
 		// Publish the new index generation (old readers keep oldGen pinned).
 		newGen := replacementGen
+		nextRefIncarnation, incarnationErr := captureValueLogRefIncarnation(newGen)
+		if incarnationErr != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return incarnationErr
+		}
 		db.trackIndex(newGen)
 
 		var oldState *DBState
@@ -1708,7 +1734,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.state.Store(newState)
 		// Vacuum rewrites physical index pages without changing logical value-log
 		// references, so advance the exact tracker with an empty delta.
-		if err := db.valueLogRefTracker.applyDelta(newState.CommitSeq, &valueLogRefDelta{}); err != nil {
+		if err := db.valueLogRefTracker.advanceIncarnation(newState.CommitSeq, oldGen.id, nextRefIncarnation); err != nil {
 			db.valueLogRefTracker.invalidate()
 			valueLogRefTrackerErr = err
 		}
@@ -1739,7 +1765,14 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			resources.Release()
 		}
 		if previousPrimary != nil {
-			releasePrimaryRuntimeV5(oldGen.primary, previousPrimary)
+			previousPrimary.current = nil
+			if oldState != nil {
+				previousPrimary.current = oldState.primaryRoot
+			}
+			if cleanupErr := db.releaseOriginalPrimaryRuntimeV5(oldGen.primary, previousPrimary); cleanupErr != nil {
+				db.publicationPoisoned.Store(true)
+				return errors.Join(ErrRecoveryRequired, cleanupErr)
+			}
 		}
 		if oldRootPublication != nil {
 			// RecoverableRootSet still pins the old physical closure while the
@@ -1748,13 +1781,18 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			if hook := db.vacuumOldRootPublicationStopHook; hook != nil {
 				handoffErr = errors.Join(handoffErr, hook())
 			}
-			oldRootPublication.release()
+			handoffErr = errors.Join(handoffErr, oldRootPublication.release())
 			if handoffErr != nil {
 				db.publicationPoisoned.Store(true)
-				handoff.Release()
-				return errors.Join(ErrRecoveryRequired, handoffErr)
+				cleanupErr := handoff.ReleaseWithError()
+				db.retainOriginalCleanupError(cleanupErr)
+				return errors.Join(ErrRecoveryRequired, handoffErr, cleanupErr)
 			}
-			handoff.Release()
+			if err := handoff.ReleaseWithError(); err != nil {
+				db.retainOriginalCleanupError(err)
+				db.publicationPoisoned.Store(true)
+				return errors.Join(ErrRecoveryRequired, err)
+			}
 		}
 
 		if oldState != nil {

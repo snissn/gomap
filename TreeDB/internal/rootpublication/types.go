@@ -257,7 +257,7 @@ func (c *PreparedRootCandidate) Abandon() error {
 		}
 	}
 	if set := c.resourceSet(); set != nil {
-		set.releaseFrom(ResourceOwnerCandidate)
+		return set.releaseFrom(ResourceOwnerCandidate)
 	}
 	return nil
 }

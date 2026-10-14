@@ -74,12 +74,32 @@ func TestPrimaryConstructionV6OriginalSiblingFailureCustody(t *testing.T) {
 // activation refusal followed by a genuine original Abort refusal must retain
 // candidate resources; the caller's prepare-error defers cannot release them.
 func TestPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T) {
+	for _, stage := range []string{"state-drop", "constructor-drop"} {
+		t.Run(stage, func(t *testing.T) { testPrimaryConstructionV6BoundCandidateFailureCustody(t, stage) })
+	}
+}
+func testPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T, stage string) {
 	database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	ptrs := appendPointersInNewSegment(t, database.dir, 0, 27, 2700, 1, func(int) []byte { return []byte("persistent-count-failure") })
+	seed := database.NewPhysicalBatch().(*Batch)
+	if err := seed.SetPointer([]byte("seed-count"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database.valueLogRefTracker.invalidate()
 	idx := database.idx.Load()
 	var original *rootpublication.DurableRootTransaction
+	var evidence *candidateValueLogRefCountsV1
+	var firstSlot *valueLogRefCountSlot
+	var recordCharge uint64
 	idx.zipper.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
 		output, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
 		if ready && err == nil {
@@ -92,12 +112,27 @@ func TestPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T) {
 		if original == nil || original.Owner() != rootpublication.ResourceOwnerCandidate {
 			t.Fatal("actual candidate not admitted")
 		}
+		member, ok := original.PublicationProjectionV6().(*rootPublicationVisibleMemberV1)
+		if !ok || member.install == nil || member.install.vlogRefCounts == nil {
+			t.Fatal("original bound candidate missing actual fallback scan")
+		}
+		evidence = member.install.vlogRefCounts
+		if evidence.counts.get(ptrs[0].FileID) != 2 || evidence.counts.metadata != database.valueLogIdentityPins.MetadataOwner() || evidence.counts.charge == 0 {
+			t.Fatal("real pointer scan not originally admitted")
+		}
+		firstSlot = &evidence.counts.slots[0]
+		recordCharge = evidence.counts.charge + evidence.metadataCharge
 		if ready, err := idx.primary.Drop(original.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
 			t.Fatal(ready, err)
 		}
+		if stage == "state-drop" {
+			if ready, err := idx.primary.Drop(original.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
+				t.Fatal(ready, err)
+			}
+		}
 	}
 	batch := database.NewPhysicalBatch().(*Batch)
-	if err := batch.Set([]byte("bound-failure"), []byte("value")); err != nil {
+	if err := batch.SetPointer([]byte("bound-failure"), ptrs[0]); err != nil {
 		t.Fatal(err)
 	}
 	err = batch.Write()
@@ -111,6 +146,14 @@ func TestPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T) {
 	if original.PreparedPrimary() == nil {
 		t.Fatal("original bound resources/projection erased")
 	}
+	if evidence == nil || len(evidence.counts.slots) == 0 || &evidence.counts.slots[0] != firstSlot || evidence.counts.get(ptrs[0].FileID) != 2 || evidence.metadataCharge == 0 {
+		t.Fatal("failed actual Abort disposed original candidate count payload")
+	}
+	drops := idx.primary.Counters().RootDrops
+	firstRefusal := original.PublicationCandidateV6().Abandon()
+	if firstRefusal == nil || original.PublicationCandidateV6().Abandon() != firstRefusal || idx.primary.Counters().RootDrops != drops {
+		t.Fatal("duplicate Abort replayed original physical disposal or replaced first receipt")
+	}
 	done := make(chan error, 1)
 	go func() { done <- database.Close() }()
 	select {
@@ -121,8 +164,14 @@ func TestPrimaryConstructionV6BoundCandidateFailureCustody(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bound failure deadlocked teardown")
 	}
-	if idx.primaryOwner.metadataCharge == 0 || idx.primaryOwner.arena.MetadataOwner().Bytes() == 0 {
-		t.Fatal("failed bound original refunded")
+	if idx.primaryOwner.metadataCharge == 0 || idx.primaryOwner.arena.MetadataOwner().Bytes() < recordCharge || &evidence.counts.slots[0] != firstSlot {
+		t.Fatal("failed bound original count backing refunded")
+	}
+	if again := database.Close(); !errors.Is(again, rootpublication.ErrDurableRootOwnership) {
+		t.Fatal("repeat Close lost first refusal")
+	}
+	if &evidence.counts.slots[0] != firstSlot || evidence.counts.get(ptrs[0].FileID) != 2 {
+		t.Fatal("repeat Close replayed disposal")
 	}
 }
 

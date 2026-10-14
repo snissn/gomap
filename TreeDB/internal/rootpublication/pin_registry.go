@@ -27,6 +27,7 @@ type IdentityPinRegistry struct {
 	activePins           uint64
 	metadata             retainedalloc.Owner
 	closing              bool
+	originalCleanupEdges uint64 // original preborn completion edges keep this authority live
 	failedPinned         *resourcePinnedBacking
 	failedNamespace      *StableNamespaceToken
 	cleanupFailure       registryCleanupFailure
@@ -547,6 +548,10 @@ func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *
 // This is only valid while the caller retains the exact child against deletion;
 // a pathname lookup is never accepted as a substitute for the open handles.
 func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec StableNamespaceSpec) (*StableNamespaceToken, error) {
+	return registry.newStableNamespaceTokenForKnownLinkWithMetadata(spec, nil)
+}
+
+func (registry *IdentityPinRegistry) newStableNamespaceTokenForKnownLinkWithMetadata(spec StableNamespaceSpec, metadata *retainedalloc.Owner) (*StableNamespaceToken, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
 	}
@@ -563,7 +568,7 @@ func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec St
 	if !known {
 		return nil, fmt.Errorf("%w: exact namespace link is not known durable", ErrNamespaceUnstable)
 	}
-	token, err := newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+	token, err := newStableNamespaceTokenWithMetadata(spec, nativeNamespaceAdapter{}, metadata, registry)
 	if err != nil {
 		return nil, err
 	}
@@ -767,7 +772,7 @@ func (registry *IdentityPinRegistry) Close() {
 	registry.closeIfIdleLocked()
 }
 func (registry *IdentityPinRegistry) closeIfIdleLocked() {
-	if !registry.closing || registry.failedPinned != nil || registry.failedNamespace != nil || registry.states.count != 0 || registry.namespaces.count != 0 || registry.stableDirectoryLinks.count != 0 {
+	if !registry.closing || registry.originalCleanupEdges != 0 || registry.failedPinned != nil || registry.failedNamespace != nil || registry.states.count != 0 || registry.namespaces.count != 0 || registry.stableDirectoryLinks.count != 0 {
 		return
 	}
 	registry.states.close()

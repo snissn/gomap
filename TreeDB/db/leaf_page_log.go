@@ -108,7 +108,7 @@ type LeafPagePreparedChildRefStableBatchLog interface {
 	AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error)
 }
 
-func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) error {
+func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) (retErr error) {
 	if len(ptrs) == 0 {
 		if resources != nil && resources.Len() != 0 {
 			return fmt.Errorf("%w: empty leaf append returned stable resources", rootpublication.ErrResourceConflict)
@@ -140,7 +140,7 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 	if captureErr != nil {
 		return captureErr
 	}
-	defer diagnostics.Close()
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 	descriptors := diagnostics.Physical()
 	for _, descriptor := range descriptors {
 		fields := descriptor.ReachabilityFields()

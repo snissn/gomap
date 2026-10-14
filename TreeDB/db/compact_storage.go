@@ -2207,7 +2207,7 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 		return nil, nil, err
 	}
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
-	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0)
+	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0, db.valueLogIdentityPins)
 	writer.ConfigureLeafLog(LeafLogDirPath(db.dir), rewriteLeafLogLaneID, leafStartSeq)
 	nextRID := uint64(0)
 	if opts.ReserveRIDs == nil {

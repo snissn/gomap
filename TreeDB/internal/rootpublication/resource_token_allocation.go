@@ -50,26 +50,42 @@ func newResourcePinnedBacking(owner *retainedalloc.Owner, registry *IdentityPinR
 	backing.refs.Store(1)
 	return backing, nil
 }
-func (backing *resourcePinnedBacking) release() {
-	if backing == nil || backing.refs.Add(-1) != 0 {
-		return
+func (backing *resourcePinnedBacking) release() error {
+	if backing == nil {
+		return nil
+	}
+	if backing.failure != nil {
+		return backing.failure
+	}
+	if backing.refs.Add(-1) != 0 {
+		return nil
 	}
 	if backing.sourceRoot != nil {
-		root := backing.sourceRoot
+		if err := backing.sourceRoot.release(); err != nil {
+			backing.failure = err
+			backing.owner.CleanupFailed()
+			// An imported cohort keeps the original source root's physical
+			// authority. Its adapter has no replacement registry; the checked
+			// caller retains this SAME backing and source-root failure graph.
+			if backing.registry != nil {
+				backing.registry.retainFailedPinnedBacking(backing)
+			}
+			return err
+		}
 		backing.sourceRoot, backing.file = nil, nil
-		root.release()
 	} else if backing.file != nil {
 		if err := backing.file.Close(); err != nil {
 			backing.failure = err
 			backing.owner.CleanupFailed()
 			backing.registry.retainFailedPinnedBacking(backing)
-			return
+			return err
 		}
 	}
 	backing.file = nil
 	owner, charge := backing.owner, backing.charge
 	backing.owner, backing.charge, backing.registry = nil, 0, nil
 	owner.RemovePending(charge)
+	return nil
 }
 
 func ownedTokenMetadataCharge(spec StableResourceSpec) (uint64, error) {
@@ -110,7 +126,7 @@ func ownedTokenMetadataCharge(spec StableResourceSpec) (uint64, error) {
 // The selected constructor accepts only static default operations here.
 // Producers with retained callback state must supply the actual admitted
 // callback owner through their typed producer route, never an opaque estimate.
-func newOwnedStableResourceToken(spec StableResourceSpec, owner *retainedalloc.Owner) (*StableResourceToken, error) {
+func newOwnedStableResourceToken(spec StableResourceSpec, owner *retainedalloc.Owner) (_ *StableResourceToken, retErr error) {
 	if spec.OnRelease != nil || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.MetadataOwner != owner || (spec.OwnedOperations != nil && spec.OwnedOperations.MetadataOwner() != owner) {
 		return nil, ErrResourceOwnership
 	}
@@ -139,30 +155,67 @@ func newOwnedStableResourceToken(spec StableResourceSpec, owner *retainedalloc.O
 		allocation.refund()
 		return nil, err
 	}
+	token := &StableResourceToken{metadata: allocation, obligationBacking: obligations}
+	operationsRetained, transferred := false, false
+	// The original admission remains live until its actual producer callback
+	// edge is consumed. An unwind refusal returns this preborn allocation receipt,
+	// retaining the SAME callback payload and first registration/cleanup causes.
+	defer func() {
+		if transferred {
+			return
+		}
+		if operationsRetained {
+			consumed, cleanupErr := token.ownedOperations.Release()
+			if consumed {
+				token.ownedOperations = nil
+			}
+			if cleanupErr != nil || !consumed {
+				if cleanupErr == nil {
+					cleanupErr = ErrResourceOwnership
+				}
+				originalErr := retErr
+				if prior := allocation.cleanupResult(); prior != nil {
+					token.cleanupFailure.original = token
+					token.cleanupFailure.causes = [2]error{prior, cleanupErr}
+					retErr = &token.cleanupFailure
+				} else {
+					retErr = allocation.cleanupFailed(token, cleanupErr)
+					allocation.failure.causes[1] = originalErr
+				}
+				return
+			}
+		}
+		if prior := allocation.cleanupResult(); prior != nil {
+			retErr = prior
+			return
+		}
+		obligations.release()
+		// This original construction object has never been published. Scrub all
+		// constructor aliases before refunding its actual containing allocation.
+		*token = StableResourceToken{}
+		if allocation.drop() {
+			allocation.refund()
+		}
+	}()
 	physical, err := newResourcePinnedBacking(owner, spec.PinRegistry, spec.File, spec.OwnedOperations == nil)
 	if err != nil {
-		obligations.release()
-		allocation.drop()
-		allocation.refund()
 		return nil, err
 	}
-	operationsRetained := false
+	token.physicalBacking = physical
 	if spec.OwnedOperations != nil {
 		if err = spec.OwnedOperations.Retain(); err != nil {
-			physical.release()
-			obligations.release()
-			allocation.drop()
-			allocation.refund()
+			if cleanupErr := physical.release(); cleanupErr != nil {
+				retErr = allocation.cleanupFailed(token, cleanupErr)
+				allocation.failure.causes[1] = err
+				// Keep this original allocation receipt after the real physical refusal.
+				transferred = true
+				return nil, retErr
+			}
 			return nil, err
 		}
 		operationsRetained = true
+		token.ownedOperations = spec.OwnedOperations
 	}
-	transferred := false
-	defer func() {
-		if operationsRetained && !transferred {
-			spec.OwnedOperations.Release()
-		}
-	}()
 	spec.Kind = ResourceKind(strings.Clone(string(spec.Kind)))
 	spec.LogicalLane = strings.Clone(spec.LogicalLane)
 	spec.ResourceID = strings.Clone(spec.ResourceID)
@@ -171,11 +224,8 @@ func newOwnedStableResourceToken(spec StableResourceSpec, owner *retainedalloc.O
 	spec.StableIdentityOverride.Platform = strings.Clone(spec.StableIdentityOverride.Platform)
 	spec.MetadataOwner = nil
 	spec.physicalBacking = physical
-	token, err := newStableResourceToken(spec, obligations.values)
+	_, err = initializeStableResourceToken(spec, obligations.values, token)
 	if err != nil {
-		obligations.release()
-		allocation.drop()
-		allocation.refund()
 		return nil, err
 	}
 	token.metadata, token.obligationBacking = allocation, obligations
@@ -186,15 +236,30 @@ func newOwnedStableResourceToken(spec StableResourceSpec, owner *retainedalloc.O
 func (token *StableResourceToken) retainMetadata() bool {
 	return token != nil && token.metadata != nil && token.metadata.retain()
 }
-func (token *StableResourceToken) releaseMetadata() {
-	if token == nil || token.metadata == nil || !token.metadata.drop() {
-		return
+func (token *StableResourceToken) releaseMetadata() error {
+	if token == nil || token.metadata == nil {
+		return nil
 	}
 	allocation := token.metadata
-	operations := token.ownedOperations
-	token.importedSource = nil
-	token.importedFields = nil
-	token.ownedOperations = nil
+	if err := allocation.cleanupResult(); err != nil {
+		return err
+	}
+	if !allocation.drop() {
+		return nil
+	}
+	if token.ownedOperations != nil {
+		consumed, err := token.ownedOperations.Release()
+		if consumed {
+			token.ownedOperations = nil
+		}
+		if err != nil {
+			return allocation.cleanupFailed(token, err)
+		}
+		if !consumed {
+			return allocation.cleanupFailed(token, ErrResourceOwnership)
+		}
+	}
+	token.importedSource, token.importedFields = nil, nil
 	token.obligationBacking.release()
 	token.obligationBacking = nil
 	token.kind, token.logicalLane, token.resourceID, token.diagnosticPath, token.reachability = "", "", "", "", ""
@@ -203,12 +268,9 @@ func (token *StableResourceToken) releaseMetadata() {
 	token.logicalObligations = nil
 	token.flush, token.sync, token.onRelease, token.identityPin, token.releaseObservation = nil, nil, nil, nil, nil
 	token.metadata = nil
-	if operations != nil {
-		operations.Release()
-	}
 	allocation.refund()
+	return nil
 }
-
 func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path string, frontier DurableFrontier, field ReachabilityField, values []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
 	if token != nil && token.importedSource != nil {
 		if onRelease != nil || directory != nil {

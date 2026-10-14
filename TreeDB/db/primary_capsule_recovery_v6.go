@@ -74,7 +74,7 @@ func selectPrimaryCapsuleAuthorityV6(data, local freelist.PageSource, dataPages,
 		s, e := mv(m)
 		return m.DiagnosticProjectionV1(), s, e
 	}
-	selected, e := selectDurableRootCandidateSetV1(candidates, reasons, func(c durableMetaCandidateV1) (durableRootSelectionV1, error) {
+	selected, e := selectDurableRootCandidateSetV1(candidates, reasons, func(c durableMetaCandidateV1) (result durableRootSelectionV1, resultErr error) {
 		v := views[c.slot]
 		g, e := v.ValidatePhysicalProjectionV6(data, local, dataPages, arenaPages)
 		if e != nil {
@@ -82,18 +82,20 @@ func selectPrimaryCapsuleAuthorityV6(data, local freelist.PageSource, dataPages,
 		}
 		current := v.Current()
 		s := durableRootSelectionV1{Slot: c.slot, Meta: c.meta, Record: current.Record, Freelist: g, Primary: current.Primary}
-		m, resources, e := validateResources(current)
-		if e != nil {
-			return s, e
-		}
-		s.Manifest, s.resources = m, resources
 		owned := true
 		defer func() {
 			if owned {
-				s.resources.Release()
-				s.ParentResources[c.slot].Release()
+				cleanup := errors.Join(s.resources.ReleaseWithError(), s.ParentResources[c.slot].ReleaseWithError())
+				if cleanup != nil {
+					result, resultErr = s, errors.Join(resultErr, cleanup)
+				}
 			}
 		}()
+		m, resources, e := validateResources(current)
+		s.Manifest, s.resources = m, resources
+		if e != nil {
+			return s, e
+		}
 		if parent := v.Parent(); parent.Record.CommitSeq != 0 {
 			_, s.ParentResources[c.slot], e = validateResources(parent)
 			if e != nil {
@@ -167,7 +169,7 @@ func recoveredCapsuleBanksV6(a *primaryarena.Arena, selected durableRootSelectio
 	return extent, roots, nil
 }
 
-func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) error {
+func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) (retErr error) {
 	defer idx.clearPrimaryRecoveryLeasesV5()
 	a, p := idx.primary, idx.pager
 	// Reserve both physical image copies and the installation descriptors before
@@ -182,21 +184,23 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) error {
 		return e
 	}
 	defer func() { a.MetadataOwner().RemovePending(pendingCharge) }()
-	selected, images, e := selectPrimaryCapsuleAuthorityV6(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
-	if e != nil {
-		return e
-	}
+	runtime := &primaryDurableRuntimeV5{}
+	bindReservedPrimaryRuntimeV5(runtime, a)
+	runtime.metadataCharge = descriptorCharge + 2*imageCharge
+	pendingCharge -= runtime.metadataCharge
 	installed := false
 	defer func() {
 		if !installed {
-			for _, r := range selected.SlotResources {
-				r.Release()
-			}
-			for _, r := range selected.ParentResources {
-				r.Release()
-			}
+			retErr = errors.Join(retErr, db.releaseOriginalPrimaryRuntimeV5(a, runtime))
 		}
 	}()
+	selected, images, e := selectPrimaryCapsuleAuthorityV6(p, a.Pager(), p.PageCount(), a.Pager().PageCount(), a.UUID(), db.validateDurableDependencyManifestV1, db.primaryDependencyDirectoryValidatorV5(idx), a.MetadataOwner())
+	runtime.projection, runtime.slots = selected.Primary, selected.SlotPrimary
+	runtime.proofRecords, runtime.proofResources = selected.ParentRecords, selected.ParentResources
+	runtime.slotResources, runtime.capsuleImages = selected.SlotResources, images
+	if e != nil {
+		return e
+	}
 	for _, r := range selected.SlotRecords {
 		if r.CommitSeq != 0 && (r.Directory.RootPageID != 0) != db.dependencyDirectoryRequiredFeature {
 			return fmt.Errorf("%w: capsule dependency feature mismatch", ErrLegacyFormatRebuildRequired)
@@ -206,40 +210,27 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) error {
 	refBacking := make([]primaryarena.Ref, 0, rootCapacity)
 	defer func() {
 		clear(rootBacking[:cap(rootBacking)])
-		clear(refBacking[:cap(refBacking)])
+		if runtime.constructionRoots == nil {
+			clear(refBacking[:cap(refBacking)])
+		}
 	}()
 	extent, roots, e := recoveredCapsuleBanksV6(a, selected, images, rootBacking)
 	if e != nil {
 		return e
 	}
-	initial, e := a.RecoverInto(extent, roots, refBacking)
+	_, e = a.RecoverInto(extent, roots, refBacking)
+	// Failed RecoverInto can already have populated this original result
+	// backing. Its concrete capacity and all partial handles stay together.
+	runtime.constructionRoots = refBacking[:cap(refBacking)]
+	runtime.constructionRootsCharge = retainedalloc.AllocationCharge(rootCapacity * uint64(unsafe.Sizeof(primaryarena.Ref{})))
+	runtime.metadataCharge += runtime.constructionRootsCharge
+	pendingCharge -= runtime.constructionRootsCharge
 	if e != nil {
 		return e
 	}
-	defer func() {
-		for _, r := range initial {
-			a.Drop(r, nil)
-		}
-	}()
 	if e = idx.activatePrimaryRecoveryLeasesV5(); e != nil {
 		return e
 	}
-	runtime := &primaryDurableRuntimeV5{projection: selected.Primary, slots: selected.SlotPrimary, proofRecords: selected.ParentRecords, proofResources: selected.ParentResources, capsuleImages: images}
-	owned := true
-	defer func() {
-		if owned {
-			for _, r := range runtime.records {
-				if r.PageID != 0 {
-					a.Drop(r, nil)
-				}
-			}
-			for _, r := range runtime.proofs {
-				if r.PageID != 0 {
-					a.Drop(r, nil)
-				}
-			}
-		}
-	}()
 	for i := range images {
 		if selected.SlotCommits[i] == 0 {
 			continue
@@ -266,10 +257,15 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) error {
 	if ok, e := a.Acquire(current, nil); !ok || e != nil {
 		return errors.Join(e, rootpublication.ErrResourceOwnership)
 	}
-	runtime.current = &primaryStateRootV5{a, current, selected.Primary.DataCommitSeq}
+	runtime.current = &primaryStateRootV5{arena: a, ref: current, dataCommit: selected.Primary.DataCommitSeq}
+	if e = bindPrimaryReadRootCertificateV6(runtime.current); e != nil {
+		return e
+	}
 	p.SetPageCount(selected.Record.TotalPages)
 	if e = idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); e != nil {
-		a.Drop(current, nil)
+		return e
+	}
+	if e = finishPrimaryRuntimeConstructionRootsV5(runtime); e != nil {
 		return e
 	}
 	// All independently eligible DATA extents remain physically retained; the
@@ -292,12 +288,15 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) error {
 	for i, image := range images {
 		if image != nil {
 			a.AdoptPendingRootMetadata(runtime.records[i], imageCharge)
-			pendingCharge -= imageCharge
+			runtime.metadataCharge -= imageCharge
 		}
 	}
-	a.AdoptPendingRootMetadata(current, descriptorCharge)
-	pendingCharge -= descriptorCharge
+	a.AdoptPendingRootMetadata(current, primaryStateDescriptorChargeV5())
+	runtime.metadataCharge -= primaryStateDescriptorChargeV5()
+	unusedCharge := runtime.metadataCharge - primaryRuntimeDescriptorChargeV5()
+	runtime.metadataCharge -= unusedCharge
+	a.MetadataOwner().RemovePending(unusedCharge)
+	runtime.slotResources = [2]*rootpublication.StableResourceSet{} // transferred to DB slots
 	installed = true
-	owned = false
 	return nil
 }

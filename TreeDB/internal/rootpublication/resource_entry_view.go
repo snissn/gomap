@@ -11,10 +11,12 @@ import (
 // chunks. A set owns one reference to each kind root; concatenation consumes
 // two owned roots without copying their retained entries or physical handles.
 type stableResourceEntryNode struct {
-	metadata    *resourceRopeMetadata
-	refs        atomic.Int64
-	left, right *stableResourceEntryNode
-	entries     []stableResourceEntry
+	cleanupFailure originalReleaseFailure
+	cleanupDone    atomic.Bool
+	metadata       *resourceRopeMetadata
+	refs           atomic.Int64
+	left, right    *stableResourceEntryNode
+	entries        []stableResourceEntry
 }
 
 func newStableResourceEntryLeaf(entries []stableResourceEntry) *stableResourceEntryNode {
@@ -50,47 +52,49 @@ func (node *stableResourceEntryNode) retain() bool {
 	return false
 }
 
-func (node *stableResourceEntryNode) release() {
-	if node != nil && node.metadata != nil {
-		releaseOwnedResourceRope(node)
-		return
+func (node *stableResourceEntryNode) release() error {
+	if node == nil {
+		return nil
 	}
-	stack := []*stableResourceEntryNode{node}
-	for len(stack) != 0 {
-		last := len(stack) - 1
-		current := stack[last]
-		stack = stack[:last]
-		if current == nil {
-			continue
+	if node.metadata != nil {
+		return releaseOwnedResourceRope(node)
+	}
+	if node.cleanupDone.Load() {
+		if node.cleanupFailure.causes[0] != nil {
+			return &node.cleanupFailure
 		}
-		lastReference := false
-		for refs := current.refs.Load(); refs > 0; refs = current.refs.Load() {
-			if current.refs.CompareAndSwap(refs, refs-1) {
-				lastReference = refs == 1
-				break
-			}
-		}
-		if !lastReference {
-			continue
-		}
-		if current.left != nil || current.right != nil {
-			stack = append(stack, current.left, current.right)
-		} else {
-			for i := range current.entries {
-				current.entries[i].token.releaseFrom(ResourceOwnerShared)
-			}
-		}
-		if current.metadata != nil {
-			// Existing physical root refs govern this node allocation. Last
-			// release clears its actual metadata aliases before refund.
-			metadata := current.metadata
-			current.left, current.right, current.entries, current.metadata = nil, nil, nil, nil
-			owner, charge, backing := metadata.owner, metadata.charge, metadata.backing
-			metadata.owner, metadata.charge, metadata.backing = nil, 0, nil
-			backing.release()
-			owner.RemovePending(charge)
+		return nil
+	}
+	last := false
+	for refs := node.refs.Load(); refs > 0; refs = node.refs.Load() {
+		if node.refs.CompareAndSwap(refs, refs-1) {
+			last = refs == 1
+			break
 		}
 	}
+	if !last {
+		return nil
+	}
+	fail := func(err error) error {
+		node.cleanupFailure.original, node.cleanupFailure.causes[0] = node, err
+		node.cleanupDone.Store(true)
+		return &node.cleanupFailure
+	}
+	if err := node.left.release(); err != nil {
+		return fail(err)
+	}
+	if err := node.right.release(); err != nil {
+		return fail(err)
+	}
+	if node.left == nil && node.right == nil {
+		for i := range node.entries {
+			if err := node.entries[i].token.releaseFrom(ResourceOwnerShared); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	node.cleanupDone.Store(true)
+	return nil
 }
 
 func (node *stableResourceEntryNode) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -567,24 +571,29 @@ func cloneStableResourceKindViews(source *resourceKindBacking, excluded map[Reso
 	return clone, true
 }
 
-func releaseStableResourceKindViews(views *resourceKindBacking) {
+func releaseStableResourceKindViews(views *resourceKindBacking) error {
 	if views != nil && views.allocation != nil {
-		views.release()
-		return
+		return views.release()
 	}
 	for _, view := range views.all() {
-		releaseStableResourceKindView(view)
+		if err := releaseStableResourceKindView(view); err != nil {
+			return err
+		}
 	}
+	return nil
 }
-
-func releaseStableResourceKindView(view stableResourceKindView) {
-	// Metadata indexes own independent entry-array aliases. A shared physical
-	// rope is not their release authority.
-	releaseOwnedResourceLogical(view.logical)
-	releaseOwnedResourcePhysical(view.physical)
+func releaseStableResourceKindView(view stableResourceKindView) error {
+	// The original backing caller clears each consumed view component. This
+	// value helper remains for generic diagnostics whose indexes are unowned.
+	if err := releaseOwnedResourceLogical(view.logical); err != nil {
+		return err
+	}
+	if err := releaseOwnedResourcePhysical(view.physical); err != nil {
+		return err
+	}
 	releaseOwnedResourceObligationIndex(view.logicalMembership)
 	view.fields.release()
-	view.root.release()
+	return view.root.release()
 }
 
 func stableResourceKindViewCount(views *resourceKindBacking) int {

@@ -60,3 +60,64 @@ func TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody(t *testing.T) {
 		t.Fatal("public repeat retried or appended failure debt")
 	}
 }
+
+// os.ErrClosed from the actual last Close is a refusal, never a disposal proof.
+func TestOriginalNamespaceErrClosedKeepsActualPayload(t *testing.T) {
+	for _, which := range []string{"proof", "token"} {
+		t.Run(which, func(t *testing.T) {
+			dir := t.TempDir()
+			parent, err := os.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parent.Close()
+			child, err := os.Create(filepath.Join(dir, "primary"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer child.Close()
+			var owner retainedalloc.Owner
+			owner.Initialize(0)
+			proof, err := NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := NewIdentityPinRegistry()
+			if which == "proof" {
+				before := owner.Bytes()
+				if err = proof.parent.Close(); err != nil {
+					t.Fatal(err)
+				}
+				first := proof.ReleaseWithError()
+				if !errors.Is(first, os.ErrClosed) || proof.parent == nil || owner.Bytes() != before {
+					t.Fatal("proof refusal lost physical payload", first)
+				}
+				if proof.ReleaseWithError() != first || owner.Bytes() != before {
+					t.Fatal("proof replay/refund")
+				}
+			} else {
+				token, err := proof.Bind(parent, 1, "primary", "primary")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = proof.ReleaseWithError(); err != nil {
+					t.Fatal(err)
+				}
+				if err = token.BindCleanupRegistry(registry); err != nil {
+					t.Fatal(err)
+				}
+				before := owner.Bytes()
+				if err = token.parent.Close(); err != nil {
+					t.Fatal(err)
+				}
+				first := token.ReleaseWithError()
+				if !errors.Is(first, os.ErrClosed) || token.parent == nil || owner.Bytes() != before || registry.failedNamespace != token {
+					t.Fatal("token refusal lost original", first)
+				}
+				if token.ReleaseWithError() != first || owner.Bytes() != before {
+					t.Fatal("token replay/refund")
+				}
+			}
+		})
+	}
+}

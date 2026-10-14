@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
 	"strings"
@@ -16,10 +17,12 @@ type resourceImportRecord struct {
 	obligation StableLogicalObligation
 }
 type resourceImportDirectory struct {
-	allocation *resourceAllocation
-	next       *resourceImportDirectory
-	directory  *DependencyDirectoryV2
-	records    []resourceImportRecord
+	closeAttempted bool
+	closeErr       error
+	allocation     *resourceAllocation
+	next           *resourceImportDirectory
+	directory      *DependencyDirectoryV2
+	records        []resourceImportRecord
 }
 
 func (source *resourceImportSource) borrowDirectory(owner *retainedalloc.Owner, directory *DependencyDirectoryV2) (*resourceImportDirectory, error) {
@@ -79,8 +82,7 @@ func (source *resourceImportSource) borrowDirectory(owner *retainedalloc.Owner, 
 		return nil
 	})
 	if err != nil {
-		d.close()
-		return nil, err
+		return nil, errors.Join(err, d.close())
 	}
 	slices.SortFunc(d.records, func(a, b resourceImportRecord) int {
 		if n := strings.Compare(a.ownerKey, b.ownerKey); n != 0 {
@@ -92,20 +94,37 @@ func (source *resourceImportSource) borrowDirectory(owner *retainedalloc.Owner, 
 	source.directories = d
 	return d, nil
 }
-func (d *resourceImportDirectory) close() {
+func (d *resourceImportDirectory) close() error {
 	if d == nil {
-		return
+		return nil
+	}
+	if d.closeAttempted {
+		return d.closeErr
+	}
+	d.closeAttempted = true
+	if d.directory != nil {
+		consumed, err := d.directory.ReleaseOutcome()
+		if consumed {
+			d.directory = nil
+		}
+		if err == nil && !consumed {
+			err = ErrResourceOwnership
+		}
+		if err != nil {
+			if d.allocation != nil {
+				err = d.allocation.cleanupFailed(d, err)
+			}
+			d.closeErr = err
+			return err
+		}
 	}
 	clear(d.records)
 	d.records = nil
-	if d.directory != nil {
-		d.directory.Release()
-		d.directory = nil
-	}
 	d.next = nil
 	allocation := d.allocation
 	d.allocation = nil
 	if allocation != nil && allocation.drop() {
 		allocation.refund()
 	}
+	return nil
 }

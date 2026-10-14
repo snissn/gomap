@@ -344,7 +344,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			_ = removeLeafGenerationPackStagingDirFn(stagingDir)
 			return stats, err
 		}
-		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
+		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0, db.valueLogIdentityPins)
 		writer.ConfigureLeafLog(privateLeafDir, rewriteLeafLogLaneID, leafStartSeq)
 		writer.configureLeafStaging(stagingDir)
 		writer.setLeafPageLogSeqAllocator(seqAlloc)
