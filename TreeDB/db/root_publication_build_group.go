@@ -40,12 +40,13 @@ type RootPublicationBuildGroup struct {
 
 	// Only original factory outputs enter these two custody cells. baseRoot is
 	// borrowed and never enters them. A failed disposal preserves both originals.
-	primaryCurrent      primaryarena.ReadRootConstructionV6
-	primaryNext         primaryarena.ReadRootConstructionV6
-	primaryNextAbortErr error
-	cleanupErr          error
-	primaryFailedNext   *RootPublicationBuildGroup
-	primaryFailure      primaryCleanupFailureV5
+	primaryCurrent         primaryarena.ReadRootConstructionV6
+	primaryNext            primaryarena.ReadRootConstructionV6
+	primaryNextAbortErr    error
+	primaryCurrentAbortErr error
+	cleanupErr             error
+	primaryFailedNext      *RootPublicationBuildGroup
+	primaryFailure         primaryCleanupFailureV5
 
 	baseRoot    uint64
 	currentRoot uint64
@@ -334,6 +335,7 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 			return rootpublication.ErrDurableRootOwnership
 		}
 		if err := group.disposePrimaryLocked(&group.primaryCurrent); err != nil {
+			group.primaryCurrentAbortErr = err
 			return err
 		}
 		group.primaryCurrent, group.primaryNext = group.primaryNext, nil
@@ -512,7 +514,12 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		return group.cleanupErr
 	}
 	var primaryErr error
-	if group.primaryNextAbortErr != nil {
+	if group.primaryCurrentAbortErr != nil {
+		// A sealed successor still owns genuine edges into this failed predecessor.
+		// Preserve both original cells after the FIRST refusal; neither cleanup
+		// action may be retried or refunded by Close.
+		primaryErr = group.primaryCurrentAbortErr
+	} else if group.primaryNextAbortErr != nil {
 		primaryErr = group.primaryNextAbortErr
 	} else {
 		primaryErr = group.disposePrimaryLocked(&group.primaryNext)

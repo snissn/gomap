@@ -341,3 +341,83 @@ func TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor(t *testing
 		t.Fatal("failed physical owner refunded originals")
 	}
 }
+
+// The original predecessor refuses disposal after the actual successor seals.
+// Close must preserve that FIRST refusal and both constructors, without trying
+// either cleanup action again or refunding the group's unresolved closure.
+func TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	basis := database.AcquireSnapshot()
+	g, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupPrimaryWriteV6(t, database, g, 0, false)
+	predecessor := groupPrimaryOwnerV6(t, g)
+	owner := g.idx.primaryOwner
+	pages := len(g.tracker.Pages())
+	var successor *rootpublication.DurableRootTransaction
+	g.idx.zipper.SetPrimaryConstructorV6(func(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
+		// Consume the genuine original edge. Its immutable image remains available
+		// to this already-admitted zipper until ordinary retirement progresses.
+		if ready, err := a.Drop(predecessor.PrimaryConstructionReferenceV6(), nil); !ready || err != nil {
+			t.Fatal(ready, err)
+		}
+		output, ready, err := rootpublication.NewPrimaryConstructionTransactionV6(a, w)
+		if ready && err == nil {
+			successor = output.(*rootpublication.DurableRootTransaction)
+		}
+		return output, ready, err
+	})
+	b := database.NewPhysicalBatch().(*Batch)
+	if err := b.Set([]byte("successor"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetRootPublicationBuildGroup(g, false); err != nil {
+		t.Fatal(err)
+	}
+	refusal := b.Write()
+	_ = b.Close()
+	if !errors.Is(refusal, rootpublication.ErrDurableRootOwnership) {
+		t.Fatalf("predecessor refusal %v", refusal)
+	}
+	if successor == nil || successor.PrimaryConstructionCertificateV6() == nil {
+		t.Fatal("actual successor did not seal before predecessor refusal")
+	}
+	closeErr := g.Close()
+	if !errors.Is(closeErr, refusal) || !database.publicationPoisoned.Load() {
+		t.Fatalf("first refusal lost: write=%v close=%v", refusal, closeErr)
+	}
+	if g.primaryCurrent != predecessor || g.primaryNext != successor || predecessor.Owner() != rootpublication.ResourceOwnerBuilder || successor.Owner() != rootpublication.ResourceOwnerBuilder {
+		t.Fatal("Close disposed original custody after predecessor refusal")
+	}
+	if !g.registered || g.idx == nil || g.tracker == nil || len(g.tracker.Pages()) < pages || owner.failedBuildGroups != g {
+		t.Fatal("failed predecessor closure refunded")
+	}
+	if again := g.Close(); again != closeErr {
+		t.Fatal("repeated Close replayed cleanup or changed receipt")
+	}
+	done := make(chan error, 1)
+	go func() {
+		basis.Close()
+		database.writeMu.Lock()
+		database.writeMu.Unlock()
+		database.durablePublishMu.Lock()
+		database.durablePublishMu.Unlock()
+		done <- database.Close()
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, refusal) {
+			t.Fatalf("shutdown lost first refusal %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("predecessor refusal deadlocked shutdown")
+	}
+	if owner.metadataCharge == 0 || successor.Owner() != rootpublication.ResourceOwnerBuilder {
+		t.Fatal("shutdown refunded failed custody")
+	}
+}

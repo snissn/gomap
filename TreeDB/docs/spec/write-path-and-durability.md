@@ -421,12 +421,22 @@ explicit sync releases writer/admission ownership before sealed-root Checkpoint.
 Unsupported surfaces and capacity refusal stop before acceptance. Post-append
 ambiguity/poison/reopen rules are unchanged.
 
+For public command-WAL stores in this mode, the main physical backend uses the
+existing PRIMARY capsule constructor and promotion. Foreground acknowledgement
+installs the prepared C1 cut against its existing backend snapshot; it does not
+checkpoint PRIMARY on acknowledgement. Dictionary and template stores keep their
+independent format policy. A newly acquired cut after checkpoint binds the exact
+successor backend StateToken, while held cuts retain their original basis and values.
+
 Checkpoint flushes one captured prefix against its captured backend basis,
 streams bounded private chunks through one backend publication group and removes
 only the proved-covered prefix at handoff. It retains the acceptance receipt
 even if later waiting/cleanup reports an error. A permitted retry completes
 handoff rather than reapplying the accepted prefix. Existing Applied-LSN,
 dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
+For selected PRIMARY V6 capsules, fallback refresh uses the same root transaction
+and verifies identical complete directory operands across the two distinct fixed
+slot addresses; matching command coverage alone does not authorize cleanup.
 See [COW publication and lock ordering](cow-cache-publication.md).
 
 ## 4. Backend Commit Model

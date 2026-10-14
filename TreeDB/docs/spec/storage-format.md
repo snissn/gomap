@@ -847,10 +847,15 @@ This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 ### 3.0 Selected PRIMARY capsules V6 (construction)
 
 Fresh `no_wal_fast` backend stores, and fresh stores explicitly selecting
-`IndexPrimaryDirectory`, use `index.db.primary`. Its checked arena header is
+`IndexPrimaryDirectory`, use `index.db.primary`. Public command-WAL stores using
+`MemtableMode="cow_btree"` also select PRIMARY for the main backend after dictionary
+and template options are copied; automatic selection does not change side-store
+format policy. Its checked arena header is
 `TDPRCAPB`, version 6. Existing arena identity and version are checked on open;
 opening never relabels a V1 bank arena as a capsule arena. Other fresh profiles
-retain the DATA-selector format below. The selected format is pre-alpha and
+and modes retain the DATA-selector format below. Selecting PRIMARY on a non-empty
+DATA-selector store returns `ErrLegacyFormatRebuildRequired`; rebuild the pre-alpha
+store rather than interpreting its existing pages as PRIMARY capsules. The selected format is pre-alpha and
 its native bounded-publication qualification remains incomplete.
 
 The PRIMARY file reserves local pages 0 through 7. Exactly two eligible fixed
