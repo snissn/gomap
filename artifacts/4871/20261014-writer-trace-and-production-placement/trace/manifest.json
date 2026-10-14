@@ -1,0 +1,149 @@
+{
+  "schema": "finite-artifact-allowlist-v1",
+  "purpose": "one trace writer-stall attribution only",
+  "artifact_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014",
+  "publishable": [
+    {
+      "path": "analysis-receipts.json",
+      "bytes": 2259,
+      "sha256": "8f209c9187eba01e688a072400e0ddc951ad92faa93bd21b39656c64de3cd1c6"
+    },
+    {
+      "path": "attribution.json",
+      "bytes": 13732,
+      "sha256": "59963f5d4b7f74466cb2a6f8f16b03c756bddbfbebdbd3b2e43e9258a639124d"
+    },
+    {
+      "path": "baseline-effective-source-census.json",
+      "bytes": 569945,
+      "sha256": "c2493039fb9cbf718eb577d03bea74533e50d764c301334e00238c1ab4fd800d"
+    },
+    {
+      "path": "baseline-overlay.json",
+      "bytes": 1625,
+      "sha256": "a13e3e9383d27341a43ccea1b253e4fd1a9a749957bde2d27b71ae3b58ce8d36"
+    },
+    {
+      "path": "benchmark.raw",
+      "bytes": 20757,
+      "sha256": "f38ba8606b75fcbf9d64d9cfd4ceb7f359473f6da7804d058c2ec4cccffeed01"
+    },
+    {
+      "path": "binary-source-binding.json",
+      "bytes": 1409,
+      "sha256": "f667db106ddf7688b2ad7f0cf1f207c6d289318a73be0cfda531bf4f54f825ea"
+    },
+    {
+      "path": "final-processes.raw",
+      "bytes": 24382,
+      "sha256": "72bf0f514b604d170ba9ad719e8400cd408f21a348934a2cfc8135f8bdd5eff4"
+    },
+    {
+      "path": "freeze-analysis.py",
+      "bytes": 7930,
+      "sha256": "be2313f5c7e26511b592b6218fb8a029dad403afac9afc323130a29d658161d7"
+    },
+    {
+      "path": "frozen-source-census.json",
+      "bytes": 569945,
+      "sha256": "261ef4f35afac396465fd68f546982a58bc6c0a9ec1d0cc674ab3a2b445128a2"
+    },
+    {
+      "path": "gc-range-audit.json",
+      "bytes": 4439,
+      "sha256": "556807e6346d1f761fb4b8cd568d4358089a3c804a50f2509c66841ca2c2dc96"
+    },
+    {
+      "path": "long-syscalls.json",
+      "bytes": 53521,
+      "sha256": "a37cdbf560bb94988568600bb1c3dde9ac99b1801eddec7c553fe80b177125cd"
+    },
+    {
+      "path": "parsed.raw",
+      "bytes": 25799939,
+      "sha256": "cce3726ccdd234965cc6efae2a68ea56d8a53e517ba5a6baf6e35eb43fed91a2"
+    },
+    {
+      "path": "parsed.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "preflight-processes.raw",
+      "bytes": 25168,
+      "sha256": "8c6148f53225fa26af1406a84b9eb9e243a98b9152919244c9740f0af931f6aa"
+    },
+    {
+      "path": "quiescence.json",
+      "bytes": 660,
+      "sha256": "9945f3f51ef4259ab1f931d16801bd20abca7c0442d667d3bd9ebaeb0ea3885f"
+    },
+    {
+      "path": "receipt.json",
+      "bytes": 1577,
+      "sha256": "2e77241fe2f498a41b52d6a7773b1e8d14b05c4f709ab60b4b758ff8486be79e"
+    },
+    {
+      "path": "report.md",
+      "bytes": 3098,
+      "sha256": "031e897b98b14ec64c9785d04a6620f0b1633637618976a2e830ee9830fe6e8b"
+    },
+    {
+      "path": "sched-profile.pprof",
+      "bytes": 6364,
+      "sha256": "1ae74440d7b8d50fb13d67e400d9eee6e47d731e35b87380087929571969e8b0"
+    },
+    {
+      "path": "sched-profile.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "sched-top.raw",
+      "bytes": 1455,
+      "sha256": "d8b8bf61eb9f7b4940e70c892329edbd8bd972c58b7d6e194b33722b4c6bfbb6"
+    },
+    {
+      "path": "source-callchain-identities.json",
+      "bytes": 685,
+      "sha256": "b4da482b7b2c0c5b66fb760b79aa809a3d00f824b48a8c8a4057b355907bea72"
+    },
+    {
+      "path": "source-toolchain-binding.json",
+      "bytes": 4624,
+      "sha256": "d9bbbbff2f458db3dc47889eb59c6104cbe3a9f8576aad20ad888f1198f05c5b"
+    },
+    {
+      "path": "stall-window-events.raw",
+      "bytes": 3369,
+      "sha256": "08c2baf69f17f69b192b8b8ad673be6b8a0465431078be42bd9068f1d916dea4"
+    },
+    {
+      "path": "syscall-profile.pprof",
+      "bytes": 41418,
+      "sha256": "faf2366ea7100b9ccd1745235fd4fb4013ad82824d5dde263de27339c860cb05"
+    },
+    {
+      "path": "syscall-profile.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "syscall-top.raw",
+      "bytes": 1440,
+      "sha256": "e99b49ca519a087bdfa70f2c48394c8533bb8925bf23ebed8b1469d7927acfec"
+    },
+    {
+      "path": "trace.out",
+      "bytes": 448037,
+      "sha256": "c2be1e77ddc072a26331d3ed99fc14ed6d2b1773663e9cd7718630e200d1eb5a"
+    }
+  ],
+  "excluded_binaries": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/before-mvcc.test"
+  ],
+  "disposable_release_list": [],
+  "source_mutations": 0,
+  "builds": 0,
+  "benchmark_invocations": 1
+}

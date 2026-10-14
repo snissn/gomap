@@ -1,0 +1,66 @@
+[
+ {
+  "lane": "ordinary-5111",
+  "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "argv": [
+   "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+   "test",
+   "-p",
+   "4",
+   "./TreeDB",
+   "-run",
+   "^TestCOWPublicPrimary",
+   "-count=1",
+   "-v",
+   "-timeout=120s"
+  ],
+  "env": {
+   "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+   "GOWORK": "off",
+   "GOTOOLCHAIN": "local",
+   "GOMAXPROCS": "4",
+   "CGO_ENABLED": "1"
+  },
+  "exit": 0,
+  "elapsed_seconds": 2.968250447884202,
+  "source_sha256": {
+   "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+   "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+   "TreeDB/docs/spec/write-path-and-durability.md": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea"
+  },
+  "source_status_unchanged": true,
+  "raw_sha256": "f7a320926f46ad350e804b0b9650b83922d3ee1b365d4d307010816bd54dc593"
+ },
+ {
+  "lane": "native-4878-traversal",
+  "head": "aa33e81993cd599e2fdc02f86fd0ed229880d8ec",
+  "argv": [
+   "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+   "test",
+   "-p",
+   "4",
+   "./TreeDB",
+   "-run",
+   "^TestCOWPublicPrimary",
+   "-count=1",
+   "-v",
+   "-timeout=120s"
+  ],
+  "env": {
+   "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+   "GOWORK": "off",
+   "GOTOOLCHAIN": "local",
+   "GOMAXPROCS": "4",
+   "CGO_ENABLED": "1"
+  },
+  "exit": 0,
+  "elapsed_seconds": 14.136005412787199,
+  "source_sha256": {
+   "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+   "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+   "TreeDB/docs/spec/write-path-and-durability.md": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea"
+  },
+  "source_status_unchanged": true,
+  "raw_sha256": "16f7859f35acca933b2f6c26f634e560f8744820bfc0a747e4a4f9dc74703b11"
+ }
+]

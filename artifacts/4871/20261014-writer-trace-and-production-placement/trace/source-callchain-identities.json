@@ -1,0 +1,22 @@
+[
+  {
+    "path": "TreeDB/internal/rootpublication/resource_identity_unix.go",
+    "sha256": "955a855992f05cf2b54b056fb02039f22eb99296acb6a544e3993ab7eaccf60a",
+    "bytes": 4165
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_token.go",
+    "sha256": "8307af44109ad33d1add92904dae845fe3d2df29d457912790f032b319ed92e7",
+    "bytes": 100690
+  },
+  {
+    "path": "TreeDB/internal/valuelog/stable_resource.go",
+    "sha256": "c2ddac9baf8afb68ddf11193fc61d9e7bc002e385a98255e251138f7ac02ec08",
+    "bytes": 90927
+  },
+  {
+    "path": "TreeDB/db/command_wal_raw.go",
+    "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+    "bytes": 117419
+  }
+]

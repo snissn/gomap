@@ -1,0 +1,37 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/before-mvcc.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.benchmem",
+    "-test.v",
+    "-test.timeout=120s",
+    "-test.trace=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/trace.out"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "SPRINT_REQUIRE_PRIMARY": "1",
+    "SPRINT_POPULATED_SIZE": "small"
+  },
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014",
+  "exit": 0,
+  "elapsed_s": 0.18099403381347656,
+  "binary_sha256_before": "b0adf067ebaac5fc2b682b4f3322030794e5793a4c81042fc50eac80c9877cdb",
+  "binary_sha256_after": "b0adf067ebaac5fc2b682b4f3322030794e5793a4c81042fc50eac80c9877cdb",
+  "source_census_sha256": "261ef4f35afac396465fd68f546982a58bc6c0a9ec1d0cc674ab3a2b445128a2",
+  "source_pre_post_unchanged": true,
+  "raw_sha256": "f38ba8606b75fcbf9d64d9cfd4ceb7f359473f6da7804d058c2ec4cccffeed01",
+  "trace_sha256": "c2be1e77ddc072a26331d3ed99fc14ed6d2b1773663e9cd7718630e200d1eb5a",
+  "trace_bytes": 448037,
+  "purpose": "one execution trace, timing diagnostic only"
+}

@@ -1,0 +1,67 @@
+[
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "trace",
+      "-d=parsed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/trace.out"
+    ],
+    "exit": 0,
+    "output": "parsed.raw",
+    "bytes": 25799939,
+    "sha256": "cce3726ccdd234965cc6efae2a68ea56d8a53e517ba5a6baf6e35eb43fed91a2"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "trace",
+      "-pprof=syscall",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/trace.out"
+    ],
+    "exit": 0,
+    "output": "syscall-profile.pprof",
+    "bytes": 41418,
+    "sha256": "faf2366ea7100b9ccd1745235fd4fb4013ad82824d5dde263de27339c860cb05"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "trace",
+      "-pprof=sched",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/trace.out"
+    ],
+    "exit": 0,
+    "output": "sched-profile.pprof",
+    "bytes": 6364,
+    "sha256": "1ae74440d7b8d50fb13d67e400d9eee6e47d731e35b87380087929571969e8b0"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=15",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/syscall-profile.pprof"
+    ],
+    "exit": 0,
+    "output": "syscall-top.raw",
+    "sha256": "e99b49ca519a087bdfa70f2c48394c8533bb8925bf23ebed8b1469d7927acfec"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=15",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-writer-trace-20261014/sched-profile.pprof"
+    ],
+    "exit": 0,
+    "output": "sched-top.raw",
+    "sha256": "d8b8bf61eb9f7b4940e70c892329edbd8bd972c58b7d6e194b33722b4c6bfbb6"
+  }
+]

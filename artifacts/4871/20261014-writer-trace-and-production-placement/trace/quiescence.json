@@ -1,0 +1,14 @@
+{
+  "time_unix": 1792012448.323194,
+  "source_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014",
+  "source_entries_checked": 4257,
+  "source_mismatches": [],
+  "source_unchanged": true,
+  "binary_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/before-mvcc.test",
+  "binary_sha256": "b0adf067ebaac5fc2b682b4f3322030794e5793a4c81042fc50eac80c9877cdb",
+  "binary_unchanged": true,
+  "go_producers": [],
+  "go_quiet": true,
+  "disposable_release_list": [],
+  "retention": "All source, binary, trace, raw and derived artifacts retained; no cleanup authorized."
+}

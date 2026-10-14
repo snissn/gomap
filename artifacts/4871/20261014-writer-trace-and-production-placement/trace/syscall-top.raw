@@ -1,0 +1,21 @@
+Main binary filename not available.
+Type: delay
+Showing nodes accounting for 26.50ms, 96.61% of 27.43ms total
+Dropped 518 nodes (cum <= 0.14ms)
+Showing top 15 nodes out of 127
+      flat  flat%   sum%        cum   cum%
+   13.34ms 48.62% 48.62%    13.34ms 48.62%  golang.org/x/sys/unix.Dup
+    9.55ms 34.83% 83.45%     9.55ms 34.83%  syscall.Fsync
+    1.45ms  5.30% 88.75%     1.45ms  5.30%  golang.org/x/sys/unix.Fallocate
+    0.74ms  2.71% 91.46%     0.74ms  2.71%  internal/syscall/unix.Unlinkat
+    0.68ms  2.49% 93.95%     0.68ms  2.49%  syscall.read
+    0.33ms  1.19% 95.14%     0.33ms  1.19%  syscall.openat
+    0.23ms  0.84% 95.97%     0.23ms  0.84%  syscall.write
+    0.17ms  0.64% 96.61%     0.17ms  0.64%  syscall.pread
+         0     0% 96.61%     0.56ms  2.05%  bufio.(*Scanner).Scan
+         0     0% 96.61%     0.44ms  1.61%  github.com/snissn/gomap/TreeDB.(*DB).Close
+         0     0% 96.61%    13.52ms 49.28%  github.com/snissn/gomap/TreeDB.(*DB).SetPointWithMVCCInput
+         0     0% 96.61%     0.25ms   0.9%  github.com/snissn/gomap/TreeDB.(*DB).Stats
+         0     0% 96.61%    13.50ms 49.24%  github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL
+         0     0% 96.61%    13.50ms 49.24%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared
+         0     0% 96.61%    13.50ms 49.24%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1

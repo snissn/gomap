@@ -1,0 +1,21 @@
+Main binary filename not available.
+Type: delay
+Showing nodes accounting for 1056.96us, 90.77% of 1164.41us total
+Dropped 45 nodes (cum <= 5.82us)
+Showing top 15 nodes out of 95
+      flat  flat%   sum%        cum   cum%
+  249.09us 21.39% 21.39%   249.09us 21.39%  runtime.selectnbsend
+  190.14us 16.33% 37.72%   190.14us 16.33%  runtime.systemstack_switch
+  186.82us 16.04% 53.77%   227.59us 19.55%  github.com/snissn/gomap/TreeDB/caching.(*DB).Close
+  180.16us 15.47% 69.24%   180.16us 15.47%  runtime.traceLocker.stack
+   75.26us  6.46% 75.70%    75.26us  6.46%  runtime.Gosched
+   38.72us  3.33% 79.03%    38.72us  3.33%  runtime.goschedguarded
+   37.95us  3.26% 82.29%    37.95us  3.26%  runtime.asyncPreempt2
+   32.26us  2.77% 85.06%    32.26us  2.77%  runtime.gcTrigger.test
+   19.46us  1.67% 86.73%    19.46us  1.67%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).Close
+   17.54us  1.51% 88.23%    17.54us  1.51%  runtime.chansend1
+   13.38us  1.15% 89.38%    52.22us  4.49%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogWriteLoop
+    8.19us   0.7% 90.08%     8.19us   0.7%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto
+    6.78us  0.58% 90.67%     6.78us  0.58%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).Stop.func1
+    1.22us   0.1% 90.77%    11.39us  0.98%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0% 90.77%    53.63us  4.61%  bufio.NewWriterSize

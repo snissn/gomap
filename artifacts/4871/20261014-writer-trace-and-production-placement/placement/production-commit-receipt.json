@@ -1,0 +1,32 @@
+[
+ {
+  "lane": "ordinary-5111",
+  "parent": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "commit": "9bd10594dc87e0ccc9f4d1c59ce6aabbf5e69e85",
+  "ref": "refs/heads/codex/5111-structural-repair-20261013",
+  "source": {
+   "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+   "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+   "TreeDB/docs/spec/write-path-and-durability.md": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea"
+  },
+  "unrelated_preserved": 127,
+  "readback_all_members": true,
+  "merged": false,
+  "qualification": "Focused public-primary checks only; full node gates remain open"
+ },
+ {
+  "lane": "native-4878-traversal",
+  "parent": "aa33e81993cd599e2fdc02f86fd0ed229880d8ec",
+  "commit": "fb20b379507f50f9b7eb4b9776907e2df8fb3a6b",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "source": {
+   "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+   "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+   "TreeDB/docs/spec/write-path-and-durability.md": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea"
+  },
+  "unrelated_preserved": 2,
+  "readback_all_members": true,
+  "merged": false,
+  "qualification": "Focused public-primary checks only; full node gates remain open"
+ }
+]

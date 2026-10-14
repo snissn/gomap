@@ -1,0 +1,169 @@
+{
+  "stall_start_ns": 3514907237703872,
+  "stall_end_ns": 3514907251022400,
+  "complete_gc_ranges": [
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(1)",
+      "start_ns": 3514907202183232,
+      "end_ns": 3514907202226880,
+      "duration_ns": 43648,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907202172544,
+      "end_ns": 3514907202421568,
+      "duration_ns": 249024,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(13)",
+      "start_ns": 3514907202418304,
+      "end_ns": 3514907202510912,
+      "duration_ns": 92608,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(18)",
+      "start_ns": 3514907202567488,
+      "end_ns": 3514907202573952,
+      "duration_ns": 6464,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907202566528,
+      "end_ns": 3514907202739456,
+      "duration_ns": 172928,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(12)",
+      "start_ns": 3514907202736576,
+      "end_ns": 3514907202746880,
+      "duration_ns": 10304,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(19)",
+      "start_ns": 3514907203023296,
+      "end_ns": 3514907203031424,
+      "duration_ns": 8128,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907203022336,
+      "end_ns": 3514907203188480,
+      "duration_ns": 166144,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(11)",
+      "start_ns": 3514907203185856,
+      "end_ns": 3514907203194496,
+      "duration_ns": 8640,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(19)",
+      "start_ns": 3514907214771712,
+      "end_ns": 3514907214782016,
+      "duration_ns": 10304,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC mark assist",
+      "scope": "Goroutine(19)",
+      "start_ns": 3514907214786112,
+      "end_ns": 3514907214817472,
+      "duration_ns": 31360,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907214769792,
+      "end_ns": 3514907214992064,
+      "duration_ns": 222272,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(14)",
+      "start_ns": 3514907214983488,
+      "end_ns": 3514907215014208,
+      "duration_ns": 30720,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC incremental sweep",
+      "scope": "Proc(3)",
+      "start_ns": 3514907215021760,
+      "end_ns": 3514907215022208,
+      "duration_ns": 448,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(40)",
+      "start_ns": 3514907225782272,
+      "end_ns": 3514907225845696,
+      "duration_ns": 63424,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907225780544,
+      "end_ns": 3514907226031744,
+      "duration_ns": 251200,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(11)",
+      "start_ns": 3514907226029888,
+      "end_ns": 3514907226046784,
+      "duration_ns": 16896,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC sweep termination)",
+      "scope": "Goroutine(40)",
+      "start_ns": 3514907227685952,
+      "end_ns": 3514907227698560,
+      "duration_ns": 12608,
+      "origin": "Begin"
+    },
+    {
+      "name": "GC concurrent mark phase",
+      "scope": "None",
+      "start_ns": 3514907227684032,
+      "end_ns": 3514907228010944,
+      "duration_ns": 326912,
+      "origin": "Begin"
+    },
+    {
+      "name": "stop-the-world (GC mark termination)",
+      "scope": "Goroutine(12)",
+      "start_ns": 3514907227958464,
+      "end_ns": 3514907228013248,
+      "duration_ns": 54784,
+      "origin": "Begin"
+    }
+  ],
+  "overlapping_ranges": [],
+  "unpaired_ends": [],
+  "unclosed_ranges": []
+}

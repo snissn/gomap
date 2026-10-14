@@ -1,0 +1,24 @@
+{
+  "before": {
+    "local_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/before-mvcc.test",
+    "bytes": 27346777,
+    "sha256": "b0adf067ebaac5fc2b682b4f3322030794e5793a4c81042fc50eac80c9877cdb",
+    "source_census_sha256": "c2493039fb9cbf718eb577d03bea74533e50d764c301334e00238c1ab4fd800d",
+    "harness_sha256": "8b0efd309dd0c660d2b31fb6f8f81e3047b425e403511097677d1d98c1b46872",
+    "common_checkpoint_repair_sha256": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "git_publication": false,
+    "retention_required": true
+  },
+  "after": {
+    "local_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/after-mvcc.test",
+    "bytes": 27369823,
+    "sha256": "bb4aebf7a5805d2ff979043c391e2314d0b9bf37170f9f30a87bfec9f9b97f0b",
+    "source_census_sha256": "261ef4f35afac396465fd68f546982a58bc6c0a9ec1d0cc674ab3a2b445128a2",
+    "harness_sha256": "8b0efd309dd0c660d2b31fb6f8f81e3047b425e403511097677d1d98c1b46872",
+    "common_checkpoint_repair_sha256": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "git_publication": false,
+    "retention_required": true
+  }
+}
