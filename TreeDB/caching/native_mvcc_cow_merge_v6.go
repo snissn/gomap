@@ -42,6 +42,9 @@ type nativeCOWMergeV6 struct {
 	lookupSource, lookupEntry              int
 	closeFailure                           error
 	cutReleased                            bool
+	cutClosing                             bool
+	cutCloseIndex                          int
+	cutBasisReleased                       bool
 }
 
 func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
@@ -379,19 +382,89 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
 		m.closeIndex++
 	}
 	if !m.cutReleased {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(cowReadCut{}))) {
-			return false, nil
-		}
 		cache := m.cache
-		cache.cutMu.Lock()
-		// Last-cut cleanup must bind its real root/basis stages, never hide the
-		// synchronous original drain behind a scalar native reservation.
-		if m.cut.refs <= 1 {
+		if !m.cutClosing {
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(cowReadCut{}))) {
+				return false, nil
+			}
+			cache.cutMu.Lock()
+			if m.cut.refs > 1 {
+				m.cut.refs--
+				m.cut = nil
+			} else if m.cut.refs == 1 {
+				// SAME original cut is no longer discoverable. This capture alone
+				// serializes its original root/retirement progress and containing charge.
+				m.cutClosing = true
+			} else {
+				cache.cutMu.Unlock()
+				return false, memtable.ErrCOWResourceWork
+			}
 			cache.cutMu.Unlock()
-			return false, memtable.ErrCOWResourceWork
 		}
-		m.cut.refs--
-		m.cut = nil
+		if m.cutClosing {
+			cut := m.cut
+			for m.cutCloseIndex < len(cut.shards)+len(cut.frozen) {
+				var table *cowTable
+				if m.cutCloseIndex < len(cut.shards) {
+					table = &cut.shards[m.cutCloseIndex]
+				} else {
+					table = &cut.frozen[m.cutCloseIndex-len(cut.shards)]
+				}
+				if table.root != nil {
+					// COWRoot.Release only drops original root/generation ref edges;
+					// actual callbacks remain in SAME COWRetirement and are metered below.
+					if !w.Reserve(3, 2*uint64(unsafe.Sizeof(memtable.COWRoot{}))+2*uint64(unsafe.Sizeof(memtable.COWBudget{}))+512) {
+						return false, nil
+					}
+					root := table.root
+					*table = cowTable{}
+					m.retirement = root.Release()
+					root = nil
+				}
+				ready, err := m.retirement.DrainWithWork(w)
+				if !ready || err != nil {
+					return false, err
+				}
+				m.cutCloseIndex++
+			}
+			if !m.cutBasisReleased {
+				// The current successor cut owns the SAME backend basis for this
+				// eligible route. CAS retries are real charged attempts. Last-basis
+				// physical cleanup is a distinct unsupported class, before effects.
+				for {
+					if !w.Reserve(1, 2*uint64(unsafe.Sizeof(cowBackendBasis{}))) {
+						return false, nil
+					}
+					n := cut.basis.refs.Load()
+					if n <= 1 {
+						return false, memtable.ErrCOWResourceWork
+					}
+					if cut.basis.refs.CompareAndSwap(n, n-1) {
+						cut.basis = nil
+						m.cutBasisReleased = true
+						break
+					}
+				}
+			}
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*cut))+2*uint64(unsafe.Sizeof(*m))) {
+				return false, nil
+			}
+			lease := cut.lease
+			if !lease.AdmitRetentionClose(w) {
+				return false, nil
+			}
+			cut.shards, cut.frozen, cut.sources, cut.domains = nil, nil, nil, nil
+			cut.cache, cut.lease = nil, nil
+			cut.refs = 0
+			m.cut = nil
+			cut = nil
+			lease.Close()
+			lease = nil
+			// Cache containing admission stays until every original cut returns.
+			if cache.activeCuts.Add(-1) == 0 && cache.readClosed.Load() {
+				cache.lease.Close()
+			}
+		}
 		m.cache = nil
 		m.cutReleased = true
 		c.Snapshot = nil
@@ -400,8 +473,8 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
 		m.record = node.LeafEntry{}
 		m.baseRecord = node.LeafEntry{}
 		m.lookupFile = nil
-		cache.cutMu.Unlock()
 	}
+
 	return true, nil
 }
 
