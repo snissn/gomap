@@ -1,0 +1,16 @@
+=== RUN   TestChargedProjectionBaseDifferential
+    charged_projection_test.go:216: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3228193429; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:230: zero work moved
+--- FAIL: TestChargedProjectionBaseDifferential (0.00s)
+=== RUN   TestChargedProjectionRefusalAndPartialClose
+    charged_projection_test.go:277: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2414676856; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:291: tree: exact retained projection root/certificate required
+--- FAIL: TestChargedProjectionRefusalAndPartialClose (0.00s)
+=== RUN   TestChargedProjectionPrimaryDifferentialAndOwner
+    charged_projection_test.go:312: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1378942605; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:314: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2555402208; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:384: node: invalid primary directory
+--- FAIL: TestChargedProjectionPrimaryDifferentialAndOwner (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/tree	0.002s
+FAIL

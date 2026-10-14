@@ -1,0 +1,12 @@
+=== RUN   TestChargedProjectionBaseDifferential
+    charged_projection_test.go:219: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-183182939; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionBaseDifferential (0.00s)
+=== RUN   TestChargedProjectionRefusalAndPartialClose
+    charged_projection_test.go:280: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-335038263; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionRefusalAndPartialClose (0.00s)
+=== RUN   TestChargedProjectionPrimaryDifferentialAndOwner
+    charged_projection_test.go:315: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4014723425; consumer: this test process only; pagers closed on return
+    charged_projection_test.go:317: RETAINED_FIXTURE /home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-962453680; consumer: this test process only; pagers closed on return
+--- PASS: TestChargedProjectionPrimaryDifferentialAndOwner (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.003s

@@ -1,0 +1,206 @@
+{
+  "schema": 1,
+  "status": "lower tree/node construction only; entire native unqualified",
+  "parent_source": "8a8c5212fdc77dc5e9e9d28177737f98f30ce08c",
+  "original_base": "3dc8dd31976ad2650e734358b4498c1affdceb5c",
+  "runtime_ancestor": "4f61cbbd6d0b7be5c69d9411c1344b4576f5e879",
+  "TreeDB_tree": "361ccf9d2d282781063ade6086b8d9b9e2a40a7a",
+  "node_tree": "c1168f3117338a2cd78c33b2018e4f6a9f49f367",
+  "tree_package_tree": "f7e8ce62d6ad0d29e22c7079303e5f7c77dcf237",
+  "toolchain": "go version go1.26.4 linux/amd64",
+  "environment": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal",
+    "GOTMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal"
+  },
+  "final_validation": [
+    {
+      "log": "projection-construction-normal.log",
+      "exit_code": 0,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 -v -count=1 -run '^(TestProjection|TestChargedProjection)' ./TreeDB/node ./TreeDB/tree"
+    },
+    {
+      "log": "projection-construction-safe.log",
+      "exit_code": 0,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 -tags treedb_safe -v -count=1 -run '^(TestProjection|TestChargedProjection|TestOwnedPointerProjection)' ./TreeDB/node ./TreeDB/tree"
+    },
+    {
+      "log": "projection-construction-race.log",
+      "exit_code": 0,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 -race -v -count=1 -run '^(TestProjection|TestChargedProjection|TestOwnedPointerProjection)' ./TreeDB/node ./TreeDB/tree"
+    }
+  ],
+  "intermediate_logs": "retained raw failed/successful diagnostics; earlier source revisions, not final-source qualification",
+  "manifest_closure": "all five newly owned source/harness files and every packet member except this manifest; no DB/archive payload",
+  "files": [
+    {
+      "path": "TreeDB/node/projection_work.go",
+      "bytes": 1593,
+      "sha256": "1a96fdd5d0de1ed6539cc50282f248b1ad6cf11db14c1bc539b98dedb5700b0e",
+      "git_blob": "1285dd0bbb697d6d33ce718020bcf54320fdea37",
+      "role": "current source/harness"
+    },
+    {
+      "path": "TreeDB/node/projection_decode.go",
+      "bytes": 6492,
+      "sha256": "bda488b1466cf94dcf1ee0b78e13d6f483ad5375d3b76541f13a285bcb0a21e3",
+      "git_blob": "445516e91448433e8ed84d6d69cb1f9cf97e58f7",
+      "role": "current source/harness"
+    },
+    {
+      "path": "TreeDB/node/projection_decode_test.go",
+      "bytes": 7316,
+      "sha256": "08a81109cc7fdbd57080e3ae215d21be1306e28a74f28e1aa1a3986907cabee2",
+      "git_blob": "04578d71df0a3cade444c4f6613cab36f499ac9a",
+      "role": "current source/harness"
+    },
+    {
+      "path": "TreeDB/tree/charged_projection.go",
+      "bytes": 30747,
+      "sha256": "4184d455bfcd057dee2d89e077b441c2c0529c9cc8a0ba9ab8317a9f59eb0f26",
+      "git_blob": "f7aec0061bf2e9a9f3b87b0448630a0f1712d079",
+      "role": "current source/harness"
+    },
+    {
+      "path": "TreeDB/tree/charged_projection_test.go",
+      "bytes": 25373,
+      "sha256": "94da6c1c9668c97c0939045f212241bd42a37949a36e70d45046f29bde4e2eb1",
+      "git_blob": "e7dca38ea34bbe6f9458678c112ffcefe72b8966",
+      "role": "current source/harness"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/construction.md",
+      "bytes": 5824,
+      "sha256": "04fab916d54b32af3bd0b224f91b771434d1e8651d1a18203483908a9bdfdef0",
+      "git_blob": "e05dafb18b55e3716d9d70d315ce52d61d6fa360",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/next-capture-contract.md",
+      "bytes": 4236,
+      "sha256": "b3d0ab061f22c23fdfd10d8148aad64b491eb5572e811177e0d843b76b2d3cf1",
+      "git_blob": "f0b3b79b98a23a997959d03e79ef13cc698b84ec",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/node-projection-first.log",
+      "bytes": 272,
+      "sha256": "4d1e6c173e740b5f70d576711a37ac5e0492ec77cc1f4d908cd61fe2cfb6b57d",
+      "git_blob": "8f0d3871910aa06295722fc964494126d8d95f56",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/node-projection-second.log",
+      "bytes": 48,
+      "sha256": "7df25ad0796ea50bda2d5c5af490960f2e2c94b7204f8d982b0048044677a710",
+      "git_blob": "d46598fc41c481fe444e16d469f5f9d0bc08fbcb",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-allocation-isolated.log",
+      "bytes": 506,
+      "sha256": "197aa3e253ad821bf11c6a4d743410430d103ef469860112fbe8ccbb5fe80dcc",
+      "git_blob": "32087bc07d541ef92793949cff331bcb5a02ceba",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-construction-normal.log",
+      "bytes": 4597,
+      "sha256": "82840776263010761d7bcb5b18e97243ba33c9a875706b1b7cba1dc18b23033a",
+      "git_blob": "ac1c82a5922278e13db9c8a4e70f018a81962f97",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-construction-race.log",
+      "bytes": 4849,
+      "sha256": "b5eba8263512d35fac9acab7bd4de31439f829a54501355edbd25ac6887f41f9",
+      "git_blob": "e4cf8cd54fbf3fe6608df10a1786bc528ff5f1d4",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-construction-safe.log",
+      "bytes": 4850,
+      "sha256": "8728ce686d19bf2dff11bc9d454535b9f2c38f8bd4416c523f6ef7cefe348594",
+      "git_blob": "066309dbc04e71a49875c9a6316cbd6dbae71e78",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-focused-admission.log",
+      "bytes": 3744,
+      "sha256": "4be4d281f7eedc5158bf250895a206817e3d97983c9e14d48f49515196ec2219",
+      "git_blob": "561f25021cfd4383159fe267e6d24e551c2d3afc",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-focused-final.log",
+      "bytes": 3302,
+      "sha256": "59efda8fc1f653eb3974277f5ca3a34913d38f0ceb71c0eab616e10727a0e6d5",
+      "git_blob": "a8d421c281cf5cae08befb96a211f5dc54d0f1ac",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-focused-third.log",
+      "bytes": 3305,
+      "sha256": "12a892c8faf827cfc5d98af029daecbba43e8cc6baf0d9f0e652621564668164",
+      "git_blob": "67de9fc95d8c00950401f8ade71de0a03d5ad2b0",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-normal-accepted-second.log",
+      "bytes": 4256,
+      "sha256": "7e1a1f446e271464e713a97fa8344550ed7342d83ac3d3ed15c845ace7990ddb",
+      "git_blob": "6218d347efb91e4f20887564ed93ce8ac56705f1",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-normal-accepted.log",
+      "bytes": 4368,
+      "sha256": "43bc595fb2422df6ea3d9259342b9fe434066a779cda64f4fa6c308c186f9928",
+      "git_blob": "485eacee6b985fa6e40e7e19e48afac91f9a87db",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-normal-final.log",
+      "bytes": 4323,
+      "sha256": "e01c874cfe752f75e8d3708cdba621570ec18c6830b3792d18db568150e26f57",
+      "git_blob": "0a94e88b8a4ef97b181fc5bf5cb679967c4ba7bc",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-normal.log",
+      "bytes": 3758,
+      "sha256": "6b07ebc07449a44995ca5859c828996f1761d35abab8c1427eb5f66011c9d074",
+      "git_blob": "aa4b2b2b839ab84e7b1d3e5c5ead1c853c803f71",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/projection-turn-core.log",
+      "bytes": 4255,
+      "sha256": "470cfa88efc28562f4203b036e5ba5a8939b4c3740dcfeac8ce22fc68f6beca7",
+      "git_blob": "d8d81a50ed99f4b698a838558a8662b914534834",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/released-fixture-inventory.json",
+      "bytes": 34607,
+      "sha256": "dd7ad78b29b8b171060adc2d7ecc025603331ae01df58ac1c9c82aaf41cfa774",
+      "git_blob": "4a5016e0bfde47cadf14bb8741e6a73da9d9b335",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/tree-projection-first.log",
+      "bytes": 1518,
+      "sha256": "2a62d01fd545f24398f96ae2d9f918c3d90010c0bd832f2037c8e2269f46762a",
+      "git_blob": "d2d9e649130c96df18d2a0e45b312dac4bf13d2a",
+      "role": "raw diagnostic or construction evidence"
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261013/native-4878-tree-projection/tree-projection-second.log",
+      "bytes": 1296,
+      "sha256": "b296656db2eced357f1918f163f49980b75bf5459d1c9aa649013ba78ba8a9aa",
+      "git_blob": "3546974338505bcca77e17fd8f053d649e37c2ae",
+      "role": "raw diagnostic or construction evidence"
+    }
+  ]
+}

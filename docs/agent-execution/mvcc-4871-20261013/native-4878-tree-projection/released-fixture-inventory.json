@@ -1,0 +1,1045 @@
+{
+  "schema": 1,
+  "test_fixture_source": "TreeDB/tree/charged_projection_test.go",
+  "consumer": "completed focused test processes only; pager close deferred on every return",
+  "live_open_file_check": "lsof -Fpn: no listed fixture path open",
+  "release_condition": "only after this source/evidence packet is committed and pushed; preserve all raw diagnostics and source",
+  "directories": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1002774715",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1050632219",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1067316806",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1133505432",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "d4cce39e690388f51c86d17d34df1fd12b85922342e1054ea7d9d0371afc10fe"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-113591122",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1200212092",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-122752186",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1309847122",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1315473420",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1378942605",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "861a9dda97f6ae4bdb5c5d430cb75549b2ad172b8d957925def81a57d2ac5e6a"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-148249617",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-148403339",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "2a525fc463fb014638e8a81e032834144070855fd0999737a0defb3d8fbae09f"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-149904676",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "9c4982b9ff65af6eb5818996f96fd74dfea5e255aecea53b44e6ed034d5a6bea"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1614860869",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1713995677",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1754076151",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1787078287",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1803189006",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-183182939",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1843476712",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1849433830",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-18869732",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1899637034",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-1969522703",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-19756935",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "4820c310683b827df2e09cfac32aa4638870f111c765ade96a2c3a8e4d5545a6"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2004745505",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2093164899",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2122324302",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2166276753",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2358539374",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2370941194",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-240058686",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2414676856",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "861a9dda97f6ae4bdb5c5d430cb75549b2ad172b8d957925def81a57d2ac5e6a"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2423752611",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2499685575",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2555402208",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "a3a7b9c560b951fe185f6b03b39c8d435e25ebde47ebabddfb2ea9add9239a9f"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2601463746",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2623291765",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2716319287",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2732918435",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2748058645",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2794520503",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2795831902",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2870982844",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-2929698478",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3002970982",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3004655227",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-303996318",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3048014361",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3151259676",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3182376990",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-319409664",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3228193429",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "861a9dda97f6ae4bdb5c5d430cb75549b2ad172b8d957925def81a57d2ac5e6a"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3265732251",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3316627581",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-332055134",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3325684434",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-335038263",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3367303329",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3374491261",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3397560910",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3422135243",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3422744974",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3476950232",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "bd78a7f4b073c51a8ca33d3d45a6c07e17a9f375cecd2569c48d64fdccfcd4f5"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3553948340",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3560863633",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3571800521",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "9fb7d476f93390ceca36fe5d990bb9b24284a5dd4da6ed1a132abc7eacaeed39"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3625430634",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3637688405",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-37118122",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "1f41ca4b91ee41e135907af979286d74855611ffec65b881c3881e51abf02310"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3735766201",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3773214690",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3825062318",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3866836773",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3935758696",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-3969880353",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4014723425",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4107877510",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4127515763",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "3e1e638ace98c21c9e678594d7e77bd001dbab53cd119e0f7a9eac65a449d236"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4156378793",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "9e90d7e692f9527371eb0f3bc67c539f422273f6460d9d1287589fdfb985791d"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-4166684020",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-471499524",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-527834183",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "7b12033bed3cadec9940640d111e79523542c4b59f50ee59877a0c601319c87d"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-536141055",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-579268822",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-600043779",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-690958760",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-720495350",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-729994385",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-753183804",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-943268329",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-962453680",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "909b32600b0f9e771fd15d1057f78d91fa97e2b8570cbe2628c3b3e45c6e7675"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-979714181",
+      "bytes": 65536,
+      "files": [
+        {
+          "relative_path": "index.db",
+          "bytes": 65536,
+          "sha256": "01b58f8494a56f62e004a981c7c30aaffed455a95d837d61460017cdbc4ceb98"
+        }
+      ]
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/native4878-projection-981185641",
+      "bytes": 1048576,
+      "files": [
+        {
+          "relative_path": "index.db.primary",
+          "bytes": 1048576,
+          "sha256": "8c1cfa8349ee802c5f43939e53e68d6acd23e1b2afca227e38f97399adfeb8f8"
+        }
+      ]
+    }
+  ],
+  "total_bytes": 18939904,
+  "total_directories": 94
+}

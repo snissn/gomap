@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/node [github.com/snissn/gomap/TreeDB/node.test]
+TreeDB/node/projection_decode_test.go:41:18: assignment mismatch: 2 variables but n.GetLeafEntryViewWithRevision returns 6 values
+FAIL	github.com/snissn/gomap/TreeDB/node [build failed]
+FAIL
