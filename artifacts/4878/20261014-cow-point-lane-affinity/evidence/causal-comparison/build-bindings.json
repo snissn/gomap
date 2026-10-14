@@ -1,0 +1,27 @@
+{
+ "before": {
+  "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+  "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+  "source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/sources/causal-after",
+  "retained_build": "0bb0dd5b26db071ef5777614ce62463c75bd98f1/artifacts/4878/20261014-primary-empty-fastpath/evidence/causal-comparison/build-bindings.json"
+ },
+ "after": {
+  "argv": [
+   "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+   "test",
+   "-c",
+   "-trimpath",
+   "-buildvcs=false",
+   "-o",
+   "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-candidate-mvcc.test",
+   "./TreeDB/mvcc/sprintperf"
+  ],
+  "exit": 0,
+  "seconds": 2.8685573120601475,
+  "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/sources/lane-affinity-candidate",
+  "harness_sha256": "b63439b1c72421396c5fd3763c0bf6e0e15570a6f9d7428219a00dd8687ffde6",
+  "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-candidate-mvcc.test",
+  "binary_sha256": "f40af2798764d639ee36096f75bf347269f8deb92ce7e72ce3d9e7842e1d270a"
+ }
+}

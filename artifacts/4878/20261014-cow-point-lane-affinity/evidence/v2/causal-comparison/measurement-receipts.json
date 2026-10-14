@@ -1,0 +1,6918 @@
+{
+ "diagnostic_only": true,
+ "wall_seconds": 6.279781968798488,
+ "receipts": [
+  {
+   "label": "before",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-forced_pointer-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009080.046817,
+   "wall_seconds": 0.31409244798123837,
+   "log": "1-command_wal_relaxed-forced_pointer-point-before.log",
+   "raw_sha256": "891d066cfbcf63f4de822df7c3a7be0f25cbf1476c3eae49ddec2c99648eec11",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point-4         \t      64\t    216552 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      7180 point_p50_ns\t     14640 point_p95_ns\t     16051 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      4618 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      4618 writer_ops/s\t     15690 writer_p50_ns\t     26560 writer_p95_ns\t   3882877 writer_p99_ns\t   89162 B/op\t     182 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5101909"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "13830553"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-forced_pointer-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009080.3846054,
+   "wall_seconds": 0.26402542367577553,
+   "log": "1-command_wal_relaxed-forced_pointer-point-after.log",
+   "raw_sha256": "2e68620d20c00706aaebbd3e4358ae18f976bf6229498dd0e99197c6048ad326",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point-4         \t      64\t     74275 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    357264 cow_end_peak_bytes\t    349984 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      6030 point_p50_ns\t     12000 point_p95_ns\t     14870 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     13464 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     13464 writer_ops/s\t     14230 writer_p50_ns\t     28470 writer_p95_ns\t     74411 writer_p99_ns\t   17644 B/op\t     172 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5063509"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5063509"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "inline",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-inline-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009080.6723254,
+   "wall_seconds": 0.26407463988289237,
+   "log": "1-command_wal_relaxed-inline-point-before.log",
+   "raw_sha256": "c5c7bbb1bea77d509fdbd4285041beaacfed87f9596c79a3042ce18f26aef362",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/inline/point-4         \t      64\t     11206 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    342800 cow_end_peak_bytes\t    337088 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         4.000 layout_after_inline\t         0 layout_after_pointer\t         4.000 layout_before_inline\t         0 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      4390 point_p50_ns\t      4880 point_p95_ns\t      6120 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     89254 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     89254 writer_ops/s\t      5360 writer_p50_ns\t      8980 writer_p95_ns\t     21040 writer_p99_ns\t    9298 B/op\t      78 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "inline",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-inline-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009080.9655623,
+   "wall_seconds": 0.26412218529731035,
+   "log": "1-command_wal_relaxed-inline-point-after.log",
+   "raw_sha256": "cc6e5857300879eba0059fafbd606c34432a854794ca1bb84c45b234fe4f7752",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/inline/point-4         \t      64\t     10870 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    342800 cow_end_peak_bytes\t    337088 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         4.000 layout_after_inline\t         0 layout_after_pointer\t         4.000 layout_before_inline\t         0 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      4350 point_p50_ns\t      4760 point_p95_ns\t      5380 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     92009 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     92009 writer_ops/s\t      5310 writer_p50_ns\t      7340 writer_p95_ns\t     10760 writer_p99_ns\t    9296 B/op\t      78 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "group_versions",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^group_versions$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-forced_pointer-group_versions-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009081.2593753,
+   "wall_seconds": 0.31410726718604565,
+   "log": "1-command_wal_relaxed-forced_pointer-group_versions-before.log",
+   "raw_sha256": "b48fab0ac43fdb067b1cf6c0bfccb4ca0d5175fa83e0f1e5cf140c387565e4e9",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/group_versions-4         \t      64\t    303026 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    618400 cow_end_peak_bytes\t    591072 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         2.000 output/op\t         0 point_calls/op\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      3300 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         1.000 scan_calls/op\t     13240 scan_p50_ns\t     17890 scan_p95_ns\t     19330 scan_p99_ns\t         0 snapshot_rotations/op\t         2.000 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      3300 writer_ops/s\t     24420 writer_p50_ns\t     47481 writer_p95_ns\t   5284251 writer_p99_ns\t   98077 B/op\t     251 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5124060"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "13930595"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "7215"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 1,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "group_versions",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^group_versions$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_relaxed-forced_pointer-group_versions-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009081.6032648,
+   "wall_seconds": 0.314129417296499,
+   "log": "1-command_wal_relaxed-forced_pointer-group_versions-after.log",
+   "raw_sha256": "229c8bb01fd8b6fa21571b11385b2ed486074b85c54690b313bad77de76521ec",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/group_versions-4         \t      64\t    242920 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    618144 cow_end_peak_bytes\t    590816 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         2.000 output/op\t         0 point_calls/op\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      4117 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         1.000 scan_calls/op\t     12900 scan_p50_ns\t     15930 scan_p95_ns\t     21841 scan_p99_ns\t         0 snapshot_rotations/op\t         2.000 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      4117 writer_ops/s\t     23370 writer_p50_ns\t     45790 writer_p95_ns\t   3913597 writer_p99_ns\t   98070 B/op\t     251 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "3794407"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "12559381"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "7215"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 1,
+   "profile": "command_wal_durable",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_durable$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_durable-forced_pointer-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009081.9480867,
+   "wall_seconds": 0.6145062129944563,
+   "log": "1-command_wal_durable-forced_pointer-point-before.log",
+   "raw_sha256": "29d48277d824fb86d6d94301e78d8045553f9e6dc5228bae3c7476926147e955",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_durable/cow_btree/forced_pointer/point-4         \t      64\t   4923568 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t     15360 point_p50_ns\t     24660 point_p95_ns\t     40381 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t       203.1 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         1.000 wal_syncs/op\t        65.00 wal_syncs_after\t         1.000 wal_syncs_before\t       203.1 writer_ops/s\t   5083259 writer_p50_ns\t   6583873 writer_p95_ns\t   9200988 writer_p99_ns\t   84690 B/op\t     108 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5088619"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "13933685"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 1,
+   "profile": "command_wal_durable",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_durable$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/1-command_wal_durable-forced_pointer-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009082.5927563,
+   "wall_seconds": 0.6647095661610365,
+   "log": "1-command_wal_durable-forced_pointer-point-after.log",
+   "raw_sha256": "1e86065af6a74bd0e45dffb5414d60079cbb07598a4c952e2e29193e089b9a8c",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_durable/cow_btree/forced_pointer/point-4         \t      64\t   5421567 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t     21730 point_p50_ns\t     83701 point_p95_ns\t     96131 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t       184.4 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         1.000 wal_syncs/op\t        65.00 wal_syncs_after\t         1.000 wal_syncs_before\t       184.4 writer_ops/s\t   5186999 writer_p50_ns\t   6760925 writer_p95_ns\t   9047167 writer_p99_ns\t   84690 B/op\t     108 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "3796237"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "12621163"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-forced_pointer-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009083.2870433,
+   "wall_seconds": 0.26407386595383286,
+   "log": "2-command_wal_relaxed-forced_pointer-point-after.log",
+   "raw_sha256": "91a325ed666f1700dd16142cddbafac6fdd085430d09009a75c74586c88fc1ce",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point-4         \t      64\t     76927 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    357264 cow_end_peak_bytes\t    349984 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      7450 point_p50_ns\t     14690 point_p95_ns\t     18460 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     13000 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     13000 writer_ops/s\t     16240 writer_p50_ns\t     33271 writer_p95_ns\t     82681 writer_p99_ns\t   17644 B/op\t     172 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "6488261"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "6488261"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-forced_pointer-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009083.5811262,
+   "wall_seconds": 0.3141459380276501,
+   "log": "2-command_wal_relaxed-forced_pointer-point-before.log",
+   "raw_sha256": "75f75d25385b478c239cdcaec04f586dbd1eef8dd98d7846a9a15548dce32bab",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point-4         \t      64\t    258174 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      9200 point_p50_ns\t     13270 point_p95_ns\t     33150 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      3873 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      3873 writer_ops/s\t     17880 writer_p50_ns\t     35531 writer_p95_ns\t   4148040 writer_p99_ns\t   89162 B/op\t     182 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5120059"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "15431058"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "inline",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-inline-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009083.92524,
+   "wall_seconds": 0.2640736559405923,
+   "log": "2-command_wal_relaxed-inline-point-after.log",
+   "raw_sha256": "e701f146da96be97cd07c9ddc4012c57fa041d6ea4109fa605edec982a668fe3",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/inline/point-4         \t      64\t     11296 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    342800 cow_end_peak_bytes\t    337088 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         4.000 layout_after_inline\t         0 layout_after_pointer\t         4.000 layout_before_inline\t         0 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      4370 point_p50_ns\t      4760 point_p95_ns\t      7300 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     88539 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     88539 writer_ops/s\t      5260 writer_p50_ns\t     11330 writer_p95_ns\t     21540 writer_p99_ns\t    9298 B/op\t      78 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "inline",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-inline-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009084.2193584,
+   "wall_seconds": 0.26409397600218654,
+   "log": "2-command_wal_relaxed-inline-point-before.log",
+   "raw_sha256": "fecc75e78d39215ebe9d066ab8825db5a2ee1fc26a75872daa33c35e6e552c9c",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/inline/point-4         \t      64\t     11077 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    342800 cow_end_peak_bytes\t    337088 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         4.000 layout_after_inline\t         0 layout_after_pointer\t         4.000 layout_before_inline\t         0 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t      4390 point_p50_ns\t      4680 point_p95_ns\t      6010 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t     90294 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t     90294 writer_ops/s\t      5230 writer_p50_ns\t      9190 writer_p95_ns\t     13980 writer_p99_ns\t    9296 B/op\t      78 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "0"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "group_versions",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^group_versions$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-forced_pointer-group_versions-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009084.5133255,
+   "wall_seconds": 0.36423303140327334,
+   "log": "2-command_wal_relaxed-forced_pointer-group_versions-after.log",
+   "raw_sha256": "04d2ee35871a94acddb2932627ce0feba968ced0548c9d43b8d68c2b03181399",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/group_versions-4         \t      64\t    280574 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    618144 cow_end_peak_bytes\t    590816 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         2.000 output/op\t         0 point_calls/op\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      3564 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         1.000 scan_calls/op\t     13170 scan_p50_ns\t     27790 scan_p95_ns\t     29390 scan_p99_ns\t         0 snapshot_rotations/op\t         2.000 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      3564 writer_ops/s\t     24631 writer_p50_ns\t     63631 writer_p95_ns\t   4074339 writer_p99_ns\t   98071 B/op\t     251 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5223550"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "15117625"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "7215"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 2,
+   "profile": "command_wal_relaxed",
+   "placement": "forced_pointer",
+   "operation": "group_versions",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^group_versions$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_relaxed-forced_pointer-group_versions-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009084.907793,
+   "wall_seconds": 0.3646528529934585,
+   "log": "2-command_wal_relaxed-forced_pointer-group_versions-before.log",
+   "raw_sha256": "e91ac01eefec073ad151ed94f38a44e224781ac372fe0343365343363850274a",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/group_versions-4         \t      64\t    279673 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    618400 cow_end_peak_bytes\t    591072 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         2.000 output/op\t         0 point_calls/op\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t      3576 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         1.000 scan_calls/op\t     12470 scan_p50_ns\t     21840 scan_p95_ns\t     26760 scan_p99_ns\t         0 snapshot_rotations/op\t         2.000 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         0 wal_syncs/op\t         0 wal_syncs_after\t         0 wal_syncs_before\t      3576 writer_ops/s\t     23060 writer_p50_ns\t     44001 writer_p95_ns\t   4854587 writer_p99_ns\t   98077 B/op\t     251 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "6592173"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "16825642"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "7215"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "2442"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "2331"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "after",
+   "sample": 2,
+   "profile": "command_wal_durable",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/lane-affinity-v2-candidate-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_durable$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_durable-forced_pointer-point-after"
+   },
+   "exit": 0,
+   "unix_start": 1792009085.3025186,
+   "wall_seconds": 0.715112681966275,
+   "log": "2-command_wal_durable-forced_pointer-point-after.log",
+   "raw_sha256": "687dfc1565fa0af931a1d6c19ec897e39f85b868a52e55f60b5f16868e0afa09",
+   "binary_sha256": "bf30556787924497cced15ca72bf3d0a3e5e6f46ec70bb8606478318487ba845",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_durable/cow_btree/forced_pointer/point-4         \t      64\t   5757545 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t     17351 point_p50_ns\t     93671 point_p95_ns\t    102091 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t       173.7 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         1.000 wal_syncs/op\t        65.00 wal_syncs_after\t         1.000 wal_syncs_before\t       173.7 writer_ops/s\t   5363122 writer_p50_ns\t   7130588 writer_p95_ns\t   9288590 writer_p99_ns\t   84688 B/op\t     108 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5186310"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "17051455"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  },
+  {
+   "label": "before",
+   "sample": 2,
+   "profile": "command_wal_durable",
+   "placement": "forced_pointer",
+   "operation": "point",
+   "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/causal-after-mvcc.test",
+    "-test.run",
+    "^$",
+    "-test.bench",
+    "^BenchmarkSprintMVCC$/^command_wal_durable$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchmem",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.v",
+    "-test.timeout=30s"
+   ],
+   "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/lane-affinity-v2-timed-temp/2-command_wal_durable-forced_pointer-point-before"
+   },
+   "exit": 0,
+   "unix_start": 1792009086.047634,
+   "wall_seconds": 0.7156288060359657,
+   "log": "2-command_wal_durable-forced_pointer-point-before.log",
+   "raw_sha256": "6c76f43fe88341027a23c37c05e5728c8d725a064d896a38817e773156f477c5",
+   "binary_sha256": "f8ef21478881ee87166670191c2f8e7278d31f75f33d20bd9f2e987bb32bc816",
+   "rows": [
+    "BenchmarkSprintMVCC/command_wal_durable/cow_btree/forced_pointer/point-4         \t      64\t   5845296 ns/op\t         1.000 ack_routing_after_ok\t         1.000 ack_routing_before_ok\t         1.000 close_ok\t         1.000 cow_capture_calls_total/op\t         1.000 cow_end_active_cuts\t         9.000 cow_end_external_leases\t    428592 cow_end_peak_bytes\t    421312 cow_end_total_bytes\t         0 cow_end_views\t         1.000 cow_prepare_calls_total/op\t         1.000 cow_publications_total/op\t         0 enqueued_records/op\t         0 layout_after_inline\t         4.000 layout_after_pointer\t         0 layout_before_inline\t         4.000 layout_before_pointer\t         4.000 layout_expected_records\t         1.000 output/op\t         1.000 point_calls/op\t     22620 point_p50_ns\t     90951 point_p95_ns\t     97931 point_p99_ns\t         0 public_checkpoints/op\t         0 public_checkpoints_after\t         0 public_checkpoints_before\t       171.1 reader_ops/s\t         0 readers_while_writer_active/op\t         0 rotated_shards/op\t         0 scan_calls/op\t         0 snapshot_rotations/op\t         0 visited/op\t         0 vlog_syncs/op\t         0 vlog_syncs_after\t         0 vlog_syncs_before\t         1.000 wal_appends/op\t        65.00 wal_appends_after\t         1.000 wal_appends_before\t         1.000 wal_syncs/op\t        65.00 wal_syncs_after\t         1.000 wal_syncs_before\t       171.1 writer_ops/s\t   5519472 writer_p50_ns\t   6983858 writer_p95_ns\t   9153698 writer_p99_ns\t   84694 B/op\t     108 allocs/op"
+   ],
+   "lane_probes": [
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "5159769"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "111"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "0"
+    },
+    {
+     "phase": "before",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.cold",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.configured",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.defaulted",
+     "value": "true"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.effective",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.gomaxprocs",
+     "value": "4"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.hot",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.physical_cores",
+     "value": "8"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.journal_lanes.warm",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.calls_total",
+     "value": "3"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.errors_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.value_log.directory_sync.ns_total",
+     "value": "17047444"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.bytes_total",
+     "value": "4719"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.l0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_live",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.bytes_total",
+     "value": "1623"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.0.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_live",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.bytes_total",
+     "value": "1584"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.1.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_live",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.bytes_total",
+     "value": "1512"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_idle_total",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.rotations_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segment_current",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_closed",
+     "value": "0"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.lane.2.segments_total",
+     "value": "1"
+    },
+    {
+     "phase": "after",
+     "key": "treedb.cache.vlog_shape.segments_total",
+     "value": "3"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+=== RUN   TestCOWRelaxedPublicPointLaneAffinity
+    cow_point_lane_affinity_test.go:65: CommitAt(2): physical pointer=true lane=1, want hot affinity lane 0
+--- FAIL: TestCOWRelaxedPublicPointLaneAffinity (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/mvcc	0.012s
+FAIL

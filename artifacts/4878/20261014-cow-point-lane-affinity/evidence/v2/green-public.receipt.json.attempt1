@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/mvcc",
+    "-run",
+    "^(TestCOWRelaxedPublicPointLaneAffinity|TestCOWSuccessorLogicalTombstoneAndEmptyValue|TestCOWSuccessorPublicEmptyKeyValue|TestCommitGroupAtCommandWALSingletonUsesPointFrame)$",
+    "-count=1",
+    "-timeout=120s",
+    "-v"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "env": {
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+  },
+  "toolchain": "go version go1.26.3 linux/amd64",
+  "exit": 1,
+  "seconds": 2.652373585384339,
+  "raw_sha256": "6631d021eb2620e0e2cb52784efa49a2a370dbff3120841200d2485275ff10aa",
+  "sources": {
+    "TreeDB/caching/db.go": "42e30dacfcaac6c0699d7bf0468a5210c238425b80ad0cc490d73c2c9562ff6b",
+    "TreeDB/mvcc/cow_point_lane_affinity_test.go": "cbd2c18785b1d39bdc992ea1a9260d2b662b3ae792001b5f491d3f3597f99a93"
+  }
+}

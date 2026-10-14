@@ -1,0 +1,18 @@
+=== RUN   TestCOWBatchCanonicalPreparationPublishesFinalRevisions
+--- PASS: TestCOWBatchCanonicalPreparationPublishesFinalRevisions (0.01s)
+=== RUN   TestCOWBatchFinalizerRefusalCancelsPrivateRoots
+--- PASS: TestCOWBatchFinalizerRefusalCancelsPrivateRoots (0.01s)
+=== RUN   TestCOWRelaxedPointLaneAffinity
+=== RUN   TestCOWRelaxedPointLaneAffinity/physical-placement
+=== RUN   TestCOWRelaxedPointLaneAffinity/multi-entry-fallback
+=== RUN   TestCOWRelaxedPointLaneAffinity/busy-release-and-close-progress
+--- PASS: TestCOWRelaxedPointLaneAffinity (0.05s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/physical-placement (0.01s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/multi-entry-fallback (0.01s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/busy-release-and-close-progress (0.03s)
+=== RUN   TestCOWPointerImmediatePointAndIteratorOldCut
+--- PASS: TestCOWPointerImmediatePointAndIteratorOldCut (0.01s)
+=== RUN   TestCOWPointerCheckpointCapturedBasisAndTombstones
+--- PASS: TestCOWPointerCheckpointCapturedBasisAndTombstones (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	0.082s

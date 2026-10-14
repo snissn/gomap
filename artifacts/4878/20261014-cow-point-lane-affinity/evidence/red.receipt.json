@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/caching",
+    "-run",
+    "^TestCOWRelaxedPointLaneAffinity/physical-placement$",
+    "-count=1",
+    "-timeout=90s",
+    "-v"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "env": {
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+  },
+  "toolchain": "go version go1.26.3 linux/amd64",
+  "exit": 1,
+  "seconds": 5.679594993591309,
+  "raw_sha256": "3c6d86c366c59d52eeff2877c2a6a08fe660ed47f4a1074317f11b1ee73b87d9",
+  "sources": {
+    "TreeDB/caching/db.go": "9d38862a7a8eae58196b73b6816d39fa6b3bad657000bd72d897c376925bd1be",
+    "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+  }
+}

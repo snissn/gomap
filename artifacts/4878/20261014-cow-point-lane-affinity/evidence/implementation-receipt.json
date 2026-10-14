@@ -1,0 +1,154 @@
+{
+  "classification": "focused changed-seam correctness; not performance acceptance",
+  "source_frozen": true,
+  "write_scope": [
+    "TreeDB/caching/db.go",
+    "TreeDB/caching/cow_point_lane_affinity_test.go"
+  ],
+  "allocation_audit": "One stack-local preferredLane integer and existing shardIdxs lookup; no new allocation/copy/owner or per-entry work. Existing pointer append and frame-capture lifetime unchanged.",
+  "eligibility": "COW, external command-WAL callback, unsynced durabilityNone, actual pointer append and no internal journal lane, exactly one nonempty ordinary Put with !IsPtr. reserveLane is necessarily false: materialization requires prior durabilitySync.",
+  "changed_risk": "Preferred lane waits instead of round-robin fallback. Focused race test reserves the preferred lane, admits COW writer, queues DB close, releases the lane and checks joined progress.",
+  "retained_initial_compile_failure": "test construction initially used wrong append-mode literal/LeafEntry field; raw retained separately; intended RED was obtained after correcting only new test.",
+  "checks": {
+    "red": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWRelaxedPointLaneAffinity/physical-placement$",
+        "-count=1",
+        "-timeout=90s",
+        "-v"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+      },
+      "toolchain": "go version go1.26.3 linux/amd64",
+      "exit": 1,
+      "seconds": 5.679594993591309,
+      "raw_sha256": "3c6d86c366c59d52eeff2877c2a6a08fe660ed47f4a1074317f11b1ee73b87d9",
+      "sources": {
+        "TreeDB/caching/db.go": "9d38862a7a8eae58196b73b6816d39fa6b3bad657000bd72d897c376925bd1be",
+        "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+      }
+    },
+    "green": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/caching",
+        "-run",
+        "^(TestCOWRelaxedPointLaneAffinity|TestCOWBatchCanonicalPreparationPublishesFinalRevisions|TestCOWBatchFinalizerRefusalCancelsPrivateRoots|TestCOWPointerImmediatePointAndIteratorOldCut|TestCOWPointerCheckpointCapturedBasisAndTombstones)$",
+        "-count=1",
+        "-timeout=90s",
+        "-v"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+      },
+      "toolchain": "go version go1.26.3 linux/amd64",
+      "exit": 0,
+      "seconds": 5.684356927871704,
+      "raw_sha256": "283f9d7da8d671f760e45322323445ce0e104362d9f1ee2a11e625bc188af656",
+      "sources": {
+        "TreeDB/caching/db.go": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+        "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+      }
+    },
+    "race": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-race",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWRelaxedPointLaneAffinity$",
+        "-count=1",
+        "-timeout=90s",
+        "-v"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+      },
+      "toolchain": "go version go1.26.3 linux/amd64",
+      "exit": 0,
+      "seconds": 25.33246088027954,
+      "raw_sha256": "c8e11d9956f44c1ec71dc4ed7128c4d470aab97468614e182c41fb9032f564d0",
+      "sources": {
+        "TreeDB/caching/db.go": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+        "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+      }
+    },
+    "public": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB",
+        "-run",
+        "^(TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite|TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotCheckpoint)$",
+        "-count=1",
+        "-timeout=90s",
+        "-v"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+      },
+      "toolchain": "go version go1.26.3 linux/amd64",
+      "exit": 0,
+      "seconds": 8.522538423538208,
+      "raw_sha256": "6d67f4afd2eda4d27575b93ea077560852dd949f10b33449c374715aa9b4ba98",
+      "sources": {
+        "TreeDB/caching/db.go": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+        "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+      }
+    }
+  },
+  "preservation": {
+    "existing_changed": [
+      "TreeDB/caching/db.go"
+    ],
+    "new_files": [
+      "TreeDB/caching/cow_point_lane_affinity_test.go"
+    ],
+    "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+    "index_sha256": "00b16b3b8cf21964213194683a9cf771cd826d634b0269541584396f83668d47",
+    "index_unchanged": true,
+    "sources": {
+      "TreeDB/caching/db.go": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+      "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+    },
+    "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "host": "Linux mikers-MS-7E71 7.0.0-30-generic #30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026 x86_64 GNU/Linux"
+  },
+  "member_sha256": {
+    "preservation-receipt.json": "4cb7a01361b504ae68de2bd4fa0ffd2601556ea355e4152470fcf1034357ccf9",
+    "race.log": "c8e11d9956f44c1ec71dc4ed7128c4d470aab97468614e182c41fb9032f564d0",
+    "public.log": "6d67f4afd2eda4d27575b93ea077560852dd949f10b33449c374715aa9b4ba98",
+    "green.receipt.json": "381dbf9d2c4f503152f89b05b0ee2575f37b7c0271f5faf3cae890d97ff574b1",
+    "public.receipt.json": "e3281a8fd10d7bc440aa5ecfde2372f631ff15d1084a2dbfda5637f6911202e7",
+    "red.receipt.json": "187387b450baf0e59df4c1b8d5879dfa6b2a569a8396816ef3630e4a78af9b27",
+    "green.log": "283f9d7da8d671f760e45322323445ce0e104362d9f1ee2a11e625bc188af656",
+    "db.go.before": "9d38862a7a8eae58196b73b6816d39fa6b3bad657000bd72d897c376925bd1be",
+    "production.diff": "65c65725d0bddc571ba3ba26799be8b8d41cda72d8966a3d9b7878ab181e4127",
+    "race.receipt.json": "5232c19c3a74c0d2db3507436fce656bea42a0318fb5fdf5af9bdb4ce137d838",
+    "db.go.after": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+    "test-construction-compile-failure.log": "ddc13141fcf4d261c5662f4504635624cf49d91f5fbc26f419df599617934724",
+    "before.json": "35dcfe0fce859f92713c4c124da56aff39b34684d7596e8826b6a6694ab93712",
+    "cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d",
+    "test-construction-compile-failure.receipt.json": "4031388808005631b7d93a85c7ccd05417ec21dd7b3fc4cc7353d274746eee8e",
+    "red.log": "3c6d86c366c59d52eeff2877c2a6a08fe660ed47f4a1074317f11b1ee73b87d9"
+  }
+}

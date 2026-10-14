@@ -1,0 +1,80 @@
+package mvcc
+
+import (
+	"bytes"
+	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+)
+
+// Exercise the public relaxed profile: its outer-leaf setting flushes pointer
+// bytes even though CommitRelaxed never requests a sync reservation.
+func TestCOWRelaxedPublicPointLaneAffinity(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
+	opts.MemtableMode = "cow_btree"
+	opts.MemtableShards = 1
+	opts.JournalLanes = 3
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatal("fixture must exercise the public relaxed pointer-flush profile")
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	before := db.Stats()
+	if before["treedb.profile.resolved"] != string(treedb.ProfileCommandWALRelaxed) ||
+		before["treedb.cache.memtable_mode"] != "cow_btree" ||
+		before["treedb.profile.ordinary_ack_class"] != treedb.ProfileCommandWALRelaxed.OrdinaryAckClass() ||
+		before["treedb.cache.journal_lanes.effective"] != "3" {
+		t.Fatalf("unexpected resolved fixture: profile=%s mode=%s ack=%s lanes=%s", before["treedb.profile.resolved"], before["treedb.cache.memtable_mode"], before["treedb.profile.ordinary_ack_class"], before["treedb.cache.journal_lanes.effective"])
+	}
+	store := New(db)
+	key := []byte("public-point")
+	value := bytes.Repeat([]byte("pointer-value"), 32)
+	for ts := uint64(1); ts <= 8; ts++ {
+		if err := store.CommitAt(ts, []Mutation{{Key: key, Value: value}}, CommitRelaxed); err != nil {
+			t.Fatal(err)
+		}
+		requireResult(t, store, key, ts, Present, ts, value)
+		physical, err := mvcckey.Encode(key, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap := db.AcquireSnapshot()
+		entry, entryErr := snap.GetEntry(physical)
+		closeErr := snap.Close()
+		if entryErr != nil || closeErr != nil {
+			t.Fatalf("snapshot entry=%v close=%v", entryErr, closeErr)
+		}
+		lane, _ := valuelog.DecodeFileID(entry.ValuePtr.FileID)
+		// One shard and one hot generation lane map every encoded key to lane 0.
+		if entry.Flags&node.FlagPointer == 0 || lane != 0 {
+			t.Fatalf("CommitAt(%d): physical pointer=%t lane=%d, want hot affinity lane 0", ts, entry.Flags&node.FlagPointer != 0, lane)
+		}
+	}
+	after := db.Stats()
+	for _, stat := range []string{
+		"treedb.command_wal.file_sync.calls_total",
+		"treedb.cache.value_log.file_sync.calls_total",
+		"treedb.cache.value_log.directory_sync.calls_total",
+		"treedb.public.checkpoint.calls_total",
+	} {
+		requireMVCCStatDelta(t, before, after, stat, 0)
+	}
+	requireMVCCStatDelta(t, before, after, "treedb.command_wal.append.count_total", 8)
+	requireMVCCStatDelta(t, before, after, "treedb.cache.cow.publications_total", 8)
+	t.Logf("public CommitAt: 8 physical lane-0 pointers; 8 canonical WAL appends and COW publications; zero WAL/vlog file syncs, extra directory syncs, checkpoints")
+}

@@ -1,0 +1,19 @@
+--- TreeDB/caching/db.go.before
++++ TreeDB/caching/db.go.after
+@@ -38408,7 +38408,15 @@
+ 	needLaneForJournal := !b.db.disableJournal
+ 	reserveLane := durability == journalDurabilitySync || materializeCommandWALPointers
+ 	if needLaneForPointers || needLaneForJournal {
+-		l, err := b.db.pickLane(reserveLane, -1)
++		preferredLane := -1
++		if b.db.cow != nil && b.db.externalCommandWAL && b.commandWALAppend != nil &&
++			!syncWrite && durability == journalDurabilityNone && needLaneForPointers && !needLaneForJournal &&
++			len(b.entries) == 1 && b.entries[0].Type == batch.OpPut && !b.entries[0].IsPtr && len(b.entries[0].Value) > 0 {
++			// Match ordinary command-WAL point placement without changing the
++			// batch producer, canonical preparation, or COW publication path.
++			preferredLane = b.db.laneForShardIndex(shardIdxs[0])
++		}
++		l, err := b.db.pickLane(reserveLane, preferredLane)
+ 		if err != nil {
+ 			unlockWriteMu()
+ 			return err

@@ -1,0 +1,10 @@
+=== RUN   TestCOWRelaxedPointLaneAffinity
+=== RUN   TestCOWRelaxedPointLaneAffinity/physical-placement
+=== RUN   TestCOWRelaxedPointLaneAffinity/multi-entry-fallback
+=== RUN   TestCOWRelaxedPointLaneAffinity/busy-release-and-close-progress
+--- PASS: TestCOWRelaxedPointLaneAffinity (0.06s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/physical-placement (0.02s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/multi-entry-fallback (0.01s)
+    --- PASS: TestCOWRelaxedPointLaneAffinity/busy-release-and-close-progress (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.074s

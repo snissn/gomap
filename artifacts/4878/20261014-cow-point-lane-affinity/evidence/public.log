@@ -1,0 +1,10 @@
+=== RUN   TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite
+=== RUN   TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite/relaxed-ordinary-write
+=== RUN   TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite/relaxed-write-sync
+--- PASS: TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite (0.02s)
+    --- PASS: TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite/relaxed-ordinary-write (0.02s)
+    --- PASS: TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite/relaxed-write-sync (0.01s)
+=== RUN   TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotCheckpoint
+--- PASS: TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotCheckpoint (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	0.046s

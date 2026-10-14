@@ -1,0 +1,5 @@
+=== RUN   TestCOWRelaxedPublicPointLaneAffinity
+    cow_point_lane_affinity_test.go:80: public CommitAt: 8 physical lane-0 pointers; 8 canonical WAL appends and COW publications; zero WAL/vlog file syncs or checkpoints; one initial directory sync
+--- PASS: TestCOWRelaxedPublicPointLaneAffinity (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	1.037s

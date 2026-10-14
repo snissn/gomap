@@ -1,0 +1,7 @@
+# github.com/snissn/gomap/TreeDB/caching [github.com/snissn/gomap/TreeDB/caching.test]
+TreeDB/caching/cow_point_lane_affinity_test.go:51:198: invalid composite literal type db.RawKVCommandWALAppendMode
+TreeDB/caching/cow_point_lane_affinity_test.go:71:10: e.IsPtr undefined (type node.LeafEntry has no field or method IsPtr)
+TreeDB/caching/cow_point_lane_affinity_test.go:73:55: e.IsPtr undefined (type node.LeafEntry has no field or method IsPtr)
+TreeDB/caching/cow_point_lane_affinity_test.go:109:10: e.IsPtr undefined (type node.LeafEntry has no field or method IsPtr)
+FAIL	github.com/snissn/gomap/TreeDB/caching [build failed]
+FAIL

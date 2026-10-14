@@ -247,7 +247,14 @@ installation. All allocation/refusal points precede acceptance:
 
 Newly produced pointer bytes are flushed for live readability through the
 registered producer before publication. This visibility flush is not fsync or
-a durable acknowledgement. Read owners use the existing physical identity pin
+a durable acknowledgement. A single ordinary unsynced COW point Put with an
+external command WAL uses the existing shard-affine value-log lane when pointer
+placement is required. This applies to both no-flush placement and the relaxed
+profile's buffered visibility flush. It avoids opening unrelated cold lanes;
+multi-entry commands and durable sync reservations retain ordinary lane selection.
+Canonical preparation, registered pointer visibility and publication remain the
+same. A busy affinity lane uses the existing lane admission and Close protocol.
+Read owners use the existing physical identity pin
 registry and registered value-log subset, with one owner per newly introduced
 distinct resource rather than one per historical RID. Actual frame dictionary
 IDs select retained definitions; cut readers do not resolve through unrelated

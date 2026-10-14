@@ -1,0 +1,17 @@
+{
+  "existing_changed": [
+    "TreeDB/caching/db.go"
+  ],
+  "new_files": [
+    "TreeDB/caching/cow_point_lane_affinity_test.go"
+  ],
+  "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "index_sha256": "00b16b3b8cf21964213194683a9cf771cd826d634b0269541584396f83668d47",
+  "index_unchanged": true,
+  "sources": {
+    "TreeDB/caching/db.go": "376af70da069dcea65e622453709219c3fe274ed1aa3bf199511907bd4fda01e",
+    "TreeDB/caching/cow_point_lane_affinity_test.go": "9f4e487c2d81714a2e239b9776c7eed7a26afc41ff22049870e412721162289d"
+  },
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "host": "Linux mikers-MS-7E71 7.0.0-30-generic #30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026 x86_64 GNU/Linux"
+}

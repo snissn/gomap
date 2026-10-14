@@ -1,0 +1,11 @@
+--- v1/TreeDB/caching/db.go
++++ v2/TreeDB/caching/db.go
+@@ -38410,7 +38410,7 @@
+ 	if needLaneForPointers || needLaneForJournal {
+ 		preferredLane := -1
+ 		if b.db.cow != nil && b.db.externalCommandWAL && b.commandWALAppend != nil &&
+-			!syncWrite && durability == journalDurabilityNone && needLaneForPointers && !needLaneForJournal &&
++			!syncWrite && (durability == journalDurabilityNone || durability == journalDurabilityFlush) && needLaneForPointers && !needLaneForJournal &&
+ 			len(b.entries) == 1 && b.entries[0].Type == batch.OpPut && !b.entries[0].IsPtr && len(b.entries[0].Value) > 0 {
+ 			// Match ordinary command-WAL point placement without changing the
+ 			// batch producer, canonical preparation, or COW publication path.

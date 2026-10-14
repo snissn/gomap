@@ -1,0 +1,8 @@
+=== RUN   TestCOWRelaxedPointLaneAffinity
+=== RUN   TestCOWRelaxedPointLaneAffinity/physical-placement
+    cow_point_lane_affinity_test.go:74: pointer=true physical lane=1 want=0
+--- FAIL: TestCOWRelaxedPointLaneAffinity (0.01s)
+    --- FAIL: TestCOWRelaxedPointLaneAffinity/physical-placement (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/caching	0.014s
+FAIL
