@@ -1,0 +1,8 @@
+=== RUN   TestRequestSameAuthorityOwnedPublications
+--- PASS: TestRequestSameAuthorityOwnedPublications (0.00s)
+=== RUN   TestRequestRefusalOwnerAndPhysicalPredicates
+--- PASS: TestRequestRefusalOwnerAndPhysicalPredicates (0.00s)
+=== RUN   TestRequestControlZeroAllocations
+--- PASS: TestRequestControlZeroAllocations (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/mvccadmission	1.005s

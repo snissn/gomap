@@ -1,0 +1,15 @@
+{
+  "base": "0f54343e4f9f0a37deccc761edd869716ce07c4c",
+  "fixture_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "recovered_trace_ref": "3d7a8710ff5e7c1038f492dabc6be4514e89b84f",
+  "dependency_head": "3e264e162abb635c2dc3d99b641f7b3645f9480d",
+  "dependency_bounded_source_sha256": "e2300e73c98703cc697f3599577083de8952f0f4b329f0eb25a9e168ecc00f8f",
+  "runtime_source_base": "075ae77487778a872384a935c6d550359ca76452",
+  "toolchain": "go1.26.4",
+  "normal": "GREEN request controls only",
+  "race": "GREEN request controls only",
+  "public_fixture": "RED missing maintained ABI; fixture exact unchanged; temporarily copied into TreeDB/mvcc for command then retained here",
+  "status": "partial #4878; no total prune activation or qualification",
+  "released_generated_roots": [],
+  "active_commands": []
+}

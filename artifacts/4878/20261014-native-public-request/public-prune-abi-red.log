@@ -1,0 +1,14 @@
+# github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:70:16: d.BeginMaintenanceRouteTraceForTest undefined (type *treedb.DB has no field or method BeginMaintenanceRouteTraceForTest)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:72:17: undefined: PruneCursor
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:82:79: unknown field WorkRecords in struct literal of type PruneOptions
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:82:96: unknown field WorkBytes in struct literal of type PruneOptions
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:82:116: unknown field Cursor in struct literal of type PruneOptions
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:84:79: x.WorkRecords undefined (type PruneStats has no field or method WorkRecords)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:84:94: x.WorkBytes undefined (type PruneStats has no field or method WorkBytes)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:85:11: x.WorkRecords undefined (type PruneStats has no field or method WorkRecords)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:85:33: x.WorkBytes undefined (type PruneStats has no field or method WorkBytes)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:88:11: x.Cursor undefined (type PruneStats has no field or method Cursor)
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:88:11: too many errors
+FAIL	github.com/snissn/gomap/TreeDB/mvcc [build failed]
+FAIL

@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/mvcc
+TreeDB/mvcc/bounded_prune_whole_current_publication_test.go:9:2: no required module provides package github.com/snissn/gomap/TreeDB/internal/m7routetrace; to add it:
+	go get github.com/snissn/gomap/TreeDB/internal/m7routetrace
+FAIL	github.com/snissn/gomap/TreeDB/mvcc [setup failed]
+FAIL
