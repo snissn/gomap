@@ -267,13 +267,25 @@ func (o *Owner) RemoveWork(amount uint64, s *RemovalWork, w *iterator.OrdinalSca
 // BindPendingWork captures only the exact original producer and charge in an
 // external admitted receipt. It does not deduct storage before alias teardown.
 func (s *RemovalWork) BindPendingWork(o *Owner, amount uint64, w *iterator.OrdinalScanWork) (bool, error) {
-	if s == nil || o == nil || w == nil {
+	if w == nil {
+		return false, ErrWorkRequired
+	}
+	return s.bindPending(o, amount, true, w)
+}
+
+// BindPendingOriginal uses the same external receipt with ordinary synchronous
+// policy. It preserves the producer/charge check without allocating work scratch.
+func (s *RemovalWork) BindPendingOriginal(o *Owner, amount uint64) (bool, error) {
+	return s.bindPending(o, amount, false, nil)
+}
+func (s *RemovalWork) bindPending(o *Owner, amount uint64, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || o == nil {
 		return false, ErrCapacity
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bound {
-		if s.owner != o || s.amount != amount || !s.pending {
+		if s.owner != o || s.amount != amount || !s.pending || s.native != native {
 			return false, ErrCapacity
 		}
 		return true, nil
@@ -287,17 +299,33 @@ func (s *RemovalWork) BindPendingWork(o *Owner, amount uint64, w *iterator.Ordin
 	s.owner = o
 	s.amount = amount
 	s.pending = true
-	s.native = true
+	s.native = native
 	s.bound = true
 	return true, nil
 }
 
 // ContinueWork follows the disposing object's actual alias scrub.
 func (s *RemovalWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
-	if s == nil || w == nil {
+	if w == nil {
 		return false, ErrWorkRequired
 	}
+	return s.continueRemoval(true, w)
+}
+
+// ContinueOriginal synchronously drives the same checked removal stages. It
+// cannot consume a paused bounded receipt owned by another caller.
+func (s *RemovalWork) ContinueOriginal() (bool, error) {
+	return s.continueRemoval(false, nil)
+}
+func (s *RemovalWork) continueRemoval(native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil {
+		return false, ErrCapacity
+	}
 	s.mu.Lock()
+	if s.native != native {
+		s.mu.Unlock()
+		return false, ErrWorkRequired
+	}
 	if s.done {
 		s.mu.Unlock()
 		return true, nil
@@ -307,7 +335,7 @@ func (s *RemovalWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
 	if o == nil {
 		return false, ErrCapacity
 	}
-	return o.removeStep(amount, pending, true, s, w)
+	return o.removeStep(amount, pending, native, s, w)
 }
 
 // CloseWorkInto uses the disposing capture's preborn receipt. The Enrollment

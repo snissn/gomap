@@ -1,0 +1,63 @@
+File: batch-c3ba.test
+Build ID: b48d44d92418ff8dce167806e9e56561e7c6d2a8
+Type: alloc_space
+Time: 2026-10-14 08:53:33 HST
+Showing nodes accounting for 474.70kB, 0.72% of 66053.68kB total
+Dropped 246 nodes (cum <= 330.27kB)
+Showing top 55 nodes out of 206
+      flat  flat%   sum%        cum   cum%
+    -586kB  0.89%  0.89%    16.30kB 0.025%  github.com/snissn/gomap/TreeDB/batch.(*Batch).SetWithRevision
+  474.25kB  0.72%  0.17%   986.44kB  1.49%  github.com/snissn/gomap/TreeDB/batch.(*Batch).setWithMVCCInput
+ -147.45kB  0.22%  0.39%   -76.12kB  0.12%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+     144kB  0.22%  0.17%      144kB  0.22%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DependencyManifestV1).materializeV1
+  128.05kB  0.19% 0.019%   128.05kB  0.19%  github.com/snissn/gomap/TreeDB/batch.(*Batch).ensureArenaChunk
+   91.88kB  0.14%  0.16%    91.88kB  0.14%  github.com/snissn/gomap/TreeDB/pager.NewGrowth
+   76.17kB  0.12%  0.27%    76.17kB  0.12%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked
+   40.16kB 0.061%  0.33%    40.16kB 0.061%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze
+   36.87kB 0.056%  0.39%    36.87kB 0.056%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+   33.17kB  0.05%  0.44%    38.62kB 0.058%  github.com/snissn/gomap/TreeDB/pager.(*Growth).stepLockedAtCount
+   32.12kB 0.049%  0.49%    32.12kB 0.049%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceSetBuilder (inline)
+      32kB 0.048%  0.54%       32kB 0.048%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get
+      32kB 0.048%  0.59%       32kB 0.048%  github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions
+   30.25kB 0.046%  0.63%   103.98kB  0.16%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1
+   23.91kB 0.036%  0.67%    40.38kB 0.061%  github.com/snissn/gomap/TreeDB/internal/rootpublication.initializeStableResourceToken
+     -18kB 0.027%  0.64%      -18kB 0.027%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset
+  -17.52kB 0.027%  0.61%     6.39kB 0.0097%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newStableResourceToken (partial-inline)
+  -16.09kB 0.024%  0.59%   -16.09kB 0.024%  github.com/snissn/gomap/TreeDB/pager.(*Pager).ensureVerifiedCapacityLocked
+   14.88kB 0.023%  0.61%    28.16kB 0.043%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableNamespaceCreationProof).bindWithMetadata
+   13.67kB 0.021%  0.63%    13.67kB 0.021%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release
+   13.62kB 0.021%  0.65%    13.62kB 0.021%  github.com/snissn/gomap/TreeDB/batch.newPooledBatch
+   11.09kB 0.017%  0.67%    11.09kB 0.017%  github.com/snissn/gomap/TreeDB/internal/rootpublication.unionStableResourceSets
+  -10.62kB 0.016%  0.65%     4.25kB 0.0064%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableNamespaceCreationProof).Bind (partial-inline)
+    9.45kB 0.014%  0.67%    65.51kB 0.099%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+    9.30kB 0.014%  0.68%     9.30kB 0.014%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics
+   -8.02kB 0.012%  0.67%    -8.02kB 0.012%  os.init.func1
+    7.44kB 0.011%  0.68%     7.44kB 0.011%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).notifyLocked (inline)
+    6.59kB  0.01%  0.69%    53.17kB  0.08%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare
+   -6.16kB 0.0093%  0.68%    13.16kB  0.02%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growToCapacity
+    5.67kB 0.0086%  0.69%     5.67kB 0.0086%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).CloneWithPagerAllocator
+    4.88kB 0.0074%   0.7%     4.88kB 0.0074%  os.(*File).Stat
+    3.78kB 0.0057%   0.7%   240.94kB  0.36%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+   -3.12kB 0.0047%   0.7%    -3.12kB 0.0047%  runtime.mallocgc
+    2.50kB 0.0038%   0.7%     2.50kB 0.0038%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*registryTable[go.shape.struct { Platform string; VolumeID uint64; ObjectID [16]uint8; Generation uint64 },go.shape.*uint8]).set
+    2.50kB 0.0038%  0.71%     2.50kB 0.0038%  strings.genSplit
+    2.25kB 0.0034%  0.71%    19.03kB 0.029%  github.com/snissn/gomap/TreeDB/pager.(*Pager).SyncPagesWithStableFileWithCallerControl
+   -2.25kB 0.0034%  0.71%    -2.25kB 0.0034%  go/types.(*Scope).insert
+   -2.04kB 0.0031%   0.7%    -2.04kB 0.0031%  golang.org/x/sys/unix.(*mmapper).Mmap
+    1.97kB 0.003%  0.71%     1.97kB 0.003%  github.com/snissn/gomap/TreeDB/db.init.func12
+   -1.91kB 0.0029%   0.7%  -995.59kB  1.51%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func3
+    1.89kB 0.0029%  0.71%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1
+    1.89kB 0.0029%  0.71%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate
+    1.89kB 0.0029%  0.71%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newPreparedRootCandidateWithExtensions
+    1.72kB 0.0026%  0.72%     1.72kB 0.0026%  github.com/snissn/gomap/TreeDB/pager.(*dirtyChunkBits).takeFrom
+    1.69kB 0.0026%  0.72%     1.69kB 0.0026%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newDependencyManifestV1FromEncoded
+   -1.59kB 0.0024%  0.72%   -44.48kB 0.067%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).NewStableIndexResourceToken.func2
+    1.59kB 0.0024%  0.72%    52.44kB 0.079%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken.func4
+    1.02kB 0.0015%  0.72%  5537.49kB  8.38%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6
+   -0.83kB 0.0013%  0.72%    77.49kB  0.12%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+    0.62kB 0.00095%  0.72%     3.44kB 0.0052%  github.com/snissn/gomap/TreeDB/db.newRootPublicationRuntimeModeV1
+   -0.55kB 0.00083%  0.72%    12.41kB 0.019%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).NewStableIndexResourceToken
+    0.53kB 0.0008%  0.72%    82.77kB  0.13%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken
+   -0.38kB 0.00057%  0.72%    -3.19kB 0.0048%  github.com/snissn/gomap/TreeDB/db.newRootPublicationRuntimeV1
+   -0.25kB 0.00038%  0.72%    22.37kB 0.034%  github.com/snissn/gomap/TreeDB/db.openWithLock
+    0.22kB 0.00033%  0.72%    15.30kB 0.023%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop

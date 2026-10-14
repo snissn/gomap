@@ -19,7 +19,7 @@ func (state *fileProducerReleaseWork) releaseStep(native bool, w *iterator.Ordin
 		return true, nil
 	}
 	if state.phase == 1 {
-		ready, err := state.removal.ContinueWork(w)
+		ready, err := continueFileRemoval(&state.removal, native, w)
 		if ready {
 			state.phase = 2
 		}
@@ -30,7 +30,7 @@ func (state *fileProducerReleaseWork) releaseStep(native bool, w *iterator.Ordin
 		state.phase = 2
 		return true, nil
 	}
-	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*state))+128) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*state))+128) {
 		return false, nil
 	}
 	f.closeMu.Lock()
@@ -46,12 +46,12 @@ func (state *fileProducerReleaseWork) releaseStep(native bool, w *iterator.Ordin
 	defer f.deleteMu.Unlock()
 	owner, charge := f.producerMetadata, f.producerCharge
 	if owner != nil {
-		ready, err := state.removal.BindPendingWork(owner, charge, w)
+		ready, err := bindFileRemoval(&state.removal, owner, charge, native, w)
 		if !ready || err != nil {
 			return false, err
 		}
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*f))+64) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*f))+64) {
 		return false, nil
 	}
 	manager := f.manager
@@ -71,4 +71,17 @@ func (state *fileProducerReleaseWork) releaseStep(native bool, w *iterator.Ordin
 	// Return through both original File unlocks before the external receipt
 	// refunds the containing allocation on its next step.
 	return false, nil
+}
+
+func bindFileRemoval(state *retainedalloc.RemovalWork, owner *retainedalloc.Owner, charge uint64, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if native {
+		return state.BindPendingWork(owner, charge, w)
+	}
+	return state.BindPendingOriginal(owner, charge)
+}
+func continueFileRemoval(state *retainedalloc.RemovalWork, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if native {
+		return state.ContinueWork(w)
+	}
+	return state.ContinueOriginal()
 }

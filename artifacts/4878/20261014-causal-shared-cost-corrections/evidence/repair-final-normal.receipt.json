@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-run",
+    "^Test(OriginalGeneration|OriginalDATAOnlySnapshot|NativeGeneration|ManagerWrapper|NativeMVCCSet|Owner|EnrollmentWork|Removal|DurableRootTransaction|PagerLogical|PagerLifecycle|PagerTruncate|PagerAsync|GrowthPrivate|PhysicalClose|SyncIndexDataWithStable).*",
+    "./TreeDB/db",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/internal/valuelog",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/pager"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "exit": 0,
+  "source_unchanged": true,
+  "script_sha256": "baf77ad7121597807ee2749a4120670bfaaeaf71bb76ca8513e2f13d62734507",
+  "raw_sha256": "55fef4415f48ecb4a3241ae0d01b34d7980f467b20ab70f921ce426a3af1a7a2"
+}

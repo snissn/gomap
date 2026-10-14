@@ -22,6 +22,9 @@ type nativeMVCCFileCloseState struct {
 }
 
 func (f *File) CloseNativeMVCCStep(w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil {
+		return false, ErrNativeMVCCFileWork
+	}
 	return f.closeOriginalStep(true, w)
 }
 
@@ -41,7 +44,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 	for {
 		switch state.phase {
 		case 0:
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*f))) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*f))) {
 				return false, nil
 			}
 			state.nativeOwned = native
@@ -63,7 +66,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 			state.cause = errors.Join(f.constructionParentErrors[0], f.constructionParentErrors[1])
 			state.phase = 1
 		case 1:
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof([]byte{}))+128) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof([]byte{}))+128) {
 				return false, nil
 			}
 			f.scratchMu.Lock()
@@ -93,7 +96,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 				state.phase = 3
 				continue
 			}
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(groupedFrameCacheSlot{}))+2*uint64(unsafe.Sizeof(groupedFrameCacheShard{}))+128) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(groupedFrameCacheSlot{}))+2*uint64(unsafe.Sizeof(groupedFrameCacheShard{}))+128) {
 				return false, nil
 			}
 			shard := &cache.shards[state.shard]
@@ -108,7 +111,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 			}
 			shard.mu.Unlock()
 		case 3:
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(ownedMmapV6{}))+48) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(ownedMmapV6{}))+48) {
 				return false, nil
 			}
 			f.remapMu.Lock()
@@ -161,7 +164,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 				return false, err
 			}
 		case 6:
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(ownedMmapV6{}))+48) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(ownedMmapV6{}))+48) {
 				return false, nil
 			}
 			f.remapMu.Lock()
@@ -180,7 +183,7 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 			f.remapMu.Unlock()
 			state.phase = 7
 		case 7:
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+128) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+128) {
 				return false, nil
 			}
 			// Persist this original close position before returning its outcome.
@@ -202,37 +205,40 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 }
 
 func closeNativeMVCCMappingV6(mapping *ownedMmapV6, native bool, w *iterator.OrdinalScanWork) (bool, error) {
-	if w == nil {
-		return false, nil
+	if native && w == nil {
+		return false, ErrNativeMVCCFileWork
 	}
 	if !mapping.constructor {
 		// Synthetic views never obtain constructor pointer-unmap authority.
 		if native && len(mapping.data) != 0 {
 			return true, errOwnedMappingV6
 		}
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*mapping))+uint64(len(mapping.data))) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*mapping))+uint64(len(mapping.data))) {
 			return false, nil
 		}
 		return true, mapping.closeV6()
 	}
 	if mapping.remainingV6() == 0 {
-		if !w.Reserve(1, uint64(unsafe.Sizeof(*mapping))) {
+		if !reserveManagerWrapperWork(w, 1, uint64(unsafe.Sizeof(*mapping))) {
 			return false, nil
 		}
 		return true, nil
 	}
 	page := uintptr(os.Getpagesize())
-	if w.Bytes > w.ByteLimit {
+	if w != nil && w.Bytes > w.ByteLimit {
 		return false, nil
 	}
-	available := w.ByteLimit - w.Bytes
+	available := ^uint64(0)
+	if w != nil {
+		available = w.ByteLimit - w.Bytes
+	}
 	overhead := 2 * uint64(unsafe.Sizeof(*mapping))
 	if available <= overhead {
 		return false, nil
 	}
 	amount := min(mapping.remainingV6(), uintptr(available-overhead))
 	amount = amount / page * page
-	if amount == 0 || !w.Reserve(1, overhead+uint64(amount)) {
+	if amount == 0 || !reserveManagerWrapperWork(w, 1, overhead+uint64(amount)) {
 		return false, nil
 	}
 	_, err := unmapOwnedRangeV6(mapping, amount)

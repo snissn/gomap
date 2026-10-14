@@ -1,0 +1,49 @@
+File: batch-c3ba.test
+Build ID: b48d44d92418ff8dce167806e9e56561e7c6d2a8
+Type: alloc_space
+Time: 2026-10-14 08:53:33 HST
+Active filters:
+   focus=Batch.*writeOptimistic
+Showing nodes accounting for 185.21kB, 0.28% of 66053.68kB total
+Showing top 40 nodes out of 98
+      flat  flat%   sum%        cum   cum%
+ -147.45kB  0.22%  0.22%   -76.12kB  0.12%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+   73.73kB  0.11%  0.11%    73.73kB  0.11%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked
+      72kB  0.11% 0.0026%       72kB  0.11%  github.com/snissn/gomap/TreeDB/pager.NewGrowth
+   37.50kB 0.057% 0.054%    37.50kB 0.057%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze
+   36.87kB 0.056%  0.11%    36.87kB 0.056%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+   30.25kB 0.046%  0.16%   103.98kB  0.16%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1
+      30kB 0.045%   0.2%       30kB 0.045%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceSetBuilder (inline)
+   13.23kB  0.02%  0.22%    13.23kB  0.02%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release
+    9.45kB 0.014%  0.24%    65.51kB 0.099%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+    9.30kB 0.014%  0.25%     9.30kB 0.014%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics
+    6.80kB  0.01%  0.26%     6.80kB  0.01%  github.com/snissn/gomap/TreeDB/internal/rootpublication.unionStableResourceSets
+    5.67kB 0.0086%  0.27%     5.67kB 0.0086%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).CloneWithPagerAllocator (inline)
+    3.78kB 0.0057%  0.27%   240.94kB  0.36%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+    1.97kB 0.003%  0.28%     1.97kB 0.003%  github.com/snissn/gomap/TreeDB/db.init.func12
+   -1.91kB 0.0029%  0.27%  -995.59kB  1.51%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func3
+    1.89kB 0.0029%  0.28%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1
+    1.89kB 0.0029%  0.28%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate
+    1.89kB 0.0029%  0.28%     1.89kB 0.0029%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newPreparedRootCandidateWithExtensions
+   -0.68kB 0.001%  0.28%    -0.68kB 0.001%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*PreparedRootCandidate).DurableRootGroup (inline)
+   -0.56kB 0.00085%  0.28%    -0.56kB 0.00085%  github.com/snissn/gomap/TreeDB/db.init.func9
+   -0.50kB 0.00076%  0.28%    -0.50kB 0.00076%  github.com/snissn/gomap/TreeDB/zipper.init.func4
+    0.25kB 0.00038%  0.28%     0.25kB 0.00038%  github.com/snissn/gomap/TreeDB/db.growPrimaryRuntimeSlice[go.shape.*uint8]
+   -0.17kB 0.00026%  0.28%    -0.17kB 0.00026%  sync.(*poolChain).pushHead
+   -0.11kB 0.00017%  0.28%    -0.11kB 0.00017%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).WaitThrough
+    0.08kB 0.00012%  0.28%     0.08kB 0.00012%  weak.runtime_registerWeakPointer
+    0.04kB 5.9e-05%  0.28%     0.04kB 5.9e-05%  sync.(*Pool).pinSlow
+   -0.03kB 4.7e-05%  0.28%   185.21kB  0.28%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+    0.03kB 4.7e-05%  0.28%    72.11kB  0.11%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+    0.03kB 4.7e-05%  0.28%     0.03kB 4.7e-05%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages
+   -0.03kB 4.7e-05%  0.28%    69.92kB  0.11%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0%  0.28%    96.66kB  0.15%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write
+         0     0%  0.28%    88.55kB  0.13%  github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync
+         0     0%  0.28%   185.21kB  0.28%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0%  0.28%   185.21kB  0.28%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0%  0.28%   185.21kB  0.28%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0%  0.28%     2.81kB 0.0043%  github.com/snissn/gomap/TreeDB/db.(*DB).buildValueLogRefDelta
+         0     0%  0.28%     2.81kB 0.0043%  github.com/snissn/gomap/TreeDB/db.(*DB).buildValueLogRefDeltaWithOptions
+         0     0%  0.28%    44.94kB 0.068%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1
+         0     0%  0.28%    -5.67kB 0.0086%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithLimitsV1
+         0     0%  0.28%     5.67kB 0.0086%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithMetadataV1

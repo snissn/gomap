@@ -1,0 +1,49 @@
+File: batch-c3ba.test
+Build ID: b48d44d92418ff8dce167806e9e56561e7c6d2a8
+Type: alloc_objects
+Time: 2026-10-14 08:53:33 HST
+Active filters:
+   focus=Batch.*writeOptimistic
+Showing nodes accounting for 768, 0.35% of 218218 total
+Showing top 40 nodes out of 80
+      flat  flat%   sum%        cum   cum%
+       242  0.11%  0.11%        570  0.26%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+       192 0.088%   0.2%        192 0.088%  github.com/snissn/gomap/TreeDB/pager.NewGrowth
+       121 0.055%  0.25%        121 0.055%  github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1
+       121 0.055%  0.31%        250  0.11%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+       121 0.055%  0.37%        121 0.055%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+       121 0.055%  0.42%        121 0.055%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release
+      -120 0.055%  0.37%         74 0.034%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+       119 0.055%  0.42%        119 0.055%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics
+       -87  0.04%  0.38%        -87  0.04%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*PreparedRootCandidate).DurableRootGroup (inline)
+       -74 0.034%  0.35%      -4483  2.05%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func3
+         7 0.0032%  0.35%          7 0.0032%  github.com/snissn/gomap/TreeDB/db.init.func12
+         6 0.0027%  0.35%          6 0.0027%  github.com/snissn/gomap/TreeDB/db.growPrimaryRuntimeSlice[go.shape.*uint8]
+         5 0.0023%  0.35%          5 0.0023%  weak.runtime_registerWeakPointer
+        -2 0.00092%  0.35%        768  0.35%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         2 0.00092%  0.35%        199 0.091%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+        -2 0.00092%  0.35%         -2 0.00092%  github.com/snissn/gomap/TreeDB/db.init.func9
+         2 0.00092%  0.35%          2 0.00092%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages
+        -2 0.00092%  0.35%        195 0.089%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+        -2 0.00092%  0.35%         -2 0.00092%  sync.(*poolChain).pushHead
+        -1 0.00046%  0.35%         -1 0.00046%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).WaitThrough
+        -1 0.00046%  0.35%         -1 0.00046%  github.com/snissn/gomap/TreeDB/zipper.init.func4
+         0     0%  0.35%        473  0.22%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+         0     0%  0.35%        295  0.14%  github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync (inline)
+         0     0%  0.35%        768  0.35%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0%  0.35%        768  0.35%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0%  0.35%        768  0.35%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0%  0.35%         15 0.0069%  github.com/snissn/gomap/TreeDB/db.(*DB).buildValueLogRefDelta
+         0     0%  0.35%         15 0.0069%  github.com/snissn/gomap/TreeDB/db.(*DB).buildValueLogRefDeltaWithOptions
+         0     0%  0.35%        240  0.11%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1
+         0     0%  0.35%       -121 0.055%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithLimitsV1
+         0     0%  0.35%        121 0.055%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithMetadataV1
+         0     0%  0.35%        570  0.26%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+         0     0%  0.35%        111 0.051%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitPostWork
+         0     0%  0.35%      -4167  1.91%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func3.1
+         0     0%  0.35%       4409  2.02%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4
+         0     0%  0.35%       4167  1.91%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4.1
+         0     0%  0.35%          6 0.0027%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).reserveVisibleCapacity
+         0     0%  0.35%        768  0.35%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0%  0.35%         15 0.0069%  github.com/snissn/gomap/TreeDB/db.newValueLogRefDelta (inline)
+         0     0%  0.35%        -10 0.0046%  github.com/snissn/gomap/TreeDB/db.releaseValueLogRefDelta

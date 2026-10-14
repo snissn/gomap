@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-run",
+    "^Test(NativeMVCCOriginal|OriginalManager|ManagerReleaseZombie|ManagerSharedRetirementParent).*",
+    "./TreeDB/internal/valuelog"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "exit": 0,
+  "source_unchanged": true,
+  "script_sha256": "baf77ad7121597807ee2749a4120670bfaaeaf71bb76ca8513e2f13d62734507",
+  "raw_sha256": "29e6964e1d2b6a812f999e3d1fe36b4d90b335e985e359c329efddda5e50681f"
+}

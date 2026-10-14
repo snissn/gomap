@@ -1,0 +1,9 @@
+{"Time":"2026-10-14T09:04:12.464233608-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/pager"}
+{"Time":"2026-10-14T09:04:12.465224678-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLogicalAllocationWithinExistingCapacity"}
+{"Time":"2026-10-14T09:04:12.465234338-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLogicalAllocationWithinExistingCapacity","Output":"=== RUN   TestPagerLogicalAllocationWithinExistingCapacity\n"}
+{"Time":"2026-10-14T09:04:12.465601571-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLogicalAllocationWithinExistingCapacity","Output":"    physical_close_work_test.go:238: logical allocation created private control: 1 allocations\n"}
+{"Time":"2026-10-14T09:04:12.465695642-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLogicalAllocationWithinExistingCapacity","Output":"--- FAIL: TestPagerLogicalAllocationWithinExistingCapacity (0.00s)\n"}
+{"Time":"2026-10-14T09:04:12.465698032-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLogicalAllocationWithinExistingCapacity","Elapsed":0}
+{"Time":"2026-10-14T09:04:12.465700702-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"FAIL\n"}
+{"Time":"2026-10-14T09:04:12.465861524-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/pager\t0.002s\n"}
+{"Time":"2026-10-14T09:04:12.465872714-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/pager","Elapsed":0.002}

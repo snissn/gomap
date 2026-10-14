@@ -752,6 +752,17 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 	if uint64(count) > ^uint64(0)-start {
 		return 0, fmt.Errorf("pager: page count overflow")
 	}
+
+	target := start + uint64(count)
+	// Ordinary logical allocation reuses the same guarded count install when
+	// every containing backing already covers the target. No Growth is created.
+	if ready, err := p.installCountWithinCapacity(target); ready || err != nil {
+		if err != nil {
+			return 0, err
+		}
+		p.maybeSchedulePreGrow(int64(p.localPageCount(target)) * page.PageSize)
+		return start, nil
+	}
 	g, _, e := NewGrowthForPager(p, start+uint64(count), nil)
 	if e != nil {
 		return 0, e

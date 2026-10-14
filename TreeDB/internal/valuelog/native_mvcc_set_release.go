@@ -26,6 +26,9 @@ func (e *nativeMVCCSetReleaseFailure) Error() string   { return "value-log origi
 func (e *nativeMVCCSetReleaseFailure) Unwrap() []error { return e.causes[:] }
 
 func (m *Manager) ReleaseNativeMVCCSetStep(set *Set, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil {
+		return false, ErrNativeMVCCFileWork
+	}
 	return m.releaseNativeMVCCSetStep(set, true, w)
 }
 func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.OrdinalScanWork) (bool, error) {
@@ -55,7 +58,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 			}
 			state.managerBound = true
 		}
-		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*set))) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*set))) {
 			return false, nil
 		}
 		refs := set.RefCount.Add(-1)
@@ -70,7 +73,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 	}
 	for state.next < set.retentionShape.FileCount {
 		if state.phase == 1 {
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(File{}))+128) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(File{}))+128) {
 				return false, nil
 			}
 			f := set.nativeFiles[state.next]
@@ -123,7 +126,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 			state.phase = 4
 		}
 		if state.phase == 4 {
-			if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(File{}))+32) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(File{}))+32) {
 				return false, nil
 			}
 			f := state.current
@@ -142,7 +145,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 			}
 			// The external control has no physical aliases after actual completion.
 			// Its next use starts only after that completed original removal.
-			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(state.fileRefund))+32) {
+			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(state.fileRefund))+32) {
 				return false, nil
 			}
 			state.fileRefund = fileProducerReleaseWork{}
@@ -151,7 +154,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 		}
 	}
 	if state.phase != 6 {
-		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(set.Files))) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(set.Files))) {
 			return false, nil
 		}
 		set.Files = nil
@@ -161,7 +164,7 @@ func (m *Manager) releaseNativeMVCCSetStep(set *Set, native bool, w *iterator.Or
 	if !ready || err != nil {
 		return false, err
 	}
-	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(set.Files))) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+uint64(unsafe.Sizeof(set.Files))) {
 		return false, nil
 	}
 	set.Files = nil
@@ -194,7 +197,7 @@ func (m *Manager) finishNativeMVCCTerminalStep(f *File, native bool, w *iterator
 		return false, ErrNativeMVCCFileWork
 	}
 	if state.phase == 0 {
-		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*m))+128) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*m))+128) {
 			return false, nil
 		}
 		m.mu.Lock()
@@ -216,7 +219,7 @@ func (m *Manager) finishNativeMVCCTerminalStep(f *File, native bool, w *iterator
 		state.phase = 2
 	}
 	if state.phase == 2 {
-		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*f))+retirementParentRetentionEnvelope+128) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*f))+retirementParentRetentionEnvelope+128) {
 			return false, nil
 		}
 		// The actual final parent Close remains outside Manager membership locks.
@@ -224,7 +227,7 @@ func (m *Manager) finishNativeMVCCTerminalStep(f *File, native bool, w *iterator
 		state.phase = 3
 	}
 	if state.phase == 3 {
-		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*m))+128) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*f))+2*uint64(unsafe.Sizeof(*m))+128) {
 			return false, nil
 		}
 		m.mu.Lock()

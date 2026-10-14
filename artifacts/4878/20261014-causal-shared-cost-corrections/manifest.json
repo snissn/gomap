@@ -1,0 +1,214 @@
+{
+ "members": [
+  {
+   "path": "evidence/batch-baseline.allocs.pprof",
+   "bytes": 71923,
+   "sha256": "6360d4618fa7751571fa5735ec2f14699789a2ad4ed27cdba6fed1393fe08521"
+  },
+  {
+   "path": "evidence/batch-c3ba.allocs.pprof",
+   "bytes": 75823,
+   "sha256": "d69a29172962e487ff3370021aafeab0d24ae07c4f0013df0887f3740faf6f91"
+  },
+  {
+   "path": "evidence/batch-diff-alloc_objects.raw",
+   "bytes": 6377,
+   "sha256": "ac5c1e508e71fe0976457d4d447c7b8bbf722cf8646982aa12165655d06d80bb"
+  },
+  {
+   "path": "evidence/batch-diff-alloc_space.raw",
+   "bytes": 6705,
+   "sha256": "d4742c6e7372aaf8a89e5b9d64ee3b84274d19776f0347c441cf00e14e66c09b"
+  },
+  {
+   "path": "evidence/batch-foreground-diff-alloc_objects.raw",
+   "bytes": 4934,
+   "sha256": "6f667a2f25d899b610fb9578f39068cd006c0f42b61f7b092172b593ed3af966"
+  },
+  {
+   "path": "evidence/batch-foreground-diff-alloc_space.raw",
+   "bytes": 4937,
+   "sha256": "b73b461b82d34ff48b7110ce707c98b60fa35d914e57f7d6c533c075c3cb2cb3"
+  },
+  {
+   "path": "evidence/escape.receipt.json",
+   "bytes": 566,
+   "sha256": "17122a4bac8cb4e3f72494b6f19efd51d76d12d25dd33271d30fd284241c8abf"
+  },
+  {
+   "path": "evidence/generation-red-source-after.json",
+   "bytes": 375644,
+   "sha256": "ebff8af5e03c6e4467f58e6593354150ae6c73c214cb10bd134972db54b0cb79"
+  },
+  {
+   "path": "evidence/generation-red-source-before.json",
+   "bytes": 375644,
+   "sha256": "ebff8af5e03c6e4467f58e6593354150ae6c73c214cb10bd134972db54b0cb79"
+  },
+  {
+   "path": "evidence/generation-red.raw",
+   "bytes": 3713,
+   "sha256": "80cd3bafc529af80e2680db4a5d4fb469b9845bcf831ee3db596db06c63a2750"
+  },
+  {
+   "path": "evidence/generation-red.receipt.json",
+   "bytes": 718,
+   "sha256": "82abc252cbf6b0afef1a5461e904bfdb64fa0b9f47bf1cb88f2bfcde9bc5ba79"
+  },
+  {
+   "path": "evidence/pager-allocation-red-source-after.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/pager-allocation-red-source-before.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/pager-allocation-red.overlay.json",
+   "bytes": 490,
+   "sha256": "b0f6008b1f854dd3f35c83c397feceb6b0d208121f2c853607d2c6883dc75606"
+  },
+  {
+   "path": "evidence/pager-allocation-red.raw",
+   "bytes": 1678,
+   "sha256": "04b3b859ea7147be5b8374e2ddfc122c63f85dce137f5143fb90905890c3379d"
+  },
+  {
+   "path": "evidence/pager-allocation-red.receipt.json",
+   "bytes": 813,
+   "sha256": "20b1b109dd2eaedd6900a76da6ff573645734a0eac2676af6a0f7084c3243706"
+  },
+  {
+   "path": "evidence/repair-final-normal-source-after.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-final-normal-source-before.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-final-normal.raw",
+   "bytes": 44886,
+   "sha256": "55fef4415f48ecb4a3241ae0d01b34d7980f467b20ab70f921ce426a3af1a7a2"
+  },
+  {
+   "path": "evidence/repair-final-normal.receipt.json",
+   "bytes": 1004,
+   "sha256": "eccf683d9f8420768110b1aabe36f41d403ccf47e0295d249e2753f13d641764"
+  },
+  {
+   "path": "evidence/repair-final-race-source-after.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-final-race-source-before.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-final-race.raw",
+   "bytes": 85703,
+   "sha256": "91c66dd21374b918875c6894eebad15ca64d43de75dd052e4bdf1c5a59ef2a8f"
+  },
+  {
+   "path": "evidence/repair-final-race.receipt.json",
+   "bytes": 1103,
+   "sha256": "e30472f8f52b01e9f454209fffe834f60b2b66e3826c9afdf8a6b02c53ad4b45"
+  },
+  {
+   "path": "evidence/repair-release-normal-source-after.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-release-normal-source-before.json",
+   "bytes": 375644,
+   "sha256": "6a066f21ed73bf2817b22af219978f917dc19e67e7000a7a40b2071771bb8df6"
+  },
+  {
+   "path": "evidence/repair-release-normal.raw",
+   "bytes": 41388,
+   "sha256": "29e6964e1d2b6a812f999e3d1fe36b4d90b335e985e359c329efddda5e50681f"
+  },
+  {
+   "path": "evidence/repair-release-normal.receipt.json",
+   "bytes": 722,
+   "sha256": "ee71e1e2d207766bf49208aaa7f45fce2d95894349409dd538d4ea25398925d6"
+  },
+  {
+   "path": "report.json",
+   "bytes": 2780,
+   "sha256": "10d2c67c49636b98d65a5cf1bc62e659f52b4bd9d39637738776e980d52f44b7"
+  },
+  {
+   "path": "root-backimport-receipt.json",
+   "bytes": 3754,
+   "sha256": "58c26e4945c4c6600511382d2f015588a2975b9b89c956f5a66d906c54da7300"
+  },
+  {
+   "path": "source/TreeDB/db/index_gen.go",
+   "bytes": 10158,
+   "sha256": "ce0500b66fe8ace815aa6037cae5616c8c692044eeab7266bd6409d99b6f610c"
+  },
+  {
+   "path": "source/TreeDB/db/native_generation_failure_predicates_test.go",
+   "bytes": 2769,
+   "sha256": "22b1bd39cd49e6c5fa8c1229aa775b9b59a4f2ef5ce698ebafc9eea1196eebb6"
+  },
+  {
+   "path": "source/TreeDB/db/original_startup_generation.go",
+   "bytes": 7947,
+   "sha256": "d18c812235b4718b61738b7dee560c5bcaf5ea0a339c34e01af9a7c693c7e6cc"
+  },
+  {
+   "path": "source/TreeDB/internal/retainedalloc/owner_work.go",
+   "bytes": 14068,
+   "sha256": "c39a32692fdc2fc44797e7f5f562f47c8901957f191a5f0e0fd452b91aaf0ebc"
+  },
+  {
+   "path": "source/TreeDB/internal/valuelog/file_producer_work.go",
+   "bytes": 2658,
+   "sha256": "1f2bd7c804943d1f67d46c7abd0b8ab7d5f0299688f1a4c1ab4d28fcce335884"
+  },
+  {
+   "path": "source/TreeDB/internal/valuelog/manager.go",
+   "bytes": 103172,
+   "sha256": "2b8b49a5bcb77f3e4a5ed1dcc5515e874c42a099d3d83c5246df9ef9b457f8ed"
+  },
+  {
+   "path": "source/TreeDB/internal/valuelog/manager_wrapper_work.go",
+   "bytes": 6092,
+   "sha256": "5334f40ff52115e1e7696974351452582dad0daaeb5713ebdae9f0c433d3e7e1"
+  },
+  {
+   "path": "source/TreeDB/internal/valuelog/native_mvcc_file_close.go",
+   "bytes": 6941,
+   "sha256": "d4fc22483cf2686e9689a64d48c1c5ef2ad7b42051edb46ff2bdd39b486410c8"
+  },
+  {
+   "path": "source/TreeDB/internal/valuelog/native_mvcc_set_release.go",
+   "bytes": 7681,
+   "sha256": "de7d21a23d5fe9d7bd672c19daefbb0345224f0f54c553e77cc1b4b27d77713e"
+  },
+  {
+   "path": "source/TreeDB/pager/grow_work.go",
+   "bytes": 20577,
+   "sha256": "1694fb224c20369adcf7bf3bd31660fe988596ce492ff0ffa2c48302251240e8"
+  },
+  {
+   "path": "source/TreeDB/pager/pager.go",
+   "bytes": 45359,
+   "sha256": "855763fa79b7864a135a1532d9a3063ba3ff52b6755ede3bb35c025fb174eee3"
+  },
+  {
+   "path": "source/TreeDB/pager/physical_close_work_test.go",
+   "bytes": 7226,
+   "sha256": "48be758c1f6c5dad10cc842ebda4df3846488986ddd09716fb340794f51eddb6"
+  }
+ ]
+}

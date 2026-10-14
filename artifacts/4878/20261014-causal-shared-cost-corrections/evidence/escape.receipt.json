@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-run",
+    "^$",
+    "-gcflags=github.com/snissn/gomap/TreeDB/internal/valuelog=-m=2",
+    "./TreeDB/internal/valuelog"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "exit": 0,
+  "source_unchanged": true,
+  "script_sha256": "17e8328ab3881556651daef73fbbf84c592c7825dc939c519a29b8786cbf5fcc"
+}

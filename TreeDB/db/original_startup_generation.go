@@ -117,6 +117,13 @@ func (g *indexGen) finishOfflineSourceV1(operation error) (*retainedalloc.Owner,
 		return nil, 0, &g.startupReceipt
 	}
 	cleanup := g.startupDB.Close()
+	// A completed DB Close can precede the outer namespace parent Close.
+	// Preserve the original physical refusal carried by the operation.
+	// A semantic operation refusal alone does not retain source or LOCK.
+	var original *originalDBCleanupFailure
+	if errors.As(operation, &original) {
+		cleanup = errors.Join(cleanup, original)
+	}
 	if cleanup != nil {
 		g.startupReceipt.cause = errors.Join(operation, cleanup, ErrRecoveryRequired)
 		g.startupReceipt.generation = g

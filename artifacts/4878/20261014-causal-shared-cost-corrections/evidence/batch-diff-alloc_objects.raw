@@ -1,0 +1,63 @@
+File: batch-c3ba.test
+Build ID: b48d44d92418ff8dce167806e9e56561e7c6d2a8
+Type: alloc_objects
+Time: 2026-10-14 08:53:33 HST
+Showing nodes accounting for 1336, 0.61% of 218218 total
+Dropped 197 nodes (cum <= 1091)
+Showing top 55 nodes out of 174
+      flat  flat%   sum%        cum   cum%
+       245  0.11%  0.11%        245  0.11%  github.com/snissn/gomap/TreeDB/pager.NewGrowth
+       242  0.11%  0.22%        570  0.26%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+       160 0.073%   0.3%        160 0.073%  strings.genSplit
+       125 0.057%  0.35%        125 0.057%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release
+       121 0.055%  0.41%        121 0.055%  github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1
+       121 0.055%  0.46%        250  0.11%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+       121 0.055%  0.52%        121 0.055%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+      -120 0.055%  0.47%         74 0.034%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+       119 0.055%  0.52%        119 0.055%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics
+       106 0.049%  0.57%        167 0.077%  github.com/snissn/gomap/TreeDB/pager.(*Growth).stepLockedAtCount
+       -87  0.04%  0.53%        -87  0.04%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*PreparedRootCandidate).DurableRootGroup (inline)
+       -74 0.034%  0.49%      -4483  2.05%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func3
+        68 0.031%  0.53%         68 0.031%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).notifyLocked (inline)
+        68 0.031%  0.56%        272  0.12%  github.com/snissn/gomap/TreeDB/internal/rootpublication.initializeStableResourceToken
+       -59 0.027%  0.53%         34 0.016%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growToCapacity
+        46 0.021%  0.55%       9400  4.31%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6
+       -45 0.021%  0.53%        103 0.047%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+        37 0.017%  0.55%         37 0.017%  weak.runtime_registerWeakPointer
+       -36 0.016%  0.53%        -34 0.016%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare
+        36 0.016%  0.55%         36 0.016%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DependencyManifestV1).materializeV1
+       -34 0.016%  0.53%       -375  0.17%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).NewStableIndexResourceToken.func2
+        34 0.016%  0.55%        704  0.32%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken
+        34 0.016%  0.56%        376  0.17%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken.func4
+        34 0.016%  0.58%        272  0.12%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableNamespaceCreationProof).bindWithMetadata
+        34 0.016%  0.59%         34 0.016%  github.com/snissn/gomap/TreeDB/pager.(*dirtyChunkBits).takeFrom
+        26 0.012%  0.61%        200 0.092%  github.com/snissn/gomap/TreeDB/pager.(*Pager).SyncPagesWithStableFileWithCallerControl
+        24 0.011%  0.62%         24 0.011%  os.(*File).Stat
+       -22  0.01%  0.61%        -22  0.01%  github.com/snissn/gomap/TreeDB/pager.(*Pager).syncDirtyChunksWithFile
+         9 0.0041%  0.61%          9 0.0041%  github.com/snissn/gomap/TreeDB/db.growPrimaryRuntimeSlice[go.shape.*uint8]
+         8 0.0037%  0.61%          8 0.0037%  github.com/snissn/gomap/TreeDB/batch.newPooledBatch (inline)
+        -8 0.0037%  0.61%         -8 0.0037%  github.com/snissn/gomap/TreeDB/db.encodeValueLogRefCounts
+        -8 0.0037%  0.61%         -8 0.0037%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewIdentityPinRegistry
+         7 0.0032%  0.61%         21 0.0096%  github.com/snissn/gomap/TreeDB/batch.(*Batch).setWithMVCCInput
+         7 0.0032%  0.61%          7 0.0032%  github.com/snissn/gomap/TreeDB/db.init.func12
+         6 0.0027%  0.62%          6 0.0027%  github.com/snissn/gomap/TreeDB/batch.(*Batch).ensureArenaChunk
+        -6 0.0027%  0.61%         -6 0.0027%  github.com/snissn/gomap/TreeDB/pager.(*Pager).ensureVerifiedCapacityLocked
+        -6 0.0027%  0.61%         -6 0.0027%  golang.org/x/sys/unix.(*mmapper).Mmap
+        -5 0.0023%  0.61%         -5 0.0023%  runtime.mallocgc
+         4 0.0018%  0.61%          7 0.0032%  github.com/snissn/gomap/TreeDB/db.encodeValueLogRefCountsOwned
+        -4 0.0018%  0.61%        -22  0.01%  github.com/snissn/gomap/TreeDB/db.newRootPublicationRuntimeV1
+        -4 0.0018%  0.61%         39 0.018%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         4 0.0018%  0.61%          6 0.0027%  os.statNolog
+        -2 0.00092%  0.61%        768  0.35%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         2 0.00092%  0.61%          8 0.0037%  github.com/snissn/gomap/TreeDB/db.(*DB).initializeRecoveredSnapshotV1
+         2 0.00092%  0.61%        199 0.091%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+         2 0.00092%  0.61%         20 0.0092%  github.com/snissn/gomap/TreeDB/db.newRootPublicationRuntimeModeV1
+         2 0.00092%  0.61%         16 0.0073%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newStableNamespaceCreationProofWithMetadata
+         2 0.00092%  0.61%         58 0.027%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop
+         2 0.00092%  0.61%         16 0.0073%  github.com/snissn/gomap/TreeDB/pager.initializeFilePager
+        -2 0.00092%  0.61%        195 0.089%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0%  0.61%        -10 0.0046%  github.com/snissn/gomap/TreeDB/batch.(*Batch).Close
+         0     0%  0.61%         10 0.0046%  github.com/snissn/gomap/TreeDB/batch.(*Batch).Set
+         0     0%  0.61%          6 0.0027%  github.com/snissn/gomap/TreeDB/batch.(*Batch).arenaCopyPair
+         0     0%  0.61%         18 0.0082%  github.com/snissn/gomap/TreeDB/batch.Acquire (inline)
+         0     0%  0.61%         18 0.0082%  github.com/snissn/gomap/TreeDB/batch.New

@@ -215,3 +215,36 @@ func TestPhysicalCloseRetainedSyncFailureDoesNotRestoreDisposedMapping(t *testin
 		t.Fatal(err)
 	}
 }
+
+// Ordinary foreground allocation must not allocate a private Growth when the
+// original mapping and bookkeeping backings already cover the logical pages.
+func TestPagerLogicalAllocationWithinExistingCapacity(t *testing.T) {
+	p, err := Open(filepath.Join(t.TempDir(), "logical.db"), 2<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.QuiesceBackgroundGrowth()
+	if _, err = p.Alloc(1); err != nil {
+		t.Fatal(err)
+	}
+	start := p.PageCount()
+	allocations := testing.AllocsPerRun(64, func() {
+		if _, err = p.Alloc(1); err != nil {
+			panic(err)
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("logical allocation created private control: %g allocations", allocations)
+	}
+	if p.PageCount() != start+65 {
+		t.Fatal("logical publication did not advance exact count")
+	}
+	// A real backing expansion continues through the constructor and preserves
+	// the original allocated page and normal reopen extent.
+	prior := p.PageCount()
+	id, err := p.Alloc(1024)
+	if err != nil || id != prior || p.PageCount() != prior+1024 {
+		t.Fatalf("expansion: %d %v", id, err)
+	}
+}

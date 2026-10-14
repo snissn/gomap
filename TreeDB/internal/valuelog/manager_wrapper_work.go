@@ -37,7 +37,7 @@ func (state *ManagerWrapperReleaseWork) BindSnapshotWrapper(m *Manager, w *itera
 	if state.manager != nil || state.phase != 0 {
 		return false, rootpublication.ErrResourceOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+64) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+64) {
 		return false, nil
 	}
 	state.manager = m
@@ -48,10 +48,10 @@ func (state *ManagerWrapperReleaseWork) BindSnapshotWrapper(m *Manager, w *itera
 // The original Set releases no Snapshot borrow. Its embedded receipt merely
 // completes the original terminal Manager after its final File aliases clear.
 func (state *ManagerWrapperReleaseWork) bindSetWrapper(m *Manager, w *iterator.OrdinalScanWork) (bool, error) {
-	if state == nil || m == nil || w == nil || state.manager != nil || state.phase != 0 {
+	if state == nil || m == nil || state.manager != nil || state.phase != 0 {
 		return false, rootpublication.ErrResourceOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*m))+64) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*m))+64) {
 		return false, nil
 	}
 	m.mu.Lock()
@@ -82,9 +82,8 @@ func (state *ManagerWrapperReleaseWork) ReleaseOriginal(m *Manager) {
 	}
 	state.manager = m
 	state.consumesBorrow = true
-	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	for {
-		ready, err := state.releaseStep(false, &w)
+		ready, err := state.releaseStep(false, nil)
 		if err != nil {
 			panic(err)
 		}
@@ -108,7 +107,7 @@ func (state *ManagerWrapperReleaseWork) releaseStep(native bool, w *iterator.Ord
 		return true, nil
 	}
 	if state.phase == 2 {
-		ready, err := state.removal.ContinueWork(w)
+		ready, err := state.continueRemoval(native, w)
 		if ready {
 			state.phase = 3
 		}
@@ -119,7 +118,7 @@ func (state *ManagerWrapperReleaseWork) releaseStep(native bool, w *iterator.Ord
 		return false, rootpublication.ErrResourceOwnership
 	}
 	if state.phase == 0 {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(*state))+64) {
+		if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(*state))+64) {
 			return false, nil
 		}
 		m.mu.Lock()
@@ -133,7 +132,7 @@ func (state *ManagerWrapperReleaseWork) releaseStep(native bool, w *iterator.Ord
 		state.phase = 1
 		m.mu.Unlock()
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+64) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*m))+64) {
 		return false, nil
 	}
 	m.mu.Lock()
@@ -150,12 +149,12 @@ func (state *ManagerWrapperReleaseWork) releaseStep(native bool, w *iterator.Ord
 		m.mu.Unlock()
 		return true, nil
 	}
-	ready, err := state.removal.BindPendingWork(m.producerMetadata, m.producerCharge, w)
+	ready, err := state.bindRemoval(m.producerMetadata, m.producerCharge, native, w)
 	if !ready || err != nil {
 		m.mu.Unlock()
 		return false, err
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+64) {
+	if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof(*m))+64) {
 		m.mu.Unlock()
 		return false, nil
 	}
@@ -164,7 +163,8 @@ func (state *ManagerWrapperReleaseWork) releaseStep(native bool, w *iterator.Ord
 	state.manager = nil
 	state.phase = 2
 	m.mu.Unlock()
-	ready, err = state.removal.ContinueWork(w)
+	m = nil
+	ready, err = state.continueRemoval(native, w)
 	if ready {
 		state.phase = 3
 	}
@@ -179,4 +179,20 @@ func (m *Manager) clearTerminalAliasesLocked() {
 	m.groupedFrameCacheBudget = nil
 	m.stableResourcePins = nil
 	m.dir, m.extraScanDirs = "", nil
+}
+
+func reserveManagerWrapperWork(w *iterator.OrdinalScanWork, records, bytes uint64) bool {
+	return w == nil || w.Reserve(records, bytes)
+}
+func (state *ManagerWrapperReleaseWork) bindRemoval(owner *retainedalloc.Owner, charge uint64, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if native {
+		return state.removal.BindPendingWork(owner, charge, w)
+	}
+	return state.removal.BindPendingOriginal(owner, charge)
+}
+func (state *ManagerWrapperReleaseWork) continueRemoval(native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if native {
+		return state.removal.ContinueWork(w)
+	}
+	return state.removal.ContinueOriginal()
 }

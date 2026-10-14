@@ -1,0 +1,86 @@
+{
+ "at_utc": "2026-10-14T19:24:51.797956+00:00",
+ "prior_head": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+ "scope": "Construction checkpoint, not ordinary/native/performance acceptance",
+ "production_paths": 10,
+ "changed_risk_tests": 2,
+ "shared_import_receipt_sha256": "58c26e4945c4c6600511382d2f015588a2975b9b89c956f5a66d906c54da7300",
+ "checks": [
+  {
+   "stem": "repair-final-normal",
+   "exit": 0,
+   "run": 45,
+   "pass": 45,
+   "fail": [],
+   "source_difference_from_current": [
+    "TreeDB/db/original_startup_generation.go"
+   ],
+   "raw_sha256": "55fef4415f48ecb4a3241ae0d01b34d7980f467b20ab70f921ce426a3af1a7a2"
+  },
+  {
+   "stem": "repair-release-normal",
+   "exit": 0,
+   "run": 43,
+   "pass": 43,
+   "fail": [],
+   "source_difference_from_current": [
+    "TreeDB/db/original_startup_generation.go"
+   ],
+   "raw_sha256": "29e6964e1d2b6a812f999e3d1fe36b4d90b335e985e359c329efddda5e50681f"
+  },
+  {
+   "stem": "repair-final-race",
+   "exit": 0,
+   "run": 88,
+   "pass": 88,
+   "fail": [],
+   "source_difference_from_current": [
+    "TreeDB/db/original_startup_generation.go"
+   ],
+   "raw_sha256": "91c66dd21374b918875c6894eebad15ca64d43de75dd052e4bdf1c5a59ef2a8f"
+  },
+  {
+   "stem": "generation-red",
+   "exit": 1,
+   "run": 2,
+   "pass": 0,
+   "fail": [
+    "TestNativeGenerationPublishedFailurePredicates",
+    "TestOriginalGenerationPublishedFailureConcurrentInspection"
+   ],
+   "source_difference_from_current": [
+    "TreeDB/db/index_gen.go",
+    "TreeDB/db/original_startup_generation.go",
+    "TreeDB/internal/retainedalloc/owner_work.go",
+    "TreeDB/internal/valuelog/file_producer_work.go",
+    "TreeDB/internal/valuelog/manager.go",
+    "TreeDB/internal/valuelog/manager_wrapper_work.go",
+    "TreeDB/internal/valuelog/native_mvcc_file_close.go",
+    "TreeDB/internal/valuelog/native_mvcc_set_release.go",
+    "TreeDB/pager/grow_work.go",
+    "TreeDB/pager/pager.go",
+    "TreeDB/pager/physical_close_work_test.go"
+   ],
+   "raw_sha256": "80cd3bafc529af80e2680db4a5d4fb469b9845bcf831ee3db596db06c63a2750"
+  },
+  {
+   "stem": "pager-allocation-red",
+   "exit": 1,
+   "run": 1,
+   "pass": 0,
+   "fail": [
+    "TestPagerLogicalAllocationWithinExistingCapacity"
+   ],
+   "source_difference_from_current": [
+    "TreeDB/db/original_startup_generation.go"
+   ],
+   "raw_sha256": "04b3b859ea7147be5b8374e2ddfc122c63f85dce137f5143fb90905890c3379d"
+  }
+ ],
+ "limitations": [
+  "Causal checks use Go1.26.4; no matched timing claim",
+  "Late source receipt helper added after these causal checks; combined ordinary32 normal/race controls own its qualification",
+  "Full ordinary all19, native original33/80/4096, platform/CI/review/merge and M0/M9 acceptance remain OPEN",
+  "Two existing foreign zstd diagnostic test paths preserved outside focused stage"
+ ]
+}

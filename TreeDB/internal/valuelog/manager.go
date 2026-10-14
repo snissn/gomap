@@ -2581,9 +2581,8 @@ func (m *Manager) Release(set *Set) error {
 	// Production Sets within the maintained native cap use exactly the same
 	// embedded continuation as native callers, with the ordinary unlimited policy.
 	if set.retentionKnown && set.retentionShape.FileCount <= len(set.nativeFiles) {
-		w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 		for {
-			ready, err := m.releaseNativeMVCCSetStep(set, false, &w)
+			ready, err := m.releaseNativeMVCCSetStep(set, false, nil)
 			if ready || err != nil {
 				return err
 			}

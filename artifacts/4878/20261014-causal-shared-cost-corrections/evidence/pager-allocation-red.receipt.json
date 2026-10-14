@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-overlay=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-4878-earlyperf-causal-20261014/pager-allocation-red.overlay.json",
+    "-run",
+    "^TestPagerLogicalAllocationWithinExistingCapacity$",
+    "./TreeDB/pager"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "exit": 1,
+  "source_unchanged": true,
+  "script_sha256": "baf77ad7121597807ee2749a4120670bfaaeaf71bb76ca8513e2f13d62734507",
+  "raw_sha256": "04b3b859ea7147be5b8374e2ddfc122c63f85dce137f5143fb90905890c3379d"
+}
