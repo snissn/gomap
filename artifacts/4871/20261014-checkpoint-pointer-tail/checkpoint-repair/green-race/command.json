@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-race",
+    "-json",
+    "-count=1",
+    "-timeout=180s",
+    "-run",
+    "^(TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis|TestCOWPublicPrimarySelectionLayeredPublication|TestCOWPublicContractCheckpointCloseReopen|TestPublicCommandWALGroupCommitCheckpointAndCloseWaitForFormingGroup|TestPublicCommandWALCheckpointDefaultCutoverAdmitsPostFrontierWriteSync|TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs|TestCOWMaintenanceOwnsFlushFenceAndWaitingWriterProgress|TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint|TestCOWBuildGroupRejectsChangedUserBasisBeforeApply|TestRefreshCommandWALPrimaryCheckpointFallbackV6)$",
+    "./TreeDB",
+    "./TreeDB/caching",
+    "./TreeDB/db"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014",
+  "env": {
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/empty-checkpoint-repair-20261014/scratch"
+  },
+  "sources": {
+    "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+    "TreeDB/docs/spec/write-path-and-durability.md": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea",
+    "TreeDB/command_wal_public_cached.go": "35de8e3f98d34a5cb60f51ac7ac2eed2cdcd8794d64c4012015403ecbe46d941",
+    "TreeDB/cached_backend_maintenance.go": "8308c2dde12742bb6a865dd59dc7dc872ee42f40690fc9aa12406380dd5233e2",
+    "TreeDB/caching/db.go": "42e30dacfcaac6c0699d7bf0468a5210c238425b80ad0cc490d73c2c9562ff6b",
+    "TreeDB/caching/cow_batch.go": "87be22f652e2befd4ad32e6697d518b056667fbb5e28a75069ef412e2c004d46",
+    "TreeDB/command_wal_group_commit.go": "23aa0e3d925647f46bc956689f40d0b8b4a8a320ecf9f9fc70ed70a523d102c6"
+  }
+}

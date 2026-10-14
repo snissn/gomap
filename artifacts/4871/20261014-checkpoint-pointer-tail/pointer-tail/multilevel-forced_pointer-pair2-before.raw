@@ -1,0 +1,176 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc/sprintperf
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkSprintMVCC
+BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point
+    benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+    benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582
+    benchmark_test.go:204: proven_cross_leaf_key="bulk-00000235"
+    benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.cold value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.configured value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.defaulted value=true
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.effective value=3
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.gomaxprocs value=4
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.hot value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.physical_cores value=8
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.journal_lanes.warm value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.value_log.directory_sync.calls_total value=3
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.value_log.directory_sync.errors_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.value_log.directory_sync.ns_total value=5090
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.bytes_total value=543140
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.l0.bytes_total value=187253
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.l0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_live value=187253
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_total value=187253
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_live value=178037
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_total value=178037
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.1.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_live value=177850
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_total value=177850
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.lane.2.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=before key=treedb.cache.vlog_shape.segments_total value=3
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.cold value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.configured value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.defaulted value=true
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.effective value=3
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.gomaxprocs value=4
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.hot value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.physical_cores value=8
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.journal_lanes.warm value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.value_log.directory_sync.calls_total value=3
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.value_log.directory_sync.errors_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.value_log.directory_sync.ns_total value=5090
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.bytes_total value=543205
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.l0.bytes_total value=187318
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.l0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_live value=187318
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_total value=187318
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_live value=178037
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_total value=178037
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.1.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_live value=177850
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_total value=177850
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.segment_current value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.lane.2.segments_total value=1
+    benchmark_test.go:551: lane_probe n=1 phase=after key=treedb.cache.vlog_shape.segments_total value=3
+    benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+    benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+    benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+    benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582
+    benchmark_test.go:204: proven_cross_leaf_key="bulk-00000235"
+    benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.cold value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.configured value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.defaulted value=true
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.effective value=3
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.gomaxprocs value=4
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.hot value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.physical_cores value=8
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.journal_lanes.warm value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.value_log.directory_sync.calls_total value=3
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.value_log.directory_sync.errors_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.value_log.directory_sync.ns_total value=5310
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.bytes_total value=543140
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.l0.bytes_total value=187253
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.l0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_live value=187253
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.bytes_total value=187253
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_live value=178037
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.bytes_total value=178037
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.1.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_live value=177850
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.bytes_total value=177850
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.lane.2.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=before key=treedb.cache.vlog_shape.segments_total value=3
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.cold value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.configured value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.defaulted value=true
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.effective value=3
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.gomaxprocs value=4
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.hot value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.physical_cores value=8
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.journal_lanes.warm value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.value_log.directory_sync.calls_total value=3
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.value_log.directory_sync.errors_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.value_log.directory_sync.ns_total value=5310
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.bytes_total value=547300
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.l0.bytes_total value=191413
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.l0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_live value=191413
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.bytes_total value=191413
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.0.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_live value=178037
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.bytes_total value=178037
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.1.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_live value=177850
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.bytes_total value=177850
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.rotations_idle_total value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.rotations_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.segment_current value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.segments_closed value=0
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.lane.2.segments_total value=1
+    benchmark_test.go:551: lane_probe n=64 phase=after key=treedb.cache.vlog_shape.segments_total value=3
+    benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+    benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed
+BenchmarkSprintMVCC/command_wal_relaxed/cow_btree/forced_pointer/point-4         	      64	    158676 ns/op	         1.000 ack_routing_after_ok	         1.000 ack_routing_before_ok	         1.000 close_ok	         1.000 cow_capture_calls_total/op	         1.000 cow_end_active_cuts	         9.000 cow_end_external_leases	   2398560 cow_end_peak_bytes	    602192 cow_end_total_bytes	         0 cow_end_views	         1.000 cow_prepare_calls_total/op	         1.000 cow_publications_total/op	         0 enqueued_records/op	         0 layout_after_inline	     24582 layout_after_pointer	         0 layout_before_inline	     24582 layout_before_pointer	     24582 layout_expected_records	  10155027 loop_elapsed_ns	    158672 loop_elapsed_ns/op	      5700 loop_residual_ns	        89.06 loop_residual_ns/op	         1.000 output/op	         1.000 point_calls/op	     40900 point_first_ns	         0 point_max_index	     40900 point_max_ns	     22959 point_mean_ns/op	     20290 point_p50_ns	     29340 point_p95_ns	     33260 point_p99_ns	   1469402 point_sum_ns	         0 public_checkpoints/op	        66.00 public_checkpoints_after	        66.00 public_checkpoints_before	      6302 reader_ops/s	         0 readers_while_writer_active/op	         0 rotated_shards/op	         0 scan_calls/op	         0 snapshot_rotations/op	         0 visited/op	         0 vlog_syncs/op	         0 vlog_syncs_after	         0 vlog_syncs_before	         1.000 wal_appends/op	       129.0 wal_appends_after	        65.00 wal_appends_before	         0 wal_syncs/op	       195.0 wal_syncs_after	       195.0 wal_syncs_before	     49920 writer_first_ns	        19.00 writer_max_index	   7765025 writer_max_ns	    135624 writer_mean_ns/op	      6302 writer_ops/s	     12331 writer_p50_ns	     19610 writer_p95_ns	     49920 writer_p99_ns	   8679925 writer_sum_ns	   87062 B/op	     191 allocs/op
+PASS

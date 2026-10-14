@@ -1,0 +1,44 @@
+--- frozen-prototype/benchmark_test.go
++++ pointer-tail/benchmark_test.go
+@@ -412,6 +412,41 @@
+ 						b.ReportMetric(float64(visited)/float64(b.N), "visited/op")
+ 						b.ReportMetric(float64(2*scanCount+pointCount)/float64(b.N), "output/op")
+ 						b.ReportMetric(float64(overlapping.Load())/float64(b.N), "readers_while_writer_active/op")
++						// Diagnostic reporting only: all samples already exist; timer is stopped.
++						var callSum int64
++						b.ReportMetric(float64(elapsed.Nanoseconds()), "loop_elapsed_ns")
++						b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N), "loop_elapsed_ns/op")
++						for _, samples := range []struct {
++							name   string
++							values []int64
++							active bool
++						}{{"writer", writerTimes, true}, {"point", pointTimes, pointCount > 0}, {"scan", scanTimes, scanCount > 0}} {
++							if !samples.active {
++								continue
++							}
++							var sum, maximum int64
++							maxIndex := 0
++							for index, value := range samples.values {
++								sum += value
++								if value > maximum {
++									maximum = value
++									maxIndex = index
++								}
++							}
++							callSum += sum
++							b.ReportMetric(float64(sum), samples.name+"_sum_ns")
++							b.ReportMetric(float64(sum)/float64(b.N), samples.name+"_mean_ns/op")
++							b.ReportMetric(float64(samples.values[0]), samples.name+"_first_ns")
++							b.ReportMetric(float64(maximum), samples.name+"_max_ns")
++							b.ReportMetric(float64(maxIndex), samples.name+"_max_index")
++						}
++						// This residual is meaningful for the sequential point inquiry.
++						// Concurrent call sums overlap and do not form a wall-time partition.
++						if workload == "point" {
++							residual := elapsed.Nanoseconds() - callSum
++							b.ReportMetric(float64(residual), "loop_residual_ns")
++							b.ReportMetric(float64(residual)/float64(b.N), "loop_residual_ns/op")
++						}
+ 						for _, latency := range []struct {
+ 							name   string
+ 							values []int64

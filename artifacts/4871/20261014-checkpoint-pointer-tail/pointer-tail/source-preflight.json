@@ -1,0 +1,10 @@
+{
+  "source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe",
+  "destination": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014",
+  "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "disk": [
+    1966736678912,
+    1568165494784,
+    298590932992
+  ]
+}

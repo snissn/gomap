@@ -1,0 +1,1418 @@
+[
+  {
+    "label": "small-forced_pointer-pair1-before",
+    "metrics": {
+      "loop_elapsed_ns": 6427302.0,
+      "loop_elapsed_ns/op": 100427.0,
+      "loop_residual_ns": 4580.0,
+      "loop_residual_ns/op": 71.56,
+      "point_first_ns": 30420.0,
+      "point_max_index": 0.0,
+      "point_max_ns": 30420.0,
+      "point_mean_ns/op": 16901.0,
+      "point_sum_ns": 1081689.0,
+      "writer_first_ns": 74511.0,
+      "writer_max_index": 42.0,
+      "writer_max_ns": 4497923.0,
+      "writer_mean_ns/op": 83454.0,
+      "writer_sum_ns": 5341033.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "2030",
+        "after": "2030"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "1",
+        "after": "1"
+      }
+    }
+  },
+  {
+    "label": "small-forced_pointer-pair1-after",
+    "metrics": {
+      "loop_elapsed_ns": 7155589.0,
+      "loop_elapsed_ns/op": 111806.0,
+      "loop_residual_ns": 4490.0,
+      "loop_residual_ns/op": 70.16,
+      "point_first_ns": 24980.0,
+      "point_max_index": 0.0,
+      "point_max_ns": 24980.0,
+      "point_mean_ns/op": 13771.0,
+      "point_sum_ns": 881359.0,
+      "writer_first_ns": 71941.0,
+      "writer_max_index": 42.0,
+      "writer_max_ns": 5454292.0,
+      "writer_mean_ns/op": 97965.0,
+      "writer_sum_ns": 6269740.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "1860",
+        "after": "1860"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "1",
+        "after": "1"
+      }
+    }
+  },
+  {
+    "label": "small-forced_pointer-pair2-after",
+    "metrics": {
+      "loop_elapsed_ns": 9046068.0,
+      "loop_elapsed_ns/op": 141345.0,
+      "loop_residual_ns": 5650.0,
+      "loop_residual_ns/op": 88.28,
+      "point_first_ns": 26690.0,
+      "point_max_index": 57.0,
+      "point_max_ns": 27470.0,
+      "point_mean_ns/op": 16793.0,
+      "point_sum_ns": 1074733.0,
+      "writer_first_ns": 65631.0,
+      "writer_max_index": 42.0,
+      "writer_max_ns": 6978677.0,
+      "writer_mean_ns/op": 124464.0,
+      "writer_sum_ns": 7965685.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "1920",
+        "after": "1920"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "1",
+        "after": "1"
+      }
+    }
+  },
+  {
+    "label": "small-forced_pointer-pair2-before",
+    "metrics": {
+      "loop_elapsed_ns": 8219139.0,
+      "loop_elapsed_ns/op": 128424.0,
+      "loop_residual_ns": 4510.0,
+      "loop_residual_ns/op": 70.47,
+      "point_first_ns": 28851.0,
+      "point_max_index": 0.0,
+      "point_max_ns": 28851.0,
+      "point_mean_ns/op": 16466.0,
+      "point_sum_ns": 1053798.0,
+      "writer_first_ns": 71830.0,
+      "writer_max_index": 42.0,
+      "writer_max_ns": 6301661.0,
+      "writer_mean_ns/op": 111888.0,
+      "writer_sum_ns": 7160831.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "1910",
+        "after": "1910"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "111",
+        "after": "4719"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "1",
+        "after": "1"
+      }
+    }
+  },
+  {
+    "label": "multilevel-forced_pointer-pair1-before",
+    "metrics": {
+      "loop_elapsed_ns": 10291949.0,
+      "loop_elapsed_ns/op": 160812.0,
+      "loop_residual_ns": 5420.0,
+      "loop_residual_ns/op": 84.69,
+      "point_first_ns": 40320.0,
+      "point_max_index": 27.0,
+      "point_max_ns": 49940.0,
+      "point_mean_ns/op": 23233.0,
+      "point_sum_ns": 1486924.0,
+      "writer_first_ns": 110811.0,
+      "writer_max_index": 19.0,
+      "writer_max_ns": 7771025.0,
+      "writer_mean_ns/op": 137494.0,
+      "writer_sum_ns": 8799605.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "5080",
+        "after": "5080"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "543140",
+        "after": "547300"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "3",
+        "after": "3"
+      }
+    }
+  },
+  {
+    "label": "multilevel-forced_pointer-pair1-after",
+    "metrics": {
+      "loop_elapsed_ns": 9235399.0,
+      "loop_elapsed_ns/op": 144303.0,
+      "loop_residual_ns": 5370.0,
+      "loop_residual_ns/op": 83.91,
+      "point_first_ns": 27751.0,
+      "point_max_index": 37.0,
+      "point_max_ns": 29250.0,
+      "point_mean_ns/op": 18137.0,
+      "point_sum_ns": 1160775.0,
+      "writer_first_ns": 60560.0,
+      "writer_max_index": 19.0,
+      "writer_max_ns": 7142858.0,
+      "writer_mean_ns/op": 126082.0,
+      "writer_sum_ns": 8069254.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "5150",
+        "after": "5150"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "543140",
+        "after": "547300"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "3",
+        "after": "3"
+      }
+    }
+  },
+  {
+    "label": "multilevel-forced_pointer-pair2-after",
+    "metrics": {
+      "loop_elapsed_ns": 5343351.0,
+      "loop_elapsed_ns/op": 83490.0,
+      "loop_residual_ns": 4480.0,
+      "loop_residual_ns/op": 70.0,
+      "point_first_ns": 27060.0,
+      "point_max_index": 0.0,
+      "point_max_ns": 27060.0,
+      "point_mean_ns/op": 15026.0,
+      "point_sum_ns": 961638.0,
+      "writer_first_ns": 51640.0,
+      "writer_max_index": 19.0,
+      "writer_max_ns": 3608205.0,
+      "writer_mean_ns/op": 68394.0,
+      "writer_sum_ns": 4377233.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "16811",
+        "after": "16811"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "543140",
+        "after": "547300"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "3",
+        "after": "3"
+      }
+    }
+  },
+  {
+    "label": "multilevel-forced_pointer-pair2-before",
+    "metrics": {
+      "loop_elapsed_ns": 10155027.0,
+      "loop_elapsed_ns/op": 158672.0,
+      "loop_residual_ns": 5700.0,
+      "loop_residual_ns/op": 89.06,
+      "point_first_ns": 40900.0,
+      "point_max_index": 0.0,
+      "point_max_ns": 40900.0,
+      "point_mean_ns/op": 22959.0,
+      "point_sum_ns": 1469402.0,
+      "writer_first_ns": 49920.0,
+      "writer_max_index": 19.0,
+      "writer_max_ns": 7765025.0,
+      "writer_mean_ns/op": 135624.0,
+      "writer_sum_ns": 8679925.0
+    },
+    "stable_lane_counters": {
+      "treedb.cache.journal_lanes.cold": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.configured": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.journal_lanes.defaulted": {
+        "before": "true",
+        "after": "true"
+      },
+      "treedb.cache.journal_lanes.effective": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.journal_lanes.gomaxprocs": {
+        "before": "4",
+        "after": "4"
+      },
+      "treedb.cache.journal_lanes.hot": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.journal_lanes.physical_cores": {
+        "before": "8",
+        "after": "8"
+      },
+      "treedb.cache.journal_lanes.warm": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.value_log.directory_sync.calls_total": {
+        "before": "3",
+        "after": "3"
+      },
+      "treedb.cache.value_log.directory_sync.errors_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.value_log.directory_sync.ns_total": {
+        "before": "5310",
+        "after": "5310"
+      },
+      "treedb.cache.vlog_shape.bytes_total": {
+        "before": "543140",
+        "after": "547300"
+      },
+      "treedb.cache.vlog_shape.l0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.l0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_live": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.bytes_total": {
+        "before": "187253",
+        "after": "191413"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.0.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_live": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.bytes_total": {
+        "before": "178037",
+        "after": "178037"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.1.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_live": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.bytes_total": {
+        "before": "177850",
+        "after": "177850"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_idle_total": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.rotations_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segment_current": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_closed": {
+        "before": "0",
+        "after": "0"
+      },
+      "treedb.cache.vlog_shape.lane.2.segments_total": {
+        "before": "1",
+        "after": "1"
+      },
+      "treedb.cache.vlog_shape.segments_total": {
+        "before": "3",
+        "after": "3"
+      }
+    }
+  }
+]

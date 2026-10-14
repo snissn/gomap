@@ -1,0 +1,7 @@
+{
+  "source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014/TreeDB/public.go",
+  "before": "cd7a986a24e4fd705e8177b4d823e5b15d7b1b674dd40b32d4a74d00853f3f09",
+  "after": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+  "receipt_sha256": "4520a3a5f2eb6e5e3d7ad139c29664fe9020776468789b990bba7b14085aa767",
+  "common_to_both_variants": true
+}

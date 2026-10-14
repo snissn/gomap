@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-timeout=120s",
+    "-run",
+    "^TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis$",
+    "./TreeDB"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014",
+  "env": {
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/empty-checkpoint-repair-20261014/scratch"
+  },
+  "sources": {
+    "TreeDB/public.go": "cd7a986a24e4fd705e8177b4d823e5b15d7b1b674dd40b32d4a74d00853f3f09",
+    "TreeDB/cow_public_primary_selection_test.go": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+    "TreeDB/command_wal_public_cached.go": "35de8e3f98d34a5cb60f51ac7ac2eed2cdcd8794d64c4012015403ecbe46d941",
+    "TreeDB/cached_backend_maintenance.go": "8308c2dde12742bb6a865dd59dc7dc872ee42f40690fc9aa12406380dd5233e2",
+    "TreeDB/caching/db.go": "42e30dacfcaac6c0699d7bf0468a5210c238425b80ad0cc490d73c2c9562ff6b"
+  }
+}

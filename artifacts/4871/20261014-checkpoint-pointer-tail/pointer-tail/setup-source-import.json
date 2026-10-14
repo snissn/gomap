@@ -1,0 +1,10 @@
+{
+  "frozen_source_census_sha256": "773d924168c412ee93359b91a9a7f4c8300a9d092e33b4df94976fa486dc3789",
+  "copied_source_files": 4257,
+  "removed_checkout_only_source_files": [],
+  "go.mod": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+  "go.sum": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+  "index_before": "ba3a9d19191abe8824bd3e12aa394bd85b597e9f4d89bd3e9c6104fa5482433e",
+  "index_after": "ba3a9d19191abe8824bd3e12aa394bd85b597e9f4d89bd3e9c6104fa5482433e",
+  "source_before_and_after_verified": true
+}

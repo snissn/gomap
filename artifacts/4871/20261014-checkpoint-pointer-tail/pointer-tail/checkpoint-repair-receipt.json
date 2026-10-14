@@ -1,0 +1,158 @@
+{
+  "at_utc": "2026-10-14T21:04:07.354617+00:00",
+  "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "branch": "codex/5111-empty-checkpoint-20261014",
+  "source_sha256": "a50c4c5bd884d610232f8d890b6d5acbf89958f4197711945567d78bc5b6a57c",
+  "base_sha256": "b20c48886c23bf4493b3369e59fe4731963079a06f2aeda71f306d6bb268737b",
+  "patch_sha256": "813be8f356727dcc1b6c1d5a5d8d180dfb164c8704ebc1780cd3009a22796822",
+  "changed": [
+    {
+      "path": "TreeDB/cow_public_primary_selection_test.go",
+      "before_sha256": "68c837c488281223764735758d3454ec4f0367f34cdf76c8b3bbae027b1dc771",
+      "sha256": "9f12c15b0d095ca370903644c0f0ac32198a299c06ebc7f0817ead0c48db67de",
+      "bytes": 13496
+    },
+    {
+      "path": "TreeDB/public.go",
+      "before_sha256": "cd7a986a24e4fd705e8177b4d823e5b15d7b1b674dd40b32d4a74d00853f3f09",
+      "sha256": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+      "bytes": 106593
+    },
+    {
+      "path": "TreeDB/docs/spec/write-path-and-durability.md",
+      "before_sha256": "0ea707242960d580ecff19b1b672802ecb0af072920bd8a0eb1bc239114f1121",
+      "sha256": "5ca1f41c8a004ec6f82f75041068a72e5c506b068798a67f4f2d516e23c645ea",
+      "bytes": 47042
+    }
+  ],
+  "runs": {
+    "red": {
+      "exit": 1,
+      "top_tests": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis",
+          "Action": "fail"
+        }
+      ],
+      "files": {
+        "raw.jsonl": "1daf5d275172f483d82304a46f88ca3b659dd2a79adfc2023e39e69512986df6",
+        "exit.json": "8ef199e2ba32edcf45464649ce4dae0f2106f394db6f819c55faa6df8200c959",
+        "command.json": "a8ce7c2766172f0954777aa3e6d7c44f57893b952ad2b6af81a794a43b4af138"
+      }
+    },
+    "green-normal": {
+      "exit": 0,
+      "top_tests": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALGroupCommitCheckpointAndCloseWaitForFormingGroup",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALCheckpointDefaultCutoverAdmitsPostFrontierWriteSync",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicContractCheckpointCloseReopen",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicPrimarySelectionLayeredPublication",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceOwnsFlushFenceAndWaitingWriterProgress",
+          "Action": "pass"
+        }
+      ],
+      "files": {
+        "raw.jsonl": "0c4f2bef48c4f8553b22cf6cb27302fd4fae536af5718eec2e40446029dde3ea",
+        "exit.json": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88",
+        "command.json": "28a8bb56265b7af86e9818d8ba75b22a8a11b820134fab55e0b1f9eea12e6771"
+      }
+    },
+    "green-race": {
+      "exit": 0,
+      "top_tests": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceOwnsFlushFenceAndWaitingWriterProgress",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALGroupCommitCheckpointAndCloseWaitForFormingGroup",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestPublicCommandWALCheckpointDefaultCutoverAdmitsPostFrontierWriteSync",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicContractCheckpointCloseReopen",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicPrimarySelectionLayeredPublication",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Test": "TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/db",
+          "Test": "TestCOWBuildGroupRejectsChangedUserBasisBeforeApply",
+          "Action": "pass"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/db",
+          "Test": "TestRefreshCommandWALPrimaryCheckpointFallbackV6",
+          "Action": "pass"
+        }
+      ],
+      "files": {
+        "raw.jsonl": "4ec7ff3e14902e8546cd24e74e7068c63bddcbd65d8b8c03d8863ba3983be8c2",
+        "exit.json": "5bc232b82de377a5655a39a2af9d7ae0fc868de5b9df957e18905cb914606c88",
+        "command.json": "29e8cb274535c6174421411a76fc7cb27b98a0c7160cc9fcef6039764b830ca8"
+      }
+    }
+  },
+  "source_unchanged_after_checks": true,
+  "quiescent": true,
+  "no_source_commit": true
+}

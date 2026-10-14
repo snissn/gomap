@@ -1,0 +1,129 @@
+--- a/TreeDB/cow_public_primary_selection_test.go
++++ b/TreeDB/cow_public_primary_selection_test.go
+@@ -298,3 +298,88 @@
+ 		})
+ 	}
+ }
++
++// Fallback convergence may publish a new physical PRIMARY root even when the
++// cached checkpoint had no dirty entries. The next C1 write must inherit it.
++func TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
++	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
++		for _, pointer := range []bool{false, true} {
++			t.Run(fmt.Sprintf("%s/pointer=%v", profile, pointer), func(t *testing.T) {
++				database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
++					opts.DisableSideStores = true
++					opts.BackgroundCheckpointInterval = -1
++					opts.BackgroundCheckpointIdleDuration = -1
++					opts.DisableBackgroundPrune = true
++					if !pointer {
++						opts.ValueLog.PointerThreshold = 1 << 20
++						opts.ValueLog.ForcePointers = false
++					}
++				})
++				first, second, third := []byte("first"), []byte("second"), []byte("third")
++				if pointer {
++					first = bytes.Repeat(first, 900)
++					second = bytes.Repeat(second, 900)
++					third = bytes.Repeat(third, 900)
++				}
++				for _, value := range [][]byte{first, second} {
++					if err := database.Set([]byte("a"), value); err != nil {
++						t.Fatal(err)
++					}
++					if err := database.Checkpoint(); err != nil {
++						t.Fatal("dirty checkpoint", err)
++					}
++				}
++				old := database.AcquireSnapshot()
++				if old == nil {
++					t.Fatal("missing old cut")
++				}
++				defer old.Close()
++				oldBasis := publicPrimaryBasis(t, old)
++				if err := database.Checkpoint(); err != nil {
++					t.Fatal("empty checkpoint", err)
++				}
++				successor, ok := database.backend.StateToken()
++				if !ok || !primaryarena.IsPage(successor.RootPageID) {
++					t.Fatal("missing actual PRIMARY successor")
++				}
++				fresh := database.AcquireSnapshot()
++				if fresh == nil {
++					t.Fatal("missing fresh cut")
++				}
++				actual := publicPrimaryBasis(t, fresh)
++				if err := fresh.Close(); err != nil {
++					t.Fatal(err)
++				}
++				t.Logf("empty checkpoint basis old=%v backend=%v fresh=%v", oldBasis, successor, actual)
++				if actual != successor {
++					t.Errorf("empty checkpoint left stale COW basis: got=%v want=%v", actual, successor)
++				}
++				if publicPrimaryBasis(t, old) != oldBasis {
++					t.Fatal("empty checkpoint mutated retained old cut")
++				}
++				cowPublicContractSnapshotValue(t, old, "a", second, true)
++				if err := database.Set([]byte("a"), third); err != nil {
++					t.Fatal("post-checkpoint write", err)
++				}
++				cowPublicContractSnapshotValue(t, old, "a", second, true)
++				if err := old.Close(); err != nil {
++					t.Fatal(err)
++				}
++				if err := database.Close(); err != nil {
++					t.Fatal("checked Close after empty checkpoint and write", err)
++				}
++				reopened, err := Open(opts)
++				if err != nil {
++					t.Fatal("reopen", err)
++				}
++				defer reopened.Close()
++				if got, err := reopened.Get([]byte("a")); err != nil || !bytes.Equal(got, third) {
++					t.Fatalf("reopen value length=%d err=%v", len(got), err)
++				}
++				if err := reopened.Close(); err != nil {
++					t.Fatal("reopened Close", err)
++				}
++			})
++		}
++	}
++}
+--- a/TreeDB/public.go
++++ b/TreeDB/public.go
+@@ -2702,8 +2702,17 @@
+ 		return err
+ 	}
+ 	if db.commandWALCached && db.backend != nil {
+-		if err := db.refreshPublicCommandWALCheckpointFallback(); err != nil {
+-			return err
++		var refreshErr error
++		if db.cached.COWMode() {
++			// Even an empty checkpoint can advance the backend's physical root.
++			// Drain admitted writers before taking the command-WAL gate, then
++			// install that successor basis before admitting another C1 publication.
++			refreshErr = db.runCachedBackendMaintenance(db.refreshPublicCommandWALCheckpointFallback)
++		} else {
++			refreshErr = db.refreshPublicCommandWALCheckpointFallback()
++		}
++		if refreshErr != nil {
++			return refreshErr
+ 		}
+ 		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
+ 			return err
+--- a/TreeDB/docs/spec/write-path-and-durability.md
++++ b/TreeDB/docs/spec/write-path-and-durability.md
+@@ -11,6 +11,13 @@
+ live reference retires. The marker grants no new logical asset authority and
+ never substitutes for reference integrity or exact GC pins. See the
+ [typed storage layout](storage-format.md) for the record and rotation rules.
++
++In public command-WAL COW mode, a checkpoint with no dirty cached entries may
++still republish the backend fallback root. That publication runs inside the
++existing cache maintenance fence: admitted writers drain, the backend publishes,
++and the cache captures the exact successor backend basis before writers resume.
++Previously captured immutable cuts retain their original basis and values. The
++same ordering applies to the final public checkpoint during `Close`.
+ 
+ ## 0. Frozen Publication Contract
+ 

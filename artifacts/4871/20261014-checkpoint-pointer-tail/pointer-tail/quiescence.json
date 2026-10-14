@@ -1,0 +1,10 @@
+{
+  "owned_go_test_producers": [],
+  "observed_go_test_producer_lines": [],
+  "process_snapshot_sha256": "ee0223a7b57d7a1c27c8585e24416f6f1e73c82fdd47a895646ed60e4a178d31",
+  "source_unchanged_after_build_and8calls": true,
+  "calls_completed": 8,
+  "all_exits_zero": true,
+  "process_elapsed_s": 4.836113214492798,
+  "binaries_retained_without_release": true
+}

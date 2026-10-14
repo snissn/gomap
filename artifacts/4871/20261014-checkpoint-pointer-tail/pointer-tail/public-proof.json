@@ -1,0 +1,82 @@
+[
+  {
+    "label": "small-forced_pointer-pair1-before",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "small-forced_pointer-pair1-after",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "small-forced_pointer-pair2-after",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "small-forced_pointer-pair2-before",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "multilevel-forced_pointer-pair1-before",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "multilevel-forced_pointer-pair1-after",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "multilevel-forced_pointer-pair2-after",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  },
+  {
+    "label": "multilevel-forced_pointer-pair2-before",
+    "lines": [
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10"
+    ]
+  }
+]
