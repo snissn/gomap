@@ -229,7 +229,10 @@ type COWResourceID struct {
 	ID   uint64
 }
 
-type cowResourceOwner struct{ release func() }
+type cowResourceOwner struct {
+	release  func()
+	provider COWResourceReleaseProviderV6
+}
 
 type cowGeneration struct {
 	budget           *COWBudget
@@ -237,6 +240,10 @@ type cowGeneration struct {
 	history, pending uint64
 	frozen, retired  bool
 	drainClaimed     bool
+	drainDone        bool
+	drainError       error
+	drainIndex       int
+	drainCondition   sync.Cond
 	ids              []COWResourceID
 	owners           []cowResourceOwner
 }
@@ -255,8 +262,10 @@ func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
 	}
 	b.stats.Generations++
 	b.stats.HistoryBytes += base
-	return &cowGeneration{budget: b, refs: 1, history: base,
-		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
+	g := &cowGeneration{budget: b, refs: 1, history: base,
+		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}
+	g.drainCondition.L = &b.mu
+	return g, nil
 }
 
 func (g *cowGeneration) retain() { g.budget.mu.Lock(); g.refs++; g.budget.mu.Unlock() }
@@ -279,34 +288,7 @@ func (g *cowGeneration) release() COWRetirement {
 
 // Claim under the budget lock, run callbacks outside it, then refund storage.
 // A copied retirement descriptor shares this claim and cannot double-drain.
-func (g *cowGeneration) drain() {
-	b := g.budget
-	b.mu.Lock()
-	if g.drainClaimed {
-		b.mu.Unlock()
-		return
-	}
-	g.drainClaimed = true
-	b.mu.Unlock()
-	cowReleaseOwners(g.owners)
-	b.mu.Lock()
-	history, frozen, retired := g.history, g.frozen, g.retired
-	// All original callback and array aliases end before their containing
-	// generation charge. The original budget serializes the terminal claim.
-	g.owners, g.ids, g.history = nil, nil, 0
-	g = nil
-	b.stats.TotalBytes -= history
-	b.stats.HistoryBytes -= history
-	b.stats.Generations--
-	if frozen {
-		b.stats.Sources--
-	}
-	if retired {
-		b.stats.RetiredBytes -= history
-	}
-	b.releaseControlLocked()
-	b.mu.Unlock()
-}
+func (g *cowGeneration) drain() { r := COWRetirement{generation: g}; _ = r.DrainWithError() }
 
 func cowReleaseOwners(owners []cowResourceOwner) {
 	for i := range owners {

@@ -57,21 +57,7 @@ type COWRetirement struct {
 	viewLease  *cowViewReleaseLease
 }
 
-func (r *COWRetirement) Drain() {
-	generation, prepared, lease := r.generation, r.prepared, r.viewLease
-	r.generation, r.prepared, r.viewLease = nil, nil, nil
-	if generation != nil {
-		generation.drain()
-	}
-	generation = nil
-	if prepared != nil {
-		prepared.drain()
-	}
-	prepared = nil
-	if lease != nil {
-		lease.Close()
-	}
-}
+func (r *COWRetirement) Drain() { _ = r.DrainWithError() }
 
 // COWWriter is deliberately not Table: Reset, arena borrowing/stealing, mutable
 // iterators and legacy mode dispatch cannot accidentally reach this capability.
@@ -313,6 +299,10 @@ type COWPrepared struct {
 	deferredBudget *COWBudget
 	deferredCharge uint64
 	drainClaimed   bool
+	drainDone      bool
+	drainError     error
+	drainIndex     int
+	drainCondition sync.Cond
 }
 
 func (p *COWPrepared) Charge() COWCharge { return p.charge }
@@ -397,6 +387,12 @@ func (w *COWWriter) HasResource(id COWResourceID) bool {
 // by Prepare; no append here can allocate. On refusal ownership stays with caller.
 // The callback is executed once on cancellation or last generation release.
 func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error {
+	return p.attachResourcesV6(ids, release, nil)
+}
+func (p *COWPrepared) AttachCheckedResourcesV6(ids []COWResourceID, provider COWResourceReleaseProviderV6) error {
+	return p.attachResourcesV6(ids, nil, provider)
+}
+func (p *COWPrepared) attachResourcesV6(ids []COWResourceID, release func(), provider COWResourceReleaseProviderV6) error {
 	w := p.writer
 	if w == nil {
 		return ErrCOWClosed
@@ -406,7 +402,7 @@ func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error
 	if w.pending != p {
 		return ErrCOWClosed
 	}
-	if len(ids) == 0 || release == nil {
+	if len(ids) == 0 || (release == nil && provider == nil) {
 		return fmt.Errorf("COW resource owner requires distinct identities and release")
 	}
 	if len(ids) > cap(p.ids)-len(p.ids) || len(p.owners) == cap(p.owners) {
@@ -433,7 +429,7 @@ func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error
 		}
 	}
 	p.ids = append(p.ids, ids...)
-	p.owners = append(p.owners, cowResourceOwner{release: release})
+	p.owners = append(p.owners, cowResourceOwner{release: release, provider: provider})
 	return nil
 }
 
@@ -500,6 +496,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
 		// full staging charge and resource owners until callbacks finish.
 		deferred = p.charge.Temporary + p.charge.Resources
 		p.deferredBudget = b
+		p.drainCondition.L = &b.mu
 		p.deferredCharge = deferred
 		b.stats.DeferredBytes += deferred
 		b.stats.RetiredBytes += deferred
@@ -520,26 +517,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	return r
 }
 
-func (p *COWPrepared) drain() {
-	b := p.deferredBudget
-	b.mu.Lock()
-	if p.drainClaimed {
-		b.mu.Unlock()
-		return
-	}
-	p.drainClaimed = true
-	b.mu.Unlock()
-	cowReleaseOwners(p.owners)
-	b.mu.Lock()
-	charge := p.deferredCharge
-	p.owners, p.deferredCharge = nil, 0
-	p = nil
-	b.stats.TotalBytes -= charge
-	b.stats.DeferredBytes -= charge
-	b.stats.RetiredBytes -= charge
-	b.releaseControlLocked()
-	b.mu.Unlock()
-}
+func (p *COWPrepared) drain() { r := COWRetirement{prepared: p}; _ = r.DrainWithError() }
 
 // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
 // its complete successor cut and fresh writer before making this transition.

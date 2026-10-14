@@ -3434,6 +3434,15 @@ func (db *DB) closeAfterHooks() error {
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
 
+	// The SAME native receipt can own physical Finish while its publication
+	// turn is already released. Join it before teardownMu/Stop: later capture
+	// teardown is deliberately too late for this original publication join.
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		if err := runtime.coordinator.JoinNativePublicationsV6(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("join native root publication: %w", err))
+		}
+	}
+
 	// A root producer releases writeMu after transferring its immutable build to
 	// the durable publisher, but it keeps teardownMu for reading until enqueue,
 	// admission, and ordered post-work have completed. Cross the teardown gate

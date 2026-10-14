@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"strings"
@@ -122,9 +123,12 @@ type IdentityDeleteLease struct {
 
 // IdentityPin owns one registry reference and is safe to release repeatedly.
 type IdentityPin struct {
-	registry *IdentityPinRegistry
-	identity StableIdentity
-	once     sync.Once
+	registry     *IdentityPinRegistry
+	identity     StableIdentity
+	state        *identityPinState // SAME admitted state; its live pin prevents removal
+	releaseMu    sync.Mutex
+	released     bool
+	releaseError error
 }
 
 func NewIdentityPinRegistry() *IdentityPinRegistry {
@@ -210,7 +214,7 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
 	}
 	state.pins++
 	registry.activePins++
-	return &IdentityPin{registry: registry, identity: identity}, nil
+	return &IdentityPin{registry: registry, identity: identity, state: state}, nil
 }
 
 func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
@@ -239,12 +243,59 @@ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
 	return nil
 }
 
-func (pin *IdentityPin) Release() {
-	if pin == nil || pin.registry == nil {
-		return
+// ReleaseWithWorkV6 consumes only the original pin. An observed or nonlast
+// state has no outgoing metadata cleanup and is a literal constant-size edge.
+// Native last-idle cleanup remains an explicit pre-effect refusal until its
+// registry-table/metadata disposal stages are bound to this SAME pin.
+func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if pin == nil {
+		return true, nil
 	}
-	pin.once.Do(func() { _ = pin.registry.release(pin.identity) })
+	pin.releaseMu.Lock()
+	defer pin.releaseMu.Unlock()
+	if pin.released {
+		return true, pin.releaseError
+	}
+	registry := pin.registry
+	if registry == nil {
+		pin.released = true
+		return true, nil
+	}
+	if w == nil {
+		pin.releaseError = registry.release(pin.identity)
+		pin.released = true
+		if pin.releaseError == nil {
+			pin.registry = nil
+			pin.state = nil
+		}
+		return true, pin.releaseError
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*pin))+2*uint64(unsafe.Sizeof(identityPinState{}))+128) {
+		return false, nil
+	}
+	registry.mu.Lock()
+	state := pin.state
+	if state == nil || state.pins == 0 {
+		registry.mu.Unlock()
+		return false, ErrUnbalancedResourcePin
+	}
+	if state.pins == 1 && state.observers == 0 && !state.deleting {
+		registry.mu.Unlock()
+		return false, retainedalloc.ErrWorkRequired
+	}
+	state.pins--
+	registry.activePins--
+	if state.pins == 0 && state.zero != nil {
+		close(state.zero)
+		state.zero = nil
+	}
+	pin.released = true
+	pin.registry = nil
+	pin.state = nil
+	registry.mu.Unlock()
+	return true, nil
 }
+func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
 
 func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
 	identity, err := validateRegistryIdentity(identity)

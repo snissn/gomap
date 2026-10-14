@@ -101,6 +101,8 @@ type Coordinator struct {
 	retryAttempt           PublishAttempt
 	reportingAttempt       bool
 	activeDispatch         uint64
+	nativeDispatchV6       uint64
+	nativePublicationsV6   *NativePublicationV6
 
 	resourceCoalesces    uint64
 	resourceConflicts    uint64
@@ -352,6 +354,15 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
 		pending = append(pending, entry.candidate.frontier)
 		if resources := entry.candidate.resourceSet(); resources != nil {
 			sets = append(sets, resources)
+		}
+	}
+	// Fenced native receipts have left pending, but their original physical
+	// resources remain recovery-reachable until SAME Finish consumes them.
+	for receipt := c.nativePublicationsV6; receipt != nil; receipt = receipt.next {
+		if receipt.fenced && receipt.candidate != nil {
+			if set := receipt.candidate.resourceSet(); set != nil && set.Owner() == ResourceOwnerCoordinator {
+				sets = append(sets, set)
+			}
 		}
 	}
 	sets = append(sets, c.recoverySets...)
@@ -647,7 +658,20 @@ func (c *Coordinator) endDrain(target *drainRequest) {
 // waits for the single scheduler goroutine. It does not silently claim pending
 // debt was durable.
 func (c *Coordinator) Stop(ctx context.Context) error {
+	// A caller-owned Finish may be idle between bounded calls. Join its SAME
+	// original receipt before stopping the scheduler, outside coordinator locks.
+	joinErr := c.JoinNativePublicationsV6(ctx)
 	c.mu.Lock()
+	// A hard physical refusal whose SAME original receipt has transferred to
+	// DB custody settles its join. Stop still excludes and joins the scheduler.
+	// An unsettled original call cannot be overtaken by terminal teardown.
+	if joinErr != nil && c.nativeDispatchV6 != 0 {
+		c.mu.Unlock()
+		return joinErr
+	}
+	if joinErr != nil {
+		c.stopErr = errors.Join(c.stopErr, joinErr)
+	}
 	if c.stopped {
 		err := c.stopErr
 		c.mu.Unlock()
@@ -677,7 +701,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 		}
 		if !c.stopped {
 			if len(c.pending) != 0 {
-				c.stopErr = ErrPublicationStopped
+				c.stopErr = errors.Join(c.stopErr, ErrPublicationStopped)
 			}
 			c.captureRecoveryResourcesLocked()
 			c.stopped = true
@@ -765,7 +789,7 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 
 func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
 	c.mu.Lock()
-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && !c.pendingNativeOwnedV6() && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
 	if !ready {
 		c.mu.Unlock()
 		return false, primaryPublicationCompletionV6{}

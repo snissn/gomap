@@ -62,6 +62,7 @@ func (db *DB) closeNativeMVCCBudgetV6() {
 // a nonnil error outcome. Its caller must finish native cleanup before clearing
 // Snapshot or refunding this containing allocation.
 type NativeMVCCCaptureV6 struct {
+	composite                         nativeCOWMergeV6
 	cache                             *DB
 	version                           uint64
 	probe                             int
@@ -207,6 +208,9 @@ func (db *DB) StepNativeMVCCOwnedCaptureV6(c *NativeMVCCCaptureV6, w *iterator.O
 		c.budget = b
 		c.owned = true
 	}
+	if db.cow != nil {
+		return db.stepNativeCOWCaptureV6(c, w)
+	}
 	if c.Snapshot == nil {
 		c.currentWork = w
 		snapshot, _, err := db.StepNativeMVCCCaptureV6(c, c.admitOwnedSnapshotV6, w)
@@ -324,7 +328,12 @@ func (c *NativeMVCCCaptureV6) CloseNativeMVCCOwnedCaptureV6(w *iterator.OrdinalS
 		c.ownedPhase = 1
 	}
 	if c.ownedPhase == 1 {
-		if c.Snapshot != nil {
+		if c.composite.cut != nil {
+			ready, err := c.closeNativeCOWCaptureV6(w)
+			if !ready || err != nil {
+				return false, err
+			}
+		} else if c.Snapshot != nil {
 			ready, err := c.Snapshot.CloseNativeMVCCSnapshotStepV6(w)
 			if !ready || err != nil {
 				return false, err

@@ -40,13 +40,14 @@ func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []
 		if !w.Reserve(2, 256) {
 			return false, nil
 		}
-		file, _, err := r.Snapshot.PinnedValueLogFile(ref.Log.FileID)
+		file, _, err := r.Snapshot.PinnedValueLogFile(ref.Log.ValueLogFileID())
 		if err != nil {
 			return false, err
 		}
-		if r.Leaf == nil || r.Leaf.File != file || r.Leaf.FileID != ref.Log.FileID {
+		if r.Leaf == nil {
 			return false, tree.ErrProjectionReader
 		}
+		r.Leaf.File, r.Leaf.FileID = file, ref.Log.FileID
 		ready, err := r.Leaf.BeginProjectionFrame(ref, dst, w)
 		if !ready || err != nil {
 			return ready, err

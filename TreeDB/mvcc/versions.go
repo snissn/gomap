@@ -422,8 +422,10 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
 
 // PruneOptions controls bounded physical deletion. BatchSize defaults to 256.
 type PruneOptions struct {
-	BatchSize int
-	Mode      CommitMode
+	BatchSize              int
+	Mode                   CommitMode
+	WorkRecords, WorkBytes uint64
+	Cursor                 *PruneCursor
 }
 
 // PruneStats accounts for the snapshot scanned and successfully committed
@@ -436,6 +438,9 @@ type PruneOptions struct {
 // amplification). DeleteWriteBytes is the sum of TreeDB's delete-batch
 // byte-size estimates.
 type PruneStats struct {
+	Complete                           bool
+	WorkRecords, WorkBytes             uint64
+	Cursor                             *PruneCursor
 	Visited, Skipped, Retained, Pruned uint64
 	RetainedBytes, PrunedBytes         uint64
 	DeleteWriteBytes                   uint64
@@ -449,6 +454,9 @@ type PruneStats struct {
 // Durable mode re-syncs the floor before the first delete, so interruption and
 // restart are idempotent and cannot recover pruned data without its floor.
 func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
+	if options.Cursor != nil || options.WorkRecords != 0 || options.WorkBytes != 0 {
+		return s.pruneNativeV6(options)
+	}
 	if options.Mode != CommitRelaxed && options.Mode != CommitDurable {
 		return stats, ErrInvalidCommitMode
 	}

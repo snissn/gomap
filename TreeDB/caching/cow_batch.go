@@ -139,7 +139,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 				if e != nil {
 					return e
 				}
-				resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceDictionary, ID: id}, lease: ownerLease, shard: i}
+				resource := &cowLiveResource{db: b.db, id: memtable.COWResourceID{Kind: cowResourceDictionary, ID: id}, lease: ownerLease, shard: i}
 				p.resources = append(p.resources, resource)
 				resource.definition, e = provider.PrepareDictionaryReadDefinition(id, c.readLimits(), c.budget.Limits().MaxResources, c.admitDictionaryRead)
 				if e != nil {
@@ -192,7 +192,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 			return err
 		}
 		ids := [1]memtable.COWResourceID{resource.id}
-		if err := b.cowState.prepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
+		if err := b.cowState.prepared.cut.prepared[shard].AttachCheckedResourcesV6(ids[:], resource); err != nil {
 			return err
 		}
 		resource.attached = true
@@ -200,7 +200,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 	for shard, files := range b.cowState.prepared.files {
 		for _, fileID := range files {
 			manager := b.db.valueLogReader
-			resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
+			resource := &cowLiveResource{db: b.db, id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
 			b.cowState.prepared.resources = append(b.cowState.prepared.resources, resource)
 			registry := manager.StableResourcePinRegistry()
 			identity, registered := manager.StableSegmentIdentity(fileID)
@@ -221,7 +221,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 			if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
 				return err
 			}
-			if err := b.cowState.prepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
+			if err := b.cowState.prepared.cut.prepared[shard].AttachCheckedResourcesV6(id[:], resource); err != nil {
 				return err
 			}
 			resource.attached = true
