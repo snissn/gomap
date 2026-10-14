@@ -1,0 +1,67 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "./TreeDB/internal/rootpublication",
+    "-run",
+    "^TestPrimaryFinishContainingRefundJoinsOriginalCall$",
+    "-count=1",
+    "-timeout=20s",
+    "-json"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "environment": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "source": [
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "04ad1e72b0c77bf6313869fd27834bf34b50a95e95dc3919f6dfe1ed51c75eeb",
+      "size": 44334
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "sha256": "8a3bcfdd98507566c7e602f0d23fc6ee8db62d9a0c28d8f867a750b330e487c0",
+      "size": 21786
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/ordinary_finish_v6.go",
+      "sha256": "1f53ec849a7d9adeb528bf9041c1bbc31f027cef014441befa7c339e750074cc",
+      "size": 731
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "559390de09ac704312e9634a752537b0e0fe6a46243c31665d97687c2ca28538",
+      "size": 17712
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_finish_containing_test.go",
+      "sha256": "6c34a71019d61908a89ee4d7c20f07f98c3515ec8a5859ff4e3ac2b993064ddc",
+      "size": 2447
+    },
+    {
+      "path": "go.mod",
+      "sha256": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+      "size": 5176
+    },
+    {
+      "path": "go.sum",
+      "sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+      "size": 44762
+    }
+  ],
+  "start": 1791990602.5299206,
+  "exit": 1,
+  "end": 1791990605.5780883,
+  "source_unchanged": true,
+  "census_unchanged": true,
+  "raw_sha256": "64a30f165c08cadb4e4339ab3e4ca27a06334532f4ed74c7eb7e52e630790865"
+}

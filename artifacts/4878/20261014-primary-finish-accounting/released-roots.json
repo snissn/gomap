@@ -1,0 +1,4 @@
+{
+  "released": [],
+  "reason": "No retained task test DB roots: t.TempDir cleanup consumed them. No Go producer remains. Source/raw/artifact/temp producer files remain evidence, not cleanup targets."
+}

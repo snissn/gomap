@@ -1,0 +1,26 @@
+[
+  {
+    "run": "red-finish",
+    "producer_path": "/tmp/native-finish-capture.py",
+    "producer_sha256": "e51956e558c75314c6d5b4958d8cabde024d28ff4c3ee3143cfe3d329d313765",
+    "script_artifact": "runs/final-producer.py",
+    "binding": "same uploaded script bytes, no edits during invocation; post-run readback verified",
+    "actual_subprocess_receipt": "runs/red-finish/receipt.json"
+  },
+  {
+    "run": "final-normal",
+    "producer_path": "/tmp/native-finish-capture.py",
+    "producer_sha256": "e51956e558c75314c6d5b4958d8cabde024d28ff4c3ee3143cfe3d329d313765",
+    "script_artifact": "runs/final-producer.py",
+    "binding": "same uploaded script bytes, no edits during invocation; post-run readback verified",
+    "actual_subprocess_receipt": "runs/final-normal/receipt.json"
+  },
+  {
+    "run": "final-race",
+    "producer_path": "/tmp/native-finish-capture.py",
+    "producer_sha256": "e51956e558c75314c6d5b4958d8cabde024d28ff4c3ee3143cfe3d329d313765",
+    "script_artifact": "runs/final-producer.py",
+    "binding": "same uploaded script bytes, no edits during invocation; post-run readback verified",
+    "actual_subprocess_receipt": "runs/final-race/receipt.json"
+  }
+]

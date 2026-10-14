@@ -1,0 +1,68 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/db",
+    "-run",
+    "Test(PrimaryFinish|StartupReplay|ReportPublishResult|RootPublicationBuildGroupPrimaryV6|PrimaryConstructionV6|RootPublicationOriginalSiblingFailureCustody|COWPublic(CrashAcknowledgedSyncReopen|CrashRelaxedOrdinaryReopen|EncodedMVCCPointsGroupsPhysicalDeleteReplay|ModeledInterruptedDependencyAndRootPublicationCuts))",
+    "-count=1",
+    "-timeout=180s",
+    "-json"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "environment": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "source": [
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "796c63c85d6fdc61d2f9df1929c896b0b9fc0e739f4ece8360365f755220e8c8",
+      "size": 46812
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "sha256": "e4013a402e466ec55527fc704c765fd44125878014f9e75e5b9e433a814c98d8",
+      "size": 21843
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/ordinary_finish_v6.go",
+      "sha256": "e6db4872e4bf52f2dfa63a8f1af2e3fc5735461498b1c004038ccdde3d5b3d8e",
+      "size": 768
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "9be643dd3b055b808235c650a90dcd0116a0abf6cc7ea575cdd137e37fff569c",
+      "size": 18110
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "sha256": "bf4483f04efc1559c949059ff9b2458bfe683640314df352dc3d530e172beb57",
+      "size": 2833
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_finish_containing_test.go",
+      "sha256": "47653c7cb103730b09b5c1cc2dceec90680fcbd64a5fb6c863f319910d8273b9",
+      "size": 8406
+    },
+    {
+      "path": "go.mod",
+      "sha256": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+      "size": 5176
+    },
+    {
+      "path": "go.sum",
+      "sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+      "size": 44762
+    }
+  ],
+  "start": 1791990156.7894285
+}

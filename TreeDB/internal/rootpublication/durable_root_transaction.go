@@ -504,14 +504,14 @@ func (transaction *DurableRootTransaction) prepareFromRecovery() error {
 	}
 	return nil
 }
-func (transaction *DurableRootTransaction) releaseFromRecovery() error {
+func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTerminalCompletionV6, error) {
 	if transaction == nil {
-		return nil
+		return nil, nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	if transaction.physicalCleanupError != nil {
-		return transaction.physicalCleanupError
+		return nil, transaction.physicalCleanupError
 	}
 	if transaction.constructionV6 != nil {
 		return transaction.releasePrimaryRecoveryLockedV6()
@@ -521,12 +521,12 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() error {
 		transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
 		transaction.releaseOwnerLockedV6()
 		transaction.phase = durableRootConsumed
-		return nil
+		return nil, nil
 	}
 	if transaction.ownerLockedV6() == ResourceOwnerReleased {
-		return nil
+		return nil, nil
 	}
-	return ErrDurableRootOwnership
+	return nil, ErrDurableRootOwnership
 }
 
 type durableRootGroupExtension struct {

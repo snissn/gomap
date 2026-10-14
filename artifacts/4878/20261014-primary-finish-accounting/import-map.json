@@ -1,0 +1,52 @@
+{
+  "base": "84246fa509280e24b93a5e2bbfeab90e4088bc8a",
+  "scope": "four original files and two new companions; no other import",
+  "paths": [
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "after_sha256": "796c63c85d6fdc61d2f9df1929c896b0b9fc0e739f4ece8360365f755220e8c8",
+      "after_size": 46812,
+      "before_sha256": "04ad1e72b0c77bf6313869fd27834bf34b50a95e95dc3919f6dfe1ed51c75eeb",
+      "kind": "existing",
+      "patch_sha256": "c3177fe2c729aadc0e361e835fc3002612d36113a194ed4e7c815111f9b8e966"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "after_sha256": "e4013a402e466ec55527fc704c765fd44125878014f9e75e5b9e433a814c98d8",
+      "after_size": 21843,
+      "before_sha256": "8a3bcfdd98507566c7e602f0d23fc6ee8db62d9a0c28d8f867a750b330e487c0",
+      "kind": "existing",
+      "patch_sha256": "b8aa7c22fbb5748af99caacf0ba32758597d216437867eb0ad1fa8e4a3649b5e"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/ordinary_finish_v6.go",
+      "after_sha256": "e6db4872e4bf52f2dfa63a8f1af2e3fc5735461498b1c004038ccdde3d5b3d8e",
+      "after_size": 768,
+      "before_sha256": "1f53ec849a7d9adeb528bf9041c1bbc31f027cef014441befa7c339e750074cc",
+      "kind": "existing",
+      "patch_sha256": "0c42f2954c8c28b66871968940e957edf64e1b931fdd21140321b3e1239a72ff"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "after_sha256": "9be643dd3b055b808235c650a90dcd0116a0abf6cc7ea575cdd137e37fff569c",
+      "after_size": 18110,
+      "before_sha256": "559390de09ac704312e9634a752537b0e0fe6a46243c31665d97687c2ca28538",
+      "kind": "existing",
+      "patch_sha256": "02e1055b9738a1237e308006386c8894394006171e2f3a8e5bde320b2dbd932e"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "after_sha256": "bf4483f04efc1559c949059ff9b2458bfe683640314df352dc3d530e172beb57",
+      "after_size": 2833,
+      "before_sha256": null,
+      "kind": "new"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_finish_containing_test.go",
+      "after_sha256": "47653c7cb103730b09b5c1cc2dceec90680fcbd64a5fb6c863f319910d8273b9",
+      "after_size": 8406,
+      "before_sha256": null,
+      "kind": "new"
+    }
+  ]
+}

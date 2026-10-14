@@ -1,0 +1,102 @@
+2026/10/14 05:05:24 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=128 raw=32768 stored=2689 ratio=0.082
+2026/10/14 05:05:24 treedb: value-log dict published class=single_value dict_id=11708679098542828498 k=32 payload_ratio=0.003 total_ratio=0.054
+--- FAIL: TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters (3.81s)
+    compact_storage_cached_internal_test.go:579: CompactStorage: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: merge exact manifest resource: stable resource ownership violation
+--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (0.46s)
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable (0.13s)
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+        cow_public_review_regression_test.go:339: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: merge exact manifest resource: stable resource ownership violation
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (0.24s)
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+        cow_public_review_regression_test.go:339: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: merge exact manifest resource: stable resource ownership violation
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.09s)
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+        cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+        cow_public_review_regression_test.go:339: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: merge exact manifest resource: stable resource ownership violation
+2026/10/14 05:06:02 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=32 raw=524288 stored=864 ratio=0.002
+2026/10/14 05:06:02 treedb: value-log dict published class=single_value dict_id=7578709227559384504 k=2 payload_ratio=0.001 total_ratio=0.003
+2026/10/14 05:06:03 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=8 raw=131072 stored=216 ratio=0.002
+2026/10/14 05:06:03 treedb: value-log dict published class=single_value dict_id=2985377635566361232 k=8 payload_ratio=0.001 total_ratio=0.002
+--- FAIL: TestIndexVacuumM4CertificationMatrix (3.97s)
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/pointer-values/compact-storage-full (0.07s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: index vacuum phase={Name:index-vacuum Status:not_required Required:false Reason:none Skipped:true SkipReason:no index vacuum policy debt WallTimeNanos:0}
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online (0.14s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online (0.14s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online (0.13s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full (0.13s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: merge exact manifest resource: stable resource ownership violation
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum (0.14s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum (0.13s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user (0.13s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist (0.13s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+2026/10/14 05:06:08 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=342 raw=32832 stored=7189 ratio=0.219
+2026/10/14 05:06:08 treedb: value-log dict published class=single_value dict_id=18271693823615066365 k=32 payload_ratio=0.018 total_ratio=0.155
+2026/10/14 05:06:14 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=3999 ratio=0.031
+2026/10/14 05:06:14 treedb: value-log dict published class=single_value dict_id=18112090073266034019 k=16 payload_ratio=0.024 total_ratio=0.028
+2026/10/14 05:06:15 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=4039 ratio=0.031
+2026/10/14 05:06:15 treedb: value-log dict published class=single_value dict_id=1070561664641535066 k=32 payload_ratio=0.025 total_ratio=0.028
+2026/10/14 05:06:20 treedb: dict training trained dict stream=0 dict_bytes=8192 samples=32 raw=524288 stored=864 ratio=0.002
+2026/10/14 05:06:20 treedb: value-log dict published class=single_value dict_id=7578709227559384504 k=2 payload_ratio=0.001 total_ratio=0.003
+--- FAIL: TestProductionAuthorityRealProducerCaptureMatrix (0.09s)
+    --- FAIL: TestProductionAuthorityRealProducerCaptureMatrix/system.outer_leaf_generation_manifest (0.00s)
+        production_authority_matrix_test.go:835: stable resource ownership violation
+    production_authority_matrix_test.go:852: supported real producer rows=15 want 16 on linux
+--- FAIL: TestProductionAuthorityFullClosureAndAllButOneRetryMatrix (0.01s)
+    production_authority_matrix_test.go:893: stable resource ownership violation
+--- FAIL: TestProductionAuthorityNamespaceAsymmetryVariants (0.01s)
+    production_authority_matrix_test.go:1226: stable resource ownership violation
+--- FAIL: TestProductionAuthorityLifecycleIdentityConflictMatrix (0.25s)
+    --- FAIL: TestProductionAuthorityLifecycleIdentityConflictMatrix/system.outer_leaf_generation_manifest (0.00s)
+        production_authority_matrix_test.go:1462: stable resource ownership violation
+--- FAIL: TestProductionAuthorityRepeatedCapturePostShutdownPlateau (0.00s)
+    --- FAIL: TestProductionAuthorityRepeatedCapturePostShutdownPlateau/meta.index_file (0.00s)
+panic: runtime error: index out of range [0] with length 0 [recovered, repanicked]
+
+goroutine 20546 [running]:
+testing.tRunner.func1.2({0x2842fa0, 0xc0028c58c0})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1974 +0x419
+testing.tRunner.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1977 +0x67f
+panic({0x2842fa0?, 0xc0028c58c0?})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/panic.go:860 +0x13a
+github.com/snissn/gomap/TreeDB/pager.(*dirtyChunkBits).takeFrom(0xc0028c09e0, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/dirty_chunks.go:51 +0x6e5
+github.com/snissn/gomap/TreeDB/pager.(*Pager).syncDirtyChunksWithFileWork(0xc0028c0908, 0x1, 0x0, 0xc01e68ad38, 0x0, 0x1, 0x0, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/pager.go:1105 +0x54c
+github.com/snissn/gomap/TreeDB/pager.(*Pager).SyncIndexDataWithStableFileWithCallerControl(0xc0028c0908, 0xc01e68ad38, 0x0, 0x0, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/pager.go:1052 +0x98
+github.com/snissn/gomap/TreeDB/pager.(*Pager).SyncIndexDataWithStableFileWithWork(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/pager.go:1043
+github.com/snissn/gomap/TreeDB/pager.(*Pager).SyncIndexDataWithStableFile(0xc0028c0908, 0xc01e68ad38)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/pager.go:1036 +0x3c
+github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken.func2(0xc01e68ad38, {0x40000, 0x0, 0x0, {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, ...}, ...})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/stable_resource.go:534 +0x3b
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceToken).syncThrough(0xc0075b6008, {0x40000, 0x0, 0x0, {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, ...}, ...})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_token.go:832 +0x4d6
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).SyncThrough.func1(0xc005116b40)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_set.go:4248 +0x1e5
+github.com/snissn/gomap/TreeDB/internal/rootpublication.rangeStableResourceLogicalIndex(0xc0051150e0, 0xc002891d30)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_entry_view.go:641 +0x21b
+github.com/snissn/gomap/TreeDB/internal/rootpublication.rangeStableResourceKindViews(0xc0071783a0, 0xc002891d30)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_entry_view.go:618 +0x196
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).rangeEntriesLocked(0xc004a5db00, 0xc002891d30)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_set.go:2730 +0x98
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).SyncThrough(0xc004a5db00)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_set.go:4242 +0x145
+github.com/snissn/gomap/TreeDB.TestProductionAuthorityRepeatedCapturePostShutdownPlateau.func1(0xc0028c0488)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/production_authority_matrix_test.go:1592 +0x3fa
+testing.tRunner(0xc0028c0488, 0xc0028b8ec0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0x21d
+created by testing.(*T).Run in goroutine 20545
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0xb13
+FAIL	github.com/snissn/gomap/TreeDB	95.261s
+FAIL

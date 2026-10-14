@@ -8,12 +8,12 @@ type OwnedFinishCallbackScopeV6 interface {
 	LeaveOwnedFinishCallbackV6()
 }
 
-func (c *Coordinator) finishOrdinaryPrimaryWithScopeV6(txn *DurableRootTransaction) error {
+func (c *Coordinator) finishOrdinaryPrimaryWithScopeV6(txn *DurableRootTransaction) (*primaryTerminalCompletionV6, error) {
 	w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	if scope, ok := c.publisher.(OwnedFinishCallbackScopeV6); ok {
 		entered, err := scope.EnterOwnedFinishCallbackV6(w)
 		if !entered || err != nil {
-			return errors.Join(err, ErrDurableRootOwnership)
+			return nil, errors.Join(err, ErrDurableRootOwnership)
 		}
 		defer scope.LeaveOwnedFinishCallbackV6()
 	}

@@ -100,6 +100,7 @@ type Coordinator struct {
 	activeAttempt          PublishAttempt
 	retryAttempt           PublishAttempt
 	reportingAttempt       bool
+	activeDispatch         uint64
 
 	resourceCoalesces    uint64
 	resourceConflicts    uint64
@@ -555,16 +556,20 @@ func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
 // only after Publish returns. Tests may use this method to prove stale and
 // duplicate reports are rejected, but cannot manufacture state transitions.
 func (c *Coordinator) ReportPublishResult(attempt PublishAttempt, result PublishResult) error {
+	return fmt.Errorf("%w: reporting belongs to the original publication caller", ErrPublisherProtocol)
+}
+
+func (c *Coordinator) reportPublishResultOwnedV6(attempt PublishAttempt, result PublishResult) (primaryPublicationCompletionV6, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.reportingAttempt || attempt.id == 0 || attempt.id != c.activeAttempt.id ||
 		attempt.candidate != c.activeAttempt.candidate || attempt.groupSize != c.activeAttempt.groupSize {
-		return fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
+		return primaryPublicationCompletionV6{}, fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
 	}
 	c.reportingAttempt = false
-	c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
+	completion := c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
 	c.activeAttempt = PublishAttempt{}
-	return nil
+	return completion, nil
 }
 
 func (c *Coordinator) Drain(ctx context.Context) error {
@@ -660,6 +665,16 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 	select {
 	case <-c.done:
 		c.mu.Lock()
+		for c.activeDispatch != 0 {
+			changed := c.changed
+			c.mu.Unlock()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			c.mu.Lock()
+		}
 		if !c.stopped {
 			if len(c.pending) != 0 {
 				c.stopErr = ErrPublicationStopped
@@ -708,7 +723,7 @@ func (c *Coordinator) CompleteStartup() error {
 		c.mu.Unlock()
 		return err
 	}
-	if !c.startupSynchronous || c.publishing || c.activeBuilders != 0 || len(c.pending) != 0 {
+	if !c.startupSynchronous || c.publishing || c.activeDispatch != 0 || c.activeBuilders != 0 || len(c.pending) != 0 {
 		c.mu.Unlock()
 		return ErrPublisherProtocol
 	}
@@ -729,11 +744,31 @@ func (c *Coordinator) StartupSynchronous() bool {
 // Startup and the normal scheduler own different execution contexts, while
 // preserving the same activeAttempt, candidate, physical owner and outcome.
 func (c *Coordinator) dispatchPublication(startup bool) bool {
+	progress, completion := c.dispatchPublicationCallV6(startup)
+	// The original Prepare/Publish/Report call has returned: callback, group,
+	// candidate and activeAttempt no longer borrow the refunded headers.
+	completePrimaryTerminalsV6(&completion.head)
+	if completion.active {
+		c.mu.Lock()
+		if completion.success {
+			c.completePublicationLockedV6(completion)
+		}
+		if c.activeDispatch == 0 {
+			panic("publication call join underflow")
+		}
+		c.activeDispatch--
+		c.notifyLocked()
+		c.mu.Unlock()
+	}
+	return progress
+}
+
+func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
 	c.mu.Lock()
-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
 	if !ready {
 		c.mu.Unlock()
-		return false
+		return false, primaryPublicationCompletionV6{}
 	}
 	groupSize := len(c.pending)
 	group := make([]*PreparedRootCandidate, groupSize)
@@ -749,12 +784,13 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 		c.captureRecoveryResourcesLocked()
 		c.notifyLocked()
 		c.mu.Unlock()
-		return true
+		return true, primaryPublicationCompletionV6{}
 	}
 	c.recordPublishTriggerLocked(c.wakeReason)
 	c.publishNow = false
 	c.wakeReason = WakeNone
 	c.publishing = true
+	c.activeDispatch++
 	c.publishCalls++
 	if c.lastRetryableError != nil {
 		c.retries++
@@ -779,16 +815,27 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 		c.reportingAttempt = prepareErr != nil
 		c.mu.Unlock()
 		if prepareErr != nil {
-			_ = c.ReportPublishResult(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
-			return true
+			completion, _ := c.reportPublishResultOwnedV6(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
+			clear(group)
+			group, candidate, attempt = nil, nil, PublishAttempt{}
+			return true, completion
 		}
 	}
 	result := c.publisher.Publish(c.ctx, candidate)
 	c.mu.Lock()
 	c.reportingAttempt = true
 	c.mu.Unlock()
-	_ = c.ReportPublishResult(attempt, result)
-	return true
+	completion, _ := c.reportPublishResultOwnedV6(attempt, result)
+	if completion.detached && len(group) > 1 {
+		// Coalescing allocated this private descriptor/member backing. Original
+		// pending candidates retain any failed sibling; this call releases only
+		// its scratch aliases before accounting the consumed prefix.
+		clear(candidate.durableRootGroup().members)
+		*candidate = PreparedRootCandidate{}
+	}
+	clear(group)
+	group, candidate, attempt = nil, nil, PublishAttempt{}
+	return true, completion
 }
 
 func (c *Coordinator) run() {
@@ -821,10 +868,11 @@ func (c *Coordinator) run() {
 	}
 }
 
-func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) {
+func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) (completion primaryPublicationCompletionV6) {
+	completion.active = true
 	c.publishing = false
 	if c.stopping {
-		return
+		return completion
 	}
 	switch result.Outcome {
 	case PublishSucceeded:
@@ -838,7 +886,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 				err = fmt.Errorf("durable sequence %d differs from candidate %d", durableSeq, candidate.frontier.commitSeq)
 			}
 			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol, err), c.activeAttempt)
-			return
+			return completion
 		}
 		oldest := result.OldestRecoverableCommitSeq
 		if oldest == 0 {
@@ -847,7 +895,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		if oldest < c.oldestRecoverable || oldest > durableSeq {
 			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol,
 				fmt.Errorf("oldest recoverable sequence %d outside monotonic range [%d,%d]", oldest, c.oldestRecoverable, durableSeq)), c.activeAttempt)
-			return
+			return completion
 		}
 		group := candidate.durableRootGroup()
 		if err := consumeDurableRootGroup(group); err != nil {
@@ -861,34 +909,59 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			c.clearPublishRequestLocked()
 			c.notifyLocked()
 			c.signal()
-			return
+			return completion
 		}
+		// A physically consumed attempt cannot keep a previous retry alias alive.
+		c.retryAttempt = PublishAttempt{}
+		completion.detached = true
 		remove := int(groupSize)
 		if remove > len(c.pending) {
 			remove = len(c.pending)
 		}
+		// Save all observations before physical Finish scrubs constructor-owned
+		// candidate/member descriptors. Their containing charge stays live until
+		// dispatchPublicationCallV6 returns.
+		completion.frontier = candidate.frontier
+		completion.frontier.commitSeq = durableSeq
+		completion.oldest = oldest
+		completion.groupSize, completion.service = groupSize, service
+		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
+			completion.lineage, completion.sequence = latest.Lineage(), latest.Sequence()
+		}
 		var removedBytes uint64
-		for _, entry := range c.pending[:remove] {
-			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+		completed := 0
+		var tail *primaryTerminalCompletionV6
+		for i := 0; i < remove; i++ {
+			entry := &c.pending[i]
 			if set := entry.candidate.resourceSet(); set != nil {
-				if txn := entry.candidate.DurableRoot(); txn.isConstructedPrimaryV6() {
-					if err := c.finishOrdinaryPrimaryWithScopeV6(txn); err != nil {
-						c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
-						c.failWaitersLocked(c.poison)
-						c.clearPublishRequestLocked()
-						c.notifyLocked()
-						return
-					}
+				txn := entry.candidate.DurableRoot()
+				var node *primaryTerminalCompletionV6
+				var err error
+				if txn.isConstructedPrimaryV6() {
+					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
 				} else {
-					if err := set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins); err != nil {
-						c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
-						c.failWaitersLocked(c.poison)
-						c.clearPublishRequestLocked()
-						c.notifyLocked()
-						return
+					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
+				}
+				if err != nil {
+					c.removeCompletedPendingPrefixV6(completed, removedBytes)
+					c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+					c.failWaitersLocked(c.poison)
+					c.clearPublishRequestLocked()
+					c.notifyLocked()
+					return completion
+				}
+				if node != nil {
+					if tail == nil {
+						completion.head = node
+					} else {
+						tail.next = node
 					}
+					tail = node
 				}
 			}
+			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+			*entry = pendingEntry{}
+			completed++
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
 		if removedBytes <= c.pendingBytes {
@@ -896,25 +969,11 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		} else {
 			c.pendingBytes = 0
 		}
-		c.durable = candidate.frontier
-		c.durable.commitSeq = durableSeq
-		c.oldestRecoverable = oldest
-		c.reachabilityEpoch++
-		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
-			c.durableRootLineage = latest.Lineage()
-			c.durableRootSequence = latest.Sequence()
-		}
-		c.lastGroupSize = groupSize
-		c.lastService = service
-		if c.ewmaService == 0 {
-			c.ewmaService = service
-		} else {
-			c.ewmaService = (7*c.ewmaService + service) / 8
-		}
-		c.lastRetryableError = nil
-		c.retryAttempt = PublishAttempt{}
-		c.satisfyWaitersLocked()
-		c.recomputePublishRequestLocked(true)
+		// Keep the original attempt outstanding through actual terminal
+		// accounting. WaitThrough cannot observe a new durable frontier yet.
+		c.publishing = true
+		completion.success = true
+
 	case PublishRetryableFailure:
 		c.recordRetryableLocked(result.Err, c.activeAttempt)
 	case PublishAmbiguous:
@@ -934,6 +993,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 	}
 	c.notifyLocked()
 	c.signal()
+	return completion
 }
 
 func consumeDurableRootGroup(group durableRootGroupExtension) error {
@@ -1352,11 +1412,14 @@ func (handoff *RecoveryResourceHandoff) ReleaseWithError() error {
 			handoff.sets[i] = nil
 		}
 		for i, transaction := range handoff.durableRoots {
-			if err := transaction.releaseFromRecovery(); err != nil {
+			node, err := transaction.releaseFromRecovery()
+			if err != nil {
 				fail(err)
 				return
 			}
 			handoff.durableRoots[i] = nil
+			transaction = nil
+			completePrimaryTerminalsV6(&node)
 		}
 		handoff.sets, handoff.durableRoots = nil, nil
 		owner, charge := handoff.metadata, handoff.metadataCharge

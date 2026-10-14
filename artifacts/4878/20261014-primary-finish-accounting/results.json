@@ -1,0 +1,87 @@
+{
+  "final-normal": {
+    "exit": 0,
+    "raw_sha256": "a586c24556f55840c11f58627b17920860beda95c8463099113786ae9755a723",
+    "packages": [
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "Action": "pass",
+        "Elapsed": 0.028
+      },
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Action": "pass",
+        "Elapsed": 0.091
+      },
+      {
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Action": "pass",
+        "Elapsed": 1.4809999999999999
+      }
+    ]
+  },
+  "final-race": {
+    "exit": 0,
+    "raw_sha256": "199b04844a329eaad86559c8576c0858a36ad9cdb2eb33be5fd9cc75eead20bb",
+    "packages": [
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "Action": "pass",
+        "Elapsed": 1.039
+      },
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Action": "pass",
+        "Elapsed": 1.1320000000000001
+      },
+      {
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Action": "pass",
+        "Elapsed": 25.559
+      }
+    ]
+  },
+  "red-finish": {
+    "exit": 1,
+    "raw_sha256": "64a30f165c08cadb4e4339ab3e4ca27a06334532f4ed74c7eb7e52e630790865",
+    "packages": [
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "Action": "fail",
+        "Elapsed": 0.002
+      }
+    ]
+  },
+  "red-stop": {
+    "exit": 1,
+    "raw_sha256": "3bbc9fd6c021259a0905c3670583b41c06d3768c1901ede3393a7c2dfa0a4d06",
+    "packages": [
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "Action": "fail",
+        "Elapsed": 0.002
+      }
+    ]
+  },
+  "public-race": {
+    "exit": 1,
+    "raw_sha256": "40f92339a7f39bfa61f8ae06449f51926810d85af7116dc9eff4f80507049327",
+    "packages": []
+  },
+  "public-race-corrected": {
+    "exit": 0,
+    "raw_sha256": "43e5256c3c31c254fbeca9f1a49c82d5633f9a76a954603add421aed53b3f7c2",
+    "packages": [
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "Action": "pass",
+        "Elapsed": 0.028
+      },
+      {
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Action": "pass",
+        "Elapsed": 0.084
+      }
+    ]
+  }
+}
