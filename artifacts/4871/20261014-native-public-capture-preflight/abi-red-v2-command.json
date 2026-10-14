@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-tags=treedb_test",
+    "-run=^TestPruneWholeCurrentPublicationSustainedPreflight$",
+    "./TreeDB/mvcc"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4",
+    "M7_CURRENT_SEGMENT_CONSTRUCTION": "1",
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/scratch"
+  }
+}
