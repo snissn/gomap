@@ -1,0 +1,33 @@
+File: populated-lane-affinity-v2-candidate-mvcc.test
+Build ID: d487cd65da39aa4b90a2680fa45e9ec11ad264c3
+Type: alloc_objects
+Time: 2026-10-14 10:26:13 HST
+Showing nodes accounting for 53816, 74.70% of 72041 total
+Dropped 1072 nodes (cum <= 360)
+Showing top 25 nodes out of 154
+      flat  flat%   sum%        cum   cum%
+     13824 19.19% 19.19%      14048 19.50%  github.com/snissn/gomap/TreeDB/db.(*DB).appendOrderedRootSpanNativeStats
+      9552 13.26% 32.45%       9552 13.26%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawSpanNativeStats
+      6322  8.78% 41.22%      44528 61.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).Stats
+      4462  6.19% 47.42%       4482  6.22%  fmt.Sprintf
+      2880  4.00% 51.42%       2880  4.00%  github.com/snissn/gomap/TreeDB/caching.addMemtableResidencyStats.func1
+      1800  2.50% 53.91%       1800  2.50%  strings.genSplit
+      1728  2.40% 56.31%       1728  2.40%  bufio.(*Scanner).Text
+      1253  1.74% 58.05%       1253  1.74%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWBudget).AcquireExternal
+      1136  1.58% 59.63%       1166  1.62%  github.com/snissn/gomap/TreeDB/internal/valuelog.AppendDecodeScratchStats
+      1120  1.55% 61.18%       1120  1.55%  github.com/snissn/gomap/TreeDB.publicBatchWriteSyncPhaseStatsInto
+      1120  1.55% 62.74%       1162  1.61%  github.com/snissn/gomap/TreeDB/caching.appendCheckpointStageStats
+       864  1.20% 63.94%        864  1.20%  github.com/snissn/gomap/TreeDB/caching.appendWriteWaitReasonStats
+       772  1.07% 65.01%        988  1.37%  github.com/snissn/gomap/TreeDB/db.(*DB).appendFlushApplyStats
+       682  0.95% 65.96%        682  0.95%  regexp.makeOnePass.func1
+       660  0.92% 66.87%       2919  4.05%  github.com/snissn/gomap/TreeDB/caching.(*Batch).PrepareExternalCommandWALPublication
+       657  0.91% 67.78%        919  1.28%  github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage
+       655  0.91% 68.69%       2128  2.95%  github.com/snissn/gomap/TreeDB/caching.(*cowCache).prepare
+       654  0.91% 69.60%       1178  1.64%  github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint
+       648   0.9% 70.50%        648   0.9%  github.com/snissn/gomap/TreeDB.publicOperationStatsInto
+       552  0.77% 71.27%        552  0.77%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).Acquire
+       546  0.76% 72.02%        546  0.76%  os.newFile
+       492  0.68% 72.71%       1568  2.18%  testing.(*common).log
+       488  0.68% 73.38%       2126  2.95%  github.com/snissn/gomap/TreeDB/mvcc/sprintperf.sprintLaneReceipt
+       480  0.67% 74.05%        480  0.67%  github.com/snissn/gomap/TreeDB/caching.vlogPayloadBucketSuffix
+       469  0.65% 74.70%       1033  1.43%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare

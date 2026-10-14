@@ -1,0 +1,2 @@
+# github.com/snissn/gomap/TreeDB/mvcc/sprintperf [github.com/snissn/gomap/TreeDB/mvcc/sprintperf.test]
+TreeDB/mvcc/sprintperf/benchmark_test.go:151:71: cannot call pointer method Type on node.Node

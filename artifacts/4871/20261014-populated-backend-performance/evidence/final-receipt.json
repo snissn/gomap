@@ -1,0 +1,19 @@
+{
+ "source_frozen": true,
+ "go_quiet": true,
+ "all_12_exit_zero": true,
+ "all_12_raw_sha_verified": true,
+ "all_12_temporary_children_empty": true,
+ "all_source_and_binary_preservation_verified": true,
+ "artifacts": {
+  "build-manifest.json": "4dd8ab7923da6d47925b3ab19920e9e916b6436ed7f4f36f5302bc7a7435e275",
+  "measurement-receipts.json": "47de9e4d25aec2c33850026401c66ab43d9e2a4ea1ccfd1c2cf81912e112bb15",
+  "summary.json": "ee5aeeb3d15a755eee48b101a6a1c6a909505e279cf3e46e5f260affb471e5e3",
+  "report.md": "17e906612b7a2833a9fe96942a6b53e55599ed42a3f6ade5e7072df46250704b",
+  "profile-receipt.json": "0f6cc5d56f2a8c0267cef8f500b4a0865a7ea07ba9bccc9cb9ffcaad1462e89e",
+  "populated-candidate.allocs.pprof": "08264d949499ad16d6c8cae7e7b3b804d2fecedf211394b91e4df24edaec7364",
+  "profile-alloc_space-top.txt": "56bf9425262971893c6f831839cf4eed328b8ff4dc0fc38e53daea25355a155b",
+  "profile-alloc_objects-full.txt": "8b69f1e551020957ac445ced5d9d7efc95a8a279c6d2c25302c44fe740c78165"
+ },
+ "cow_capture_prepare_publication_each_one_per_unit_verified": true
+}

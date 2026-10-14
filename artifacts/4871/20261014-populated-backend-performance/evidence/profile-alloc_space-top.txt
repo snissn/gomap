@@ -1,0 +1,33 @@
+File: populated-lane-affinity-v2-candidate-mvcc.test
+Build ID: d487cd65da39aa4b90a2680fa45e9ec11ad264c3
+Type: alloc_space
+Time: 2026-10-14 10:26:13 HST
+Showing nodes accounting for 65648.12kB, 92.02% of 71343.03kB total
+Dropped 1150 nodes (cum <= 356.71kB)
+Showing top 25 nodes out of 76
+      flat  flat%   sum%        cum   cum%
+32768.12kB 45.93% 45.93% 32768.12kB 45.93%  bufio.NewWriterSize (inline)
+    7448kB 10.44% 56.37%     7448kB 10.44%  github.com/snissn/gomap/TreeDB/tree.(*Tree).OwnedPointerProjectionIterator
+ 7043.95kB  9.87% 66.24%  9862.36kB 13.82%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter
+ 5491.03kB  7.70% 73.94% 13993.41kB 19.61%  github.com/snissn/gomap/TreeDB/caching.(*DB).Stats
+ 4188.75kB  5.87% 79.81%     4216kB  5.91%  github.com/snissn/gomap/TreeDB/db.(*DB).appendOrderedRootSpanNativeStats
+ 2818.41kB  3.95% 83.76%  2818.41kB  3.95%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogDictPreparer
+ 2740.25kB  3.84% 87.60%  2740.25kB  3.84%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawSpanNativeStats
+ 1984.47kB  2.78% 90.38%  1984.47kB  2.78%  github.com/snissn/gomap/TreeDB/db.newLeafPageReadCacheWithWriteAdmission (inline)
+  576.09kB  0.81% 91.19%  1250.17kB  1.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen
+  296.75kB  0.42% 91.61%   772.77kB  1.08%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+   49.64kB  0.07% 91.68% 10213.22kB 14.32%  github.com/snissn/gomap/TreeDB/caching.Open
+   49.36kB 0.069% 91.75%  1103.06kB  1.55%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt
+   48.19kB 0.068% 91.81%   513.12kB  0.72%  github.com/snissn/gomap/TreeDB/db.materializePrimaryManifestV5
+   42.98kB  0.06% 91.87% 35729.15kB 50.08%  github.com/snissn/gomap/TreeDB/db.openWithLock
+   39.91kB 0.056% 91.93%  7471.43kB 10.47%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowSeekGEMergeAdmitted
+   16.66kB 0.023% 91.95%  7713.62kB 10.81%  github.com/snissn/gomap/TreeDB/db.(*DB).Stats
+   14.77kB 0.021% 91.97%  7544.91kB 10.58%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).buildCOWIteratorLocked
+    8.28kB 0.012% 91.99% 46088.07kB 64.60%  github.com/snissn/gomap/TreeDB.openResolved
+    8.22kB 0.012% 92.00%  7509.63kB 10.53%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowIteratorSources
+    5.69kB 0.008% 92.01% 70602.90kB 98.96%  github.com/snissn/gomap/TreeDB/mvcc/sprintperf.BenchmarkSprintMVCC.func1
+    3.07kB 0.0043% 92.01%   417.92kB  0.59%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL
+    3.07kB 0.0043% 92.01%   775.84kB  1.09%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+       1kB 0.0014% 92.02%   423.88kB  0.59%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+    0.77kB 0.0011% 92.02%   403.83kB  0.57%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+    0.69kB 0.00096% 92.02% 32770.41kB 45.93%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions

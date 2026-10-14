@@ -1,0 +1,35 @@
+{
+ "attribution_only": true,
+ "argv": [
+  "taskset",
+  "-c",
+  "0-3",
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/populated-lane-affinity-v2-candidate-mvcc.test",
+  "-test.run",
+  "^$",
+  "-test.bench",
+  "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+  "-test.benchmem",
+  "-test.benchtime=128x",
+  "-test.count=1",
+  "-test.v",
+  "-test.timeout=30s",
+  "-test.memprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/evidence/populated-backend-sol61-v1/populated-candidate.allocs.pprof",
+  "-test.memprofilerate=1"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "GOMAXPROCS": "4",
+  "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/populated-sol61-profile-temp",
+  "SPRINT_MEMTABLE": "cow_btree",
+  "SPRINT_REQUIRE_PRIMARY": "1"
+ },
+ "exit": 0,
+ "seconds": 0.6418268289417028,
+ "raw_sha256": "20a243a4550434a90235fcd9f3f7c4a98c680c1e9d83610a56380fb78557a1f1",
+ "binary_sha256": "d2621d92bcbc571a94047fdaa81c2dda90903e9f6a4f3315a04c628a29eb8466",
+ "profile_sha256": "08264d949499ad16d6c8cae7e7b3b804d2fecedf211394b91e4df24edaec7364",
+ "temporary_children_after": []
+}
