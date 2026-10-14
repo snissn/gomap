@@ -1,0 +1,374 @@
+diff --git a/TreeDB/caching/native_mvcc_cow_merge_v6.go b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+index 055b0b6b6..ab8b5e971 100644
+--- a/TreeDB/caching/native_mvcc_cow_merge_v6.go
++++ b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+@@ -404,3 +404,21 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
+ 	}
+ 	return true, nil
+ }
++
++// NativeMVCCSelectedRecordV6 validates a stationary winner in this SAME retained
++// composite cut. No backend leaf claim is synthesized for an overlay record.
++// The original request owns this capture and prevents traversal advancement
++// until the bound current-delete transaction has finished or been cancelled.
++func (c *NativeMVCCCaptureV6) NativeMVCCSelectedRecordV6(snapshot *backenddb.Snapshot, w *iterator.OrdinalScanWork) (node.LeafEntry, bool, error) {
++	if c == nil || w == nil {
++		return node.LeafEntry{}, false, backenddb.ErrNativeMVCCSnapshotWork
++	}
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(node.LeafEntry{}))+128) {
++		return node.LeafEntry{}, false, nil
++	}
++	m := &c.composite
++	if !c.IsCompositeCOWV6() || c.Snapshot != snapshot || m.cut.basis == nil || m.cut.basis.snapshot != snapshot || m.pending || !m.valid || m.cutReleased || m.winner < 0 || m.winner > m.count {
++		return node.LeafEntry{}, false, tree.ErrProjectionOwner
++	}
++	return m.record, true, nil
++}
+diff --git a/TreeDB/db/native_mvcc_current_delete_v6.go b/TreeDB/db/native_mvcc_current_delete_v6.go
+index e9cf4efc5..e9997e85c 100644
+--- a/TreeDB/db/native_mvcc_current_delete_v6.go
++++ b/TreeDB/db/native_mvcc_current_delete_v6.go
+@@ -1,6 +1,7 @@
+ package db
+ 
+ import (
++	"bytes"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+@@ -163,6 +164,14 @@ func (s *Snapshot) ValidateNativeMVCCSelectionV6(selection tree.NativeMVCCSelect
+ 	return s.tree.MatchesNativeMVCCSelectionV6(selection, w)
+ }
+ 
++// NativeMVCCSelectionSourceV6 borrows an actual producer-owned composite cut.
++// It validates and returns that cut's stationary selected winner, including its
++// original revision. The caller retains the producer until transaction cleanup;
++// a borrowed backend Snapshot alone cannot witness an overlay winner.
++type NativeMVCCSelectionSourceV6 interface {
++	NativeMVCCSelectedRecordV6(*Snapshot, *iterator.OrdinalScanWork) (node.LeafEntry, bool, error)
++}
++
+ // NativeMVCCCurrentDeleteV6 is the original caller's admitted construction
+ // continuation. The Snapshot and physical selection remain stationary until
+ // the same transaction is either published or physically cancelled. Preparing
+@@ -172,6 +181,8 @@ type NativeMVCCCurrentDeleteV6 struct {
+ 	db          *DB
+ 	snapshot    *Snapshot
+ 	selection   tree.NativeMVCCSelectionV6
++	source      NativeMVCCSelectionSourceV6
++	record      node.LeafEntry
+ 	request     mvccadmission.Request
+ 	transaction *rootpublication.DurableRootTransaction
+ 	release     rootpublication.PrimaryConstructionReleaseWork
+@@ -179,16 +190,31 @@ type NativeMVCCCurrentDeleteV6 struct {
+ }
+ 
+ func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
++	return c.bindNativeMVCCCurrentDeleteV6(s, selection, nil, request, w)
++}
++
++// BindNativeMVCCCompositeDeleteV6 retains no new Snapshot edge: source owns the
++// SAME composite cut and its basis. Its original producer validates the winner
++// before constructor creation, and the Request is checked again at current cut.
++func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCompositeDeleteV6(s *Snapshot, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
++	if source == nil {
++		return false, ErrNativeMVCCSnapshotWork
++	}
++	return c.bindNativeMVCCCurrentDeleteV6(s, tree.NativeMVCCSelectionV6{}, source, request, w)
++}
++
++func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
+ 	if c == nil || s == nil || w == nil {
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+ 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(selection))) {
+ 		return false, nil
+ 	}
+-	if c.phase != 0 || c.snapshot != nil || s.db == nil || !s.nativeMVCC.workOwned || s.nativeMVCC.capturePhase != 4 {
++	if c.phase != 0 || c.snapshot != nil || s.db == nil ||
++		(source == nil && (!s.nativeMVCC.workOwned || s.nativeMVCC.capturePhase != 4)) {
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+-	c.db, c.snapshot, c.selection, c.request, c.phase = s.db, s, selection, request, 1
++	c.db, c.snapshot, c.selection, c.source, c.request, c.phase = s.db, s, selection, source, request, 1
+ 	return true, nil
+ }
+ 
+@@ -200,11 +226,23 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.Or
+ 	if c == nil || c.db == nil || w == nil {
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+-	if c.phase >= 3 && c.phase < 5 {
++	if c.phase == 3 {
++		return c.transaction.PreparePrimaryPromotionStorageV6(w)
++	}
++	if c.phase == 4 {
+ 		return true, nil
+ 	}
+ 	if c.phase == 1 {
+-		ready, err := c.snapshot.ValidateNativeMVCCSelectionV6(c.selection, w)
++		var ready bool
++		var err error
++		if c.source != nil {
++			c.record, ready, err = c.source.NativeMVCCSelectedRecordV6(c.snapshot, w)
++		} else {
++			ready, err = c.snapshot.ValidateNativeMVCCSelectionV6(c.selection, w)
++			if ready && err == nil {
++				c.record = c.selection.Record()
++			}
++		}
+ 		if !ready || err != nil {
+ 			return ready, err
+ 		}
+@@ -244,7 +282,10 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.Or
+ 		}
+ 		c.phase = 3
+ 	}
+-	return ready, err
++	if !ready || err != nil {
++		return ready, err
++	}
++	return c.transaction.PreparePrimaryPromotionStorageV6(w)
+ }
+ 
+ // composeNativeMVCCCurrentDeleteLockedV6 uses the actual current immutable
+@@ -276,7 +317,16 @@ func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scrat
+ 	if cert != current.certificate {
+ 		return false, rootpublication.ErrDurableRootOwnership
+ 	}
+-	record := c.selection.Record()
++	record := c.record
++	if c.source != nil {
++		selected, ready, err := c.source.NativeMVCCSelectedRecordV6(c.snapshot, w)
++		if !ready || err != nil {
++			return ready, err
++		}
++		if !bytes.Equal(selected.Key, record.Key) || selected.Revision != record.Revision || selected.Flags != record.Flags || selected.ValuePtr != record.ValuePtr {
++			return false, rootpublication.ErrDurableRootOwnership
++		}
++	}
+ 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(mvccadmission.Cut{}))+2*uint64(unsafe.Sizeof(mvccadmission.Authority{}))) {
+ 		return false, nil
+ 	}
+@@ -311,6 +361,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 	}
+ 	if c.transaction == nil && c.phase != 5 {
+ 		c.db, c.snapshot, c.selection, c.request, c.phase = nil, nil, tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
++		c.source, c.record = nil, node.LeafEntry{}
+ 		return true, nil
+ 	}
+ 	if c.phase != 5 {
+@@ -325,6 +376,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 	if ready && err == nil {
+ 		c.transaction, c.db, c.snapshot = nil, nil, nil
+ 		c.selection, c.request, c.phase = tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
++		c.source, c.record = nil, node.LeafEntry{}
+ 	}
+ 	return ready, err
+ }
+diff --git a/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go b/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go
+index 9a490e89d..911b24be8 100644
+--- a/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go
++++ b/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go
+@@ -126,7 +126,22 @@ func TestNativeMVCCPrivateConstructorPhysicalAbortV6(t *testing.T) {
+ 	}
+ 	txn := owner.(*DurableRootTransaction)
+ 	ref := txn.PrimaryConstructionReferenceV6()
++	constructorBytes := a.MetadataOwner().Bytes()
++	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{}); ready || err != nil || txn.PrimaryPromotionV6() != nil || a.MetadataOwner().Bytes() != constructorBytes {
++		t.Fatalf("promotion storage pre-effect refusal: %t %v", ready, err)
++	}
++	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil {
++		t.Fatalf("private promotion storage: %t %v", ready, err)
++	}
++	promotion := txn.PrimaryPromotionV6()
++	if promotion == nil || len(promotion.Image) != PrimaryCapsuleSizeV6 || promotion.Root != (primaryarena.Ref{}) || promotion.Parent != (primaryarena.Ref{}) || a.MetadataOwner().Bytes() <= constructorBytes {
++		t.Fatal("private storage was not admitted or selected publication authority")
++	}
++	promotion = nil
+ 	before := a.MetadataOwner().Bytes()
++	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil || a.MetadataOwner().Bytes() != before {
++		t.Fatalf("private storage replay: %t %v", ready, err)
++	}
+ 	counts := a.Counters()
+ 	var receipt PrimaryConstructionReleaseWork
+ 	if ready, err := receipt.Bind(txn, &iterator.OrdinalScanWork{}); ready || err != nil || txn.constructionV6.cleanupPhase != 0 || a.Counters() != counts {
+diff --git a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+index 79d6d2353..e43c3d6f3 100644
+--- a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
++++ b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+@@ -205,6 +205,48 @@ func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {
+ 	return t.constructionV6.promotion
+ }
+ 
++// PreparePrimaryPromotionStorageV6 admits and allocates only the original
++// transaction's private promotion image. No current root, slot, parent, physical
++// fence or visible resource edge is selected here. The SAME constructor owns the
++// image through cancellation or later promotion, including allowance refusal.
++func (t *DurableRootTransaction) PreparePrimaryPromotionStorageV6(w *iterator.OrdinalScanWork) (bool, error) {
++	if t == nil || w == nil {
++		return false, ErrDurableRootOwnership
++	}
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
++		return false, nil
++	}
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	c := t.constructionV6
++	if c == nil || !c.nativeWorkOwned || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 {
++		return false, ErrDurableRootOwnership
++	}
++	if c.promotion != nil {
++		return c.promotion.Root == (primaryarena.Ref{}) && len(c.promotion.Image) == PrimaryCapsuleSizeV6, nil
++	}
++	promotion, charge, ready, err := allocatePrimaryPromotionStorageV6(c.arena.MetadataOwner(), w)
++	if !ready || err != nil {
++		return ready, err
++	}
++	c.promotion = promotion
++	c.metadataCharge += charge
++	return true, nil
++}
++
++// Both ordinary and work-owned preparation allocate the same concrete storage
++// under the original arena metadata owner, before any allocation effect.
++func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, uint64, bool, error) {
++	if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
++		return nil, 0, false, nil
++	}
++	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
++	if err := owner.AddPending(charge); err != nil {
++		return nil, 0, false, err
++	}
++	return &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil
++}
++
+ // Fresh promotion selects actual parent/target and acquires independent physical
+ // closure edges. These head-bound operands never survive as private preparation.
+ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (result *PrimaryPromotionV6, completed bool, returnErr error) {
+@@ -217,21 +259,30 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	c := t.constructionV6
+-	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || c.promotion != nil || parent == nil || parentRoot == (primaryarena.Ref{}) {
++	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || (c.promotion != nil && c.promotion.Root != (primaryarena.Ref{})) || parent == nil || parentRoot == (primaryarena.Ref{}) {
+ 		return nil, false, ErrDurableRootOwnership
+ 	}
+ 	target := uint64(1) - parent.Slot()
+-	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
+-	if err := c.arena.MetadataOwner().AddPending(charge); err != nil {
+-		return nil, false, err
++	promotion := c.promotion
++	charge := uint64(0)
++	if promotion == nil {
++		var ready bool
++		var err error
++		promotion, charge, ready, err = allocatePrimaryPromotionStorageV6(c.arena.MetadataOwner(), w)
++		if !ready || err != nil {
++			return nil, ready, err
++		}
+ 	}
+-	chargeTransferred := false
++	image := promotion.Image
++	chargeTransferred := charge == 0
+ 	defer func() {
+ 		if !chargeTransferred {
++			image = nil
++			promotion.Image = nil
++			promotion = nil
+ 			c.arena.MetadataOwner().RemovePending(charge)
+ 		}
+ 	}()
+-	image := make([]byte, PrimaryCapsuleSizeV6)
+ 	view, ready, err := ConstructPrimaryCapsuleV6(image, target, DurablePrimaryRootRecordV5{Record: record, Primary: projection}, t.input.PreparedPrimary, parent, w)
+ 	if !ready || err != nil {
+ 		return nil, ready, err
+@@ -259,7 +310,8 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
+ 	if ready, err = c.arena.Acquire(parentRoot, w); !ready || err != nil {
+ 		return nil, ready, err
+ 	}
+-	c.promotion = &PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
++	*promotion = PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
++	c.promotion = promotion
+ 	c.metadataCharge += charge
+ 	chargeTransferred = true
+ 	retained = true
+diff --git a/TreeDB/mvcc/native_cow_publication_v6_test.go b/TreeDB/mvcc/native_cow_publication_v6_test.go
+index 282a0b482..fa76a1225 100644
+--- a/TreeDB/mvcc/native_cow_publication_v6_test.go
++++ b/TreeDB/mvcc/native_cow_publication_v6_test.go
+@@ -103,15 +103,17 @@ func TestNativePruneCOWCommandWALCompositePublication(t *testing.T) {
+ 					pruneErr = e
+ 					break
+ 				}
+-				if ack != 0 {
+-					break
+-				}
+-				if cursor != nil && cursor.integrityDone && !cursor.loadingFloor {
++				// Every legal nonterminal return must let this same caller complete
++				// an ordinary durable write, including an ACK-bearing return.
++				if !x.Complete {
+ 					if e = s.CommitAt(100, []Mutation{{Key: future, Value: []byte("future-after")}}, CommitDurable); e != nil {
+ 						t.Fatal(e)
+ 					}
+ 					writes++
+ 				}
++				if ack != 0 {
++					break
++				}
+ 				if x.Complete {
+ 					break
+ 				}
+diff --git a/TreeDB/mvcc/prune_cursor_v6.go b/TreeDB/mvcc/prune_cursor_v6.go
+index 4ca75b2e1..7629aa903 100644
+--- a/TreeDB/mvcc/prune_cursor_v6.go
++++ b/TreeDB/mvcc/prune_cursor_v6.go
+@@ -374,20 +374,35 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			}
+ 			c.phase = 14
+ 		case 14:
+-			if !c.capture.NativeProjectionUsesBackendV6() {
+-				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+-			}
+-			selection, ready, err := c.projection.NativeMVCCSelectionV6(w)
+-			if !ready || err != nil {
+-				return err
+-			}
+-			if !w.Reserve(1, uint64(c.selectedSize)+64) {
+-				return nil
+-			}
+-			if !bytes.Equal(selection.Record().Key, c.selected[:c.selectedSize]) {
+-				return tree.ErrProjectionOwner
++			var ready bool
++			var err error
++			if c.capture.IsCompositeCOWV6() {
++				var record node.LeafEntry
++				record, ready, err = c.capture.NativeMVCCSelectedRecordV6(c.reader.Snapshot, w)
++				if !ready || err != nil {
++					return err
++				}
++				if !w.Reserve(1, uint64(c.selectedSize)+64) {
++					return nil
++				}
++				if !bytes.Equal(record.Key, c.selected[:c.selectedSize]) {
++					return tree.ErrProjectionOwner
++				}
++				ready, err = c.prepared.BindNativeMVCCCompositeDeleteV6(c.reader.Snapshot, &c.capture, c.request, w)
++			} else {
++				var selection tree.NativeMVCCSelectionV6
++				selection, ready, err = c.projection.NativeMVCCSelectionV6(w)
++				if !ready || err != nil {
++					return err
++				}
++				if !w.Reserve(1, uint64(c.selectedSize)+64) {
++					return nil
++				}
++				if !bytes.Equal(selection.Record().Key, c.selected[:c.selectedSize]) {
++					return tree.ErrProjectionOwner
++				}
++				ready, err = c.prepared.BindNativeMVCCCurrentDeleteV6(c.reader.Snapshot, selection, c.request, w)
+ 			}
+-			ready, err = c.prepared.BindNativeMVCCCurrentDeleteV6(c.reader.Snapshot, selection, c.request, w)
+ 			if !ready || err != nil {
+ 				return err
+ 			}

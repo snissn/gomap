@@ -1,0 +1,69 @@
+=== RUN   TestSetWithWorkRefusalLeavesEntries
+--- PASS: TestSetWithWorkRefusalLeavesEntries (0.00s)
+=== RUN   TestSetWithWorkEveryAdmissionRefusal
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/empty
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/replace
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/suffix
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/root-split
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/nested-split
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/fork-replace
+=== RUN   TestSetWithWorkEveryAdmissionRefusal/fork-insert
+--- PASS: TestSetWithWorkEveryAdmissionRefusal (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/empty (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/replace (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/suffix (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/root-split (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/nested-split (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/fork-replace (0.00s)
+    --- PASS: TestSetWithWorkEveryAdmissionRefusal/fork-insert (0.00s)
+=== RUN   TestSetWithWorkActualEngineDifferential
+--- PASS: TestSetWithWorkActualEngineDifferential (0.00s)
+=== RUN   TestSetWithWorkChargesStringBytesAndCapacity
+--- PASS: TestSetWithWorkChargesStringBytesAndCapacity (0.00s)
+=== RUN   TestSetWithWorkRefusesOpaqueCopyBeforeCallback
+--- PASS: TestSetWithWorkRefusesOpaqueCopyBeforeCallback (0.00s)
+=== RUN   TestSetWithWorkGeometryReceipts
+=== RUN   TestSetWithWorkGeometryReceipts/default-replace-small
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=8 bytes=504 calls=15; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=8 charged_bytes=504
+=== RUN   TestSetWithWorkGeometryReceipts/default-insert-small
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=13 bytes=784 calls=18; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=13 charged_bytes=784
+=== RUN   TestSetWithWorkGeometryReceipts/default-fork-replace-1
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=11 bytes=744 calls=18; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=11 charged_bytes=744
+=== RUN   TestSetWithWorkGeometryReceipts/default-fork-replace-2
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=15 bytes=1040 calls=24; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=15 charged_bytes=1040
+=== RUN   TestSetWithWorkGeometryReceipts/default-fork-replace-4
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=21 bytes=1528 calls=30; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=21 charged_bytes=1528
+=== RUN   TestSetWithWorkGeometryReceipts/default-root-split
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=151 bytes=10622 calls=100; literal records_cap=32 bytes_cap=1048576 ready=false charged_records=27 charged_bytes=1328
+=== RUN   TestSetWithWorkGeometryReceipts/default-fork-replace-full
+    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=145 bytes=13166 calls=47; literal records_cap=32 bytes_cap=1048576 ready=false charged_records=4 charged_bytes=232
+--- PASS: TestSetWithWorkGeometryReceipts (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-replace-small (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-insert-small (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-fork-replace-1 (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-fork-replace-2 (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-fork-replace-4 (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-root-split (0.00s)
+    --- PASS: TestSetWithWorkGeometryReceipts/default-fork-replace-full (0.00s)
+=== RUN   TestMapUpstreamMutationAndCOW
+--- PASS: TestMapUpstreamMutationAndCOW (0.00s)
+=== RUN   TestCursorDifferentialOrderingAndSeek
+=== RUN   TestCursorDifferentialOrderingAndSeek/0
+=== RUN   TestCursorDifferentialOrderingAndSeek/1
+=== RUN   TestCursorDifferentialOrderingAndSeek/63
+=== RUN   TestCursorDifferentialOrderingAndSeek/64
+=== RUN   TestCursorDifferentialOrderingAndSeek/4096
+--- PASS: TestCursorDifferentialOrderingAndSeek (0.00s)
+    --- PASS: TestCursorDifferentialOrderingAndSeek/0 (0.00s)
+    --- PASS: TestCursorDifferentialOrderingAndSeek/1 (0.00s)
+    --- PASS: TestCursorDifferentialOrderingAndSeek/63 (0.00s)
+    --- PASS: TestCursorDifferentialOrderingAndSeek/64 (0.00s)
+    --- PASS: TestCursorDifferentialOrderingAndSeek/4096 (0.00s)
+=== RUN   TestCursorPartialLongKeyAndExactStop
+--- PASS: TestCursorPartialLongKeyAndExactStop (0.01s)
+=== RUN   TestCursorRefusalCancelAndClose
+--- PASS: TestCursorRefusalCancelAndClose (0.00s)
+=== RUN   TestCursorOneRecordQuantumProgress
+--- PASS: TestCursorOneRecordQuantumProgress (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/cowbtree	0.025s

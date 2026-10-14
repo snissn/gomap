@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/internal/cowbtree",
+    "-count=1",
+    "-timeout=90s"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  },
+  "source_sha256": {
+    "TreeDB/internal/cowbtree/map_mutation_work.go": "69d452cbb7458b2669c6cc5824c7e4b0a37412e3b7eeffe7bc499c11ede95b89",
+    "TreeDB/internal/cowbtree/string_cursor.go": "d5e946fa7e83cb8d530786e7225d7c392e82ab8015ff27b382fff358607fab7f",
+    "TreeDB/internal/cowbtree/string_cursor_test.go": "d62b29b2ed72e75f0392052c879962f68b792fbe5891423402e112de71f53340",
+    "TreeDB/internal/cowbtree/map.go": "2235efd30547d4847b9cc15cfcf619c750ec17eb05d8df9e9d15b0fc563dc2d8",
+    "TreeDB/internal/cowbtree/map_mutation_work_test.go": "f2dfc9fcf22cc5e99d6bdd31294fcd14a1025f106cf28d02ebe91b894f2321fb"
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "owned": [
+    "TreeDB/caching/native_mvcc_cow_merge_v6.go",
+    "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "TreeDB/mvcc/native_cow_publication_v6_test.go",
+    "TreeDB/mvcc/prune_cursor_v6.go"
+  ],
+  "readonly": [
+    "TreeDB/internal/cowbtree/map.go",
+    "TreeDB/internal/cowbtree/map_mutation_work.go",
+    "TreeDB/internal/cowbtree/map_mutation_work_test.go",
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go"
+  ],
+  "runs": [
+    {
+      "name": "constructor",
+      "exit_code": 0,
+      "elapsed_seconds": 2.5174293681047857,
+      "bytes": 1563,
+      "sha256": "a83ab99425561bb487cb6f0dca0c531a1ceb58140b5829bb381a4c6da830f1e4"
+    },
+    {
+      "name": "public",
+      "exit_code": 1,
+      "elapsed_seconds": 8.075596223119646,
+      "bytes": 4891,
+      "sha256": "bfd29b5caeebb05f44dd475aaafa977a4b2fdeb23dd60d26c1b9d2928a8faff9"
+    }
+  ],
+  "head_unchanged": true,
+  "index_unchanged": true,
+  "status_unchanged": true,
+  "source_unchanged": true,
+  "members": [
+    {
+      "path": "after.json",
+      "bytes": 821674,
+      "sha256": "450593a1ade2698ddd00cd812bba59d2f944a44eaa8d23839f01a33e42cf245c"
+    },
+    {
+      "path": "before.json",
+      "bytes": 821674,
+      "sha256": "ae8cec8b8691d4b9c6cba809a40fccf571cc827deb43b85b8744f717d466b6e3"
+    },
+    {
+      "path": "constructor.command.json",
+      "bytes": 734,
+      "sha256": "2047bacff7fd0eb6de74db30f41a81b77d9e1078326ea773a49f21cfadd25f52"
+    },
+    {
+      "path": "constructor.exit.json",
+      "bytes": 159,
+      "sha256": "ca115b90ad14e1afe6750664ea1bd2cc5a3e3de385e823c1c143f0cf689898fd"
+    },
+    {
+      "path": "constructor.raw.jsonl",
+      "bytes": 1563,
+      "sha256": "a83ab99425561bb487cb6f0dca0c531a1ceb58140b5829bb381a4c6da830f1e4"
+    },
+    {
+      "path": "owned.patch",
+      "bytes": 17386,
+      "sha256": "2c6db63990a4e8ed830f27761e26575f058232c5c659d037c1014857b51cc5ba"
+    },
+    {
+      "path": "public.command.json",
+      "bytes": 740,
+      "sha256": "153fd2b4fae4cf6d005e747a04c400b9af09e377ae9e182f19a6cf250c643ba5"
+    },
+    {
+      "path": "public.exit.json",
+      "bytes": 158,
+      "sha256": "8cea250ff0b1b11681b322b95cd68a053e3a9e3335f6718f87b287f65885d01f"
+    },
+    {
+      "path": "public.raw.jsonl",
+      "bytes": 4891,
+      "sha256": "bfd29b5caeebb05f44dd475aaafa977a4b2fdeb23dd60d26c1b9d2928a8faff9"
+    },
+    {
+      "path": "source/TreeDB/caching/native_mvcc_cow_merge_v6.go",
+      "bytes": 12650,
+      "sha256": "9d1aacddf158f7fd0ea65eab6e07f23dcef9f379d007abafc0a1a7325d09c838"
+    },
+    {
+      "path": "source/TreeDB/db/native_mvcc_current_delete_v6.go",
+      "bytes": 14669,
+      "sha256": "c03193230d0bbb644ad2584ec3bf918e2e747be4948b6d1ac25e7046fd26be6f"
+    },
+    {
+      "path": "source/TreeDB/internal/cowbtree/map.go",
+      "bytes": 32457,
+      "sha256": "ba60d20abaee7745aa38fbbdbaa43eec65ad261e099d559ac4864f325c683f52"
+    },
+    {
+      "path": "source/TreeDB/internal/cowbtree/map_mutation_work.go",
+      "bytes": 5585,
+      "sha256": "69d452cbb7458b2669c6cc5824c7e4b0a37412e3b7eeffe7bc499c11ede95b89"
+    },
+    {
+      "path": "source/TreeDB/internal/cowbtree/map_mutation_work_test.go",
+      "bytes": 10433,
+      "sha256": "e93e0e17633cdcd6d040522290562ca28aed6f8033cffd33baf598848de2dfcc"
+    },
+    {
+      "path": "source/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go",
+      "bytes": 9294,
+      "sha256": "129d5171fbbbfea910d345fa3c6fea0b226a4399defdc8a9ec95d6a186ad5a96"
+    },
+    {
+      "path": "source/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "bytes": 20180,
+      "sha256": "2af95fbd1d21164813559ad7b92f323db4c3d29b937bfef1f23117a68ffe1e27"
+    },
+    {
+      "path": "source/TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    },
+    {
+      "path": "source/TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "source/TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+      "bytes": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    },
+    {
+      "path": "source/TreeDB/mvcc/native_cow_publication_v6_test.go",
+      "bytes": 5502,
+      "sha256": "205920c2bf3b8a0fe71d179dcd9ef2a69086fab8c7a5a06544ec5eeb633283a3"
+    },
+    {
+      "path": "source/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 16002,
+      "sha256": "ab689b15af41f39884c16a188179be79708265c4bae491384aaa19323a902b62"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+--- FAIL: TestSetWithWorkRefusalLeavesEntries (0.00s)
+    map_mutation_work_test.go:15: Map lacks bounded original-engine SetWithWork capability
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/cowbtree	0.001s
+FAIL

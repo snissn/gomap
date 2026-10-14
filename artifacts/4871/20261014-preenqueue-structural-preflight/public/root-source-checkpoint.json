@@ -1,0 +1,75 @@
+{
+  "at_utc": "2026-10-14T23:02:43.116216+00:00",
+  "parent": "6c962f19482589cb882bf2ed5e08a40deaf1b573",
+  "frozen_receipt_sha256": "3a52cfd96ea65797150db6f4c201a50534b73e5726448d80f00b773c7615942f",
+  "source": [
+    {
+      "path": "TreeDB/caching/native_mvcc_cow_merge_v6.go",
+      "bytes": 12650,
+      "sha256": "9d1aacddf158f7fd0ea65eab6e07f23dcef9f379d007abafc0a1a7325d09c838"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "bytes": 14669,
+      "sha256": "c03193230d0bbb644ad2584ec3bf918e2e747be4948b6d1ac25e7046fd26be6f"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go",
+      "bytes": 9294,
+      "sha256": "129d5171fbbbfea910d345fa3c6fea0b226a4399defdc8a9ec95d6a186ad5a96"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "bytes": 20180,
+      "sha256": "2af95fbd1d21164813559ad7b92f323db4c3d29b937bfef1f23117a68ffe1e27"
+    },
+    {
+      "path": "TreeDB/mvcc/native_cow_publication_v6_test.go",
+      "bytes": 5502,
+      "sha256": "205920c2bf3b8a0fe71d179dcd9ef2a69086fab8c7a5a06544ec5eeb633283a3"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 16002,
+      "sha256": "ab689b15af41f39884c16a188179be79708265c4bae491384aaa19323a902b62"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map.go",
+      "bytes": 32457,
+      "sha256": "ba60d20abaee7745aa38fbbdbaa43eec65ad261e099d559ac4864f325c683f52"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map_mutation_work.go",
+      "bytes": 5585,
+      "sha256": "69d452cbb7458b2669c6cc5824c7e4b0a37412e3b7eeffe7bc499c11ede95b89"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map_mutation_work_test.go",
+      "bytes": 10433,
+      "sha256": "e93e0e17633cdcd6d040522290562ca28aed6f8033cffd33baf598848de2dfcc"
+    }
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "full_go_source_rows_verified": 4322,
+  "protected_fixture_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "qualification": "Construction only. Map package and constructor controls PASS; both actual COW public controls explicitly refuse phase16 with ACK0/cut0. Native progress/Q32/Finish/performance/final merge gates OPEN.",
+  "merged": false,
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "e7aa8d8b5a894932d1b15306bcdd4437a983d3e6",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "all_working_source_preserved": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}

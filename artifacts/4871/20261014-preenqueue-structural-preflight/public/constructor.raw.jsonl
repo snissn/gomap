@@ -1,0 +1,8 @@
+{"Time":"2026-10-14T13:01:12.388566081-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication"}
+{"Time":"2026-10-14T13:01:12.389667622-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestNativeMVCCPrivateConstructorPhysicalAbortV6"}
+{"Time":"2026-10-14T13:01:12.389674792-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestNativeMVCCPrivateConstructorPhysicalAbortV6","Output":"=== RUN   TestNativeMVCCPrivateConstructorPhysicalAbortV6\n"}
+{"Time":"2026-10-14T13:01:12.390423239-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestNativeMVCCPrivateConstructorPhysicalAbortV6","Output":"--- PASS: TestNativeMVCCPrivateConstructorPhysicalAbortV6 (0.00s)\n"}
+{"Time":"2026-10-14T13:01:12.390426929-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestNativeMVCCPrivateConstructorPhysicalAbortV6","Elapsed":0}
+{"Time":"2026-10-14T13:01:12.390462979-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Output":"PASS\n"}
+{"Time":"2026-10-14T13:01:12.390710671-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.002s\n"}
+{"Time":"2026-10-14T13:01:12.390732462-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Elapsed":0.002}
