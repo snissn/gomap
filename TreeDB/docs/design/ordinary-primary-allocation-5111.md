@@ -220,3 +220,32 @@ The selected leaf-pack staging zipper applies SYSTEM collection descriptors in
 materialized form, matching its existing published SYSTEM counterpart. The user
 PRIMARY directory remains governed by its separate operand rewrite path; generic
 R1 rewrite behavior and ownership are unchanged.
+
+
+The backend-basis completion repair reuses the original Snapshot finalizer and
+preborn OriginalCleanupCustody in its existing identity registry. Its containing
+basis, typed completion controls, pager completion receipt and registry's
+outstanding-edge counter contribute their actual independently rounded owner
+charges. Original cleanup custody prevents registry disposal while an admitted
+completion is outstanding, even when its metadata is charged to the arena;
+failure is linked before dropping that guard and success consumes aliases first.
+
+Basis Close acceptance, actual Snapshot completion and independent later pager
+descriptor disposal are distinct outcomes. Startup/handoff postcapture refusal,
+registration refusal, active inner readers, DATA-only and PRIMARY captures use
+that same completion boundary. Actual failed PRIMARY last-file closure retains
+both the original payload and basis capacity; the available error propagates
+through cut release, handoff, maintenance and cache Close. Successful cleanup
+preserves an original refusal error's identity. Same-root VLog refresh during
+admission refuses a stale view before acquiring references under the existing
+state lock. These source-bound component tests do not close the open child-file,
+complete value/leaf, physical cache identity, Windows or complete-operation cost
+items described above.
+
+The actual public read consumers and iterator-construction unwind join available
+original cleanup errors. Bound iterator Close synchronously excludes active
+moves and consumes its private child; consumed wrapper aliases are scrubbed
+before their independent allocation is released. The original held-C3 physical
+PRIMARY close fault also discriminates a public GetManyView callback: an operation
+that succeeds must still report its actual final cleanup error. These caller
+checks retain successful missing-key and original refusal semantics.

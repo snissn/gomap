@@ -27,6 +27,7 @@ type IdentityPinRegistry struct {
 	activePins           uint64
 	metadata             retainedalloc.Owner
 	closing              bool
+	originalCleanupEdges uint64 // original preborn completion edges keep this authority live
 	failedPinned         *resourcePinnedBacking
 	failedNamespace      *StableNamespaceToken
 	cleanupFailure       registryCleanupFailure
@@ -767,7 +768,7 @@ func (registry *IdentityPinRegistry) Close() {
 	registry.closeIfIdleLocked()
 }
 func (registry *IdentityPinRegistry) closeIfIdleLocked() {
-	if !registry.closing || registry.failedPinned != nil || registry.failedNamespace != nil || registry.states.count != 0 || registry.namespaces.count != 0 || registry.stableDirectoryLinks.count != 0 {
+	if !registry.closing || registry.originalCleanupEdges != 0 || registry.failedPinned != nil || registry.failedNamespace != nil || registry.states.count != 0 || registry.namespaces.count != 0 || registry.stableDirectoryLinks.count != 0 {
 		return
 	}
 	registry.states.close()

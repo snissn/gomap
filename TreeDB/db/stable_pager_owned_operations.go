@@ -1,13 +1,14 @@
 package db
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"github.com/snissn/gomap/TreeDB/pager"
 	"os"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 // This is the actual private pager/Snapshot callback environment. Descriptor
@@ -17,6 +18,7 @@ type stablePagerOwnedOperations struct {
 	refs              atomic.Int64
 	completionMu      sync.Mutex
 	snapshotCompleted bool
+	completionErr     error
 	disposalClaimed   bool
 	transferred       atomic.Bool
 	snapshot          *Snapshot
@@ -106,16 +108,18 @@ func (operations *stablePagerOwnedOperations) Release() {
 	_ = snapshot.Close()
 }
 
-// Called by the original Snapshot finalizer after successful handle scrub. False retains
-// the failed original wrapper with the already admitted failure owner instead
-// of returning an alias which still represents cleanup debt to the pool.
-func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) bool {
+// Called by the original Snapshot finalizer after successful handle scrub.
+// Return the actual available disposal outcome; surviving descriptor references
+// own their independent later physical disposal without retaining Snapshot aliases.
+func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) error {
 	operations.completionMu.Lock()
 	if operations.snapshotCompleted {
+		err := operations.completionErr
 		operations.completionMu.Unlock()
-		return err == nil
+		return err
 	}
 	operations.snapshotCompleted = true
+	operations.completionErr = err
 	operations.failure.causes[0] = err
 	if err == nil {
 		operations.snapshot = nil
@@ -132,12 +136,17 @@ func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) bool 
 		counter.Add(-1)
 	}
 	if claimed {
-		operations.disposeAfterSnapshotCompletion()
+		if disposalErr := operations.disposeAfterSnapshotCompletion(); err == nil {
+			err = disposalErr
+		}
 	}
-	return err == nil
+	operations.completionMu.Lock()
+	operations.completionErr = err
+	operations.completionMu.Unlock()
+	return err
 }
 
-func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() {
+func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() error {
 	owner, metadata, charge := operations.owner, operations.MetadataOwner(), operations.charge
 	operations.pager = nil
 	if operations.failure.causes[0] != nil {
@@ -146,7 +155,7 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() {
 		}
 		operations.originalCustody.Complete(operations, &operations.failure)
 		metadata.CleanupFailed()
-		return
+		return &operations.failure
 	}
 	consumed, debt, err := true, false, error(nil)
 	if owner != nil {
@@ -159,7 +168,7 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() {
 		}
 		operations.originalCustody.Complete(operations, &operations.failure)
 		metadata.CleanupFailed()
-		return
+		return &operations.failure
 	}
 	operations.originalCustody.Complete(nil, nil)
 	operations.originalCustody = nil
@@ -167,6 +176,7 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() {
 	operations.metadata = nil
 	operations.charge = 0
 	metadata.RemovePending(charge)
+	return err
 }
 func (owner *primaryArenaOwnerV5) retainFailedPagerOperations(operations *stablePagerOwnedOperations) {
 	owner.mu.Lock()

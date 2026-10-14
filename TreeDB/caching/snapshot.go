@@ -419,7 +419,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 			s.cowReader = nil
 		}
 		s.cowPin.Close()
-		s.db.cow.releaseCut(s.cowCut)
+		err = s.db.cow.releaseCut(s.cowCut)
 	} else if s.backend != nil {
 		err = s.backend.Close()
 	}

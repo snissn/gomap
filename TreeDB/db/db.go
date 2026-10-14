@@ -1613,6 +1613,11 @@ type Snapshot struct {
 	// The one transferred capture callback shares this actual finalizer; nil
 	// Close does not imply its retained state or metadata can be disposed.
 	stablePagerCompletion *stablePagerOwnedOperations
+	// The original finalizer owns this private consumer through actual cleanup.
+	cleanupCompletion        SnapshotCleanupCompletion
+	cleanupCompletionAdopted bool
+	cleanupFinished          bool
+	cleanupErr               error
 }
 
 type snapshotRootTree struct {
@@ -1707,6 +1712,8 @@ type SnapshotAllocationSizes struct {
 	// RegistryMetadata is the distinct physical identity/namespace authority
 	// owner. PRIMARY capture must enroll both in the same governing budget.
 	RegistryMetadata *retainedalloc.Owner
+	// IdentityRegistry is the SAME original cleanup authority, never a new registry.
+	IdentityRegistry *rootpublication.IdentityPinRegistry
 }
 
 // ErrSnapshotCapacity reports fixed reader cohort or manual leaf-pin refusal.
@@ -1892,10 +1899,11 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	}
 	if admit != nil {
 		sizes := SnapshotAllocationSizes{Wrapper: uint64(unsafe.Sizeof(Snapshot{}))}
+		sizes.RegistryMetadata = db.valueLogIdentityPins.MetadataOwner()
+		sizes.IdentityRegistry = db.valueLogIdentityPins
 		if state.primaryRoot != nil {
 			sizes.PrimaryRoot = uint64(unsafe.Sizeof(primaryStateRootV5{}))
 			sizes.PrimaryMetadata = state.primaryRoot.arena.MetadataOwner()
-			sizes.RegistryMetadata = db.valueLogIdentityPins.MetadataOwner()
 		}
 		if state.LeafGenerations != nil && state.LeafGenerations.PinSet != nil {
 			sizes.PinSet = uint64(unsafe.Sizeof(leafGenerationPinSet{}))
@@ -1926,15 +1934,25 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		if vm == nil {
 			return nil, ErrClosed
 		}
-		vm.Acquire(vlogSet)
 	}
 
+	// Same-root VLog/leaf topology refresh also uses the publication reader
+	// side. Revalidate and acquire original references under its existing state
+	// lock, after external admission and before any capture reference effects.
+	// This is the same rootReuseMu -> db.mu order as original build groups.
+	db.mu.RLock()
+	if db.closing.Load() {
+		db.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	if db.snapshotViewRO.Load() != view {
+		db.mu.RUnlock()
+		return nil, ErrSnapshotCapacity
+	}
 	var registryID int64
 	if idx != nil {
 		if idx.registry == nil {
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
+			db.mu.RUnlock()
 			return nil, ErrClosed
 		}
 
@@ -1944,9 +1962,7 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 			registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
 		}
 		if registryID == 0 {
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
+			db.mu.RUnlock()
 			return nil, ErrSnapshotCapacity
 		}
 	}
@@ -1955,12 +1971,18 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 			if registryID != 0 {
 				idx.registry.Unregister(registryID)
 			}
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
-			return nil, ErrClosed
+			db.mu.RUnlock()
+			return nil, e
 		}
 	}
+	// Existing state and root-reuse read locks retain this exact view.
+	// Acquire VLog only after fallible reader-floor and PRIMARY admission;
+	// refusal has no last-file cleanup to discard or retry. From here onward
+	// capture performs only the already-admitted original reference setup.
+	if vlogNeedsPin {
+		vm.Acquire(vlogSet)
+	}
+	db.mu.RUnlock() // no leaf materialization or consumer callback under state lock
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
 		if state.LeafGenerations.PinSet != nil {
@@ -2221,13 +2243,10 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 			}
 		}
 	}
-	if s.primaryMetadata != nil {
-		// All original last-read cleanup outcomes precede governor release.
-		// VLog Release may consume its references before a namespace barrier
-		// fails; the exact failed Snapshot still retains that cleanup debt.
-		s.primaryMetadata.CloseAfterCleanup(err)
-		s.primaryMetadata = nil
-	}
+	// The original pager callback can perform the actual last physical action.
+	// Keep this SAME enrollment live through that outcome and alias scrub.
+	metadata := s.primaryMetadata
+	s.primaryMetadata = nil
 	s.primaryRelease = primaryarena.ReleaseQueue{}
 	// Success includes actual exported-handle scrub, not just claiming the
 	// finalizer. Failed cleanup retains the exact wrapper with its debt owner.
@@ -2235,7 +2254,19 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		s.db.snapPool.Put(s)
 	}
 	if pagerCompletion != nil {
-		pagerCompletion.snapshotFinalized(err)
+		err = pagerCompletion.snapshotFinalized(err)
+	}
+	metadata.CloseAfterCleanup(err)
+	// Publish actual completion after alias scrub and every original callback's
+	// available final action. Private postcapture refusal can adopt while this
+	// same finalizer is running, or consume its retained exact outcome afterward.
+	s.iteratorMu.Lock()
+	s.cleanupFinished, s.cleanupErr = true, err
+	completion := s.cleanupCompletion
+	s.cleanupCompletion = nil
+	s.iteratorMu.Unlock()
+	if completion != nil {
+		completion.SnapshotCleanupCompleted(err)
 	}
 	return err
 }

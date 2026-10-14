@@ -15,15 +15,15 @@ func (db *DB) refreshCOWBackendBasis() error {
 		return err
 	}
 	old, err := db.cow.installCOWBasis(basis, nil)
-	basis.release()
+	err = joinCOWCleanupError(err, basis.release())
 	if err != nil {
 		return err
 	}
 	if old != nil {
-		old.drain()
+		err = old.drain()
 	}
 	db.cow.refreshRequired.Store(false)
-	return nil
+	return err
 }
 
 func (db *DB) finishCOWBackendMaintenance(fnErr error) error {

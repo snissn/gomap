@@ -93,13 +93,14 @@ func NewOriginalCleanupCustody(registry *IdentityPinRegistry, owner *retainedall
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if registry.closing {
+	if registry.closing || registry.originalCleanupEdges == ^uint64(0) {
 		return nil, retainedalloc.ErrClosed
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourcePinnedBacking{})))
 	if err := owner.AddPending(charge); err != nil {
 		return nil, err
 	}
+	registry.originalCleanupEdges++
 	backing := &resourcePinnedBacking{owner: owner, charge: charge, registry: registry}
 	backing.refs.Store(1)
 	return (*OriginalCleanupCustody)(backing), nil
@@ -115,14 +116,28 @@ func (custody *OriginalCleanupCustody) Complete(payload any, err error) {
 	if !backing.custodyCompleted.CompareAndSwap(false, true) {
 		return
 	}
+	registry := backing.registry
 	if err != nil {
 		backing.custody, backing.failure = payload, err
 		backing.refs.Store(0)
 		backing.owner.CleanupFailed()
-		backing.registry.retainFailedPinnedBacking(backing)
-		return
+	} else {
+		backing.release()
 	}
-	backing.release()
+	// Failure was linked before consuming the original edge; success consumed
+	// the original payload before permitting physical registry disposal.
+	registry.mu.Lock()
+	if registry.originalCleanupEdges == 0 {
+		registry.mu.Unlock()
+		panic("unbalanced original cleanup custody")
+	}
+	if err != nil {
+		backing.failedNext = registry.failedPinned
+		registry.failedPinned = backing
+	}
+	registry.originalCleanupEdges--
+	registry.closeIfIdleLocked()
+	registry.mu.Unlock()
 }
 
 // CaptureStableNamespaceWithMetadata creates an independent, admitted namespace

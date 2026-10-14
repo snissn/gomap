@@ -31032,12 +31032,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer s.Close()
+		defer s.Close() // retain original panic unwind; actual outcome joins below
 		v, err := s.Get(key)
 		if err == tree.ErrKeyNotFound {
-			return nil, nil
+			v, err = nil, nil
 		}
-		return v, err
+		return v, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31095,12 +31095,12 @@ func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		defer s.Close()
+		defer s.Close() // retain original panic unwind; actual outcome joins below
 		v, rev, err := s.GetVersioned(key)
 		if err == tree.ErrKeyNotFound {
-			return nil, rev, nil
+			v, err = nil, nil
 		}
-		return v, rev, err
+		return v, rev, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	scratch := getOwnedReadScratch()
@@ -31235,8 +31235,9 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 		if err != nil {
 			return err
 		}
-		defer s.Close()
-		return s.GetManyView(keys, fn)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		err = s.GetManyView(keys, fn)
+		return joinCOWCleanupError(err, s.Close())
 	}
 	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
@@ -31313,8 +31314,9 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 		if err != nil {
 			return dst, err
 		}
-		defer s.Close()
-		return s.GetAppend(key, dst)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		out, err := s.GetAppend(key, dst)
+		return out, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31341,8 +31343,9 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 		if err != nil {
 			return dst, 0, err
 		}
-		defer s.Close()
-		return s.GetVersionedAppend(key, dst)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		out, revision, err := s.GetVersionedAppend(key, dst)
+		return out, revision, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31371,8 +31374,9 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		defer s.Close()
-		return s.Has(key)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		found, err := s.Has(key)
+		return found, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31409,8 +31413,9 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer s.Close()
-		return s.HasMany(keys)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		found, err := s.HasMany(keys)
+		return found, joinCOWCleanupError(err, s.Close())
 	}
 	keys = normalizeRawKVPointKeys(keys)
 	out := make([]bool, len(keys))
@@ -31463,7 +31468,8 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 			return nil, err
 		}
 		defer snap.Close()
-		return snap.HasPrefixes(prefixes)
+		found, err := snap.HasPrefixes(prefixes)
+		return found, joinCOWCleanupError(err, snap.Close())
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
