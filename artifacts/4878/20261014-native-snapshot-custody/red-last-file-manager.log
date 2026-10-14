@@ -1,0 +1,5 @@
+--- FAIL: TestNativeMVCCSetLastFileRetainsActualManagerAcrossOrdinaryClose (0.00s)
+    native_mvcc_set_release_test.go:119: original terminal refund consumed Manager borrowed by unfinished Set receipt
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.002s
+FAIL

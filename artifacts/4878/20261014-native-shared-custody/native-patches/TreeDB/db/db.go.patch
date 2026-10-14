@@ -1,0 +1,238 @@
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -297,8 +297,12 @@
+ 	// teardownMu read lease. Close drains them only after acquiring teardownMu
+ 	// exclusively, so a recovery callback cannot race its admitted producer.
+ 	captureTeardownHooksMu     sync.Mutex
+-	captureTeardownHooks       []func() error
++	captureTeardownHooks       []captureTeardownHook
+ 	captureTeardownHooksClosed bool
++	captureTeardownHooksOwner  *retainedalloc.Owner
++	captureTeardownHooksCharge uint64
++	captureTeardownFailure     captureTeardownFailure
++	captureTeardownErrorCharge uint64
+ 
+ 	leafGenerationLiveStatsMu        sync.RWMutex
+ 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
+@@ -1571,6 +1575,7 @@
+ // the pointer and any later method call remains invalid even after subsequent
+ // snapshots are acquired.
+ type Snapshot struct {
++	nativeMVCC nativeMVCCSnapshotStateV6
+ 	// A failed historical rebind retains both exact original root operands.
+ 	primaryRebindRoot      primaryStateRootV5
+ 	primaryRebindErr       error
+@@ -1586,6 +1591,7 @@
+ 	idx                    *indexGen
+ 	state                  *DBState
+ 	vlogManager            *valuelog.Manager
++	vlogWrapperBorrowed    bool
+ 	vlogPinned             bool
+ 	systemRootPublishEpoch uint64
+ 	leafGenerationIDs      []uint64
+@@ -1775,6 +1781,17 @@
+ 	idx := view.idx
+ 	state := view.state
+ 	vm := view.vlogManager
++	managerBorrowAdopted := false
++	if vm != nil {
++		if !vm.RetainSnapshotWrapper() {
++			return false
++		}
++		defer func() {
++			if !managerBorrowAdopted {
++				snap.nativeMVCC.managerRelease.ReleaseOriginal(vm)
++			}
++		}()
++	}
+ 	vlogSet := state.ValueLogSet
+ 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+ 	if vlogNeedsPin {
+@@ -1837,6 +1854,8 @@
+ 	snap.idx = idx
+ 	snap.state = state
+ 	snap.vlogManager = vm
++	snap.vlogWrapperBorrowed = vm != nil
++	managerBorrowAdopted = true
+ 	snap.vlogPinned = vlogNeedsPin
+ 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
+ 	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+@@ -1899,6 +1918,7 @@
+ 	idx := view.idx
+ 	state := view.state
+ 	vm := view.vlogManager
++	managerBorrowAdopted := false
+ 
+ 	if bounded && state.LeafGenerations != nil && len(state.LeafGenerations.GenerationOrder) != 0 && state.LeafGenerations.PinSet == nil {
+ 		// The manual-view fallback creates tracker/ref arrays during capture. COW
+@@ -1973,6 +1993,20 @@
+ 			db.mu.RUnlock()
+ 			return nil, ErrSnapshotCapacity
+ 		}
++	}
++	if vm != nil {
++		if !vm.RetainSnapshotWrapper() {
++			if registryID != 0 {
++				idx.registry.Unregister(registryID)
++			}
++			db.mu.RUnlock()
++			return nil, ErrClosed
++		}
++		defer func() {
++			if !managerBorrowAdopted {
++				snap.nativeMVCC.managerRelease.ReleaseOriginal(vm)
++			}
++		}()
+ 	}
+ 	if state.primaryRoot != nil {
+ 		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
+@@ -2023,6 +2057,8 @@
+ 	snap.idx = idx
+ 	snap.state = state
+ 	snap.vlogManager = vm
++	snap.vlogWrapperBorrowed = vm != nil
++	managerBorrowAdopted = true
+ 	snap.vlogPinned = vlogNeedsPin
+ 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
+ 	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+@@ -2159,6 +2195,9 @@
+ 	if s == nil {
+ 		return nil
+ 	}
++	if s.nativeMVCC.workOwned {
++		return ErrNativeMVCCSnapshotWork
++	}
+ 	s.iteratorMu.Lock()
+ 	if !s.closed.CompareAndSwap(false, true) {
+ 		s.iteratorMu.Unlock()
+@@ -2171,12 +2210,16 @@
+ }
+ 
+ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
++	if s.nativeMVCC.workOwned {
++		return nil
++	}
+ 	s.iteratorMu.Lock()
+ 	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+ 		s.iteratorMu.Unlock()
+ 		return nil
+ 	}
+ 	originalIndex, originalDB := s.idx, s.db
++	originalManager, managerBorrowed := s.vlogManager, s.vlogWrapperBorrowed
+ 	indexBorrowed := s.indexWrapperBorrowed
+ 	s.indexWrapperBorrowed = false
+ 	pagerCompletion := s.stablePagerCompletion
+@@ -2276,6 +2319,11 @@
+ 	}
+ 	if pagerCompletion != nil {
+ 		err = pagerCompletion.snapshotFinalized(err)
++	}
++	if err == nil && managerBorrowed {
++		s.vlogManager = nil
++		s.vlogWrapperBorrowed = false
++		s.nativeMVCC.managerRelease.ReleaseOriginal(originalManager)
+ 	}
+ 	metadata.CloseAfterCleanup(err)
+ 	if indexBorrowed {
+@@ -3175,14 +3223,20 @@
+ 		return func() {}, false
+ 	}
+ 	idx := len(db.captureTeardownHooks)
+-	db.captureTeardownHooks = append(db.captureTeardownHooks, hook)
++	var metadata *retainedalloc.Owner
++	if db.valueLogIdentityPins != nil {
++		metadata = db.valueLogIdentityPins.MetadataOwner()
++	}
++	if err := db.appendCaptureTeardownHookLocked(captureTeardownHook{hook: hook}, metadata); err != nil {
++		return func() {}, false
++	}
+ 
+ 	var once sync.Once
+ 	return func() {
+ 		once.Do(func() {
+ 			db.captureTeardownHooksMu.Lock()
+-			if idx >= 0 && idx < len(db.captureTeardownHooks) && db.captureTeardownHooks[idx] != nil {
+-				db.captureTeardownHooks[idx] = nil
++			if !db.captureTeardownHooksClosed && idx >= 0 && idx < len(db.captureTeardownHooks) && db.captureTeardownHooks[idx].hook != nil {
++				db.captureTeardownHooks[idx] = captureTeardownHook{}
+ 			}
+ 			db.captureTeardownHooksMu.Unlock()
+ 		})
+@@ -3196,24 +3250,68 @@
+ 	db.captureTeardownHooksMu.Lock()
+ 	if db.captureTeardownHooksClosed {
+ 		db.captureTeardownHooksMu.Unlock()
++		if len(db.captureTeardownFailure.causes) != 0 {
++			return &db.captureTeardownFailure
++		}
+ 		return nil
+ 	}
++	metadata := db.captureTeardownHooksOwner
++	hooks, charge := db.captureTeardownHooks, db.captureTeardownHooksCharge
++	errorCharge := retainedalloc.AllocationCharge(uint64(len(hooks)) * uint64(unsafe.Sizeof(error(nil))))
++	if metadata != nil && len(hooks) != 0 {
++		if err := metadata.AddPending(errorCharge); err != nil {
++			db.captureTeardownHooksMu.Unlock()
++			return err
++		}
++	}
++	var errs []error
++	if len(hooks) != 0 {
++		errs = make([]error, 0, len(hooks))
++	}
++	// Transfer the original backing. All producers are excluded by teardownMu.
+ 	db.captureTeardownHooksClosed = true
+-	hooks := append([]func() error(nil), db.captureTeardownHooks...)
+-	clear(db.captureTeardownHooks)
+ 	db.captureTeardownHooks = nil
++	db.captureTeardownHooksCharge = 0
+ 	db.captureTeardownHooksMu.Unlock()
+-
+-	var errs []error
+-	for _, hook := range hooks {
++	for i := range hooks {
++		hook := hooks[i].hook
+ 		if hook == nil {
+ 			continue
+ 		}
+-		if err := hook(); err != nil {
++		err := hook()
++		// Clear the local method value before consuming containing/control charge.
++		hook = nil
++		if err != nil {
+ 			errs = append(errs, err)
+-		}
+-	}
+-	return errors.Join(errs...)
++			continue
++		}
++		hooks[i].hook = nil
++		completionOwner, completionCharge := hooks[i].completionOwner, hooks[i].completionCharge
++		hooks[i].completionOwner, hooks[i].completionCharge = nil, 0
++		if completionOwner != nil && completionCharge != 0 {
++			completionOwner.RemovePending(completionCharge)
++		}
++	}
++	if len(errs) != 0 {
++		// Keep the SAME backing: each failed method value still retains its exact
++		// original authority and admitted completion charge. Never retry callbacks.
++		db.captureTeardownHooks = hooks
++		db.captureTeardownHooksCharge = charge
++		db.captureTeardownFailure.causes = errs
++		db.captureTeardownErrorCharge = errorCharge
++		return &db.captureTeardownFailure
++	}
++	clear(hooks)
++	hooks = nil
++	if metadata != nil && charge != 0 {
++		metadata.RemovePending(charge)
++	}
++
++	errs = nil
++	if metadata != nil && errorCharge != 0 && charge != 0 {
++		metadata.RemovePending(errorCharge)
++	}
++	return nil
+ }
+ 
+ func (db *DB) Close() error {

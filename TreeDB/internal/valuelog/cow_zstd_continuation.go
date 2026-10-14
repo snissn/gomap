@@ -66,6 +66,12 @@ func (c *COWZSTDContinuation) Begin(input, raw []byte, w *iterator.OrdinalScanWo
 	return c.begin(input, raw, nil, nil, 0, 0, 0, 0, false, false, w)
 }
 
+// BeginSpans uses the same original decoder with its necessary admitted
+// physical history. The caller supplies a finite output span to each Step.
+func (c *COWZSTDContinuation) BeginSpans(input []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	return c.begin(input, nil, nil, nil, 0, 0, 0, 0, false, true, w)
+}
+
 // BeginFile receives the exact producer payload range and a CRC seed for the
 // already-validated original header/directory. Every ReadAt, checksum scan and
 // FeedInput copy reserves before effects; an exhausted feed retains this SAME

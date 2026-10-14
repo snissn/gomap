@@ -1,0 +1,72 @@
+{
+  "base": "b5723dd42b5089841df6cba121b3cfdad06b8417",
+  "supersedes": "3119c777638b0325e71b404e65aa57aa99494a0fe8961a772aace65ef31ac5a0",
+  "boundary": "Only exact captureTeardownHooks field replacement + four new DB fields, exact two DB method replacements, and two named NEW files. Other native DB edits excluded.",
+  "signature": "tryRegisterCaptureTeardownOwnedHook(func() error, registryMetadata, completionOwner *retainedalloc.Owner, completionCharge uint64) (bool,error)",
+  "array_owner": "Original DB.valueLogIdentityPins.MetadataOwner() from array birth; mismatch refuses before effects",
+  "completion": "Actual admitted original authority containing/env charge; successful producer defers refund, DB clears SAME array/local method value then direct original RemovePending; failed record remains in SAME admitted backing and is never retried",
+  "evidence": "Real method-value held-return + 2 actual COW governors outcomes, compatibility cancellation, foreign owner and geometric overlap refusal, exact multi-cause original Close retention, original held producer teardown controls; focused normal/race GREEN",
+  "qualification": "Helper only; whole public native33/80/all19 and remaining gates OPEN",
+  "source": [
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/capture_teardown_allocation.go",
+      "bytes": 3817,
+      "sha256": "b9e3c5cc99d2b78b974f990817db2be642b073d5bd91805ee684197df1e73680"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/capture_teardown_allocation_test.go",
+      "bytes": 8350,
+      "sha256": "7b44f33b4b5245f45406146e50c69e5bab8f64dd6f08e39fb93d188485718e14"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/commands.json",
+      "bytes": 1111,
+      "sha256": "d7624095e78e45271fbd557614c1267bce74709b593944264e00d7e5889bfe2e"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/db-fields.after.txt",
+      "bytes": 204,
+      "sha256": "b9ea548081934dbd27ea483e64686a1a2c30942b759eeb3524eeb04d5d99933b"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/db-fields.before.txt",
+      "bytes": 36,
+      "sha256": "1c1effad50c3660303e579fbfe63619f67193355436e7e2760f5f716fa099ccf"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/normal.log",
+      "bytes": 46,
+      "sha256": "b46c92990092baa3de33dc06f4a3f249f2e1e9b79546b5ca53aa30d3f5aeeac4"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/race.log",
+      "bytes": 46,
+      "sha256": "1d0ec250ce33bfa467809856fe5316f58ada7e0251ed66f172049cc09ef751a4"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/runCaptureTeardownHooksLocked.after.txt",
+      "bytes": 2088,
+      "sha256": "58f2df81ad12840a85ba463e5d4fdd3db9e30d661222c2332f83c743c6121db4"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/runCaptureTeardownHooksLocked.before.txt",
+      "bytes": 563,
+      "sha256": "7fc295db2211a01a7adf8204197ad0e2c60b25143cd0068a8c190a4350275c6c"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/source.json",
+      "bytes": 572486,
+      "sha256": "cf0b3344a77b3066ce53db6f2d2d2312c0f1535ef67db61cfaa82be5ed08d5e2"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/tryRegisterCaptureTeardownHook.after.txt",
+      "bytes": 921,
+      "sha256": "85293c8ce435a8b5a295147526d61a32bf3fd43351344bd4588283fd5ece0fe8"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/typed-owned/tryRegisterCaptureTeardownHook.before.txt",
+      "bytes": 669,
+      "sha256": "88c0e3d4052f785175804cf3d1deb50bdeaa3ab208c19577431297e8b46cad6b"
+    }
+  ]
+}

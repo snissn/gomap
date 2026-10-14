@@ -1,0 +1,23 @@
+func (db *DB) runCaptureTeardownHooksLocked() error {
+	db.captureTeardownHooksMu.Lock()
+	if db.captureTeardownHooksClosed {
+		db.captureTeardownHooksMu.Unlock()
+		return nil
+	}
+	db.captureTeardownHooksClosed = true
+	hooks := append([]func() error(nil), db.captureTeardownHooks...)
+	clear(db.captureTeardownHooks)
+	db.captureTeardownHooks = nil
+	db.captureTeardownHooksMu.Unlock()
+
+	var errs []error
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}

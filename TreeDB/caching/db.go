@@ -8959,7 +8959,11 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
-	cow                          *cowCache
+	cow *cowCache
+	// One original cache-lifetime governor for native legacy captures. COW
+	// uses cow.budget. Every original metadata owner enrolls on this same budget.
+	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
+	nativeMVCCLimits             memtable.COWLimits
 	writeWaitForCheckpointActive atomic.Int64
 
 	mu          sync.RWMutex
@@ -10022,6 +10026,7 @@ type DB struct {
 	vlogGenerationVacuumExecMaxNanos                           atomic.Uint64
 	vlogGenerationRewriteQueueFollowupBlockedUntilNS           atomic.Int64
 	bgErrMu                                                    sync.Mutex
+	bgErrRevision                                              uint64
 	bgErr                                                      error
 
 	// Backpressure state
@@ -12499,6 +12504,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
 	cowMode := modeStr == "cow_btree"
+	nativeMVCCLimits := opts.COWMemtableLimits
+	if nativeMVCCLimits == (memtable.COWLimits{}) {
+		nativeMVCCLimits = memtable.DefaultCOWLimits()
+	}
+	if err := nativeMVCCLimits.Validate(); err != nil {
+		return nil, err
+	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -13222,6 +13234,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
 	db.cow = cowOwner
+	db.nativeMVCCLimits = nativeMVCCLimits
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
@@ -13531,24 +13544,62 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	close(job.out)
 }
 
-func (db *DB) reportError(err error) {
+func (db *DB) retainOriginalCleanupError(err error) {
 	if err == nil {
 		return
 	}
-	if errors.Is(err, errDBClosing) {
+	for {
+		db.bgErrMu.Lock()
+		prior, revision := db.bgErr, db.bgErrRevision
+		if prior == nil {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Error methods may read DB state or report another original failure.
+		// No original edge is consumed until the unchanged root is locked again.
+		if errors.Is(prior, err) {
+			return
+		}
+		containsPrior := errors.Is(err, prior)
+		var original rootpublication.OriginalCleanupPriorBinder
+		if !containsPrior {
+			original = rootpublication.SelectOriginalCleanupPrior(err, prior)
+		}
+		db.bgErrMu.Lock()
+		if db.bgErrRevision != revision {
+			db.bgErrMu.Unlock()
+			continue
+		}
+		if containsPrior || (original != nil && original.TryLinkPriorCleanupError(prior)) {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Existing ordinary errors keep first-error semantics. Actual cleanup
+		// receipts provide the preborn edge needed to retain original custody.
+		if original == nil {
+			return
+		}
+	}
+}
+func (db *DB) reportError(err error) {
+	if err == nil || db == nil {
 		return
 	}
-	if db != nil && db.closing.Load() {
-		return
+	original := rootpublication.IsOriginalCleanupError(err)
+	if !original {
+		if errors.Is(err, errDBClosing) || db.closing.Load() {
+			return
+		}
 	}
+	// Original cleanup custody precedes notification, including during closing.
+	db.retainOriginalCleanupError(err)
 	if db.notifyError != nil {
 		db.notifyError(err)
 	}
-	db.bgErrMu.Lock()
-	if db.bgErr == nil {
-		db.bgErr = err
-	}
-	db.bgErrMu.Unlock()
 }
 
 func (db *DB) backgroundError() error {
@@ -17626,7 +17677,10 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 	}
 	ptrs, resources, err := db.appendValueLogInternal(l, dictID, dict, records, durability, capture)
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
+		if rootpublication.IsOriginalCleanupError(err) {
+			db.reportError(err)
+		}
 	}
 	return ptrs, resources, err
 }
@@ -26385,6 +26439,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	defer db.closeNativeMVCCBudgetV6()
 	// Keep actual producer governors live through the final backend checkpoint,
 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
 	if db.cow != nil {
@@ -28902,7 +28957,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 				stableInstalled = true
 				stableErr = capture.addRotation(rotation)
 			} else if rotation != nil {
-				rotation.Release()
+				stableErr = errors.Join(stableErr, rotation.ReleaseWithError())
 			}
 			rotateErr = stableErr
 		}
@@ -28945,7 +29000,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		if db.isLeafLogAppendLane(l) {
 			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 		} else {
-			w, err = valuelog.NewWriter(path, fileID)
+			w, err = valuelog.NewWriterWithMetadata(path, fileID, db.valueLogIdentityPins.MetadataOwner())
 		}
 		if err != nil {
 			return err
@@ -29035,7 +29090,7 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 	if db.isLeafLogAppendLane(l) {
 		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 	} else {
-		w, err = valuelog.NewWriter(path, fileID)
+		w, err = valuelog.NewWriterWithMetadata(path, fileID, db.valueLogIdentityPins.MetadataOwner())
 	}
 	if err != nil {
 		return err
@@ -31032,12 +31087,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer s.Close()
+		defer s.Close() // retain original panic unwind; actual outcome joins below
 		v, err := s.Get(key)
 		if err == tree.ErrKeyNotFound {
-			return nil, nil
+			v, err = nil, nil
 		}
-		return v, err
+		return v, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31095,12 +31150,12 @@ func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		defer s.Close()
+		defer s.Close() // retain original panic unwind; actual outcome joins below
 		v, rev, err := s.GetVersioned(key)
 		if err == tree.ErrKeyNotFound {
-			return nil, rev, nil
+			v, err = nil, nil
 		}
-		return v, rev, err
+		return v, rev, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	scratch := getOwnedReadScratch()
@@ -31235,8 +31290,9 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 		if err != nil {
 			return err
 		}
-		defer s.Close()
-		return s.GetManyView(keys, fn)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		err = s.GetManyView(keys, fn)
+		return joinCOWCleanupError(err, s.Close())
 	}
 	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
@@ -31313,8 +31369,9 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 		if err != nil {
 			return dst, err
 		}
-		defer s.Close()
-		return s.GetAppend(key, dst)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		out, err := s.GetAppend(key, dst)
+		return out, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31341,8 +31398,9 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 		if err != nil {
 			return dst, 0, err
 		}
-		defer s.Close()
-		return s.GetVersionedAppend(key, dst)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		out, revision, err := s.GetVersionedAppend(key, dst)
+		return out, revision, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31371,8 +31429,9 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		defer s.Close()
-		return s.Has(key)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		found, err := s.Has(key)
+		return found, joinCOWCleanupError(err, s.Close())
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31409,8 +31468,9 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer s.Close()
-		return s.HasMany(keys)
+		defer s.Close() // retain original panic unwind; actual outcome joins below
+		found, err := s.HasMany(keys)
+		return found, joinCOWCleanupError(err, s.Close())
 	}
 	keys = normalizeRawKVPointKeys(keys)
 	out := make([]bool, len(keys))
@@ -31463,7 +31523,8 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 			return nil, err
 		}
 		defer snap.Close()
-		return snap.HasPrefixes(prefixes)
+		found, err := snap.HasPrefixes(prefixes)
+		return found, joinCOWCleanupError(err, snap.Close())
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {

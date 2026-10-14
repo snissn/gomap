@@ -1,0 +1,9 @@
+UNQUALIFIED construction checkpoint for #4878.
+
+This freezes shared original Manager/File/Set custody, external enrollment refunds, original namespace/PrimaryArena cleanup, leaf PinSet progress, typed DB capture hooks and provisional Snapshot/constructor glue. Ordinary and native cleanup use the same original objects. Bounded refusal precedes effects; physical success and caller alias detachment precede containing refunds.
+
+Focused composed normal and race passed. checks.json gives exact commands, raw logs and source binding. source.json covers the complete mutable test closure, including read-only ordinary imported dependencies. frozen-source and manifest.json contain only the explicit owned allowlist. released-baseline/native-patches distinguish handed-off original bytes from native edits where recoverable baseline source is available. Read-only ordinary imports and protected diagnostic census/export files remain unstaged.
+
+The actual initial Manager Close RED is retained separately from the narrower under-mu isolation RED and the GREEN repeated-Close-only negative control. The ordinary PrimaryArena nonlast allocation RED and corrected zero-allocation GREEN are also retained. The superseded func-only capture hook evidence does not qualify the typed callback lifetime; typed-owned packet is the accepted source-bound boundary.
+
+No maintained public PruneCursor exists yet. DATA absence composition, current Prepare/Publish/Report/Finish, retired generation completion and callback physical Finish remain to integrate. This packet does not establish a public ACK, all19, format/fault, 40% shrink, 8x output, whole cost, platform, or M0 pass. The unchanged protected SAMERequest 33/80/4096 fixture must run at the first usable public ABI. Unsupported native Windows partial unmapping remains fail closed; ordinary behavior remains its prior domain.

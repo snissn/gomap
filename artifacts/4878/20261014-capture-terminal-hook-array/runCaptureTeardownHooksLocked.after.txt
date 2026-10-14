@@ -1,0 +1,50 @@
+func (db *DB) runCaptureTeardownHooksLocked() error {
+	db.captureTeardownHooksMu.Lock()
+	if db.captureTeardownHooksClosed {
+		db.captureTeardownHooksMu.Unlock()
+		if len(db.captureTeardownFailure.causes) != 0 {
+			return &db.captureTeardownFailure
+		}
+		return nil
+	}
+	metadata := db.captureTeardownHooksOwner
+	hooks, charge := db.captureTeardownHooks, db.captureTeardownHooksCharge
+	errorCharge := retainedalloc.AllocationCharge(uint64(len(hooks)) * uint64(unsafe.Sizeof(error(nil))))
+	if metadata != nil && len(hooks) != 0 {
+		if err := metadata.AddPending(errorCharge); err != nil {
+			db.captureTeardownHooksMu.Unlock()
+			return err
+		}
+	}
+	var errs []error
+	if len(hooks) != 0 {
+		errs = make([]error, 0, len(hooks))
+	}
+	// Transfer the original backing. All producers are excluded by teardownMu.
+	db.captureTeardownHooksClosed = true
+	db.captureTeardownHooks = nil
+	db.captureTeardownHooksCharge = 0
+	db.captureTeardownHooksMu.Unlock()
+	for i, hook := range hooks {
+		if hook != nil {
+			if err := hook(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		hooks[i] = nil
+	}
+	hooks = nil
+	if metadata != nil && charge != 0 {
+		metadata.RemovePending(charge)
+	}
+	if len(errs) != 0 {
+		db.captureTeardownFailure.causes = errs
+		db.captureTeardownErrorCharge = errorCharge
+		return &db.captureTeardownFailure
+	}
+	errs = nil
+	if metadata != nil && errorCharge != 0 && charge != 0 {
+		metadata.RemovePending(errorCharge)
+	}
+	return nil
+}

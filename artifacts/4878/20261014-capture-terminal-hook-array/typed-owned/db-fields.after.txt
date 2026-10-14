@@ -1,0 +1,5 @@
+captureTeardownHooks []captureTeardownHook
+captureTeardownHooksOwner *retainedalloc.Owner
+captureTeardownHooksCharge uint64
+captureTeardownFailure captureTeardownFailure
+captureTeardownErrorCharge uint64

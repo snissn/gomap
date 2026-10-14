@@ -1,0 +1,50 @@
+{
+  "base": "b5723dd42b5089841df6cba121b3cfdad06b8417",
+  "boundary": "Only four DB fields plus exact two method replacements, and the two named new companion files. Remaining native db.go changes are excluded from this boundary.",
+  "signature": "tryRegisterCaptureTeardownHookWithMetadata(func() error, *retainedalloc.Owner) (bool, error)",
+  "array_owner": "DB.valueLogIdentityPins.MetadataOwner()",
+  "callback_control": "Original producer admits prior to registration; no new authority cancellation closure",
+  "source": [
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/capture_teardown_allocation.go",
+      "bytes": 2686,
+      "sha256": "dcb5d22fabfed80db1179292dbbfb230b957cea30fa9fa0e7682146c46efa16a"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/capture_teardown_allocation_test.go",
+      "bytes": 3272,
+      "sha256": "3d343af08144e55ce38ca5e65db30aff1ac3bb707c95f4fb0bbc17ab2a97b483"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/db-fields.txt",
+      "bytes": 161,
+      "sha256": "3b128ae5fa75397a96e1e7e8eac4af06583a0db4be54ddcb94d2f7012186185b"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/normal.log",
+      "bytes": 46,
+      "sha256": "c7d136740ccad3014a239d88b115f74b84cc76796b85b0255f63cb48974a69d5"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/runCaptureTeardownHooksLocked.after.txt",
+      "bytes": 1442,
+      "sha256": "994cb27cb8922d99a1e5639b7ddc9e10e70cd59567125bcb372a0e1433f687ef"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/runCaptureTeardownHooksLocked.before.txt",
+      "bytes": 563,
+      "sha256": "7fc295db2211a01a7adf8204197ad0e2c60b25143cd0068a8c190a4350275c6c"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/tryRegisterCaptureTeardownHook.after.txt",
+      "bytes": 837,
+      "sha256": "0a9715f3062911bdbd5b5830eb0a4526c581d94cbaee0b01690bd48b98360fef"
+    },
+    {
+      "path": "artifacts/4878/20261014-capture-terminal-hook-array/tryRegisterCaptureTeardownHook.before.txt",
+      "bytes": 669,
+      "sha256": "88c0e3d4052f785175804cf3d1deb50bdeaa3ab208c19577431297e8b46cad6b"
+    }
+  ],
+  "scope": "focused helper and existing teardown/held-primary controls; not whole public prune qualification"
+}

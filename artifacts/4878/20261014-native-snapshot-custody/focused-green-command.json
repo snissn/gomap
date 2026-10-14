@@ -1,0 +1,18 @@
+{
+  "exit_code": 0,
+  "packages": [
+    "TreeDB/db",
+    "TreeDB/internal/valuelog",
+    "TreeDB/internal/rootpublication",
+    "TreeDB/internal/retainedalloc"
+  ],
+  "run": "TestNativeMVCCSet|TestNativeMVCCOriginalSet|TestManagerWrapper|TestNativeMVCCSnapshotActual|TestLeafPinWork|TestOriginalDATAOnlySnapshot|TestOriginalManager|Test.*Namespace|Test.*CreationProof|TestEnrollment|TestOrdinaryMetadata",
+  "flags": [
+    "-mod=readonly",
+    "-p",
+    "2",
+    "-count=1",
+    "-timeout=60s"
+  ],
+  "raw": "normal.log"
+}

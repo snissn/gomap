@@ -1,0 +1,5 @@
+--- FAIL: TestNativeMVCCSetInitialCloseCompletionRetainsActualManager (0.00s)
+    native_mvcc_set_release_test.go:204: initial original Close completion refunded Manager held by unfinished Set receipt
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.002s
+FAIL

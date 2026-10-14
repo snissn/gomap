@@ -1,0 +1,57 @@
+--- a/TreeDB/db/leaf_generation_runtime.go
++++ b/TreeDB/db/leaf_generation_runtime.go
+@@ -96,10 +96,13 @@
+ type leafGenerationPinSet struct {
+ 	refs []*leafGenerationPinRef
+ 
+-	mu      sync.Mutex
+-	holders int64
+-	stale   bool
+-	pinned  bool
++	mu            sync.Mutex
++	holders       int64
++	stale         bool
++	pinned        bool
++	unpinning     bool
++	unpinPosition int
++	unpinCycle    uint64
+ }
+ 
+ func newLeafGenerationPinSet(refs []*leafGenerationPinRef) *leafGenerationPinSet {
+@@ -115,28 +118,23 @@
+ 	}
+ 	s.mu.Lock()
+ 	defer s.mu.Unlock()
++	repaired := s.repairUnpinPrefixLocked()
+ 	s.holders++
+ 	if s.stale && !s.pinned {
+ 		tracker.pinRefs(s.refs)
+ 		s.pinned = true
+ 		return true
+ 	}
+-	return false
++	return repaired
+ }
+ 
+ func (s *leafGenerationPinSet) release(tracker *leafGenerationPinTracker) {
+-	if s == nil || tracker == nil {
+-		return
+-	}
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
+-	if s.holders == 0 {
+-		return
+-	}
+-	s.holders--
+-	if s.holders == 0 && s.pinned {
+-		tracker.unpinRefs(s.refs)
+-		s.pinned = false
++	var state leafGenerationPinReleaseWork
++	for {
++		ready, err := s.releasePinWork(tracker, &state, nil)
++		if ready || err != nil {
++			return
++		}
+ 	}
+ }
+ 

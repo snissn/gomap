@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"io"
 	"os"
 	"path/filepath"
@@ -410,7 +411,7 @@ type resourceOperation func(*os.File, DurableFrontier) error
 type StableResourceOwnedOperations interface {
 	MetadataOwner() *retainedalloc.Owner
 	Retain() error
-	Release()
+	Release() (consumed bool, err error)
 	FlushThrough(*os.File, DurableFrontier) error
 	SyncThrough(*os.File, DurableFrontier) error
 }
@@ -469,6 +470,8 @@ type resourceTokenMetrics struct {
 }
 
 type StableResourceToken struct {
+	cleanupFailure     originalReleaseFailure
+	cleanupDone        atomic.Bool
 	importedSource     *StableResourceToken
 	importedFields     *resourceFieldBacking
 	metadata           *resourceAllocation
@@ -525,6 +528,12 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 // for exact-handle clones produced inside this package. Public producers always
 // pass nil and retain the full validation/copy boundary above.
 func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation) (*StableResourceToken, error) {
+	return initializeStableResourceToken(spec, normalized, nil)
+}
+
+// Selected construction initializes the SAME pre-admitted original token. Its
+// receipt can therefore retain all unresolved constructor operands on refusal.
+func initializeStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation, token *StableResourceToken) (_ *StableResourceToken, retErr error) {
 	if spec.OriginalObservation != nil {
 		return newOriginalObservedStableResourceTokenNormalized(spec, normalized)
 	}
@@ -532,7 +541,17 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if spec.physicalBacking != nil {
 		defer func() {
 			if !physicalTransferred {
-				spec.physicalBacking.release()
+				if cleanupErr := spec.physicalBacking.release(); cleanupErr != nil {
+					originalErr := retErr
+					if token != nil && token.metadata != nil {
+						retErr = token.metadata.cleanupFailed(token, cleanupErr)
+						token.metadata.failure.causes[1] = originalErr
+					} else {
+						retErr = errors.Join(originalErr, cleanupErr)
+					}
+				} else if token != nil {
+					token.physicalBacking = nil
+				}
 			}
 		}()
 	}
@@ -629,7 +648,12 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if syncThrough == nil {
 		syncThrough = func(file *os.File, _ DurableFrontier) error { return stableio.SyncFile(file) }
 	}
-	token := &StableResourceToken{
+	if token == nil {
+		token = &StableResourceToken{}
+	}
+	metadata, obligations := token.metadata, token.obligationBacking
+	*token = StableResourceToken{
+		metadata: metadata, obligationBacking: obligations,
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
@@ -862,11 +886,15 @@ func (token *StableResourceToken) WithPinnedFile(fn func(*os.File) error) error 
 	return fn(token.pinned)
 }
 
-func (token *StableResourceToken) Release() {
-	if token == nil || !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(ResourceOwnerReleased)) {
-		return
+func (token *StableResourceToken) Release() { _ = token.ReleaseWithError() }
+func (token *StableResourceToken) ReleaseWithError() error {
+	if token == nil {
+		return nil
 	}
-	token.releasePinned()
+	if !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(ResourceOwnerReleased)) {
+		return token.releaseResult()
+	}
+	return token.releasePinned()
 }
 
 func (token *StableResourceToken) claim(owner ResourceOwnerState) error {
@@ -883,53 +911,86 @@ func (token *StableResourceToken) transfer(from, to ResourceOwnerState) error {
 	return nil
 }
 
-func (token *StableResourceToken) releaseFrom(owner ResourceOwnerState) {
-	if token == nil || !token.owner.CompareAndSwap(uint32(owner), uint32(ResourceOwnerReleased)) {
-		return
+func (token *StableResourceToken) releaseResult() error {
+	if !token.cleanupDone.Load() {
+		return ErrResourceOwnership
 	}
-	token.releasePinned()
+	if token.cleanupFailure.causes[0] != nil {
+		return &token.cleanupFailure
+	}
+	return nil
 }
-
-func (token *StableResourceToken) releasePinned() {
-	if token.released.Swap(true) {
-		return
+func (token *StableResourceToken) releaseFrom(owner ResourceOwnerState) error {
+	if token == nil {
+		return nil
 	}
-	token.releasePinnedReference()
+	if !token.owner.CompareAndSwap(uint32(owner), uint32(ResourceOwnerReleased)) {
+		return token.releaseResult()
+	}
+	return token.releasePinned()
+}
+func (token *StableResourceToken) releasePinned() (err error) {
+	if token.released.Swap(true) {
+		return token.releaseResult()
+	}
+	defer func() {
+		if err != nil {
+			token.cleanupFailure.original, token.cleanupFailure.causes[0] = token, err
+			if token.metadata != nil {
+				token.metadata.owner.CleanupFailed()
+			}
+			err = &token.cleanupFailure
+		}
+		token.cleanupDone.Store(true)
+	}()
+	if err = token.releasePinnedReference(); err != nil {
+		return err
+	}
+	token.pinned, token.pinnedRefs, token.physicalBacking = nil, nil, nil
 	if token.namespace != nil && token.importedSource == nil {
-		token.namespace.release()
+		if err = token.namespace.release(); err != nil {
+			return err
+		}
 	}
 	token.identityPin.Release()
+	token.identityPin = nil
 	if token.directory != nil {
-		token.directory.Release()
+		consumed, cleanup := token.directory.ReleaseOutcome()
+		if consumed {
+			token.directory = nil
+		}
+		if cleanup != nil {
+			return cleanup
+		}
 	}
 	if token.onRelease != nil {
 		token.onRelease()
+		token.onRelease = nil
 	}
 	if token.observationCleanup != nil {
 		cleanup := token.observationCleanup
 		token.observationCleanup = nil
-		cleanup.finishOriginalObservation(token.releaseObservation, token.identity, token.namespace)
+		if err = cleanup.finishOriginalObservation(token.releaseObservation, token.identity, token.namespace); err != nil {
+			token.observationCleanup = cleanup
+			return err
+		}
 	} else if token.releaseObservation != nil {
-		_ = token.releaseObservation.Unobserve(token.identity)
+		if err = token.releaseObservation.Unobserve(token.identity); err != nil {
+			return err
+		}
 	}
-	if token.metadata != nil {
-		token.pinned, token.pinnedRefs, token.physicalBacking, token.namespace, token.directory = nil, nil, nil, nil, nil
-		token.releaseMetadata()
-	} else if token.physicalBacking != nil {
-		// Added original physical backing has explicit disposal. Legacy scalar
-		// descriptors survive, but no refunded shared-handle alias may survive.
-		token.pinned, token.pinnedRefs, token.physicalBacking = nil, nil, nil
-	}
+	token.releaseObservation = nil
+	token.namespace = nil
+	return token.releaseMetadata()
 }
-
-func (token *StableResourceToken) releasePinnedReference() {
+func (token *StableResourceToken) releasePinnedReference() error {
 	if token.physicalBacking != nil {
-		token.physicalBacking.release()
-		return
+		return token.physicalBacking.release()
 	}
 	if token.pinnedRefs == nil || token.pinnedRefs.Add(-1) == 0 {
-		_ = token.pinned.Close()
+		return token.pinned.Close()
 	}
+	return nil
 }
 
 func (token *StableResourceToken) retainPinned() error {
@@ -1103,6 +1164,8 @@ type StableNamespaceSpec struct {
 // namespace tokens while syncing each distinct exact parent once. Additional
 // parents carry source-side obligations for cross-parent moves.
 type StableNamespaceBatchSpec struct {
+	MetadataOwner     *retainedalloc.Owner
+	Registry          *IdentityPinRegistry
 	Registrations     []StableNamespaceSpec
 	AdditionalParents []*os.File
 }
@@ -1129,31 +1192,90 @@ func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, a
 	if stableNamespaceCreationPersistsThroughChild() {
 		return nil, fmt.Errorf("%w: batched parent namespace persistence is unavailable", ErrNamespacePersistenceUnsupported)
 	}
-	tokens := make([]*StableNamespaceToken, 0, len(spec.Registrations))
-	releaseTokens := func() {
-		for _, token := range tokens {
-			token.Release()
-		}
+	owned := spec.MetadataOwner != nil
+	if owned && spec.Registry == nil {
+		return nil, ErrResourceOwnership
 	}
-	for _, registration := range spec.Registrations {
-		token, err := newStableNamespaceToken(registration, adapter)
-		if err != nil {
-			releaseTokens()
+	parentCapacity := len(spec.Registrations) + len(spec.AdditionalParents)
+	if parentCapacity < len(spec.Registrations) {
+		return nil, retainedalloc.ErrCapacity
+	}
+	tableCapacity := 8
+	for tableCapacity/2 < parentCapacity {
+		if tableCapacity > int(^uint(0)>>1)/2 {
+			return nil, retainedalloc.ErrCapacity
+		}
+		tableCapacity *= 2
+	}
+	var batch *stableNamespaceBatchCleanup
+	var custody *OriginalCleanupCustody
+	var charge uint64
+	if owned {
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stableNamespaceBatchCleanup{})))
+		charge += retainedalloc.AllocationCharge(uint64(len(spec.Registrations)) * uint64(unsafe.Sizeof((*StableNamespaceToken)(nil))))
+		charge += retainedalloc.AllocationCharge(uint64(parentCapacity) * uint64(unsafe.Sizeof(stableNamespaceBatchParent{})))
+		charge += retainedalloc.AllocationCharge(uint64(tableCapacity) * uint64(unsafe.Sizeof(int(0))))
+		if err := spec.MetadataOwner.AddPending(charge); err != nil {
 			return nil, err
 		}
-		tokens = append(tokens, token)
-	}
-	type stableBatchParent struct {
-		identity StableIdentity
-		file     *os.File
-	}
-	parents := make([]stableBatchParent, 0, len(tokens)+len(spec.AdditionalParents))
-	defer func() {
-		for _, parent := range parents {
-			_ = parent.file.Close()
+		var err error
+		custody, err = NewOriginalCleanupCustody(spec.Registry, spec.MetadataOwner)
+		if err != nil {
+			spec.MetadataOwner.RemovePending(charge)
+			return nil, err
 		}
-	}()
-	seen := make(map[StableIdentity]struct{}, cap(parents))
+	}
+	batch = &stableNamespaceBatchCleanup{metadata: spec.MetadataOwner, charge: charge, custody: custody}
+	tokens := make([]*StableNamespaceToken, 0, len(spec.Registrations))
+	batch.tokens = tokens
+	batch.parents = make([]stableNamespaceBatchParent, 0, parentCapacity)
+	batch.table = make([]int, tableCapacity)
+	finish := func(cause error) ([]*StableNamespaceToken, error) {
+		var cleanupErr error
+		for i := range batch.parents {
+			parent := &batch.parents[i]
+			if parent.file == nil {
+				continue
+			}
+			e := stableNamespaceBatchCloseFile(parent.file)
+			cleanupErr = errors.Join(cleanupErr, e)
+			if e == nil {
+				parent.file = nil
+				if owned {
+					spec.MetadataOwner.RemovePending(parent.charge)
+					parent.charge = 0
+				}
+			}
+		}
+		cause = errors.Join(cause, cleanupErr)
+		if cause != nil {
+			for _, token := range tokens {
+				e := token.ReleaseWithError()
+				cause = errors.Join(cause, e)
+				cleanupErr = errors.Join(cleanupErr, e)
+			}
+		}
+		batch.completeConstruction(cleanupErr)
+		if cause != nil {
+			if owned && batch.failure != nil {
+				return nil, errors.Join(cause, batch)
+			}
+			return nil, cause
+		}
+		return tokens, nil
+	}
+	for _, registration := range spec.Registrations {
+		token, err := newStableNamespaceTokenWithMetadata(registration, adapter, spec.MetadataOwner, spec.Registry)
+		if err != nil {
+			return finish(err)
+		}
+		if owned {
+			token.batch, token.batchIndex = batch, len(tokens)
+			batch.outstanding++
+		}
+		tokens = append(tokens, token)
+		batch.tokens = tokens
+	}
 	addParent := func(parent *os.File) error {
 		if parent == nil {
 			return fmt.Errorf("%w: nil stable namespace batch parent", ErrUnresolvedResource)
@@ -1163,63 +1285,185 @@ func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, a
 			return err
 		}
 		identity.Generation = 0
-		if _, ok := seen[identity]; ok {
-			return nil
+		mask := len(batch.table) - 1
+		at := int(registryIdentityHash(identity)) & mask
+		for batch.table[at] != 0 {
+			if batch.parents[batch.table[at]-1].identity == identity {
+				return nil
+			}
+			at = (at + 1) & mask
+		}
+		var fileCharge uint64
+		if owned {
+			fileCharge, err = StableFileMetadataCharge(uint64(len(parent.Name()) + len("#stable-pin")))
+			if err != nil {
+				return err
+			}
+			if err = spec.MetadataOwner.AddPending(fileCharge); err != nil {
+				return err
+			}
 		}
 		pinned, err := duplicate(parent)
 		if err != nil {
+			if owned {
+				spec.MetadataOwner.RemovePending(fileCharge)
+			}
 			return err
 		}
-		seen[identity] = struct{}{}
-		parents = append(parents, stableBatchParent{identity: identity, file: pinned})
+		batch.parents = append(batch.parents, stableNamespaceBatchParent{identity: identity, file: pinned, charge: fileCharge})
+		batch.table[at] = len(batch.parents)
 		return nil
 	}
 	for _, registration := range spec.Registrations {
 		if err := addParent(registration.Parent); err != nil {
-			releaseTokens()
-			return nil, err
+			return finish(err)
 		}
 	}
 	for _, parent := range spec.AdditionalParents {
 		if err := addParent(parent); err != nil {
-			releaseTokens()
-			return nil, err
+			return finish(err)
 		}
 	}
-	var syncCounts = make(map[StableIdentity]uint64, len(parents))
-	var syncNanos = make(map[StableIdentity]uint64, len(parents))
-	for _, parent := range parents {
+	for i := range batch.parents {
+		parent := &batch.parents[i]
 		started := time.Now()
 		err := adapter.Sync(parent.file)
-		elapsed := uint64(time.Since(started))
+		parent.syncNanos = uint64(time.Since(started))
 		if err != nil {
-			releaseTokens()
-			return nil, err
+			return finish(err)
 		}
-		syncCounts[parent.identity] = 1
-		syncNanos[parent.identity] = elapsed
+		parent.syncCount = 1
 	}
-	for _, token := range tokens {
+	// Final temporary handles must finish before any token certifies stability.
+	out, err := finish(nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, token := range out {
 		identity := token.parentIdentity
 		identity.Generation = 0
+		at := int(registryIdentityHash(identity)) & (len(batch.table) - 1)
+		for batch.table[at] != 0 {
+			parent := &batch.parents[batch.table[at]-1]
+			if parent.identity == identity {
+				token.syncs.Store(parent.syncCount)
+				token.syncNanos.Store(parent.syncNanos)
+				parent.syncCount, parent.syncNanos = 0, 0
+				break
+			}
+			at = (at + 1) & (len(batch.table) - 1)
+		}
 		token.state.Store(namespaceStable)
-		if syncCounts[identity] != 0 {
-			token.syncs.Store(syncCounts[identity])
-			token.syncNanos.Store(syncNanos[identity])
-			delete(syncCounts, identity)
+	}
+	if len(out) != 0 {
+		for i := range batch.parents {
+			parent := &batch.parents[i]
+			out[0].additionalSyncs.Add(parent.syncCount)
+			out[0].additionalSyncNanos.Add(parent.syncNanos)
 		}
 	}
-	// Sync evidence for source-side parents has no reachable resource token of
-	// its own. Attach that batch evidence once to the first real namespace token
-	// so resource-set stats count physical parent syncs without inventing a
-	// resource or double-counting the destination parent.
-	if len(tokens) != 0 {
-		for identity, count := range syncCounts {
-			tokens[0].additionalSyncs.Add(count)
-			tokens[0].additionalSyncNanos.Add(syncNanos[identity])
-		}
+	return out, nil
+}
+
+type stableNamespaceBatchParent struct {
+	identity             StableIdentity
+	file                 *os.File
+	charge               uint64
+	syncCount, syncNanos uint64
+}
+type stableNamespaceBatchCleanup struct {
+	mu                          sync.Mutex
+	metadata                    *retainedalloc.Owner
+	charge                      uint64
+	custody                     *OriginalCleanupCustody
+	parents                     []stableNamespaceBatchParent
+	table                       []int
+	tokens                      []*StableNamespaceToken
+	outstanding                 int
+	constructionDone, completed bool
+	failure                     error
+	prior                       error
+}
+
+var stableNamespaceBatchCloseFile = func(file *os.File) error { return file.Close() }
+
+func (batch *stableNamespaceBatchCleanup) Error() string {
+	return "original namespace batch physical cleanup failed"
+}
+func (batch *stableNamespaceBatchCleanup) Is(target error) bool {
+	batch.mu.Lock()
+	first, prior := batch.failure, batch.prior
+	batch.mu.Unlock()
+	return errors.Is(first, target) || errors.Is(prior, target)
+}
+func (batch *stableNamespaceBatchCleanup) As(target any) bool {
+	batch.mu.Lock()
+	first, prior := batch.failure, batch.prior
+	batch.mu.Unlock()
+	return errors.As(first, target) || errors.As(prior, target)
+}
+func (batch *stableNamespaceBatchCleanup) OriginalCleanupPriorAvailable() bool {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	return batch.prior == nil
+}
+func (batch *stableNamespaceBatchCleanup) TryLinkPriorCleanupError(prior error) bool {
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	if prior == nil || prior == batch || batch.prior != nil {
+		return false
 	}
-	return tokens, nil
+	batch.prior = prior
+	return true
+}
+func (batch *stableNamespaceBatchCleanup) completeConstruction(err error) {
+	batch.mu.Lock()
+	batch.constructionDone = true
+	if err != nil && batch.failure == nil {
+		batch.failure = err
+	}
+	batch.mu.Unlock()
+	batch.completeIfConsumed()
+}
+func (batch *stableNamespaceBatchCleanup) tokenCompleted(index int, err error) {
+	batch.mu.Lock()
+	if err == nil {
+		batch.tokens[index] = nil
+	}
+	if batch.failure == nil && err != nil {
+		batch.failure = err
+	}
+	batch.outstanding--
+	batch.mu.Unlock()
+	batch.completeIfConsumed()
+}
+func (batch *stableNamespaceBatchCleanup) completeIfConsumed() {
+	batch.mu.Lock()
+	if batch.metadata == nil || batch.completed || !batch.constructionDone || batch.outstanding != 0 {
+		batch.mu.Unlock()
+		return
+	}
+	batch.completed = true
+	owner, charge, custody, err := batch.metadata, batch.charge, batch.custody, batch.failure
+	if err == nil {
+		clear(batch.tokens)
+		clear(batch.parents)
+		clear(batch.table)
+		batch.tokens, batch.parents, batch.table = nil, nil, nil
+		batch.metadata, batch.charge, batch.custody = nil, 0, nil
+	}
+	batch.mu.Unlock()
+	custody.Complete(batch, func() error {
+		if err != nil {
+			return batch
+		}
+		return nil
+	}())
+	if err == nil {
+		owner.RemovePending(charge)
+	} else {
+		owner.CleanupFailed()
+	}
 }
 
 // StableNamespaceParentGeneration derives a stable, non-zero logical
@@ -1284,6 +1528,8 @@ func (failure *ownedNamespaceCleanupFailure) add(err error) {
 }
 
 type StableNamespaceToken struct {
+	batch                  *stableNamespaceBatchCleanup
+	batchIndex             int
 	cleanupFailure         ownedNamespaceCleanupFailure
 	cleanupRegistry        *IdentityPinRegistry
 	originalCleanup        *resourcePinnedBacking
@@ -1320,6 +1566,8 @@ type StableNamespaceToken struct {
 // to carry that one creation sync to later resource registration, where the
 // logical parent generation is finally known.
 type StableNamespaceCreationProof struct {
+	closeWork      namespaceProofCloseWork
+	closeMu        sync.Mutex
 	cleanupFailure ownedNamespaceCleanupFailure
 	metadata       *retainedalloc.Owner
 	metadataCharge uint64
@@ -1536,54 +1784,23 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 	if proof == nil {
 		return nil
 	}
+	proof.closeMu.Lock()
+	defer proof.closeMu.Unlock()
 	proof.mu.Lock()
-	defer proof.mu.Unlock()
-	if proof.released.Swap(true) {
-		return proof.cleanupErr
+	if proof.closeWork.native {
+		proof.mu.Unlock()
+		return retainedalloc.ErrWorkRequired
 	}
-	parent, persistence := proof.parent, proof.persistence
-	if persistence != nil && persistence != parent {
-		e := persistence.Close()
-		if e == nil || errors.Is(e, os.ErrClosed) {
-			proof.persistence = nil
-		} else {
-			if proof.metadata != nil {
-				proof.cleanupFailure.add(e)
-				proof.cleanupErr = &proof.cleanupFailure
-			} else {
-				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
-			}
+	proof.mu.Unlock()
+	var state NamespaceProofReleaseWork
+	state.proof = proof
+	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	for {
+		ready, err := state.continueWork(false, &w)
+		if err != nil || ready {
+			return err
 		}
 	}
-	if parent != nil {
-		e := parent.Close()
-		if e == nil || errors.Is(e, os.ErrClosed) {
-			proof.parent = nil
-			if persistence == parent {
-				proof.persistence = nil
-			}
-		} else {
-			if proof.metadata != nil {
-				proof.cleanupFailure.add(e)
-				proof.cleanupErr = &proof.cleanupFailure
-			} else {
-				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
-			}
-		}
-	}
-	if proof.metadata != nil {
-		if proof.cleanupErr != nil {
-			proof.metadata.CleanupFailed()
-			return proof.cleanupErr
-		}
-		metadata, charge := proof.metadata, proof.metadataCharge
-		proof.name = ""
-		proof.adapter = nil
-		proof.metadata = nil
-		proof.metadataCharge = 0
-		metadata.RemovePending(charge)
-	}
-	return proof.cleanupErr
 }
 
 const (
@@ -1594,6 +1811,16 @@ const (
 
 func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, error) {
 	return newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+}
+
+// NewStableNamespaceTokenWithMetadata uses the original pending namespace
+// constructor while admitting its actual descriptor and duplicate-handle
+// storage to the caller's existing physical identity authority.
+func NewStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, metadata *retainedalloc.Owner, registry *IdentityPinRegistry) (*StableNamespaceToken, error) {
+	if metadata == nil || registry == nil {
+		return nil, ErrResourceOwnership
+	}
+	return newStableNamespaceTokenWithMetadata(spec, nativeNamespaceAdapter{}, metadata, registry)
 }
 
 // NewRecoveredStableNamespaceToken reconstructs an already-durable namespace
@@ -1639,31 +1866,68 @@ func NewRecoveredStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, expe
 func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (*StableNamespaceToken, error) {
 	return newStableNamespaceTokenWithMetadata(spec, adapter, nil, nil)
 }
-func newStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner, registry *IdentityPinRegistry) (*StableNamespaceToken, error) {
-	if spec.Parent == nil || spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" || adapter == nil {
-		return nil, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
+
+// ValidateRecoveredStableNamespaceDescriptorV1 performs the same exact
+// registration/link/parent checks without duplicating or registering handles.
+// The caller owns and checks the actual last Close of both borrowed operands.
+func ValidateRecoveredStableNamespaceDescriptorV1(spec StableNamespaceSpec, expectedParent StableIdentity) error {
+	if _, _, err := validateStableNamespaceSpec(spec, nativeNamespaceAdapter{}); err != nil {
+		return err
+	}
+	identity, err := stableIdentityFromFile(spec.Parent)
+	if err != nil {
+		return err
+	}
+	identity.Generation = spec.ParentGeneration
+	if identity.Generation != expectedParent.Generation || !SamePhysicalIdentity(identity, expectedParent) {
+		return ErrResourceConflict
+	}
+	return nil
+}
+
+// ValidateRecoveredStableNamespaceMetadataV1 shares the original descriptor
+// checks when the actual registered producer already holds parent authority.
+// It neither opens a parent nor invents a namespace for a nil descriptor.
+func ValidateRecoveredStableNamespaceMetadataV1(spec StableNamespaceSpec) error {
+	if spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" {
+		return fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
 	}
 	if spec.Operation == NamespaceRename && spec.OldName == "" {
-		return nil, fmt.Errorf("%w: rename missing old name", ErrUnresolvedResource)
+		return fmt.Errorf("%w: rename missing old name", ErrUnresolvedResource)
 	}
-	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
-		return nil, err
+	return validateDiagnosticPath(spec.DiagnosticPath)
+}
+
+func validateStableNamespaceSpec(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (StableIdentity, bool, error) {
+	if spec.Parent == nil || adapter == nil {
+		return StableIdentity{}, false, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
+	}
+	if err := ValidateRecoveredStableNamespaceMetadataV1(spec); err != nil {
+		return StableIdentity{}, false, err
 	}
 	var linkedIdentity StableIdentity
 	hasLinkedResource := spec.LinkedResource != nil
 	if hasLinkedResource {
 		if err := adapter.ValidateLink(spec.Parent, spec.LinkedResource, spec.NewName); err != nil {
-			return nil, err
+			return StableIdentity{}, false, err
 		}
 		var err error
 		linkedIdentity, err = adapter.Identity(spec.LinkedResource)
 		if err != nil {
-			return nil, err
+			return StableIdentity{}, false, err
 		}
 		if !linkedIdentity.valid() {
-			return nil, fmt.Errorf("%w: linked namespace resource has no stable identity", ErrUnresolvedResource)
+			return StableIdentity{}, false, fmt.Errorf("%w: linked namespace resource has no stable identity", ErrUnresolvedResource)
 		}
 		linkedIdentity.Generation = 0
+	}
+	return linkedIdentity, hasLinkedResource, nil
+}
+
+func newStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner, registry *IdentityPinRegistry) (*StableNamespaceToken, error) {
+	linkedIdentity, hasLinkedResource, err := validateStableNamespaceSpec(spec, adapter)
+	if err != nil {
+		return nil, err
 	}
 	// The exact constructor reserves all independently allocated descriptor and
 	// duplicate-handle storage before either exists. Its original registry is
@@ -2286,16 +2550,20 @@ func (token *StableNamespaceToken) retain() error {
 	return nil
 }
 
-func (token *StableNamespaceToken) release() {
+func (token *StableNamespaceToken) release() error {
 	if token == nil {
-		return
+		return nil
 	}
 	token.mu.Lock()
 	defer token.mu.Unlock()
+	if token.refs.Load() <= 0 {
+		return token.cleanupErr
+	}
 	if token.refs.Add(-1) > 0 {
-		return
+		return nil
 	}
 	token.releaseLocked()
+	return token.cleanupErr
 }
 
 // BindCleanupRegistry is a one-time attachment to the DB's existing physical
@@ -2340,6 +2608,15 @@ func (token *StableNamespaceToken) releaseLocked() {
 	if token.released.Swap(true) {
 		return
 	}
+	if token.batch != nil {
+		defer func() {
+			batch, index := token.batch, token.batchIndex
+			if token.cleanupErr == nil {
+				token.batch = nil
+			}
+			batch.tokenCompleted(index, token.cleanupErr)
+		}()
+	}
 	if token.metadata == nil && token.cleanupRegistry == nil {
 		if token.persistence != nil && token.persistence != token.parent {
 			_ = token.persistence.Close()
@@ -2352,7 +2629,7 @@ func (token *StableNamespaceToken) releaseLocked() {
 	parent, persistence := token.parent, token.persistence
 	if persistence != nil && persistence != parent {
 		e := persistence.Close()
-		if e == nil || errors.Is(e, os.ErrClosed) {
+		if e == nil {
 			token.persistence = nil
 		} else {
 			token.cleanupFailure.add(e)
@@ -2361,7 +2638,7 @@ func (token *StableNamespaceToken) releaseLocked() {
 	}
 	if parent != nil {
 		e := parent.Close()
-		if e == nil || errors.Is(e, os.ErrClosed) {
+		if e == nil {
 			token.parent = nil
 			if persistence == parent {
 				token.persistence = nil
@@ -2435,3 +2712,30 @@ type ResourceKindStats struct {
 var _ io.ReaderAt = (*StableResourceToken)(nil)
 
 func DuplicateStableFile(file *os.File) (*os.File, error) { return duplicateStableFile(file) }
+
+// ValidateRecoveredResourceDescriptorV1 applies the original token's pure
+// descriptor checks without normalizing/allocating another resource owner.
+func ValidateRecoveredResourceDescriptorV1(entry DependencyManifestEntryV1) error {
+	if err := validateDiagnosticPath(entry.DiagnosticPath); err != nil {
+		return err
+	}
+	if err := validateDurableFrontier(entry.Frontier); err != nil {
+		return err
+	}
+	for _, obligation := range entry.LogicalObligations {
+		found := false
+		for _, field := range entry.Reachability {
+			if obligation.Reachability == field {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ErrResourceConflict
+		}
+		if err := validateStableLogicalObligation(obligation, obligation.Reachability); err != nil {
+			return err
+		}
+	}
+	return nil
+}

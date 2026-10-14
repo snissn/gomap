@@ -36,6 +36,8 @@ type COWLeafContinuation struct {
 	shape                                    COWRecordShape
 	decoder                                  COWBlockContinuation
 	phase                                    uint8
+	leaf                                     bool
+	decodeAt                                 int
 	active, verifyCRC, completed, cancelling bool
 	err                                      error
 	prefix, readAt, crcAt, copyAt            int
@@ -49,29 +51,48 @@ func (c *COWLeafContinuation) Begin(f *os.File, ptr page.ValuePtr, limits COWRea
 	return c.beginAdmitted(f, ptr, limits, input, raw, dst, verifyCRC)
 }
 
+// BeginValue borrows one actual persistent value record under the same file
+// owner. Unlike leaf mode it neither clamps the supported value domain nor
+// expands a page. Caller-admitted full capacities remain charged until Cancel.
+func (c *COWLeafContinuation) BeginValue(f *os.File, ptr page.ValuePtr, limits COWReadLimits, input, raw []byte, verifyCRC bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))+128) {
+		return false, nil
+	}
+	return c.beginModeAdmitted(f, ptr, limits, input, raw, nil, verifyCRC, false)
+}
+
 // beginAdmitted is shared only with the concrete projection adapter, whose
 // SAME OrdinalScanWork reservation covers this fixed constructor and probes.
 func (c *COWLeafContinuation) beginAdmitted(f *os.File, ptr page.ValuePtr, limits COWReadLimits, input, raw, dst []byte, verifyCRC bool) (bool, error) {
+	return c.beginModeAdmitted(f, ptr, limits, input, raw, dst, verifyCRC, true)
+}
+func (c *COWLeafContinuation) beginModeAdmitted(f *os.File, ptr page.ValuePtr, limits COWReadLimits, input, raw, dst []byte, verifyCRC, leaf bool) (bool, error) {
 	if c.active || c.cancelling {
 		return false, ErrCOWReadPending
 	}
 	requestedLimits := limits
-	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
-	limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
-	limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
-	if f == nil || ptr.Offset < 4 || len(dst) < page.PageSize || limits.MaxRecordBytes < HeaderSize || limits.MaxRawBytes == 0 || limits.MaxValueBytes == 0 ||
+	if leaf {
+		limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
+		limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
+		limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
+	}
+	if f == nil || ptr.Offset < 4 || (leaf && len(dst) < page.PageSize) || (!leaf && isLeafLogFileID(ptr.FileID)) || limits.MaxRecordBytes < HeaderSize || limits.MaxRawBytes == 0 || limits.MaxValueBytes == 0 ||
+		limits.MaxRecordBytes > uint64(^uint(0)>>1) || limits.MaxRawBytes > uint64(^uint(0)>>1) || limits.MaxValueBytes > uint64(^uint(0)>>1) ||
 		uint64(cap(input)) > limits.MaxRecordBytes || uint64(cap(raw)) > limits.MaxRawBytes ||
 		uint64(len(input)) < limits.MaxRecordBytes || uint64(len(raw)) < limits.MaxRawBytes ||
 		cowBuffersOverlap(input, raw) || cowBuffersOverlap(input, dst) || cowBuffersOverlap(raw, dst) {
 		return false, ErrCOWReadCapacity
 	}
-	if c.completed && c.record.CRCProved && c.err == nil && c.f == f && page.ValuePtrIsGrouped(ptr) && page.ValuePtrIsGrouped(c.record.Pointer) &&
+	if c.leaf == leaf && c.completed && c.record.CRCProved && c.err == nil && c.f == f && page.ValuePtrIsGrouped(ptr) && page.ValuePtrIsGrouped(c.record.Pointer) &&
 		ptr.FileID == c.record.Pointer.FileID && ptr.Offset == c.record.Pointer.Offset &&
 		page.ValuePtrRecordLength(ptr) == page.ValuePtrRecordLength(c.record.Pointer) &&
 		c.limits == limits && c.requestedLimits == requestedLimits && c.verifyCRC == verifyCRC && cowSameBacking(c.input, input) && cowSameBacking(c.raw, raw) {
 		c.record.Pointer = ptr
 		c.shape.ptr = ptr
-		c.dst = dst[:page.PageSize]
+		c.dst = dst
+		if leaf {
+			c.dst = dst[:page.PageSize]
+		}
 		c.completed = false
 		c.active = true
 		c.record.Retarget = true
@@ -83,7 +104,10 @@ func (c *COWLeafContinuation) beginAdmitted(f *os.File, ptr page.ValuePtr, limit
 		return true, nil
 	}
 	detach := c.completed && (c.ZSTD != nil && c.ZSTD.begun || c.Template != nil && c.Template.active)
-	*c = COWLeafContinuation{ZSTD: c.ZSTD, Template: c.Template, TemplateScratch: c.TemplateScratch, f: f, record: iterator.OrdinalRecordCursor{Pointer: ptr, Active: true}, limits: limits, requestedLimits: requestedLimits, input: input, raw: raw, dst: dst[:page.PageSize], verifyCRC: verifyCRC, active: true}
+	*c = COWLeafContinuation{ZSTD: c.ZSTD, Template: c.Template, TemplateScratch: c.TemplateScratch, f: f, record: iterator.OrdinalRecordCursor{Pointer: ptr, Active: true}, limits: limits, requestedLimits: requestedLimits, input: input, raw: raw, dst: dst, leaf: leaf, verifyCRC: verifyCRC, active: true}
+	if leaf {
+		c.dst = dst[:page.PageSize]
+	}
 	if detach {
 		c.phase = 19
 	}
@@ -115,7 +139,7 @@ func (c *COWLeafContinuation) Step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 	}
 	if !c.active {
 		if c.completed {
-			return c.dst, true, nil
+			return c.result(), true, nil
 		}
 		return nil, false, ErrCOWDecoderClosed
 	}
@@ -148,12 +172,12 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			if !w.Reserve(1, uint64(2*HeaderSize+len(c.f.Name())+128)) {
 				return nil, false, nil
 			}
-			n, err := cowReadHeader(c.f, c.record.Pointer, c.input[:HeaderSize], c.limits, true)
+			n, err := cowReadHeader(c.f, c.record.Pointer, c.input[:HeaderSize], c.limits, c.leaf)
 			if err != nil {
 				return nil, false, err
 			}
 			copy(c.record.Header[:], c.input[:HeaderSize])
-			c.shape = COWRecordShape{RecordBytes: uint64(n) + HeaderSize, ptr: c.record.Pointer, limits: c.limits, leaf: true, valid: true}
+			c.shape = COWRecordShape{RecordBytes: uint64(n) + HeaderSize, ptr: c.record.Pointer, limits: c.limits, leaf: c.leaf, valid: true}
 			grouped := c.input[5]&recordFlagGrouped != 0
 			if grouped != page.ValuePtrIsGrouped(c.record.Pointer) {
 				return nil, false, ErrCorrupt
@@ -305,7 +329,11 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 				var ok bool
 				var err error
 				if c.shape.Codec == BlockCodecNone || c.shape.Codec == BlockCodecZSTD {
-					ok, err = c.ZSTD.Begin(c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes):int(c.shape.RawBytes)], w)
+					if c.leaf {
+						ok, err = c.ZSTD.Begin(c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes):int(c.shape.RawBytes)], w)
+					} else {
+						ok, err = c.ZSTD.BeginSpans(c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], w)
+					}
 				} else {
 					ok, err = c.decoder.Begin(c.shape.Codec, c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes)], w)
 				}
@@ -324,8 +352,17 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			var done bool
 			var err error
 			if c.shape.Codec == BlockCodecNone || c.shape.Codec == BlockCodecZSTD {
-				_, done, err = c.ZSTD.stepBound(nil, w)
-				if done && err == nil {
+				var output []byte
+				if !c.leaf {
+					output = c.raw[c.decodeAt:min(c.decodeAt+4096, int(c.shape.RawBytes))]
+				}
+				n, yes, stepErr := c.ZSTD.stepBound(output, w)
+				done, err = yes, stepErr
+				c.decodeAt += n
+				if done && err == nil && !c.leaf && uint64(c.decodeAt) != c.shape.RawBytes {
+					err = ErrCorrupt
+				}
+				if done && err == nil && c.leaf {
 					var raw []byte
 					raw, err = c.ZSTD.RawResult()
 					if err == nil && uint64(len(raw)) != c.shape.RawBytes {
@@ -354,6 +391,16 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 				c.phase = 17
 				continue
 			}
+			if !c.leaf {
+				if HasCompactLeafLogPayload(c.value) {
+					return nil, false, ErrCOWReadUnsupported
+				}
+				if uint64(len(c.value)) > c.limits.MaxValueBytes {
+					return nil, false, ErrCOWReadCapacity
+				}
+				c.phase = 14
+				continue
+			}
 			pre, suf, compact, err := compactLeafLogPayloadBounds(c.value)
 			if err != nil {
 				return nil, false, err
@@ -372,10 +419,14 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			if !w.Reserve(1, 96) {
 				return nil, false, nil
 			}
-			if len(c.TemplateScratch) < page.PageSize || cowBuffersOverlap(c.TemplateScratch, c.dst) || cowBuffersOverlap(c.TemplateScratch, c.input) || cowBuffersOverlap(c.TemplateScratch, c.raw) {
+			required := c.limits.MaxValueBytes
+			if c.leaf {
+				required = page.PageSize
+			}
+			if uint64(cap(c.TemplateScratch)) > c.limits.MaxValueBytes || uint64(len(c.TemplateScratch)) < required || cowBuffersOverlap(c.TemplateScratch, c.dst) || cowBuffersOverlap(c.TemplateScratch, c.input) || cowBuffersOverlap(c.TemplateScratch, c.raw) {
 				return nil, false, ErrCOWReadCapacity
 			}
-			ok, err := c.Template.Begin(c.value, c.TemplateScratch[:page.PageSize], w)
+			ok, err := c.Template.Begin(c.value, c.TemplateScratch[:int(required)], w)
 			if err != nil || !ok {
 				return nil, false, err
 			}
@@ -478,9 +529,16 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			}
 			c.active = false
 			c.completed = true
-			return c.dst, true, nil
+			return c.result(), true, nil
 		}
 	}
+}
+
+func (c *COWLeafContinuation) result() []byte {
+	if c.leaf {
+		return c.dst
+	}
+	return c.value
 }
 
 // Cancel removes this consumer's aliases in charged phases. It never closes the

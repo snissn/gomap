@@ -43,6 +43,9 @@ type enrollmentCloseWork struct {
 type EnrollmentReleaseWork struct {
 	mu                 sync.Mutex
 	primary, companion RemovalWork
+	enrollment, paired *Enrollment
+	bound              bool
+	bindPhase          uint8
 }
 
 func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool {
@@ -290,61 +293,131 @@ func (s *RemovalWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
 // CloseWorkInto uses the disposing capture's preborn receipt. The Enrollment
 // is scrubbed before its containing charge is removed; unfinished traversal
 // remains charged in that capture, rather than in the disposed Enrollment.
-func (e *Enrollment) CloseWorkInto(w *iterator.OrdinalScanWork, state *EnrollmentReleaseWork) (bool, error) {
+func (state *EnrollmentReleaseWork) Bind(e *Enrollment, w *iterator.OrdinalScanWork) (bool, error) {
 	if w == nil {
 		return false, ErrWorkRequired
-	}
-	return e.closePairStep(true, w, state)
-}
-func (e *Enrollment) closePairStep(native bool, w *iterator.OrdinalScanWork, state *EnrollmentReleaseWork) (bool, error) {
-	if e == nil {
-		return true, nil
 	}
 	if state == nil {
 		return false, ErrCapacity
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return e.closePairUnserialized(native, w, state)
+	return state.bindUnserialized(e, true, w)
 }
-func (e *Enrollment) closePairUnserialized(native bool, w *iterator.OrdinalScanWork, state *EnrollmentReleaseWork) (bool, error) {
-	if e == nil {
-		return true, nil
+func (state *EnrollmentReleaseWork) bindUnserialized(e *Enrollment, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if state.bound {
+		return false, ErrCapacity
+	}
+	if state.bindPhase == 0 {
+		if e == nil {
+			return false, ErrCapacity
+		}
+		e.closeWork.mu.Lock()
+		if !native && e.closeWork.native && e.closeWork.phase != 3 {
+			e.closeWork.mu.Unlock()
+			return false, ErrWorkRequired
+		}
+		if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*e))+128) {
+			e.closeWork.mu.Unlock()
+			return false, nil
+		}
+		if e.closed.Load() {
+			state.bound = true
+			e.closeWork.mu.Unlock()
+			return true, nil
+		}
+		if native && e.closeWork.native {
+			e.closeWork.mu.Unlock()
+			return false, ErrWorkRequired
+		}
+		state.enrollment = e
+		state.paired = e.companion
+		e.closeWork.native = native
+		state.bindPhase = 1
+		e.closeWork.mu.Unlock()
+	}
+	if state.paired != nil {
+		companion := state.paired
+		companion.closeWork.mu.Lock()
+		defer companion.closeWork.mu.Unlock()
+		if companion.closeWork.native && companion.closeWork.phase != 3 {
+			return false, ErrWorkRequired
+		}
+		if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*companion))+128) {
+			return false, nil
+		}
+		companion.closeWork.native = native
+	}
+	state.bound = true
+	return true, nil
+}
+func (state *EnrollmentReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil {
+		return false, ErrWorkRequired
 	}
 	if state == nil {
 		return false, ErrCapacity
 	}
-	e.closeWork.mu.Lock()
-	companion := e.companion
-	if !native && e.closeWork.native && e.closeWork.phase != 3 {
-		e.closeWork.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.bound {
+		return false, ErrCapacity
+	}
+	return state.continuePairUnserialized(true, w)
+}
+func (state *EnrollmentReleaseWork) continuePairUnserialized(native bool, w *iterator.OrdinalScanWork) (bool, error) {
+	ready, err := state.paired.closeEnrollmentStepInto(native, w, &state.companion, &state.paired)
+	if !ready || err != nil {
+		return false, err
+	}
+	return state.enrollment.closeEnrollmentStepInto(native, w, &state.primary, &state.enrollment)
+}
+func (e *Enrollment) CloseWorkInto(w *iterator.OrdinalScanWork, state *EnrollmentReleaseWork) (bool, error) {
+	if w == nil {
 		return false, ErrWorkRequired
 	}
-	e.closeWork.mu.Unlock()
-	if companion != nil || state.companion.started {
-		ready, err := companion.closeEnrollmentStep(native, w, &state.companion)
+	if state == nil {
+		return false, ErrCapacity
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return e.closePairUnserialized(true, w, state)
+}
+func (e *Enrollment) closePairUnserialized(native bool, w *iterator.OrdinalScanWork, state *EnrollmentReleaseWork) (bool, error) {
+	if state == nil {
+		return false, ErrCapacity
+	}
+	if !state.bound {
+		if e == nil {
+			return true, nil
+		}
+		ready, err := state.bindUnserialized(e, native, w)
 		if !ready || err != nil {
 			return false, err
 		}
 	}
-	return e.closeEnrollmentStep(native, w, &state.primary)
+	return state.continuePairUnserialized(native, w)
 }
-func (e *Enrollment) closeEnrollmentStep(native bool, w *iterator.OrdinalScanWork, state *RemovalWork) (bool, error) {
+func (e *Enrollment) closeEnrollmentStepInto(native bool, w *iterator.OrdinalScanWork, state *RemovalWork, alias **Enrollment) (bool, error) {
 	if state.done {
 		return true, nil
 	}
 	if state.started {
+		*alias = nil
 		return state.owner.removeUnserialized(state.amount, false, native, state, w)
 	}
 	if e == nil {
 		return true, nil
 	}
 	e.closeWork.mu.Lock()
-	defer e.closeWork.mu.Unlock()
+
 	if !native && e.closeWork.native {
+		e.closeWork.mu.Unlock()
 		return false, ErrWorkRequired
 	}
 	if e.closed.Load() {
+		*alias = nil
+		e.closeWork.mu.Unlock()
 		return true, nil
 	}
 	o := e.owner
@@ -352,10 +425,12 @@ func (e *Enrollment) closeEnrollmentStep(native bool, w *iterator.OrdinalScanWor
 	delta := AllocationCharge(uint64(unsafe.Sizeof(Enrollment{})))
 	if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Enrollment{}))+2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {
 		o.mu.Unlock()
+		e.closeWork.mu.Unlock()
 		return false, nil
 	}
 	if e.binding.refs == 0 || delta > o.controls || delta > o.bytes {
 		o.mu.Unlock()
+		e.closeWork.mu.Unlock()
 		panic("retained enrollment accounting underflow")
 	}
 	// Transfer the exact remaining cleanup to an already admitted containing
@@ -374,5 +449,8 @@ func (e *Enrollment) closeEnrollmentStep(native bool, w *iterator.OrdinalScanWor
 	o.controls -= delta
 	o.bytes -= delta
 	o.mu.Unlock()
+	e.closeWork.mu.Unlock()
+	*alias = nil
+	e = nil
 	return o.removeUnserialized(delta, false, native, state, w)
 }

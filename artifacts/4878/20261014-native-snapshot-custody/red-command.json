@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p",
+    "2",
+    "./TreeDB/internal/valuelog",
+    "-run",
+    "^TestNativeMVCCSetLastFileRetainsActualManagerAcrossOrdinaryClose$",
+    "-count=1",
+    "-timeout=30s"
+  ],
+  "exit": 1,
+  "kind": "actual pre-repair Set receipt ordering reconstructed by inverse scoped patch; not historical binary"
+}

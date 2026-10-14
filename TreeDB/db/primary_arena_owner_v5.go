@@ -28,6 +28,7 @@ type primaryArenaOwnerV5 struct {
 	cleanupErr              error
 	closeFailure            primaryCleanupFailureV5
 	namespaceFailure        primaryCleanupFailureV5
+	closeWork               primaryArenaCloseWork
 	refs                    uint64
 	arena                   *primaryarena.Arena
 	namespaceMu             sync.Mutex
@@ -78,35 +79,23 @@ func (owner *primaryArenaOwnerV5) release(work *iterator.OrdinalScanWork) (bool,
 // physicalDebt distinguishes incomplete last physical cleanup from an earlier
 // sibling failure reported after this caller's successful nonlast release.
 func (owner *primaryArenaOwnerV5) releaseWithOutcome(work *iterator.OrdinalScanWork) (consumed, physicalDebt bool, err error) {
-	if work != nil && !work.Reserve(1, 2*uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))) {
-		return false, false, nil
+	// A bounded caller must keep its original parent's external receipt. The
+	// scalar entry point never consumes an edge followed by unbounded cleanup.
+	if work != nil {
+		return false, false, ErrNativeMVCCSnapshotWork
 	}
-	if owner == nil {
-		return false, false, rootpublication.ErrResourceOwnership
+	var receipt primaryArenaReleaseState
+	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	ready, err := bindPrimaryArenaRelease(&receipt, owner, false, &w)
+	if !ready || err != nil {
+		return false, false, err
 	}
-	owner.mu.Lock()
-	if owner.refs == 0 {
-		owner.mu.Unlock()
-		return false, false, rootpublication.ErrResourceOwnership
+	for {
+		ready, debt, err := continuePrimaryArenaRelease(&receipt, nil, nil, nil, &w)
+		if err != nil || ready {
+			return true, debt, err
+		}
 	}
-	owner.refs--
-	last, prior := owner.refs == 0, owner.cleanupErr
-	owner.mu.Unlock()
-	if !last {
-		return true, false, prior
-	}
-	arenaErr := owner.arena.Close()
-	namespaceErr := owner.clearNamespaceV5()
-	if arenaErr == nil && namespaceErr == nil && prior == nil {
-		arena, charge := owner.arena, owner.metadataCharge
-		owner.arena = nil
-		owner.metadataCharge = 0
-		arena.MetadataOwner().RemovePending(charge)
-		return true, false, nil
-	}
-	owner.closeFailure.causes = [3]error{arenaErr, namespaceErr, prior}
-	owner.arena.MetadataOwner().CleanupFailed()
-	return true, true, &owner.closeFailure
 }
 
 // clearNamespaceV5 retires only the exact current proof and parent. Failed
@@ -182,9 +171,9 @@ func (owner *primaryArenaOwnerV5) retainFailedDataGeneration(g *indexGen) {
 	defer owner.mu.Unlock()
 	g.failedNext = owner.failedDataGenerations
 	owner.failedDataGenerations = g
-	g.closeFailure.causes[2] = owner.cleanupErr
+	g.closeFailure.retainCause(2, owner.cleanupErr)
 	if g.closeErr != &g.closeFailure {
-		g.closeFailure.causes[0] = g.closeErr
+		g.closeFailure.retainCause(0, g.closeErr)
 	}
 	g.closeErr = &g.closeFailure
 	owner.cleanupErr = g.closeErr

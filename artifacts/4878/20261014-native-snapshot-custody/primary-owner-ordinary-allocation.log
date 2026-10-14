@@ -1,0 +1,5 @@
+--- FAIL: TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation (0.00s)
+    primary_arena_release_work_test.go:143: ordinary owner edge allocated unadmitted receipt: 1
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.003s
+FAIL
