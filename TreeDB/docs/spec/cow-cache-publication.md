@@ -118,6 +118,12 @@ roots and frozen sources shadow older sources and backend entries. Physical
 deletion markers suppress older entries; MVCC logical tombstones remain normal
 encoded values interpreted by the MVCC layer.
 
+The empty-backend shortcut is a proof about the captured root. It accepts an
+empty leaf directly, or a canonical PRIMARY directory with no components whose
+digest-validated base is an empty leaf. Nonempty/internal bases and any component
+(including an inline absence) retain the same-cut merge path; physical validation
+errors propagate. It never consults a newer published root to infer emptiness.
+
 Point lookup, successor selection, merge traversal, pointer/checksum decoding
 and copying occur after the cut latch is released. Public values are owned
 copies; `GetAppend` appends into caller storage. Forward iterators retain their

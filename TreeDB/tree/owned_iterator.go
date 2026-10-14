@@ -60,14 +60,32 @@ func (t *Tree) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(p
 	return it
 }
 
-// OwnedUserRootEmpty proves emptiness from this exact captured tree root. It
-// reads one validated index page without iterator or key scratch allocation.
-// An external root or any nonempty/internal root conservatively returns false.
+// OwnedUserRootEmpty proves emptiness from this exact captured tree root
+// without iterator or key scratch allocation. A PRIMARY directory is empty only
+// when it has no components and its digest-validated base is an empty leaf.
+// External roots and nonempty/internal bases conservatively return false.
 func (t *Tree) OwnedUserRootEmpty() (bool, error) {
 	var n node.Node
 	verify := t.pager != nil && t.pager.VerifyOnRead()
 	if err := t.loadNodeViewWithLoadKindInto(&n, t.rootPageID, verify, false); err != nil {
 		return false, err
+	}
+	if n.Type() != page.PageTypePrimaryDirectory {
+		return n.Type() == page.PageTypeLeaf && n.Count() == 0, nil
+	}
+	directory, err := node.DecodePrimaryDirectory(n.Data())
+	if err != nil {
+		return false, err
+	}
+	if directory.Count() != 0 {
+		return false, nil
+	}
+	base, _ := directory.Base()
+	if err := t.loadChildRefViewInto(&n, base.Ref, true, false); err != nil {
+		return false, err
+	}
+	if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeLeaf && n.Type() != page.PageTypeInternal) {
+		return false, node.ErrPrimaryDirectory
 	}
 	return n.Type() == page.PageTypeLeaf && n.Count() == 0, nil
 }

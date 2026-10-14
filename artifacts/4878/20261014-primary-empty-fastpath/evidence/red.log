@@ -1,0 +1,8 @@
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/primary_empty
+    owned_root_empty_test.go:89: empty=false err=<nil>; want empty=true error=false
+--- FAIL: TestOwnedUserRootEmptyCapturedPrimary (0.00s)
+    --- FAIL: TestOwnedUserRootEmptyCapturedPrimary/primary_empty (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/tree	0.001s
+FAIL

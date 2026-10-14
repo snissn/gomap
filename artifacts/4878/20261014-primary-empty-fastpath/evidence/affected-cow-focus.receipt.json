@@ -1,0 +1,16 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "./TreeDB/tree",
+  "./TreeDB/caching",
+  "-run",
+  "^(TestOwnedUserRootEmptyCapturedPrimary|TestCOWEmptyBasisIteratorNeedsNoReadWorkspace|TestCOWEmptyShardIteratorDiskTombstoneAndOldCut|TestCOWPointerImmediatePointAndIteratorOldCut|TestCOWPointerCheckpointCapturedBasisAndTombstones)$",
+  "-count=1",
+  "-timeout=120s",
+  "-v"
+ ],
+ "exit": 0,
+ "seconds": 11.832923650741577,
+ "sha256": "69bb1462c46f4fc525cca32d9cbf08802bd4176c7387d62f8bc4a5b0ed6a65a5"
+}

@@ -1,0 +1,19 @@
+{
+ "paths": [
+  {
+   "path": "TreeDB/tree/owned_iterator.go",
+   "sha256": "96644ca560e460bdf92a3c92e70479c63aa04ddecc527bb9f5a91ebaa14df518"
+  },
+  {
+   "path": "TreeDB/tree/owned_root_empty_test.go",
+   "sha256": "0264c2de733acb5b8213e1d3a8317778bf72302b05176e1a5ea0806012a38c8e"
+  },
+  {
+   "path": "TreeDB/docs/spec/cow-cache-publication.md",
+   "sha256": "55cac005b4bff235afac319e9ec02e36f423e7500e58c2536a7e75dd01208d74"
+  }
+ ],
+ "outside_paths_preserved": 11590,
+ "new_root_capture": false,
+ "authority_change": false
+}

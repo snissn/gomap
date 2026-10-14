@@ -1,0 +1,32 @@
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/plain_empty
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/primary_empty
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/nonempty_base
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/internal_base
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/put
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/absence
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/directory_corrupt
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/base_digest
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/missing_base
+--- PASS: TestOwnedUserRootEmptyCapturedPrimary (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/plain_empty (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/primary_empty (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/nonempty_base (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/internal_base (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/put (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/absence (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/directory_corrupt (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/base_digest (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/missing_base (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.003s
+=== RUN   TestCOWEmptyBasisIteratorNeedsNoReadWorkspace
+--- PASS: TestCOWEmptyBasisIteratorNeedsNoReadWorkspace (0.01s)
+=== RUN   TestCOWEmptyShardIteratorDiskTombstoneAndOldCut
+--- PASS: TestCOWEmptyShardIteratorDiskTombstoneAndOldCut (0.00s)
+=== RUN   TestCOWPointerImmediatePointAndIteratorOldCut
+--- PASS: TestCOWPointerImmediatePointAndIteratorOldCut (0.00s)
+=== RUN   TestCOWPointerCheckpointCapturedBasisAndTombstones
+--- PASS: TestCOWPointerCheckpointCapturedBasisAndTombstones (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	0.023s

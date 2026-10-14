@@ -1,0 +1,25 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "./TreeDB/tree",
+  "-run",
+  "^TestOwnedUserRootEmptyCapturedPrimary$",
+  "-count=1",
+  "-timeout=90s",
+  "-v"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "CGO_ENABLED": "1",
+  "GOMAXPROCS": "4"
+ },
+ "exit": 0,
+ "wall_seconds": 1.7163348197937012,
+ "raw_sha256": "cfc1188d93a1948be72e3a0b19089399b92448975fc2f0915baa267dc3ea26f9",
+ "source_sha256": "96644ca560e460bdf92a3c92e70479c63aa04ddecc527bb9f5a91ebaa14df518",
+ "test_sha256": "0264c2de733acb5b8213e1d3a8317778bf72302b05176e1a5ea0806012a38c8e",
+ "head": "62253f2dc9a5e417e37c16e2dfae524daa70cbef"
+}

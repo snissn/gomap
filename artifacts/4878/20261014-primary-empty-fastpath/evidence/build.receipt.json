@@ -1,0 +1,27 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "-c",
+  "-trimpath",
+  "-buildvcs=false",
+  "-o",
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/fastpath-candidate-mvcc.test",
+  "./TreeDB/mvcc/sprintperf"
+ ],
+ "exit": 0,
+ "seconds": 6.874232530593872,
+ "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "projection_sha256": "9a29694fbd3ab81dc1046699cc24327000d7154170af55cf9522a19bd22331a2",
+ "harness": [
+  {
+   "path": "TreeDB/mvcc/sprintperf/admission_test.go",
+   "sha256": "2978839f31fd5e5f511c4375ffc1109745ad5344d80bdaccdbdaa003f9b356ad"
+  },
+  {
+   "path": "TreeDB/mvcc/sprintperf/benchmark_test.go",
+   "sha256": "9785066d7a74d1fb962c03ac57ea43866e036c66b92aff1c07bab0acd818edfb"
+  }
+ ],
+ "binary_sha256": "a0c498c6735b2df1acb3748ba6af3c9ddf6eb137cddfa6a1057530ac211a7dd8"
+}
