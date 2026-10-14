@@ -2702,8 +2702,17 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		return err
 	}
 	if db.commandWALCached && db.backend != nil {
-		if err := db.refreshPublicCommandWALCheckpointFallback(); err != nil {
-			return err
+		var refreshErr error
+		if db.cached.COWMode() {
+			// Even an empty checkpoint can advance the backend's physical root.
+			// Drain admitted writers before taking the command-WAL gate, then
+			// install that successor basis before admitting another C1 publication.
+			refreshErr = db.runCachedBackendMaintenance(db.refreshPublicCommandWALCheckpointFallback)
+		} else {
+			refreshErr = db.refreshPublicCommandWALCheckpointFallback()
+		}
+		if refreshErr != nil {
+			return refreshErr
 		}
 		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
 			return err

@@ -12,6 +12,13 @@ live reference retires. The marker grants no new logical asset authority and
 never substitutes for reference integrity or exact GC pins. See the
 [typed storage layout](storage-format.md) for the record and rotation rules.
 
+In public command-WAL COW mode, a checkpoint with no dirty cached entries may
+still republish the backend fallback root. That publication runs inside the
+existing cache maintenance fence: admitted writers drain, the backend publishes,
+and the cache captures the exact successor backend basis before writers resume.
+Previously captured immutable cuts retain their original basis and values. The
+same ordering applies to the final public checkpoint during `Close`.
+
 ## 0. Frozen Publication Contract
 
 This section is normative for every production durability profile. It freezes
