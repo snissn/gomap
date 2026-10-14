@@ -124,6 +124,15 @@ digest-validated base is an empty leaf. Nonempty/internal bases and any componen
 (including an inline absence) retain the same-cut merge path; physical validation
 errors propagate. It never consults a newer published root to infer emptiness.
 
+For a nonempty captured backend, one-successor selection uses fixed admitted
+ancestor, key and leaf scratch on that same immutable cut. It compares one
+metadata candidate from each eligible source and materializes only the winning
+value-log pointer. PRIMARY base/component digests retain ordinary read validation.
+A physical tombstone or unsupported source returns to the existing complete
+same-cut merge so suppression and advancement remain correct. The returned key
+and value are owned copies; this changes neither publication nor durability
+authority.
+
 Point lookup, successor selection, merge traversal, pointer/checksum decoding
 and copying occur after the cut latch is released. Public values are owned
 copies; `GetAppend` appends into caller storage. Forward iterators retain their

@@ -625,24 +625,10 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
-		if bounded && currRef.Kind == page.ChildRefLeafLog {
-			if readLeaf == nil {
-				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
-			}
-			data, err := readLeaf(currRef.Log, leafScratch[:0])
-			if err != nil {
-				return node.LeafEntry{}, err
-			}
-			if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &leafScratch[:page.PageSize][0] {
-				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
-			}
-			n, err = validateLeafLogNode(data, currRef.Log, t.shouldVerifyLeafRefChecksum(), false)
-			if err != nil {
-				return node.LeafEntry{}, err
-			}
-		} else if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
+		if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
 			return node.LeafEntry{}, err
 		}
+
 		if bounded {
 			n.SetFixedKeyScratch(keyScratch)
 		}
