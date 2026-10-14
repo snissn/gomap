@@ -3,6 +3,7 @@ package retainedalloc
 import (
 	"errors"
 	"testing"
+	"unsafe"
 )
 
 type testBudget struct {
@@ -44,7 +45,7 @@ func TestOwnerSharedDistinctAdmissionAndFailureUnwind(t *testing.T) {
 	var o Owner
 	o.Initialize(256)
 	a := &testBudget{cap: 4096}
-	b := &testBudget{cap: 512}
+	b := &testBudget{cap: 256 + 3*AllocationCharge(uint64(unsafe.Sizeof(Enrollment{}))) + 2*AllocationCharge(uint64(unsafe.Sizeof(binding{})))}
 	e1, err := o.Enroll(a)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,302 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/crc/crc.go",
+    "bytes": 1300,
+    "sha256": "aca33fce834c476587eefc420b41d0ce7e93de86e7459283b0ccba8a75b3b4cf"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/durabilitycut/durabilitycut.go",
+    "bytes": 9408,
+    "sha256": "b104538dc206062d4ae992572f3364b0f923a76d7e16c70707e82af089ebbbf4"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/iterator/iterator.go",
+    "bytes": 1843,
+    "sha256": "aa4de9262c2f87e4492f96ad55193af723e05b43d8828e9e6eef16e2e91cc6d7"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/iterator/ordinal.go",
+    "bytes": 3245,
+    "sha256": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/arena.go",
+    "bytes": 37980,
+    "sha256": "cf597c67db1e6ef26b8eabcaecd9c8c6f67b5524cf7168e8d1ea49f93351b76b"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/bundle.go",
+    "bytes": 12402,
+    "sha256": "f3cbde81690330ffe0fab31a07472ec9b780d86b7acef79d9eadbfed9d0d5df7"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/custody.go",
+    "bytes": 6951,
+    "sha256": "456c1dc00d45f1df998714121369a95936250f033877369d1f0a65cdeaddbcad"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/metadata.go",
+    "bytes": 5884,
+    "sha256": "429fa487b8d49157f74b479d984b6e008110584f47fae34ca8a82309d23f0f74"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/metadata_range.go",
+    "bytes": 2223,
+    "sha256": "010efb106de1725c06540a022666c23050b8172b802ec1e726a3c15acc6a5f72"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+    "bytes": 4943,
+    "sha256": "3c0d42c158ae87fe9b673beb1edd43f18bc9a7f53270ba4ab77db315795e7f27"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/ownership.go",
+    "bytes": 6634,
+    "sha256": "301f9a15207d190fdbb2a83e4080853b022947371f19ae315b1b6beb09c77779"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/physical_capture.go",
+    "bytes": 2910,
+    "sha256": "c28d16c76f7f720762d47a29ae2a039eff228ab31848f0b366e5d4adfe478a4c"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/physical_close_work.go",
+    "bytes": 3115,
+    "sha256": "00a372f228fbef73f0e263cf611af50679c08205f0c7eeac2514db6dc940eed6"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_construction_release_v6.go",
+    "bytes": 1139,
+    "sha256": "67fedf3dbb6e868a43a33374ce328c8c4cb68dd8c31b05a3d01ab9e656653ac3"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_v6.go",
+    "bytes": 13441,
+    "sha256": "ce1dda24c3c2c8fd336d45ab20d9aa1db631f2512fee9bd9c744b8afb55a7d55"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/release_queue.go",
+    "bytes": 2544,
+    "sha256": "d4eb7b41954468eeef286cbbe05cc25446cba5f009b7312a5d522b6506c5b024"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/retention.go",
+    "bytes": 2593,
+    "sha256": "c696fb75ccde661f104675986227efe9b144e04a35ffedebdf7797c3dd1fbed0"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/retainedalloc/owner.go",
+    "bytes": 10333,
+    "sha256": "c3c4bcf13d45b4b6c19d12abde8b64b4aa8990ae180b15b4787e7265d249b0a0"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/retainedalloc/owner_work.go",
+    "bytes": 10340,
+    "sha256": "4aa6f531e1d3ba0863a9eebef8e2ff0638fe1fd1eb8504a0f961cded17369e32"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/builder.go",
+    "bytes": 56513,
+    "sha256": "5193abd9de4d4c3fbeee044af99af82d5dc3a68063c7f38834b4bd8261692f36"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/compact.go",
+    "bytes": 5186,
+    "sha256": "5640a305dc2e918f3c2657d56e1628fc5fb06fbae888badab4926160ca9bc18f"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/internal.go",
+    "bytes": 34485,
+    "sha256": "09138c46e13f22233fe481368c9e889c27f1fa205f5c58ee8c2ecb049fc6e20f"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/leaf.go",
+    "bytes": 69291,
+    "sha256": "471524d06fd3bad9dd6c1ddc10ae5cf5e191775376619a217e240adea355e4a1"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/leaf_columnar.go",
+    "bytes": 2286,
+    "sha256": "71586ec00398767f13076bc4212ab8d0c134fe5554af8711c093b10177e51279"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/leaf_prefix_v2.go",
+    "bytes": 2958,
+    "sha256": "8e27ba3300c1743cf8456fa95e26604423add060d6e631d91de977de000cc414"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/leaf_valueptr.go",
+    "bytes": 309,
+    "sha256": "41725d7836f078bc365daa18187dfb89856006a98dc42d0e4732bc4f489bd423"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/node.go",
+    "bytes": 15648,
+    "sha256": "03ef40ff745619a5dbb04cbdeaa50a6a4810b286679bfcc33300a3ad5b47cc7c"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/primary_directory_v1.go",
+    "bytes": 14404,
+    "sha256": "755d3d74bd7e15574e716d273318cd08cc1c5535f7b1b6c57851671f81253a99"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/projection_decode.go",
+    "bytes": 6848,
+    "sha256": "a14621aee754bd5117870a10ff0f90da54d54c31b1c67faca0db150cb40dc471"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/projection_work.go",
+    "bytes": 1593,
+    "sha256": "1a96fdd5d0de1ed6539cc50282f248b1ad6cf11db14c1bc539b98dedb5700b0e"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/split.go",
+    "bytes": 11374,
+    "sha256": "dbc1b8cc04ae5b326a8363990a3c320c1d70f2d58f3584e69ed24a8006ef8cd8"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/child_ref.go",
+    "bytes": 3496,
+    "sha256": "503c8930e3b3161dd21738a33ed063ee23bd88c05839585e6b9ab364e28d149d"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/durable_meta_v1.go",
+    "bytes": 4649,
+    "sha256": "7e1de9a6d2098d192332d0600cbbd42753522a3a78a205dd7eccc9d8bf993de2"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/freelist.go",
+    "bytes": 1334,
+    "sha256": "88555adf4846d0d41c53d7e52e1da06e2fa9ea4ca85b2c062617b3c7234a5173"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/layout_assert.go",
+    "bytes": 1446,
+    "sha256": "4d38f06971e4dfe3ac716bcf4acac65dbb57adf6936c72a7a98b6ef552acfefd"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/meta.go",
+    "bytes": 2925,
+    "sha256": "aa3a9db2b2fa21b0cb770141d2b67ec4acd76819c9d22750a374794ae2ead1bb"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/page.go",
+    "bytes": 9641,
+    "sha256": "a675201b627d72dd47dd3d48b60160b4701453b6a458c5a9da639ef0e0b79322"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/value_log.go",
+    "bytes": 513,
+    "sha256": "5daa429d4be36177e181de4a8cf10bab96fa8bd39d852b53de53c422dbfb9e03"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/page/value_ptr_flags.go",
+    "bytes": 3420,
+    "sha256": "0693297e92a3f68a81ef7ac5981f0f9cb1491faf5ebd44b2b7cac12c6f971141"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/dirty_chunks.go",
+    "bytes": 1924,
+    "sha256": "e617d6d79239caf4b9eeab4ec6dc514cb376fdad1dda1dc5202ed803a0dfd7b3"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/grow.go",
+    "bytes": 2779,
+    "sha256": "e3ae43cab70b6592f56bc5cb2074765c74d620b4e07cf6ab90c4c6df7d980c6f"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/grow_work.go",
+    "bytes": 19348,
+    "sha256": "0651edfd2ea43f0d38f4018288902c17f06a4cfaefabb1f327816cc73915c765"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/madvise_linux.go",
+    "bytes": 337,
+    "sha256": "a806e73d1e78f2c909dd67c8e375ee4387a2bd148342f16a2b9a219fcc96c538"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/madvise_willneed_linux.go",
+    "bytes": 185,
+    "sha256": "402ddb6a826823f85860cba099d17c1c7bc2d20ae6e7a33717814015b8e5137a"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mapping_owner.go",
+    "bytes": 919,
+    "sha256": "ba19cb37093f904b7d133ad491692ae549f0b6edc49e8d7e73e526aa82c40dd7"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mapping_owner_unix.go",
+    "bytes": 1225,
+    "sha256": "b23962dcd251b3ac7c135ca0bf1e9700564eb8e01b4d474bd431809ff9c821b1"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mmap_granularity_unix.go",
+    "bytes": 139,
+    "sha256": "4b2483fc99485e1bfc23e76cf68d3b86c32caf2ef70f516d234397badad299b5"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mmap_populate_linux.go",
+    "bytes": 123,
+    "sha256": "691e07da11164a036ae0b8af0ef150ead3b87f7fdaa4aae2ba6743cc2e1c369f"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mmap_sync_policy_linux.go",
+    "bytes": 213,
+    "sha256": "622014161a9299406ff932715431071d735d19ca74e863c85909dc2a97ea2312"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/mmap_unix.go",
+    "bytes": 827,
+    "sha256": "b82965789fa53d71a61cdf46b308154cb886ad0c7861a60de1eed8aaeb015c10"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/pager.go",
+    "bytes": 44651,
+    "sha256": "6d985eac99d5375b4299542d738622402b1cba173b907b743d6c9af1e0953ac0"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/physical_close_work.go",
+    "bytes": 7458,
+    "sha256": "d5601661ef65a1eec4465f5b5e8be8215cd2935ce54585f3cf615cc7dc76979a"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/preallocate_linux.go",
+    "bytes": 443,
+    "sha256": "c5288ab3ee5b398fe78964657a70f279e89e03ec72b22d0874a254a29d219363"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/primary_read_root_close_work.go",
+    "bytes": 1088,
+    "sha256": "81cece0fed7431727375f97a3ddae3ad4bafaf265c5bd4e23358c468d70fdae9"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/primary_read_root_v6.go",
+    "bytes": 6592,
+    "sha256": "819187998b462cbf86e2f6631518e428cb293050d6affa092a5a16c6da70eef0"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/sync_page_file.go",
+    "bytes": 173,
+    "sha256": "42bd444faf9abd7ed3293f6bc42b21145cb53b5b956af1ad545b0f12d4b848ba"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/sync_page_file_linux.go",
+    "bytes": 349,
+    "sha256": "c8774ce740920587e729949e06863cee501f23bacd9fb1df23788b185d49db9e"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/sync_page_ranges.go",
+    "bytes": 876,
+    "sha256": "699298ed612cfd108ddf7dab638bc5085cde0f7ce1c46d5c519e2212989ff139"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/sync_page_ranges_linux.go",
+    "bytes": 932,
+    "sha256": "bb4c97dafb0fd7291d61dc6eff092121b63587432c9d814b4bafa9f2bacef085"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/write_work.go",
+    "bytes": 12304,
+    "sha256": "fc548dc9df9ef22dc2ed0ede0e9af2ec847cbcc9a2643cff2a1f8f3086d28894"
+  }
+]

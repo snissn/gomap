@@ -3,11 +3,13 @@ package pager
 import (
 	"errors" // Added import
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -23,6 +25,8 @@ var (
 // testHookTruncateAfterPageCount is a package-local scheduling barrier for
 // proving that overlapping grow intents do not append stale page-count deltas.
 var testHookTruncateAfterPageCount func(uint64)
+var testHookReadOnlyAfterAdmission func(*os.File)
+var testHookReadOnlyBeforeInitialize func(*os.File)
 
 type chunkList struct {
 	data [][]byte
@@ -50,11 +54,20 @@ type prefetchBitset struct {
 
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
-	file         *os.File
-	chunks       [][]byte
-	atomicChunks atomic.Pointer[chunkList] // Lock-free view for Get
-	chunkSize    int64
-	numPages     atomic.Uint64 // The number of pages logically allocated
+	readOnlyCleanup ReadOnlyCleanupError
+	// ownedFileMetadata is an already-admitted producer contribution, transferred
+	// with the exact child file. It survives failed physical disposal.
+	ownedFileMetadata       *retainedalloc.Owner
+	ownedFileCharge         uint64
+	ownedFileCloseAttempted bool
+	ownedFileCloseErr       error
+	file                    *os.File
+	chunks                  [][]byte
+	mappings                []mappingOwner
+	closeWork               physicalCloseState
+	atomicChunks            atomic.Pointer[chunkList] // Lock-free view for Get
+	chunkSize               int64
+	numPages                atomic.Uint64 // The number of pages logically allocated
 	// durableFileSize is the file length covered by a completed file-wide
 	// durability fence. Sparse range durability is restricted to this prefix.
 	durableFileSize atomic.Int64
@@ -183,10 +196,22 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 // only for observations. If cleanup fails, the returned pager owns the exact
 // remaining file/mappings and is disabled until Close completes.
 func OpenOwnedFileWithOptions(file *os.File, diagnosticPath string, chunkSize int64, opts OpenOptions) (*Pager, error) {
+	return openOwnedFile(file, diagnosticPath, chunkSize, opts, nil, 0)
+}
+
+// OpenOwnedFileWithMetadata consumes the same exact file and a pending capacity
+// contribution admitted BEFORE its creation. Only successful physical Close
+// clears the file/name aliases and refunds it. Failure returns the original
+// Pager, retaining its first outcome and contribution without replay.
+func OpenOwnedFileWithMetadata(file *os.File, diagnosticPath string, chunkSize int64, opts OpenOptions, owner *retainedalloc.Owner, charge uint64) (*Pager, error) {
+	return openOwnedFile(file, diagnosticPath, chunkSize, opts, owner, charge)
+}
+func openOwnedFile(file *os.File, diagnosticPath string, chunkSize int64, opts OpenOptions, owner *retainedalloc.Owner, charge uint64) (*Pager, error) {
 	if file == nil {
 		return nil, fmt.Errorf("nil owned pager file")
 	}
 	p := newFilePager(file, diagnosticPath, chunkSize, opts)
+	p.ownedFileMetadata, p.ownedFileCharge = owner, charge
 	fail := func(err error) (*Pager, error) {
 		if closeErr := p.Close(); closeErr != nil {
 			return p, errors.Join(err, closeErr)
@@ -248,16 +273,19 @@ func initializeFilePager(p *Pager, opts OpenOptions) error {
 
 		numChunks := size / chunkSize
 		p.chunks = make([][]byte, numChunks)
+		p.mappings = make([]mappingOwner, numChunks)
 		p.ensurePrefetchCapacityLocked(int(numChunks))
 		p.dirtyChunks.grow(int(numChunks))
 
 		for i := int64(0); i < numChunks; i++ {
-			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
+			mapping, err := mapConstructor(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate, false)
+			data := mapping.data
 			if err != nil {
 				return err
 			}
 			madviseChunk(data)
 			p.chunks[i] = data
+			p.mappings[i] = mapping
 		}
 
 		p.atomicChunks.Store(&chunkList{data: p.chunks})
@@ -286,6 +314,9 @@ func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
 }
 
 func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, error) {
+	if chunkSize <= 0 || uint64(chunkSize) > uint64(^uint(0)>>1) {
+		return nil, ErrFileSize
+	}
 	if chunkSize%page.PageSize != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
 	}
@@ -300,35 +331,111 @@ func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*P
 	if err != nil {
 		return nil, err
 	}
-	if err := mmapAvailable(); err != nil {
-		_ = f.Close()
+	p, err := openReadOnlyOwnedFile(f, path, chunkSize, opts, -1)
+	if err != nil && p != nil {
+		// Legacy path callers return the error, so the original error ownership
+		// seam must itself retain this exact partial pager. Do not require those
+		// callers to recover a discarded second return value.
+		p.readOnlyCleanup.cause, p.readOnlyCleanup.pager = err, p
+		return nil, &p.readOnlyCleanup
+	}
+	return p, err
+}
+
+// ReadOnlyCleanupError retains the exact original pager after failed constructor
+// cleanup. Keep the fatal error (including through wrapping) until process
+// shutdown. Close observes the first failure without retrying uncertain cleanup.
+// The receipt is embedded in that same pager; there is no replacement owner.
+type ReadOnlyCleanupError struct {
+	cause error
+	pager *Pager
+}
+
+func (e *ReadOnlyCleanupError) Error() string {
+	return "pager: fatal readonly cleanup: " + e.cause.Error()
+}
+func (e *ReadOnlyCleanupError) Unwrap() error { return e.cause }
+func (e *ReadOnlyCleanupError) Close() error  { return e.cause }
+
+// OpenReadOnlyOwnedFileWithMetadata consumes the already-held file only after
+// admitting its complete pager/control backing at the caller's original owner.
+// A returned non-nil pager on error retains an actual failed cleanup action;
+// the caller must retain it and charge without replaying Close.
+func OpenReadOnlyOwnedFileWithMetadata(f *os.File, path string, chunkSize int64, opts OpenOptions, owner *retainedalloc.Owner) (*Pager, uint64, bool, error) {
+	if f == nil || owner == nil || chunkSize <= 0 || uint64(chunkSize) > uint64(^uint(0)>>1) || chunkSize%page.PageSize != 0 || chunkSize%int64(os.Getpagesize()) != 0 || (mmapOffsetGranularity() > 0 && chunkSize%mmapOffsetGranularity() != 0) {
+		return nil, 0, false, ErrFileSize
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	size := info.Size()
+	if size < 0 || size%page.PageSize != 0 {
+		return nil, 0, false, ErrFileSize
+	}
+	n := uint64(size / chunkSize)
+	if size%chunkSize != 0 {
+		n++
+	}
+	v := (uint64(size/page.PageSize) + verifiedChunkPages - 1) / verifiedChunkPages
+	if n > uint64(^uint(0)>>1) || v > uint64(^uint(0)>>1) {
+		return nil, 0, false, ErrFileSize
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Pager{}))) + retainedalloc.AllocationCharge(uint64(len(path))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(chunkList{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(verifiedBitset{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(prefetchBitset{}))) + retainedalloc.AllocationCharge(n*uint64(unsafe.Sizeof([]byte{}))) + retainedalloc.AllocationCharge(n*uint64(unsafe.Sizeof(mappingOwner{}))) + retainedalloc.AllocationCharge(((n+63)/64)*8) + retainedalloc.AllocationCharge(v*uint64(unsafe.Sizeof([]uint64{}))) + v*retainedalloc.AllocationCharge(verifiedChunkWords*8)
+	if err = owner.AddPending(charge); err != nil {
+		return nil, 0, false, err
+	}
+	if testHookReadOnlyAfterAdmission != nil {
+		testHookReadOnlyAfterAdmission(f)
+	}
+	p, err := openReadOnlyOwnedFile(f, path, chunkSize, opts, size)
+	if p == nil {
+		owner.RemovePending(charge)
+		charge = 0
+	}
+	return p, charge, true, err
+}
+
+func openReadOnlyOwnedFile(f *os.File, path string, chunkSize int64, opts OpenOptions, admittedSize int64) (*Pager, error) {
+	p := &Pager{file: f, chunkSize: chunkSize, path: path, readOnly: true, mmapPopulate: opts.MmapPopulate, prefetchOnRead: opts.PrefetchOnRead}
+	fail := func(err error) (*Pager, error) {
+		if closeErr := p.Close(); closeErr != nil {
+			return p, errors.Join(err, closeErr)
+		}
 		return nil, err
+	}
+	if testHookReadOnlyBeforeInitialize != nil {
+		testHookReadOnlyBeforeInitialize(f)
+	}
+	if err := mmapAvailable(); err != nil {
+		return fail(err)
 	}
 
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, err
+		return fail(err)
 	}
 
 	size := info.Size()
-	if size%int64(page.PageSize) != 0 {
-		_ = f.Close()
-		return nil, ErrFileSize
+	// Admission used this exact extent to size every control backing. Refuse
+	// an intervening growth before allocating any extent-dependent arrays.
+	if admittedSize >= 0 && size != admittedSize {
+		return fail(ErrFileSize)
 	}
-
-	p := &Pager{
-		file:           f,
-		chunkSize:      chunkSize,
-		path:           path,
-		readOnly:       true,
-		mmapPopulate:   opts.MmapPopulate,
-		prefetchOnRead: opts.PrefetchOnRead,
+	if size < 0 || size%int64(page.PageSize) != 0 {
+		return fail(ErrFileSize)
 	}
 
 	if size > 0 {
-		numChunks := int64((size + chunkSize - 1) / chunkSize)
+		numChunks := size / chunkSize
+		if size%chunkSize != 0 {
+			numChunks++
+		}
+		if uint64(numChunks) > uint64(^uint(0)>>1) {
+			return fail(ErrFileSize)
+		}
 		p.chunks = make([][]byte, numChunks)
+		p.mappings = make([]mappingOwner, numChunks)
 		p.ensurePrefetchCapacityLocked(int(numChunks))
 
 		for i := int64(0); i < numChunks; i++ {
@@ -338,13 +445,14 @@ func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*P
 			if remaining < int64(length) {
 				length = int(remaining)
 			}
-			data, err := mmapFileReadOnly(f.Fd(), offset, length, opts.MmapPopulate)
+			mapping, err := mapConstructor(f.Fd(), offset, length, opts.MmapPopulate, true)
+			data := mapping.data
 			if err != nil {
-				p.Close()
-				return nil, err
+				return fail(err)
 			}
 			madviseChunk(data)
 			p.chunks[i] = data
+			p.mappings[i] = mapping
 		}
 
 		p.atomicChunks.Store(&chunkList{data: p.chunks})
@@ -587,35 +695,7 @@ func (p *Pager) PageCount() uint64 {
 }
 
 // Close closes the pager and unmaps memory.
-func (p *Pager) Close() error {
-	p.stopGrower()
-	p.growMu.Lock()
-	defer p.growMu.Unlock()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.closing = true          // Includes a partial-unmap failure; no pending install may pass.
-	p.atomicChunks.Store(nil) // Do not publish partially unmapped storage on failure.
-	if !p.memoryOnly {
-		for i, chunk := range p.chunks {
-			if chunk == nil {
-				continue
-			}
-			if err := munmapFile(chunk); err != nil {
-				return err
-			}
-			p.chunks[i] = nil
-		}
-	}
-	p.chunks = nil
-	p.atomicChunks.Store(nil)
-	if p.memoryOnly {
-		return nil
-	}
-	if p.file == nil {
-		return nil
-	}
-	return p.file.Close()
-}
+func (p *Pager) Close() error { return p.closeOrdinaryPhysical() }
 
 // Truncate resizes the file to the specified number of pages.
 // Safety: Shrinking is forbidden. Only growing is allowed.

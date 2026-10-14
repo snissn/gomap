@@ -1,0 +1,49 @@
+{
+  "module": {
+    "Path": "github.com/snissn/compress",
+    "Version": "v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "Time": "2026-10-14T11:24:47Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/snissn/compress@v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/snissn/compress/@v/v1.18.2-snissn.0.0.20261014112447-88a027b09341.mod",
+    "GoVersion": "1.23",
+    "Sum": "h1:brG2Yps8frK2s7mVF9Lz+N3ettUty+hcX2y3vAyEMUw=",
+    "GoModSum": "h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM="
+  },
+  "consumer_pin_receipt_sha256": "e4a95d9df1e0f6a193d310f006394e7843066c9b7153486bd44ea2840068b1a1",
+  "files": [
+    {
+      "path": "go.mod",
+      "bytes": 5176,
+      "sha256": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 44762,
+      "sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a"
+    }
+  ],
+  "provider_sources": [
+    {
+      "path": "zstd/decoder.go",
+      "bytes": 23834,
+      "sha256": "1a33ba3df4141aba681ac579b37caad78305d713280fd128bfa2b495c931e61a"
+    },
+    {
+      "path": "zstd/decoder_bounded.go",
+      "bytes": 41790,
+      "sha256": "f3367ce2d83ea1257addfa43c4ad47f478b0c7d7a70e4ed419a4813d36b64a8c"
+    }
+  ],
+  "command": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p",
+    "2",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/pager",
+    "./TreeDB/internal/primaryarena",
+    "-count=1"
+  ],
+  "exit_code": 0
+}

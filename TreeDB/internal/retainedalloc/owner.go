@@ -44,17 +44,20 @@ func AllocationCharge(n uint64) uint64 {
 }
 
 type binding struct {
-	budget   Budget
-	lease    Lease
-	refs     uint64
-	producer bool
-	next     *binding
+	budget      Budget
+	lease       Lease
+	refs        uint64
+	producer    bool
+	next        *binding
+	prev        *binding
+	cleanupRefs uint64
 }
 type Owner struct {
 	mu                                 sync.Mutex
 	bytes, baseline, controls, pending uint64
 	head                               *binding
 	closed                             bool
+	closeWork                          ownerCloseWork
 	retired, cleanupFailed             bool
 }
 
@@ -124,29 +127,31 @@ func (o *Owner) AddPending(bytes uint64) error {
 	return nil
 }
 func (o *Owner) RemovePending(bytes uint64) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if bytes > o.pending {
-		panic("pending metadata underflow")
-	}
-	if err := o.resizeLocked(bytes, false); err != nil {
-		panic("pending metadata release refused")
-	}
-	o.pending -= bytes
-	if o.closed && o.pending == 0 {
-		o.releaseClosedBindingsLocked()
+	var work RemovalWork
+	for {
+		done, err := o.removeUnserialized(bytes, true, false, &work, nil)
+		if err != nil {
+			panic("pending metadata release refused")
+		}
+		if done {
+			return
+		}
 	}
 }
+
 func (o *Owner) releaseClosedBindingsLocked() {
 	link := &o.head
 	for *link != nil {
 		b := *link
-		if b.refs != 0 || b.producer {
+		if b.refs != 0 || b.cleanupRefs != 0 || b.producer {
 			link = &b.next
 			continue
 		}
 		*link = b.next
-		b.next = nil
+		if b.next != nil {
+			b.next.prev = b.prev
+		}
+		b.next, b.prev = nil, nil
 		b.lease.Close()
 		delta := AllocationCharge(uint64(unsafe.Sizeof(binding{})))
 		if err := o.resizeLocked(delta, false); err != nil {
@@ -162,10 +167,15 @@ func (o *Owner) releaseClosedBindingsLocked() {
 
 // Remove follows actual storage/edge cleanup, never speculative disposal.
 func (o *Owner) Remove(bytes uint64) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if err := o.resizeLocked(bytes, false); err != nil {
-		panic("retained allocation accounting underflow")
+	var work RemovalWork
+	for {
+		done, err := o.removeUnserialized(bytes, false, false, &work, nil)
+		if err != nil {
+			panic("retained allocation accounting underflow")
+		}
+		if done {
+			return
+		}
 	}
 }
 
@@ -174,6 +184,7 @@ type Enrollment struct {
 	binding   *binding
 	closed    atomic.Bool
 	companion *Enrollment
+	closeWork enrollmentCloseWork
 }
 
 // Enroll shares one governing lease for this exact budget/owner identity.
@@ -211,6 +222,9 @@ func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
 			return nil, err
 		}
 		found = &binding{budget: budget, lease: lease, next: o.head}
+		if o.head != nil {
+			o.head.prev = found
+		}
 		o.head = found
 	}
 	if found.refs == math.MaxUint64 {
@@ -224,38 +238,18 @@ func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
 // Close follows the capture's real storage cleanup. It drops this exact
 // enrollment and releases the governing lease only at its last shared capture.
 func (e *Enrollment) Close() {
-	if e == nil || !e.closed.CompareAndSwap(false, true) {
-		return
-	}
-	e.companion.Close()
-	o, b := e.owner, e.binding
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if b.refs == 0 {
-		panic("retained enrollment underflow")
-	}
-	b.refs--
-	delta := AllocationCharge(uint64(unsafe.Sizeof(Enrollment{})))
-	if b.refs == 0 && !b.producer && (!o.closed && !o.retired && !o.cleanupFailed || o.closed && o.pending == 0) {
-		link := &o.head
-		for *link != b {
-			if *link == nil {
-				panic("retained enrollment absent")
+	var state EnrollmentReleaseWork
+	for {
+		done, err := e.closePairUnserialized(false, nil, &state)
+		if err != nil {
+			if err == ErrWorkRequired {
+				return
 			}
-			link = &(*link).next
+			panic("retained enrollment release refused")
 		}
-		*link = b.next
-		b.next = nil
-		b.lease.Close()
-		delta += AllocationCharge(uint64(unsafe.Sizeof(binding{})))
-	}
-	if err := o.resizeLocked(delta, false); err != nil {
-		panic("retained enrollment release refused")
-	}
-	o.controls -= delta
-	if o.closed && o.head == nil && o.pending == 0 {
-		o.bytes = 0
-		o.baseline = 0
+		if done {
+			return
+		}
 	}
 }
 
@@ -263,26 +257,12 @@ func (e *Enrollment) Close() {
 // own the constructor baseline and enrollment descriptors until their normal
 // last release; closed owners never admit more producer growth.
 func (o *Owner) Close() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.closed {
-		return nil
+	for {
+		done, err := o.closeStep(false, nil)
+		if err != nil || done {
+			return err
+		}
 	}
-	retained := o.baseline + o.controls + o.pending
-	if o.bytes < retained {
-		return ErrCapacity
-	}
-	if err := o.resizeLocked(o.bytes-retained, false); err != nil {
-		return err
-	}
-	o.closed = true
-	for b := o.head; b != nil; b = b.next {
-		b.producer = false
-	}
-	if o.pending == 0 {
-		o.releaseClosedBindingsLocked()
-	}
-	return nil
 }
 
 // Retire follows replacement of this exact physical arena. Old captures can
@@ -295,17 +275,30 @@ func (o *Owner) Retire() { o.mu.Lock(); o.retired = true; o.mu.Unlock() }
 func (o *Owner) CleanupFailed() { o.mu.Lock(); o.cleanupFailed = true; o.mu.Unlock() }
 
 func (e *Enrollment) BelongsTo(o *Owner) bool {
-	return e != nil && !e.closed.Load() && e.owner == o
+	if e == nil {
+		return false
+	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	return !e.closed.Load() && e.owner == o
 }
 func (e *Enrollment) CloseAfterCleanup(err error) {
 	if e == nil {
 		return
 	}
 	if err != nil {
-		e.owner.CleanupFailed()
-		if e.companion != nil {
-			e.companion.owner.CleanupFailed()
+		e.closeWork.mu.Lock()
+		if e.owner != nil {
+			e.owner.CleanupFailed()
 		}
+		if e.companion != nil {
+			e.companion.closeWork.mu.Lock()
+			if e.companion.owner != nil {
+				e.companion.owner.CleanupFailed()
+			}
+			e.companion.closeWork.mu.Unlock()
+		}
+		e.closeWork.mu.Unlock()
 	}
 	e.Close()
 }
@@ -351,7 +344,12 @@ func EnrollPair(first, second *Owner, budget Budget) (*Enrollment, error) {
 	return a, nil
 }
 func (e *Enrollment) BelongsToPair(first, second *Owner) bool {
-	if !e.BelongsTo(first) {
+	if e == nil {
+		return false
+	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	if e.closed.Load() || e.owner != first {
 		return false
 	}
 	if second == nil {
@@ -368,11 +366,21 @@ func (e *Enrollment) ActivateProducer() error {
 	if e == nil {
 		return nil
 	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	if e.closed.Load() {
+		return ErrClosed
+	}
 	a := e.owner
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var b *Owner
 	if e.companion != nil {
+		e.companion.closeWork.mu.Lock()
+		defer e.companion.closeWork.mu.Unlock()
+		if e.companion.closed.Load() {
+			return ErrClosed
+		}
 		b = e.companion.owner
 		b.mu.Lock()
 		defer b.mu.Unlock()

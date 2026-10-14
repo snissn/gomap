@@ -1,0 +1,13 @@
+{
+  "root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-shared-physical-20261014",
+  "producer": "shared_packet.py windows-compile",
+  "consumers": [],
+  "source_retained_in": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/artifacts/4878/20261014-native-shared-physical-cleanup",
+  "files": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-shared-physical-20261014/pager-windows-amd64.test.exe",
+      "bytes": 5501440,
+      "sha256": "d33e867df32ace5d1d4099ed1181e2fdbb6dea93b76f7026ccaf5bd71b128bc3"
+    }
+  ]
+}

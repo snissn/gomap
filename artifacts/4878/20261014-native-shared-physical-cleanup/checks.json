@@ -1,0 +1,77 @@
+[
+  {
+    "label": "normal",
+    "exit_code": 0,
+    "command": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-modfile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-codec-worker.mod",
+      "-p",
+      "2",
+      "./TreeDB/internal/retainedalloc",
+      "./TreeDB/pager",
+      "./TreeDB/internal/primaryarena",
+      "-count=1"
+    ],
+    "env_delta": {}
+  },
+  {
+    "label": "race",
+    "exit_code": 0,
+    "command": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-modfile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-codec-worker.mod",
+      "-p",
+      "2",
+      "-race",
+      "./TreeDB/internal/retainedalloc",
+      "./TreeDB/pager",
+      "./TreeDB/internal/primaryarena",
+      "-run",
+      "Test(RemovalWork|EnrollmentCloseWork|OrdinaryMetadata|PhysicalCloseWork|GrowthPrivate|Owner|ArenaPhysicalCloseWork)",
+      "-count=1"
+    ],
+    "env_delta": {}
+  },
+  {
+    "label": "386",
+    "exit_code": 0,
+    "command": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-modfile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-codec-worker.mod",
+      "-p",
+      "2",
+      "./TreeDB/internal/retainedalloc",
+      "./TreeDB/pager",
+      "./TreeDB/internal/primaryarena",
+      "-run",
+      "Test(RemovalWork|EnrollmentCloseWork|OrdinaryMetadata|PhysicalCloseWork|GrowthPrivate|Owner|ArenaPhysicalCloseWork)",
+      "-count=1"
+    ],
+    "env_delta": {
+      "GOARCH": "386"
+    }
+  },
+  {
+    "label": "windows-compile",
+    "exit_code": 0,
+    "command": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-modfile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-codec-worker.mod",
+      "-p",
+      "2",
+      "-c",
+      "./TreeDB/pager",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-shared-physical-20261014/pager-windows-amd64.test.exe"
+    ],
+    "env_delta": {
+      "GOOS": "windows",
+      "GOARCH": "amd64",
+      "CGO_ENABLED": "0"
+    }
+  }
+]
