@@ -298,3 +298,88 @@ func TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild(t *testing.T) {
 		})
 	}
 }
+
+// Fallback convergence may publish a new physical PRIMARY root even when the
+// cached checkpoint had no dirty entries. The next C1 write must inherit it.
+func TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
+	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
+		for _, pointer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/pointer=%v", profile, pointer), func(t *testing.T) {
+				database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
+					opts.DisableSideStores = true
+					opts.BackgroundCheckpointInterval = -1
+					opts.BackgroundCheckpointIdleDuration = -1
+					opts.DisableBackgroundPrune = true
+					if !pointer {
+						opts.ValueLog.PointerThreshold = 1 << 20
+						opts.ValueLog.ForcePointers = false
+					}
+				})
+				first, second, third := []byte("first"), []byte("second"), []byte("third")
+				if pointer {
+					first = bytes.Repeat(first, 900)
+					second = bytes.Repeat(second, 900)
+					third = bytes.Repeat(third, 900)
+				}
+				for _, value := range [][]byte{first, second} {
+					if err := database.Set([]byte("a"), value); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.Checkpoint(); err != nil {
+						t.Fatal("dirty checkpoint", err)
+					}
+				}
+				old := database.AcquireSnapshot()
+				if old == nil {
+					t.Fatal("missing old cut")
+				}
+				defer old.Close()
+				oldBasis := publicPrimaryBasis(t, old)
+				if err := database.Checkpoint(); err != nil {
+					t.Fatal("empty checkpoint", err)
+				}
+				successor, ok := database.backend.StateToken()
+				if !ok || !primaryarena.IsPage(successor.RootPageID) {
+					t.Fatal("missing actual PRIMARY successor")
+				}
+				fresh := database.AcquireSnapshot()
+				if fresh == nil {
+					t.Fatal("missing fresh cut")
+				}
+				actual := publicPrimaryBasis(t, fresh)
+				if err := fresh.Close(); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("empty checkpoint basis old=%v backend=%v fresh=%v", oldBasis, successor, actual)
+				if actual != successor {
+					t.Errorf("empty checkpoint left stale COW basis: got=%v want=%v", actual, successor)
+				}
+				if publicPrimaryBasis(t, old) != oldBasis {
+					t.Fatal("empty checkpoint mutated retained old cut")
+				}
+				cowPublicContractSnapshotValue(t, old, "a", second, true)
+				if err := database.Set([]byte("a"), third); err != nil {
+					t.Fatal("post-checkpoint write", err)
+				}
+				cowPublicContractSnapshotValue(t, old, "a", second, true)
+				if err := old.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := database.Close(); err != nil {
+					t.Fatal("checked Close after empty checkpoint and write", err)
+				}
+				reopened, err := Open(opts)
+				if err != nil {
+					t.Fatal("reopen", err)
+				}
+				defer reopened.Close()
+				if got, err := reopened.Get([]byte("a")); err != nil || !bytes.Equal(got, third) {
+					t.Fatalf("reopen value length=%d err=%v", len(got), err)
+				}
+				if err := reopened.Close(); err != nil {
+					t.Fatal("reopened Close", err)
+				}
+			})
+		}
+	}
+}
