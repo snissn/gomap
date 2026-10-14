@@ -1,0 +1,4 @@
+ok  	github.com/snissn/gomap/TreeDB/caching	0.002s [no tests to run]
+ok  	github.com/snissn/gomap/TreeDB/internal/memtable	0.001s [no tests to run]
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.001s [no tests to run]
+ok  	github.com/snissn/gomap/TreeDB/mvcc	0.002s [no tests to run]

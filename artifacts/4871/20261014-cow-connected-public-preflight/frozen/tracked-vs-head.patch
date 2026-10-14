@@ -1,0 +1,747 @@
+diff --git a/TreeDB/caching/cow_batch.go b/TreeDB/caching/cow_batch.go
+index 56847c1f3..e6cb155d6 100644
+--- a/TreeDB/caching/cow_batch.go
++++ b/TreeDB/caching/cow_batch.go
+@@ -139,7 +139,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
+ 				if e != nil {
+ 					return e
+ 				}
+-				resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceDictionary, ID: id}, lease: ownerLease, shard: i}
++				resource := &cowLiveResource{db: b.db, id: memtable.COWResourceID{Kind: cowResourceDictionary, ID: id}, lease: ownerLease, shard: i}
+ 				p.resources = append(p.resources, resource)
+ 				resource.definition, e = provider.PrepareDictionaryReadDefinition(id, c.readLimits(), c.budget.Limits().MaxResources, c.admitDictionaryRead)
+ 				if e != nil {
+@@ -192,7 +192,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
+ 			return err
+ 		}
+ 		ids := [1]memtable.COWResourceID{resource.id}
+-		if err := b.cowState.prepared.cut.prepared[shard].AttachResources(ids[:], resource.close); err != nil {
++		if err := b.cowState.prepared.cut.prepared[shard].AttachCheckedResourcesV6(ids[:], resource); err != nil {
+ 			return err
+ 		}
+ 		resource.attached = true
+@@ -200,7 +200,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
+ 	for shard, files := range b.cowState.prepared.files {
+ 		for _, fileID := range files {
+ 			manager := b.db.valueLogReader
+-			resource := &cowLiveResource{id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
++			resource := &cowLiveResource{db: b.db, id: memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(fileID)}, manager: manager}
+ 			b.cowState.prepared.resources = append(b.cowState.prepared.resources, resource)
+ 			registry := manager.StableResourcePinRegistry()
+ 			identity, registered := manager.StableSegmentIdentity(fileID)
+@@ -221,7 +221,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
+ 			if err := b.cowState.prepared.cut.next.shards[shard].resources.add(resource); err != nil {
+ 				return err
+ 			}
+-			if err := b.cowState.prepared.cut.prepared[shard].AttachResources(id[:], resource.close); err != nil {
++			if err := b.cowState.prepared.cut.prepared[shard].AttachCheckedResourcesV6(id[:], resource); err != nil {
+ 				return err
+ 			}
+ 			resource.attached = true
+diff --git a/TreeDB/caching/cow_resources.go b/TreeDB/caching/cow_resources.go
+index 3977e70ec..50e40eab6 100644
+--- a/TreeDB/caching/cow_resources.go
++++ b/TreeDB/caching/cow_resources.go
+@@ -1,6 +1,9 @@
+ package caching
+ 
+ import (
++	"errors"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"sync"
+ 	"unsafe"
+ 
+@@ -17,21 +20,31 @@ const cowResourceDictionary = 2
+ // attached to C1. It is not a root/deletion registry. Entries are immutable
+ // after insertion, and roots/cursors keep the generation alive while reading.
+ type cowGenerationResources struct {
+-	mu      sync.RWMutex
+-	entries []*cowLiveResource
+-	lease   *memtable.COWExternalLease
++	releaseMu  sync.Mutex
++	released   bool
++	closeIndex int
++	mu         sync.RWMutex
++	entries    []*cowLiveResource
++	lease      *memtable.COWExternalLease
+ }
+ 
+ type cowLiveResource struct {
+-	id         memtable.COWResourceID
+-	context    *cowGenerationResources
+-	manager    *valuelog.Manager
+-	set        *valuelog.Set
+-	pin        *rootpublication.IdentityPin
+-	definition *dictdb.DictionaryReadDefinition
+-	lease      *memtable.COWExternalLease
+-	shard      int
+-	attached   bool // sequenced preparation state; never consulted by readers
++	releaseMu           sync.Mutex
++	releaseCondition    sync.Cond
++	releasing, released bool
++	releaseErr          error
++	failure             rootpublication.OriginalReleaseFailure
++	db                  *DB
++	resolverIndex       int
++	id                  memtable.COWResourceID
++	context             *cowGenerationResources
++	manager             *valuelog.Manager
++	set                 *valuelog.Set
++	pin                 *rootpublication.IdentityPin
++	definition          *dictdb.DictionaryReadDefinition
++	lease               *memtable.COWExternalLease
++	shard               int
++	attached            bool // sequenced preparation state; never consulted by readers
+ }
+ 
+ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResources, error) {
+@@ -49,7 +62,46 @@ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResour
+ 	return &cowGenerationResources{entries: make([]*cowLiveResource, n), lease: lease}, nil
+ }
+ 
+-func (r *cowGenerationResources) close() { r.entries = nil; r.lease.Close() }
++func (r *cowGenerationResources) close() {
++	_, _, completion, _ := r.ReleaseCOWResourceWorkV6(nil)
++	if completion != nil {
++		completion.Close()
++	}
++}
++
++// The original resolver is the first attached owner and retires last. Its
++// original backing is retained until every live resource actually completed.
++func (r *cowGenerationResources) ReleaseCOWResourceWorkV6(w *iterator.OrdinalScanWork) (bool, bool, retainedalloc.Lease, error) {
++	if r == nil {
++		return true, true, nil, nil
++	}
++	r.releaseMu.Lock()
++	defer r.releaseMu.Unlock()
++	if r.released {
++		return true, true, nil, nil
++	}
++	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))) {
++		return false, false, nil, nil
++	}
++	r.mu.Lock()
++	for r.closeIndex < len(r.entries) {
++		if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) {
++			r.mu.Unlock()
++			return false, false, nil, nil
++		}
++		if r.entries[r.closeIndex] != nil {
++			r.mu.Unlock()
++			return false, false, nil, memtable.ErrCOWResourceWork
++		}
++		r.closeIndex++
++	}
++	r.entries = nil
++	completion := r.lease
++	r.lease = nil
++	r.released = true
++	r.mu.Unlock()
++	return true, true, completion, nil
++}
+ func (r *cowGenerationResources) get(id memtable.COWResourceID) *cowLiveResource {
+ 	if r == nil {
+ 		return nil
+@@ -76,27 +128,114 @@ func (r *cowGenerationResources) add(e *cowLiveResource) error {
+ 	return memtable.ErrCOWCapacity
+ }
+ func (r *cowLiveResource) close() {
+-	if r.context != nil {
+-		r.context.mu.Lock()
+-		for i, e := range r.context.entries {
+-			if e == r {
+-				r.context.entries[i] = nil
+-				break
+-			}
++	_, _, completion, _ := r.ReleaseCOWResourceWorkV6(nil)
++	if completion != nil {
++		completion.Close()
++	}
++}
++
++// Completion runs on the SAME resource in the original generation slot.
++// No callback, physical I/O or error traversal executes under its mutex.
++func (r *cowLiveResource) ReleaseCOWResourceWorkV6(w *iterator.OrdinalScanWork) (bool, bool, retainedalloc.Lease, error) {
++	if r == nil {
++		return true, true, nil, nil
++	}
++	r.releaseMu.Lock()
++	if r.releaseCondition.L == nil {
++		r.releaseCondition.L = &r.releaseMu
++	}
++	for r.releasing {
++		if w != nil {
++			r.releaseMu.Unlock()
++			return false, false, nil, nil
+ 		}
+-		r.context.mu.Unlock()
++		r.releaseCondition.Wait()
++	}
++	if r.releaseErr != nil {
++		err := r.releaseErr
++		r.releaseMu.Unlock()
++		return false, false, nil, err
++	}
++	if r.released {
++		r.releaseMu.Unlock()
++		return true, true, nil, nil
++	}
++	// Dictionary capture still has a void original finalizer. It cannot become
++	// a successful bounded physical callback merely through a typed wrapper.
++	if w != nil && r.definition != nil {
++		r.releaseMu.Unlock()
++		return false, false, nil, memtable.ErrCOWResourceWork
+ 	}
++	r.releasing = true
++	r.releaseMu.Unlock()
++	var err error
++	ready := true
+ 	if r.definition != nil {
+ 		r.definition.Close()
+ 		r.definition = nil
+ 	}
+ 	if r.set != nil {
+-		r.manager.Release(r.set)
+-		r.set = nil
++		if w == nil {
++			unlimited := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++			ready, err = r.manager.ReleaseNativeMVCCSetStep(r.set, &unlimited)
++		} else {
++			ready, err = r.manager.ReleaseNativeMVCCSetStep(r.set, w)
++		}
++		if ready && err == nil {
++			r.set = nil
++			r.manager = nil
++		}
++	}
++	if ready && err == nil && r.pin != nil {
++		ready, err = r.pin.ReleaseWithWorkV6(w)
++		if ready && err == nil {
++			r.pin = nil
++		}
++	}
++	if ready && err == nil && r.context != nil {
++		context := r.context
++		context.mu.Lock()
++		for r.resolverIndex < len(context.entries) {
++			if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) {
++				ready = false
++				break
++			}
++			i := r.resolverIndex
++			r.resolverIndex++
++			if context.entries[i] == r {
++				context.entries[i] = nil
++				break
++			}
++		}
++		context.mu.Unlock()
++		if ready {
++			r.context = nil
++		}
++	}
++	hard := err != nil && !errors.Is(err, retainedalloc.ErrWorkRequired) && !errors.Is(err, memtable.ErrCOWResourceWork)
++	var completion retainedalloc.Lease
++	var reportDB *DB
++	if hard {
++		err = r.failure.RetainOriginalCleanupFailure(r, err)
++		reportDB = r.db
++	}
++	r.releaseMu.Lock()
++	if hard {
++		r.releaseErr = err
++	}
++	if ready && err == nil {
++		completion = r.lease
++		r.lease = nil
++		r.db = nil
++		r.released = true
++	}
++	r.releasing = false
++	r.releaseCondition.Broadcast()
++	r.releaseMu.Unlock()
++	if reportDB != nil {
++		reportDB.reportError(err)
+ 	}
+-	r.pin.Release()
+-	r.pin = nil
+-	r.lease.Close()
++	return ready && err == nil, ready, completion, err
+ }
+ 
+ type cowDictionaryReadProvider interface {
+@@ -139,7 +278,7 @@ func prepareCOWEmptyRoot(w *memtable.COWWriter, budget *memtable.COWBudget) (*me
+ 		return nil, nil, err
+ 	}
+ 	ids := [1]memtable.COWResourceID{{Kind: cowResourceGenerationOwner, ID: 1}}
+-	if err = p.AttachResources(ids[:], resources.close); err != nil {
++	if err = p.AttachCheckedResourcesV6(ids[:], resources); err != nil {
+ 		retired := p.Cancel()
+ 		retired.Drain()
+ 		resources.close()
+diff --git a/TreeDB/caching/native_mvcc_prune_v6.go b/TreeDB/caching/native_mvcc_prune_v6.go
+index c89af3e56..669e4b504 100644
+--- a/TreeDB/caching/native_mvcc_prune_v6.go
++++ b/TreeDB/caching/native_mvcc_prune_v6.go
+@@ -62,6 +62,7 @@ func (db *DB) closeNativeMVCCBudgetV6() {
+ // a nonnil error outcome. Its caller must finish native cleanup before clearing
+ // Snapshot or refunding this containing allocation.
+ type NativeMVCCCaptureV6 struct {
++	composite                         nativeCOWMergeV6
+ 	cache                             *DB
+ 	version                           uint64
+ 	probe                             int
+@@ -207,6 +208,9 @@ func (db *DB) StepNativeMVCCOwnedCaptureV6(c *NativeMVCCCaptureV6, w *iterator.O
+ 		c.budget = b
+ 		c.owned = true
+ 	}
++	if db.cow != nil {
++		return db.stepNativeCOWCaptureV6(c, w)
++	}
+ 	if c.Snapshot == nil {
+ 		c.currentWork = w
+ 		snapshot, _, err := db.StepNativeMVCCCaptureV6(c, c.admitOwnedSnapshotV6, w)
+@@ -324,7 +328,12 @@ func (c *NativeMVCCCaptureV6) CloseNativeMVCCOwnedCaptureV6(w *iterator.OrdinalS
+ 		c.ownedPhase = 1
+ 	}
+ 	if c.ownedPhase == 1 {
+-		if c.Snapshot != nil {
++		if c.composite.cut != nil {
++			ready, err := c.closeNativeCOWCaptureV6(w)
++			if !ready || err != nil {
++				return false, err
++			}
++		} else if c.Snapshot != nil {
+ 			ready, err := c.Snapshot.CloseNativeMVCCSnapshotStepV6(w)
+ 			if !ready || err != nil {
+ 				return false, err
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 7cb81eb0a..5a0433f71 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -3434,6 +3434,15 @@ func (db *DB) closeAfterHooks() error {
+ 	db.clearFlushApplyReadOnlyPrepareBuffers()
+ 	db.writeMu.Unlock()
+ 
++	// The SAME native receipt can own physical Finish while its publication
++	// turn is already released. Join it before teardownMu/Stop: later capture
++	// teardown is deliberately too late for this original publication join.
++	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
++		if err := runtime.coordinator.JoinNativePublicationsV6(context.Background()); err != nil {
++			errs = append(errs, fmt.Errorf("join native root publication: %w", err))
++		}
++	}
++
+ 	// A root producer releases writeMu after transferring its immutable build to
+ 	// the durable publisher, but it keeps teardownMu for reading until enqueue,
+ 	// admission, and ordered post-work have completed. Cross the teardown gate
+diff --git a/TreeDB/db/native_mvcc_current_delete_v6.go b/TreeDB/db/native_mvcc_current_delete_v6.go
+index a908d247c..e9cf4efc5 100644
+--- a/TreeDB/db/native_mvcc_current_delete_v6.go
++++ b/TreeDB/db/native_mvcc_current_delete_v6.go
+@@ -40,13 +40,14 @@ func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []
+ 		if !w.Reserve(2, 256) {
+ 			return false, nil
+ 		}
+-		file, _, err := r.Snapshot.PinnedValueLogFile(ref.Log.FileID)
++		file, _, err := r.Snapshot.PinnedValueLogFile(ref.Log.ValueLogFileID())
+ 		if err != nil {
+ 			return false, err
+ 		}
+-		if r.Leaf == nil || r.Leaf.File != file || r.Leaf.FileID != ref.Log.FileID {
++		if r.Leaf == nil {
+ 			return false, tree.ErrProjectionReader
+ 		}
++		r.Leaf.File, r.Leaf.FileID = file, ref.Log.FileID
+ 		ready, err := r.Leaf.BeginProjectionFrame(ref, dst, w)
+ 		if !ready || err != nil {
+ 			return ready, err
+diff --git a/TreeDB/internal/memtable/cow_budget.go b/TreeDB/internal/memtable/cow_budget.go
+index 8f537ac4b..deb3d4127 100644
+--- a/TreeDB/internal/memtable/cow_budget.go
++++ b/TreeDB/internal/memtable/cow_budget.go
+@@ -229,7 +229,10 @@ type COWResourceID struct {
+ 	ID   uint64
+ }
+ 
+-type cowResourceOwner struct{ release func() }
++type cowResourceOwner struct {
++	release  func()
++	provider COWResourceReleaseProviderV6
++}
+ 
+ type cowGeneration struct {
+ 	budget           *COWBudget
+@@ -237,6 +240,10 @@ type cowGeneration struct {
+ 	history, pending uint64
+ 	frozen, retired  bool
+ 	drainClaimed     bool
++	drainDone        bool
++	drainError       error
++	drainIndex       int
++	drainCondition   sync.Cond
+ 	ids              []COWResourceID
+ 	owners           []cowResourceOwner
+ }
+@@ -255,8 +262,10 @@ func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
+ 	}
+ 	b.stats.Generations++
+ 	b.stats.HistoryBytes += base
+-	return &cowGeneration{budget: b, refs: 1, history: base,
+-		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
++	g := &cowGeneration{budget: b, refs: 1, history: base,
++		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}
++	g.drainCondition.L = &b.mu
++	return g, nil
+ }
+ 
+ func (g *cowGeneration) retain() { g.budget.mu.Lock(); g.refs++; g.budget.mu.Unlock() }
+@@ -279,34 +288,7 @@ func (g *cowGeneration) release() COWRetirement {
+ 
+ // Claim under the budget lock, run callbacks outside it, then refund storage.
+ // A copied retirement descriptor shares this claim and cannot double-drain.
+-func (g *cowGeneration) drain() {
+-	b := g.budget
+-	b.mu.Lock()
+-	if g.drainClaimed {
+-		b.mu.Unlock()
+-		return
+-	}
+-	g.drainClaimed = true
+-	b.mu.Unlock()
+-	cowReleaseOwners(g.owners)
+-	b.mu.Lock()
+-	history, frozen, retired := g.history, g.frozen, g.retired
+-	// All original callback and array aliases end before their containing
+-	// generation charge. The original budget serializes the terminal claim.
+-	g.owners, g.ids, g.history = nil, nil, 0
+-	g = nil
+-	b.stats.TotalBytes -= history
+-	b.stats.HistoryBytes -= history
+-	b.stats.Generations--
+-	if frozen {
+-		b.stats.Sources--
+-	}
+-	if retired {
+-		b.stats.RetiredBytes -= history
+-	}
+-	b.releaseControlLocked()
+-	b.mu.Unlock()
+-}
++func (g *cowGeneration) drain() { r := COWRetirement{generation: g}; _ = r.DrainWithError() }
+ 
+ func cowReleaseOwners(owners []cowResourceOwner) {
+ 	for i := range owners {
+diff --git a/TreeDB/internal/memtable/cow_tree.go b/TreeDB/internal/memtable/cow_tree.go
+index bd50d7c87..eac252cf1 100644
+--- a/TreeDB/internal/memtable/cow_tree.go
++++ b/TreeDB/internal/memtable/cow_tree.go
+@@ -57,21 +57,7 @@ type COWRetirement struct {
+ 	viewLease  *cowViewReleaseLease
+ }
+ 
+-func (r *COWRetirement) Drain() {
+-	generation, prepared, lease := r.generation, r.prepared, r.viewLease
+-	r.generation, r.prepared, r.viewLease = nil, nil, nil
+-	if generation != nil {
+-		generation.drain()
+-	}
+-	generation = nil
+-	if prepared != nil {
+-		prepared.drain()
+-	}
+-	prepared = nil
+-	if lease != nil {
+-		lease.Close()
+-	}
+-}
++func (r *COWRetirement) Drain() { _ = r.DrainWithError() }
+ 
+ // COWWriter is deliberately not Table: Reset, arena borrowing/stealing, mutable
+ // iterators and legacy mode dispatch cannot accidentally reach this capability.
+@@ -313,6 +299,10 @@ type COWPrepared struct {
+ 	deferredBudget *COWBudget
+ 	deferredCharge uint64
+ 	drainClaimed   bool
++	drainDone      bool
++	drainError     error
++	drainIndex     int
++	drainCondition sync.Cond
+ }
+ 
+ func (p *COWPrepared) Charge() COWCharge { return p.charge }
+@@ -397,6 +387,12 @@ func (w *COWWriter) HasResource(id COWResourceID) bool {
+ // by Prepare; no append here can allocate. On refusal ownership stays with caller.
+ // The callback is executed once on cancellation or last generation release.
+ func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error {
++	return p.attachResourcesV6(ids, release, nil)
++}
++func (p *COWPrepared) AttachCheckedResourcesV6(ids []COWResourceID, provider COWResourceReleaseProviderV6) error {
++	return p.attachResourcesV6(ids, nil, provider)
++}
++func (p *COWPrepared) attachResourcesV6(ids []COWResourceID, release func(), provider COWResourceReleaseProviderV6) error {
+ 	w := p.writer
+ 	if w == nil {
+ 		return ErrCOWClosed
+@@ -406,7 +402,7 @@ func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error
+ 	if w.pending != p {
+ 		return ErrCOWClosed
+ 	}
+-	if len(ids) == 0 || release == nil {
++	if len(ids) == 0 || (release == nil && provider == nil) {
+ 		return fmt.Errorf("COW resource owner requires distinct identities and release")
+ 	}
+ 	if len(ids) > cap(p.ids)-len(p.ids) || len(p.owners) == cap(p.owners) {
+@@ -433,7 +429,7 @@ func (p *COWPrepared) AttachResources(ids []COWResourceID, release func()) error
+ 		}
+ 	}
+ 	p.ids = append(p.ids, ids...)
+-	p.owners = append(p.owners, cowResourceOwner{release: release})
++	p.owners = append(p.owners, cowResourceOwner{release: release, provider: provider})
+ 	return nil
+ }
+ 
+@@ -500,6 +496,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
+ 		// full staging charge and resource owners until callbacks finish.
+ 		deferred = p.charge.Temporary + p.charge.Resources
+ 		p.deferredBudget = b
++		p.drainCondition.L = &b.mu
+ 		p.deferredCharge = deferred
+ 		b.stats.DeferredBytes += deferred
+ 		b.stats.RetiredBytes += deferred
+@@ -520,26 +517,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
+ 	return r
+ }
+ 
+-func (p *COWPrepared) drain() {
+-	b := p.deferredBudget
+-	b.mu.Lock()
+-	if p.drainClaimed {
+-		b.mu.Unlock()
+-		return
+-	}
+-	p.drainClaimed = true
+-	b.mu.Unlock()
+-	cowReleaseOwners(p.owners)
+-	b.mu.Lock()
+-	charge := p.deferredCharge
+-	p.owners, p.deferredCharge = nil, 0
+-	p = nil
+-	b.stats.TotalBytes -= charge
+-	b.stats.DeferredBytes -= charge
+-	b.stats.RetiredBytes -= charge
+-	b.releaseControlLocked()
+-	b.mu.Unlock()
+-}
++func (p *COWPrepared) drain() { r := COWRetirement{prepared: p}; _ = r.DrainWithError() }
+ 
+ // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
+ // its complete successor cut and fresh writer before making this transition.
+diff --git a/TreeDB/internal/rootpublication/coordinator.go b/TreeDB/internal/rootpublication/coordinator.go
+index 17cec305a..4c6bc815c 100644
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -101,6 +101,8 @@ type Coordinator struct {
+ 	retryAttempt           PublishAttempt
+ 	reportingAttempt       bool
+ 	activeDispatch         uint64
++	nativeDispatchV6       uint64
++	nativePublicationsV6   *NativePublicationV6
+ 
+ 	resourceCoalesces    uint64
+ 	resourceConflicts    uint64
+@@ -354,6 +356,15 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
+ 			sets = append(sets, resources)
+ 		}
+ 	}
++	// Fenced native receipts have left pending, but their original physical
++	// resources remain recovery-reachable until SAME Finish consumes them.
++	for receipt := c.nativePublicationsV6; receipt != nil; receipt = receipt.next {
++		if receipt.fenced && receipt.candidate != nil {
++			if set := receipt.candidate.resourceSet(); set != nil && set.Owner() == ResourceOwnerCoordinator {
++				sets = append(sets, set)
++			}
++		}
++	}
+ 	sets = append(sets, c.recoverySets...)
+ 	var resources *StableResourceSet
+ 	if len(sets) != 0 {
+@@ -647,7 +658,20 @@ func (c *Coordinator) endDrain(target *drainRequest) {
+ // waits for the single scheduler goroutine. It does not silently claim pending
+ // debt was durable.
+ func (c *Coordinator) Stop(ctx context.Context) error {
++	// A caller-owned Finish may be idle between bounded calls. Join its SAME
++	// original receipt before stopping the scheduler, outside coordinator locks.
++	joinErr := c.JoinNativePublicationsV6(ctx)
+ 	c.mu.Lock()
++	// A hard physical refusal whose SAME original receipt has transferred to
++	// DB custody settles its join. Stop still excludes and joins the scheduler.
++	// An unsettled original call cannot be overtaken by terminal teardown.
++	if joinErr != nil && c.nativeDispatchV6 != 0 {
++		c.mu.Unlock()
++		return joinErr
++	}
++	if joinErr != nil {
++		c.stopErr = errors.Join(c.stopErr, joinErr)
++	}
+ 	if c.stopped {
+ 		err := c.stopErr
+ 		c.mu.Unlock()
+@@ -677,7 +701,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
+ 		}
+ 		if !c.stopped {
+ 			if len(c.pending) != 0 {
+-				c.stopErr = ErrPublicationStopped
++				c.stopErr = errors.Join(c.stopErr, ErrPublicationStopped)
+ 			}
+ 			c.captureRecoveryResourcesLocked()
+ 			c.stopped = true
+@@ -765,7 +789,7 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
+ 
+ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
+ 	c.mu.Lock()
+-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
++	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && !c.pendingNativeOwnedV6() && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+ 	if !ready {
+ 		c.mu.Unlock()
+ 		return false, primaryPublicationCompletionV6{}
+diff --git a/TreeDB/internal/rootpublication/pin_registry.go b/TreeDB/internal/rootpublication/pin_registry.go
+index eaf2664a0..ebf1e1f0c 100644
+--- a/TreeDB/internal/rootpublication/pin_registry.go
++++ b/TreeDB/internal/rootpublication/pin_registry.go
+@@ -3,6 +3,7 @@ package rootpublication
+ import (
+ 	"errors"
+ 	"fmt"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"os"
+ 	"strings"
+@@ -122,9 +123,12 @@ type IdentityDeleteLease struct {
+ 
+ // IdentityPin owns one registry reference and is safe to release repeatedly.
+ type IdentityPin struct {
+-	registry *IdentityPinRegistry
+-	identity StableIdentity
+-	once     sync.Once
++	registry     *IdentityPinRegistry
++	identity     StableIdentity
++	state        *identityPinState // SAME admitted state; its live pin prevents removal
++	releaseMu    sync.Mutex
++	released     bool
++	releaseError error
+ }
+ 
+ func NewIdentityPinRegistry() *IdentityPinRegistry {
+@@ -210,7 +214,7 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
+ 	}
+ 	state.pins++
+ 	registry.activePins++
+-	return &IdentityPin{registry: registry, identity: identity}, nil
++	return &IdentityPin{registry: registry, identity: identity, state: state}, nil
+ }
+ 
+ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
+@@ -239,12 +243,59 @@ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
+ 	return nil
+ }
+ 
+-func (pin *IdentityPin) Release() {
+-	if pin == nil || pin.registry == nil {
+-		return
++// ReleaseWithWorkV6 consumes only the original pin. An observed or nonlast
++// state has no outgoing metadata cleanup and is a literal constant-size edge.
++// Native last-idle cleanup remains an explicit pre-effect refusal until its
++// registry-table/metadata disposal stages are bound to this SAME pin.
++func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
++	if pin == nil {
++		return true, nil
++	}
++	pin.releaseMu.Lock()
++	defer pin.releaseMu.Unlock()
++	if pin.released {
++		return true, pin.releaseError
++	}
++	registry := pin.registry
++	if registry == nil {
++		pin.released = true
++		return true, nil
++	}
++	if w == nil {
++		pin.releaseError = registry.release(pin.identity)
++		pin.released = true
++		if pin.releaseError == nil {
++			pin.registry = nil
++			pin.state = nil
++		}
++		return true, pin.releaseError
++	}
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*pin))+2*uint64(unsafe.Sizeof(identityPinState{}))+128) {
++		return false, nil
++	}
++	registry.mu.Lock()
++	state := pin.state
++	if state == nil || state.pins == 0 {
++		registry.mu.Unlock()
++		return false, ErrUnbalancedResourcePin
++	}
++	if state.pins == 1 && state.observers == 0 && !state.deleting {
++		registry.mu.Unlock()
++		return false, retainedalloc.ErrWorkRequired
+ 	}
+-	pin.once.Do(func() { _ = pin.registry.release(pin.identity) })
++	state.pins--
++	registry.activePins--
++	if state.pins == 0 && state.zero != nil {
++		close(state.zero)
++		state.zero = nil
++	}
++	pin.released = true
++	pin.registry = nil
++	pin.state = nil
++	registry.mu.Unlock()
++	return true, nil
+ }
++func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
+ 
+ func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
+ 	identity, err := validateRegistryIdentity(identity)
+diff --git a/TreeDB/mvcc/versions.go b/TreeDB/mvcc/versions.go
+index bd38c23f2..2b87ebbc0 100644
+--- a/TreeDB/mvcc/versions.go
++++ b/TreeDB/mvcc/versions.go
+@@ -422,8 +422,10 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
+ 
+ // PruneOptions controls bounded physical deletion. BatchSize defaults to 256.
+ type PruneOptions struct {
+-	BatchSize int
+-	Mode      CommitMode
++	BatchSize              int
++	Mode                   CommitMode
++	WorkRecords, WorkBytes uint64
++	Cursor                 *PruneCursor
+ }
+ 
+ // PruneStats accounts for the snapshot scanned and successfully committed
+@@ -436,6 +438,9 @@ type PruneOptions struct {
+ // amplification). DeleteWriteBytes is the sum of TreeDB's delete-batch
+ // byte-size estimates.
+ type PruneStats struct {
++	Complete                           bool
++	WorkRecords, WorkBytes             uint64
++	Cursor                             *PruneCursor
+ 	Visited, Skipped, Retained, Pruned uint64
+ 	RetainedBytes, PrunedBytes         uint64
+ 	DeleteWriteBytes                   uint64
+@@ -449,6 +454,9 @@ type PruneStats struct {
+ // Durable mode re-syncs the floor before the first delete, so interruption and
+ // restart are idempotent and cannot recover pruned data without its floor.
+ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
++	if options.Cursor != nil || options.WorkRecords != 0 || options.WorkBytes != 0 {
++		return s.pruneNativeV6(options)
++	}
+ 	if options.Mode != CommitRelaxed && options.Mode != CommitDurable {
+ 		return stats, ErrInvalidCommitMode
+ 	}
