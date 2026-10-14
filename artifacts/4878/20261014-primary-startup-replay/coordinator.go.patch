@@ -1,0 +1,249 @@
+diff --git a/TreeDB/internal/rootpublication/coordinator.go b/TreeDB/internal/rootpublication/coordinator.go
+index 44e17a750..20b1bbcb7 100644
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -12,8 +12,11 @@ import (
+ )
+ 
+ type Options struct {
+-	Clock     Clock
+-	Publisher Publisher
++	// StartupSynchronous keeps the original scheduler dormant while startup
++	// replay drives the same owned publication attempt in the waiting caller.
++	StartupSynchronous bool
++	Clock              Clock
++	Publisher          Publisher
+ 	// FixedPublishDelay runs the normal coordinator contract with a fixed
+ 	// timer delay. Zero keeps the adaptive 20x-service-time policy. The fixed
+ 	// mode exists for deterministic safety-equivalent benchmark matrices.
+@@ -46,14 +49,15 @@ type drainRequest struct {
+ type Coordinator struct {
+ 	mu sync.Mutex
+ 
+-	clock             Clock
+-	publisher         Publisher
+-	fixedPublishDelay time.Duration
+-	ctx               context.Context
+-	cancel            context.CancelFunc
+-	wake              chan struct{}
+-	changed           chan struct{}
+-	done              chan struct{}
++	clock              Clock
++	publisher          Publisher
++	fixedPublishDelay  time.Duration
++	startupSynchronous bool
++	ctx                context.Context
++	cancel             context.CancelFunc
++	wake               chan struct{}
++	changed            chan struct{}
++	done               chan struct{}
+ 
+ 	pending         []pendingEntry
+ 	pendingBytes    uint64
+@@ -164,7 +168,7 @@ func New(options Options) (*Coordinator, error) {
+ 	}
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	c := &Coordinator{
+-		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, ctx: ctx, cancel: cancel,
++		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
+ 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
+ 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
+ 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
+@@ -444,6 +448,7 @@ func activateDurableRootGroup(group durableRootGroupExtension) error {
+ 
+ func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGeneration uint64) error {
+ 	for {
++		c.dispatchPublication(true)
+ 		c.mu.Lock()
+ 		if err := c.terminalErrorLocked(); err != nil {
+ 			c.mu.Unlock()
+@@ -494,6 +499,7 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
+ 	c.requestPublishLocked(WakeWaiter)
+ 	c.mu.Unlock()
+ 	c.signal()
++	c.dispatchPublication(true)
+ 	select {
+ 	case err := <-waiter.ch:
+ 		return err
+@@ -578,6 +584,7 @@ func (c *Coordinator) Drain(ctx context.Context) error {
+ 	c.signal()
+ 	defer c.endDrain(request)
+ 	for {
++		c.dispatchPublication(true)
+ 		c.mu.Lock()
+ 		if err := c.terminalErrorLocked(); err != nil {
+ 			c.mu.Unlock()
+@@ -692,9 +699,104 @@ func (c *Coordinator) Stats() Stats {
+ 	}
+ }
+ 
++// CompleteStartup switches the SAME coordinator to its normal scheduler only
++// after the caller has completed replay, visible state, tracking and appenders.
++// A failed or unfinished startup attempt cannot silently become ordinary debt.
++func (c *Coordinator) CompleteStartup() error {
++	c.mu.Lock()
++	if err := c.terminalErrorLocked(); err != nil {
++		c.mu.Unlock()
++		return err
++	}
++	if !c.startupSynchronous || c.publishing || c.activeBuilders != 0 || len(c.pending) != 0 {
++		c.mu.Unlock()
++		return ErrPublisherProtocol
++	}
++	c.startupSynchronous = false
++	c.notifyLocked()
++	c.mu.Unlock()
++	c.signal()
++	return nil
++}
++
++func (c *Coordinator) StartupSynchronous() bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.startupSynchronous
++}
++
++// dispatchPublication is the sole original Prepare/Publish/Report engine.
++// Startup and the normal scheduler own different execution contexts, while
++// preserving the same activeAttempt, candidate, physical owner and outcome.
++func (c *Coordinator) dispatchPublication(startup bool) bool {
++	c.mu.Lock()
++	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
++	if !ready {
++		c.mu.Unlock()
++		return false
++	}
++	groupSize := len(c.pending)
++	group := make([]*PreparedRootCandidate, groupSize)
++	for i := range group {
++		group[i] = c.pending[i].candidate
++	}
++	candidate, coalesceErr := coalesceCandidates(group)
++	if coalesceErr != nil {
++		c.resourceConflicts++
++		c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
++		c.failWaitersLocked(c.poison)
++		c.clearPublishRequestLocked()
++		c.captureRecoveryResourcesLocked()
++		c.notifyLocked()
++		c.mu.Unlock()
++		return true
++	}
++	c.recordPublishTriggerLocked(c.wakeReason)
++	c.publishNow = false
++	c.wakeReason = WakeNone
++	c.publishing = true
++	c.publishCalls++
++	if c.lastRetryableError != nil {
++		c.retries++
++	}
++	c.nextAttemptID++
++	attempt := PublishAttempt{
++		id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
++		drains: append([]*drainRequest(nil), c.drains...), started: c.clock.Now(),
++		waiters: append([]*durabilityWaiter(nil), c.waiters...),
++	}
++	c.activeAttempt = attempt
++	preparer, prepares := c.publisher.(PublisherPreparer)
++	if prepares {
++		c.preparing = true
++	}
++	c.mu.Unlock()
++	if prepares {
++		prepareErr := preparer.Prepare(c.ctx, candidate)
++		c.mu.Lock()
++		c.preparing = false
++		c.notifyLocked()
++		c.reportingAttempt = prepareErr != nil
++		c.mu.Unlock()
++		if prepareErr != nil {
++			_ = c.ReportPublishResult(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
++			return true
++		}
++	}
++	result := c.publisher.Publish(c.ctx, candidate)
++	c.mu.Lock()
++	c.reportingAttempt = true
++	c.mu.Unlock()
++	_ = c.ReportPublishResult(attempt, result)
++	return true
++}
++
+ func (c *Coordinator) run() {
+ 	defer close(c.done)
+ 	for {
++		if c.dispatchPublication(false) {
++			continue
++		}
+ 		c.mu.Lock()
+ 		if c.stopping {
+ 			c.mu.Unlock()
+@@ -702,67 +804,10 @@ func (c *Coordinator) run() {
+ 		}
+ 		var timerC <-chan time.Time
+ 		var timerGeneration uint64
+-		if c.timer != nil {
++		if !c.startupSynchronous && c.timer != nil {
+ 			timerC = c.timer.C()
+ 			timerGeneration = c.timerGeneration
+ 		}
+-		ready := c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+-		if ready {
+-			groupSize := len(c.pending)
+-			group := make([]*PreparedRootCandidate, groupSize)
+-			for i := range group {
+-				group[i] = c.pending[i].candidate
+-			}
+-			candidate, coalesceErr := coalesceCandidates(group)
+-			if coalesceErr != nil {
+-				c.resourceConflicts++
+-				c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
+-				c.failWaitersLocked(c.poison)
+-				c.clearPublishRequestLocked()
+-				c.captureRecoveryResourcesLocked()
+-				c.notifyLocked()
+-				c.mu.Unlock()
+-				continue
+-			}
+-			c.recordPublishTriggerLocked(c.wakeReason)
+-			c.publishNow = false
+-			c.wakeReason = WakeNone
+-			c.publishing = true
+-			c.publishCalls++
+-			if c.lastRetryableError != nil {
+-				c.retries++
+-			}
+-			c.nextAttemptID++
+-			attempt := PublishAttempt{
+-				id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
+-				drains: append([]*drainRequest(nil), c.drains...), started: c.clock.Now(),
+-				waiters: append([]*durabilityWaiter(nil), c.waiters...),
+-			}
+-			c.activeAttempt = attempt
+-			preparer, prepares := c.publisher.(PublisherPreparer)
+-			if prepares {
+-				c.preparing = true
+-			}
+-			c.mu.Unlock()
+-			if prepares {
+-				prepareErr := preparer.Prepare(c.ctx, candidate)
+-				c.mu.Lock()
+-				c.preparing = false
+-				c.notifyLocked()
+-				c.reportingAttempt = prepareErr != nil
+-				c.mu.Unlock()
+-				if prepareErr != nil {
+-					_ = c.ReportPublishResult(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
+-					continue
+-				}
+-			}
+-			result := c.publisher.Publish(c.ctx, candidate)
+-			c.mu.Lock()
+-			c.reportingAttempt = true
+-			c.mu.Unlock()
+-			_ = c.ReportPublishResult(attempt, result)
+-			continue
+-		}
+ 		c.mu.Unlock()
+ 		select {
+ 		case <-c.ctx.Done():

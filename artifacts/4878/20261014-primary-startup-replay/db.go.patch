@@ -1,0 +1,99 @@
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 9c66a10b1..e11c9a3be 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -2781,6 +2781,26 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error)
+ 	}
+ 	db.seedEntryRevisionFloor()
+ 
++	// PRIMARY replay must use the original constructed transaction and PRIMARY
++	// seal. Keep its SAME coordinator synchronous until post-replay readiness;
++	// the DATA-only pre-coordinator publisher cannot encode a PRIMARY parent.
++	if gen.primary != nil && gen.primary.CapsuleFormatV6() {
++		if opts.IndexOuterLeavesInValueLog {
++			manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
++			if err == nil && !selectedExact {
++				manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
++			}
++			if err != nil {
++				return nil, err
++			}
++			db.leafGenerationManifest = manifest
++		}
++		db.initializeRecoveredSnapshotV1(gen, vm)
++		if err := db.initializeRootPublicationRuntimeModeV1(gen, true); err != nil {
++			return nil, err
++		}
++	}
++
+ 	segments, err := listRecoverySegments(opts.Dir)
+ 	if err != nil {
+ 		return nil, err
+@@ -2924,23 +2944,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error)
+ 		db.leafGenerationManifest = manifest
+ 	}
+ 
+-	// Initialize State after recovery so log cleanup can proceed without pinning.
+-	initialState := &DBState{
+-		primaryRoot:                db.primaryCurrentRootV5(),
+-		CommitSeq:                  db.meta.CommitSeq,
+-		RootPageID:                 db.meta.UserRootPageID,
+-		SystemRootPageID:           db.meta.SystemRootPageID,
+-		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+-		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
+-		ValueLogSet:                vm.CurrentSetNoRefresh(),
+-		LeafGenerations:            db.currentLeafGenerationView(),
+-		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+-	}
+-	oldInitialState := db.state.Swap(initialState)
+-	db.publishSnapshotView(gen, initialState, vm)
+-	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
+-		_ = vm.Release(oldInitialState.ValueLogSet)
+-	}
++	// Replay may already have installed visible states through the SAME
++	// synchronous PRIMARY coordinator; publish the final selected state here.
++	db.initializeRecoveredSnapshotV1(gen, vm)
+ 	if err := db.initValueLogRefTracker(); err != nil {
+ 		return nil, err
+ 	}
+@@ -2952,7 +2958,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error)
+ 	// Recovery, replay, the visible snapshot, reachability tracking, and any
+ 	// command-WAL appender must all name the same root before asynchronous root
+ 	// publication can admit its first builder.
+-	if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
++	if db.rootPublication == nil {
++		if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
++			return nil, err
++		}
++	} else if err := db.rootPublication.coordinator.CompleteStartup(); err != nil {
+ 		return nil, err
+ 	}
+ 	// Replay handlers may restore derived state that must become durable before
+@@ -2994,6 +3004,27 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error)
+ 	return db, nil
+ }
+ 
++// initializeRecoveredSnapshotV1 publishes the exact selected startup frontier.
++// The existing state owner releases its prior Set only after the new view is visible.
++func (db *DB) initializeRecoveredSnapshotV1(gen *indexGen, vm *valuelog.Manager) {
++	initialState := &DBState{
++		primaryRoot:                db.primaryCurrentRootV5(),
++		CommitSeq:                  db.meta.CommitSeq,
++		RootPageID:                 db.meta.UserRootPageID,
++		SystemRootPageID:           db.meta.SystemRootPageID,
++		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
++		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
++		ValueLogSet:                vm.CurrentSetNoRefresh(),
++		LeafGenerations:            db.currentLeafGenerationView(),
++		LeafGenerationStateVersion: db.leafGenerationStateVersion,
++	}
++	oldInitialState := db.state.Swap(initialState)
++	db.publishSnapshotView(gen, initialState, vm)
++	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
++		_ = vm.Release(oldInitialState.ValueLogSet)
++	}
++}
++
+ func (db *DB) acceptingCloseHooksLocked() bool {
+ 	return db != nil && !db.closeHooksClosed && !db.closing.Load()
+ }

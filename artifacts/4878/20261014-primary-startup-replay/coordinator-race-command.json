@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-race",
+    "./TreeDB/internal/rootpublication",
+    "-run",
+    "^Test(StartupReplay|Enqueue|Wait|Drain|Stop|Timer|Retry|Publish|Hard)",
+    "-count=1"
+  ]
+}

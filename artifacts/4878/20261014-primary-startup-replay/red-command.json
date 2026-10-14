@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "./TreeDB",
+    "-run",
+    "^TestCOWPublicCrashAcknowledgedSyncReopen$/command_wal_durable$",
+    "-count=1",
+    "-v"
+  ],
+  "db_sha256": "b5765114bdf8766d6f93a732c46a28ca42bd49b1dd7aace62a9c06450e37630c"
+}

@@ -1,0 +1,177 @@
+[
+  {
+    "path": "README.md",
+    "sha256": "c34189c4a66666511e3fe7797c04c70901f8eb9653ea8f5ea4c67177d4d66146",
+    "bytes": 1410
+  },
+  {
+    "path": "baseline/TreeDB/db/db.go",
+    "sha256": "b5765114bdf8766d6f93a732c46a28ca42bd49b1dd7aace62a9c06450e37630c",
+    "bytes": 208025
+  },
+  {
+    "path": "baseline/TreeDB/db/root_publication_activation.go",
+    "sha256": "68e0c7075584f3df5dd5695656095f1d429866da7404ed7503d81ec81b5005b5",
+    "bytes": 78179
+  },
+  {
+    "path": "baseline/TreeDB/internal/rootpublication/coordinator.go",
+    "sha256": "eb706b95fa57037447dd3810d20507db92bb51943c3a8723a6b240d04bf5eb76",
+    "bytes": 42879
+  },
+  {
+    "path": "before-db.go",
+    "sha256": "b5765114bdf8766d6f93a732c46a28ca42bd49b1dd7aace62a9c06450e37630c",
+    "bytes": 208025
+  },
+  {
+    "path": "candidate-command.json",
+    "sha256": "307d9263082a098182d222c17b244667f032202973b871ae8f039d1fab6f1d79",
+    "bytes": 283
+  },
+  {
+    "path": "candidate-exit.json",
+    "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17",
+    "bytes": 17
+  },
+  {
+    "path": "candidate.log",
+    "sha256": "1bc4a12168cb6a5f8518c52d7c996b4a77cd13c41f4ef63c902ed6a6672c7598",
+    "bytes": 96460
+  },
+  {
+    "path": "construction-prerequisites/TreeDB/caching/native_mvcc_prune_v6.go",
+    "sha256": "93e84d64108c124474ef973e72e216f5ce4dbdae74e6e505027e9e7d17b8bd93",
+    "bytes": 6160
+  },
+  {
+    "path": "construction-prerequisites/TreeDB/native_mvcc_prune.go",
+    "sha256": "be312742e1f3b1eb94e88237951ea33e0237c8482214ec5f4bcd34debd7d830f",
+    "bytes": 1695
+  },
+  {
+    "path": "coordinator-normal-command.json",
+    "sha256": "a125cf3822dd70d2f18953a87d2c946a7b063631c35178775f47151e31b754b2",
+    "bytes": 304
+  },
+  {
+    "path": "coordinator-normal-exit.json",
+    "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17",
+    "bytes": 17
+  },
+  {
+    "path": "coordinator-normal.log",
+    "sha256": "a9be5790a101c49ba40b1211f51b186abfcdea442bc6541466cc77d24095bd01",
+    "bytes": 68
+  },
+  {
+    "path": "coordinator-race-command.json",
+    "sha256": "3f369d9497e1ef06387af0d185d52b408166d3237bc255f87f45f5b59cb40e1e",
+    "bytes": 317
+  },
+  {
+    "path": "coordinator-race-exit.json",
+    "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17",
+    "bytes": 17
+  },
+  {
+    "path": "coordinator-race.log",
+    "sha256": "ecac4537464dac483162e5759bd64e408a511d21f7004311be3d80f03f15606b",
+    "bytes": 68
+  },
+  {
+    "path": "coordinator.go.patch",
+    "sha256": "2777a04a712282301c8fa7c349c4f48effdb5ce647e3088a3ed33635f817af9f",
+    "bytes": 8232
+  },
+  {
+    "path": "db.go.patch",
+    "sha256": "090a990a18419bae190f74b2c46c146e519ce2754dfcf3d7aea9cdde9205a0e7",
+    "bytes": 4457
+  },
+  {
+    "path": "frozen/TreeDB/db/db.go",
+    "sha256": "cdce6aa3eba831860ae32c4439acce10591c993b7c835bc0a5d114b53cad10ab",
+    "bytes": 209355
+  },
+  {
+    "path": "frozen/TreeDB/db/root_publication_activation.go",
+    "sha256": "f444b8c7bb641f9e77b57b35744dadae487395d773c4826a197809e07ee031f5",
+    "bytes": 78675
+  },
+  {
+    "path": "frozen/TreeDB/internal/rootpublication/coordinator.go",
+    "sha256": "04ad1e72b0c77bf6313869fd27834bf34b50a95e95dc3919f6dfe1ed51c75eeb",
+    "bytes": 44334
+  },
+  {
+    "path": "frozen/TreeDB/internal/rootpublication/coordinator_startup_replay_test.go",
+    "sha256": "2001b375fe21d4299319c941bb1630bd4252d2de20092a65a9317ce13c5c2b6e",
+    "bytes": 3690
+  },
+  {
+    "path": "public-normal-command.json",
+    "sha256": "6336bf41c4953aa0bbfd239b6c961ebfd2f02f15d19e292ddf7e039839d5d8c6",
+    "bytes": 376
+  },
+  {
+    "path": "public-normal-exit.json",
+    "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17",
+    "bytes": 17
+  },
+  {
+    "path": "public-normal.log",
+    "sha256": "aaff06d5299d186cfc1cea96001cda1a758e62a41474ae1902852a43f55d19b9",
+    "bytes": 43
+  },
+  {
+    "path": "public-race-command.json",
+    "sha256": "fcfe781de100dc2847dbceffeeaff56b1518e4e9f224c937937cd6eeb7408c36",
+    "bytes": 389
+  },
+  {
+    "path": "public-race-exit.json",
+    "sha256": "e89df0eae5ec7db81135aed16463968955c578bcc4f2ec43172eff351f080c17",
+    "bytes": 17
+  },
+  {
+    "path": "public-race.log",
+    "sha256": "f086d5760811e51b52621dd164d941caee70f24eb52d1b53876f3e898911cec0",
+    "bytes": 44
+  },
+  {
+    "path": "red-command.json",
+    "sha256": "72e3441455ca4a0d8875a5e96a1a75d9eac4cdc144ea37d5b98bafcaecc56205",
+    "bytes": 366
+  },
+  {
+    "path": "red-exit.json",
+    "sha256": "5cc319f54b05a38799195a491c303aa686eab7caccfdbbf1e8b8c07405cb7392",
+    "bytes": 17
+  },
+  {
+    "path": "red.log",
+    "sha256": "1e368fab9f852e5594fe19bf09088b49c19b2ab9110edf017c7798d67f5c08fe",
+    "bytes": 96625
+  },
+  {
+    "path": "root_publication_activation.go.patch",
+    "sha256": "f92a9c6784da7359c0abc1cc2e37c0f4a31c57b95e06f6939e9be152d3f1e519",
+    "bytes": 2637
+  },
+  {
+    "path": "shared-manifest.json",
+    "sha256": "c6803312c22ffced10146d9edd1ab777556a0d9137982b89fb5e37f5c874d319",
+    "bytes": 4374
+  },
+  {
+    "path": "source-after-race.json",
+    "sha256": "fc1c7d353dc23a9c7135557c3e9de0e4dc340cd1df145f16bdb81b7d67398581",
+    "bytes": 541391
+  },
+  {
+    "path": "source-before-race.json",
+    "sha256": "fc1c7d353dc23a9c7135557c3e9de0e4dc340cd1df145f16bdb81b7d67398581",
+    "bytes": 541391
+  }
+]

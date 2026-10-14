@@ -1,0 +1,140 @@
+{
+  "status": "CONSTRUCTION ONLY; startup source controls qualified; total native4878 and all19 remain OPEN",
+  "base_commit": "4a32120c793c2a6ab38eb6b89bcf26d59d873659",
+  "imports": [
+    {
+      "path": "TreeDB/db/db.go",
+      "before_sha256": "b5765114bdf8766d6f93a732c46a28ca42bd49b1dd7aace62a9c06450e37630c",
+      "after_sha256": "cdce6aa3eba831860ae32c4439acce10591c993b7c835bc0a5d114b53cad10ab",
+      "bytes": 209355
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "before_sha256": "68e0c7075584f3df5dd5695656095f1d429866da7404ed7503d81ec81b5005b5",
+      "after_sha256": "f444b8c7bb641f9e77b57b35744dadae487395d773c4826a197809e07ee031f5",
+      "bytes": 78675
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "before_sha256": "eb706b95fa57037447dd3810d20507db92bb51943c3a8723a6b240d04bf5eb76",
+      "after_sha256": "04ad1e72b0c77bf6313869fd27834bf34b50a95e95dc3919f6dfe1ed51c75eeb",
+      "bytes": 44334
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_startup_replay_test.go",
+      "before_sha256": null,
+      "after_sha256": "2001b375fe21d4299319c941bb1630bd4252d2de20092a65a9317ce13c5c2b6e",
+      "bytes": 3690
+    }
+  ],
+  "excluded_public_prerequisites": [
+    "TreeDB/caching/native_mvcc_prune_v6.go",
+    "TreeDB/native_mvcc_prune.go"
+  ],
+  "commands": {
+    "red": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublicCrashAcknowledgedSyncReopen$/command_wal_durable$",
+        "-count=1",
+        "-v"
+      ],
+      "db_sha256": "b5765114bdf8766d6f93a732c46a28ca42bd49b1dd7aace62a9c06450e37630c"
+    },
+    "candidate": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublicCrashAcknowledgedSyncReopen$/command_wal_durable$",
+        "-count=1",
+        "-v"
+      ]
+    },
+    "public-normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublic(CrashAcknowledgedSyncReopen|CrashRelaxedOrdinaryReopen|EncodedMVCCPointsGroupsPhysicalDeleteReplay|ModeledInterruptedDependencyAndRootPublicationCuts)$",
+        "-count=1"
+      ]
+    },
+    "coordinator-normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^Test(StartupReplay|Enqueue|Wait|Drain|Stop|Timer|Retry|Publish|Hard)",
+        "-count=1"
+      ]
+    },
+    "public-race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "-race",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublic(CrashAcknowledgedSyncReopen|CrashRelaxedOrdinaryReopen|EncodedMVCCPointsGroupsPhysicalDeleteReplay|ModeledInterruptedDependencyAndRootPublicationCuts)$",
+        "-count=1"
+      ]
+    },
+    "coordinator-race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "-mod=readonly",
+        "-race",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^Test(StartupReplay|Enqueue|Wait|Drain|Stop|Timer|Retry|Publish|Hard)",
+        "-count=1"
+      ]
+    }
+  },
+  "exits": {
+    "red": {
+      "exit_code": 1
+    },
+    "candidate": {
+      "exit_code": 0
+    },
+    "public-normal": {
+      "exit_code": 0
+    },
+    "coordinator-normal": {
+      "exit_code": 0
+    },
+    "public-race": {
+      "exit_code": 0
+    },
+    "coordinator-race": {
+      "exit_code": 0
+    }
+  },
+  "reconstruction": "Checkout base_commit; apply frozen imports and construction-prerequisites. Two foreign zstd diagnostics remain protected and bind prior 4a/87ff retained exact copies; do not stage or overwrite them."
+}

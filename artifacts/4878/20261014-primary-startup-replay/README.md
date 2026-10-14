@@ -1,0 +1,7 @@
+# Canonical PRIMARY startup replay construction checkpoint
+
+The original acknowledged crash/reopen control fails before the patch with `durable root record V1 format invalid`. Startup replay now uses the original PRIMARY constructor, seal, Coordinator and publication attempt. The existing asynchronous scheduling engine is factored once; synchronous startup waits drive exactly that engine and preserve activeAttempt/resource custody. Startup restores the selected manifest and visible snapshot before replay. The original post-replay snapshot/tracker/appender boundary enables the same normal coordinator only after unfinished debt/builders are absent. No validator/format change.
+
+Original crash/reopen, relaxed, encoded-MVCC and interrupted physical cuts pass normal/race. New coordinator controls cover dormant asynchronous scheduler, failed Prepare retained original resource, unfinished activation refusal, Drain retry, normal scheduler transition and Stop recovery handoff. These are scoped startup controls; shared Finish containing ordering, total native public ABI/77f14 fixture/all19/cost/platform remain OPEN.
+
+`shared-manifest.json` records exact argv/exit and source import allowlist. Full source census is identical before/after race. Dirty public constructor prerequisites are frozen separately for replayability, excluded from production imports/staging. Existing public tests are unchanged.
