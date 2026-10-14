@@ -1,0 +1,5 @@
+--- FAIL: TestSnapshotAllocationAdmissionRefusesRefreshedExactView (0.04s)
+    snapshot_cleanup_completion_test.go:243: retired view resurrected after admission: snapshot=0x2a390c8a7608 err=<nil> originalSetRefs=1
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.038s
+FAIL

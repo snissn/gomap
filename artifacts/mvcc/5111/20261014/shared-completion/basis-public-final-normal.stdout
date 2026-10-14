@@ -1,0 +1,181 @@
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator (0.20s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA (0.08s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY (0.11s)
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/DATA
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY
+--- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose (0.13s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/DATA (0.07s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY (0.06s)
+=== RUN   TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt
+--- PASS: TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt (0.06s)
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator (0.15s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA (0.06s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY (0.09s)
+=== RUN   TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases
+--- PASS: TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases (0.12s)
+=== RUN   TestCOWSuccessorCapturedSourcesPrecedenceAndPressure
+--- PASS: TestCOWSuccessorCapturedSourcesPrecedenceAndPressure (0.13s)
+=== RUN   TestCOWSuccessorPointerOwnershipRefusalRetry
+--- PASS: TestCOWSuccessorPointerOwnershipRefusalRetry (0.15s)
+=== RUN   TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease
+--- PASS: TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease (0.09s)
+=== RUN   TestCOWReadPressurePreservesCapacityError
+--- PASS: TestCOWReadPressurePreservesCapacityError (0.10s)
+=== RUN   TestCOWSnapshotIteratorWrapperAdmissionAndLifetime
+--- PASS: TestCOWSnapshotIteratorWrapperAdmissionAndLifetime (0.09s)
+=== RUN   TestCOWCursorDeniedWrapperDoesNotAllocate
+--- PASS: TestCOWCursorDeniedWrapperDoesNotAllocate (0.08s)
+=== RUN   TestCOWPointerImmediatePointAndIteratorOldCut
+--- PASS: TestCOWPointerImmediatePointAndIteratorOldCut (0.08s)
+=== RUN   TestCOWPointerCheckpointCapturedBasisAndTombstones
+--- PASS: TestCOWPointerCheckpointCapturedBasisAndTombstones (0.09s)
+=== RUN   TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry
+--- PASS: TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry (0.08s)
+=== RUN   TestCOWViewCallbacksOutsideReadLocksAndClosedEmptyRoutes
+--- PASS: TestCOWViewCallbacksOutsideReadLocksAndClosedEmptyRoutes (0.08s)
+=== RUN   TestCOWReadAdapterCursorOwnsOldRoot
+--- PASS: TestCOWReadAdapterCursorOwnsOldRoot (0.00s)
+=== RUN   TestCOWReadAdapterRefusesReverseAndCallback
+--- PASS: TestCOWReadAdapterRefusesReverseAndCallback (0.00s)
+=== RUN   TestCOWReadAdapterMovementCloseRace
+--- PASS: TestCOWReadAdapterMovementCloseRace (0.00s)
+=== RUN   TestGetMany_MemtablePointerValues_DefensiveCopyAndCapacityCapped
+--- PASS: TestGetMany_MemtablePointerValues_DefensiveCopyAndCapacityCapped (0.07s)
+=== RUN   TestGetManyViewBypassUsesBackendView
+--- PASS: TestGetManyViewBypassUsesBackendView (0.00s)
+=== RUN   TestGetManyViewBackendFallbackUsesBackendView
+--- PASS: TestGetManyViewBackendFallbackUsesBackendView (0.00s)
+=== RUN   TestSeekGEExactMVCCRangeKeepsSyntheticLowerBoundOnLogicalShard
+--- PASS: TestSeekGEExactMVCCRangeKeepsSyntheticLowerBoundOnLogicalShard (0.05s)
+=== RUN   TestSeekGEExactMVCCRangeDoesNotHideMalformedSuffix
+--- PASS: TestSeekGEExactMVCCRangeDoesNotHideMalformedSuffix (0.04s)
+=== RUN   TestSeekGEExactMVCCRangeDoesNotHideOversizedMalformedSuffix
+--- PASS: TestSeekGEExactMVCCRangeDoesNotHideOversizedMalformedSuffix (0.01s)
+=== RUN   TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence
+=== RUN   TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence/hit
+=== RUN   TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence/physical_tombstone
+--- PASS: TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence (0.10s)
+    --- PASS: TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence/hit (0.05s)
+    --- PASS: TestSeekGEExactMVCCRangeUsesSameShardImmutablePrecedence/physical_tombstone (0.05s)
+=== RUN   TestSeekGEExactMVCCRangeFallsBackForRangeSpans
+--- PASS: TestSeekGEExactMVCCRangeFallsBackForRangeSpans (0.00s)
+=== RUN   TestSeekGEExactMVCCRangeUsesShardLocalInMemorySources
+--- PASS: TestSeekGEExactMVCCRangeUsesShardLocalInMemorySources (0.65s)
+=== RUN   TestGetMany_ConsultsOnlyTouchedPublishedRootPointShards
+--- PASS: TestGetMany_ConsultsOnlyTouchedPublishedRootPointShards (0.00s)
+=== RUN   TestGetMany_DedupesRepeatedKeysWithinShard
+--- PASS: TestGetMany_DedupesRepeatedKeysWithinShard (0.00s)
+=== RUN   TestGetMany_UsesPublishedRootPointShardsAsAuthority
+--- PASS: TestGetMany_UsesPublishedRootPointShardsAsAuthority (0.00s)
+=== RUN   TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing
+--- PASS: TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing (0.00s)
+=== RUN   TestGetMany_UsesPointProbesWhenTablePrefersSparseSortedRefs
+--- PASS: TestGetMany_UsesPointProbesWhenTablePrefersSparseSortedRefs (0.00s)
+=== RUN   TestGetMany_DuplicateMissesCollapseToSingleBackendKey
+--- PASS: TestGetMany_DuplicateMissesCollapseToSingleBackendKey (0.00s)
+=== RUN   TestSeekGE_RawPhysicalDeleteCounterexample
+--- PASS: TestSeekGE_RawPhysicalDeleteCounterexample (0.05s)
+=== RUN   TestSeekGEVersionRange_RotationPartialPublication
+--- PASS: TestSeekGEVersionRange_RotationPartialPublication (0.05s)
+=== RUN   TestSeekGEVersionRange_SameTimestampRetainedBytes
+=== RUN   TestSeekGEVersionRange_SameTimestampRetainedBytes/skiplist
+=== RUN   TestSeekGEVersionRange_SameTimestampRetainedBytes/btree
+=== RUN   TestSeekGEVersionRange_SameTimestampRetainedBytes/hash_sorted
+=== RUN   TestSeekGEVersionRange_SameTimestampRetainedBytes/append_only
+--- PASS: TestSeekGEVersionRange_SameTimestampRetainedBytes (0.29s)
+    --- PASS: TestSeekGEVersionRange_SameTimestampRetainedBytes/skiplist (0.05s)
+    --- PASS: TestSeekGEVersionRange_SameTimestampRetainedBytes/btree (0.05s)
+    --- PASS: TestSeekGEVersionRange_SameTimestampRetainedBytes/hash_sorted (0.07s)
+    --- PASS: TestSeekGEVersionRange_SameTimestampRetainedBytes/append_only (0.11s)
+=== RUN   TestSeekGEVersionRange_PhysicalDeleteRetriesFreshView
+--- PASS: TestSeekGEVersionRange_PhysicalDeleteRetriesFreshView (0.05s)
+=== RUN   TestSeekGEVersionRange_ConcurrentReaders
+--- PASS: TestSeekGEVersionRange_ConcurrentReaders (0.05s)
+=== RUN   TestSeekGEVersionRange_AdmittedWriterCannotInsertIntoRotatedGeneration
+--- PASS: TestSeekGEVersionRange_AdmittedWriterCannotInsertIntoRotatedGeneration (0.08s)
+=== RUN   TestSeekGEVersionRange_FallbackExclusive
+=== RUN   TestSeekGEVersionRange_FallbackExclusive/noncanonical
+=== RUN   TestSeekGEVersionRange_FallbackExclusive/range-span
+--- PASS: TestSeekGEVersionRange_FallbackExclusive (0.10s)
+    --- PASS: TestSeekGEVersionRange_FallbackExclusive/noncanonical (0.05s)
+    --- PASS: TestSeekGEVersionRange_FallbackExclusive/range-span (0.05s)
+=== RUN   TestSeekGE_GenericKeepsExclusiveGate
+--- PASS: TestSeekGE_GenericKeepsExclusiveGate (0.05s)
+=== RUN   TestSeekGEVersionRange_AllowsPointWriterDuringBackendAcquire
+--- PASS: TestSeekGEVersionRange_AllowsPointWriterDuringBackendAcquire (0.04s)
+=== RUN   TestSeekGEVersionRange_PruneRequiresStoreFence
+    point_successor_mvcc_test.go:509: unfenced prune returned retained live40 after backend tomb80 deletion: key=005444424d564343016f6e652d6b65790000ffffffffffffffd7 value=016f6c64
+--- PASS: TestSeekGEVersionRange_PruneRequiresStoreFence (0.07s)
+=== RUN   TestSeekGE_SourcePrecedenceTombstonesAndBounds
+--- PASS: TestSeekGE_SourcePrecedenceTombstonesAndBounds (0.06s)
+=== RUN   TestSeekGE_SourceCountersSpanTombstoneRounds
+--- PASS: TestSeekGE_SourceCountersSpanTombstoneRounds (0.04s)
+=== RUN   TestSeekGE_SourceCountersSkipDisjointNilBackend
+--- PASS: TestSeekGE_SourceCountersSkipDisjointNilBackend (0.05s)
+=== RUN   TestSeekGE_NewerRangeSpanMasksOlderCandidate
+--- PASS: TestSeekGE_NewerRangeSpanMasksOlderCandidate (0.04s)
+=== RUN   TestSeekGE_DoesNotRotateOrCreateGeneralIterator
+--- PASS: TestSeekGE_DoesNotRotateOrCreateGeneralIterator (0.04s)
+=== RUN   TestSeekGE_ReturnsOwnedBytes
+--- PASS: TestSeekGE_ReturnsOwnedBytes (0.04s)
+=== RUN   TestSeekGE_CompetingVersionsAcrossMutableQueuedAndPublishedSources
+--- PASS: TestSeekGE_CompetingVersionsAcrossMutableQueuedAndPublishedSources (0.08s)
+=== RUN   TestSeekGE_AttributionPartitionsWinningSource
+--- PASS: TestSeekGE_AttributionPartitionsWinningSource (0.11s)
+=== RUN   TestSeekGE_TimingAttributionIsOptIn
+--- PASS: TestSeekGE_TimingAttributionIsOptIn (0.04s)
+=== RUN   TestSeekGE_FlushPublicationPreservesAnswer
+--- PASS: TestSeekGE_FlushPublicationPreservesAnswer (0.05s)
+=== RUN   TestSeekGE_ConcurrentCommitSnapshotIsCoherent
+--- PASS: TestSeekGE_ConcurrentCommitSnapshotIsCoherent (0.04s)
+=== RUN   TestSeekGE_AfterCloseFailsClosed
+--- PASS: TestSeekGE_AfterCloseFailsClosed (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	4.079s
+=== RUN   TestGetMany_RetriesAfterRefreshingStaleValueLogSet
+--- PASS: TestGetMany_RetriesAfterRefreshingStaleValueLogSet (0.10s)
+=== RUN   TestGetMany_OrderMissingEmptyAndDefensiveCopy
+--- PASS: TestGetMany_OrderMissingEmptyAndDefensiveCopy (0.08s)
+=== RUN   TestGetMany_ValueSlicesAreCapacityCapped
+--- PASS: TestGetMany_ValueSlicesAreCapacityCapped (0.09s)
+=== RUN   TestGetMany_ParallelPath_OrderMissingEmptyAndDefensiveCopy
+--- PASS: TestGetMany_ParallelPath_OrderMissingEmptyAndDefensiveCopy (0.43s)
+=== RUN   TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry
+--- PASS: TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry (0.04s)
+=== RUN   TestSnapshotAllocationAdmissionFixedCohortPressure
+--- PASS: TestSnapshotAllocationAdmissionFixedCohortPressure (0.13s)
+=== RUN   TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet
+--- PASS: TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet (0.00s)
+=== RUN   TestSnapshotCleanupCompletionSharesOriginalFinalReader
+--- PASS: TestSnapshotCleanupCompletionSharesOriginalFinalReader (0.06s)
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed
+--- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal (0.11s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running (0.06s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed (0.05s)
+=== RUN   TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError
+--- PASS: TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError (0.07s)
+=== RUN   TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors
+--- PASS: TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors (0.11s)
+=== RUN   TestSnapshotAllocationAdmissionRefusesRefreshedExactView
+--- PASS: TestSnapshotAllocationAdmissionRefusesRefreshedExactView (0.08s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.283s
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed
+--- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion (0.00s)
+    --- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed (0.00s)
+    --- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed (0.00s)
+=== RUN   TestOriginalCleanupCustodyOverflowRefusesBeforeEffects
+--- PASS: TestOriginalCleanupCustodyOverflowRefusesBeforeEffects (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s

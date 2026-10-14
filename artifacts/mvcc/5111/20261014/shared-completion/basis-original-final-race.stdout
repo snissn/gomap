@@ -1,0 +1,7 @@
+=== RUN   TestCOWBasisOriginalLastPhysicalCloseRetainsBasisCapacity
+    cow_cut_test.go:341: actual failed PRIMARY and basis capacity after outer close: {TotalBytes:193056 HistoryBytes:0 ReservedBytes:192800 RetiredBytes:0 PeakBytes:242624 ControlBytes:256 DeferredBytes:0 ExternalBytes:192800 Views:0 Generations:0 Sources:0 ExternalLeases:3}
+--- PASS: TestCOWBasisOriginalLastPhysicalCloseRetainsBasisCapacity (0.08s)
+=== RUN   TestCOWPublicGetManyViewReportsOriginalBasisCleanup
+--- PASS: TestCOWPublicGetManyViewReportsOriginalBasisCleanup (0.06s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.143s

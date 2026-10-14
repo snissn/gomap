@@ -1,0 +1,154 @@
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator (0.11s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA (0.05s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY (0.06s)
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/DATA
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY
+--- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose (0.07s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/DATA (0.03s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY (0.04s)
+=== RUN   TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt
+--- PASS: TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt (0.05s)
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator (0.06s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA (0.03s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY (0.04s)
+=== RUN   TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases
+--- PASS: TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases (0.06s)
+=== RUN   TestCOWEmptyBasisIteratorNeedsNoReadWorkspace
+--- PASS: TestCOWEmptyBasisIteratorNeedsNoReadWorkspace (0.07s)
+=== RUN   TestCOWEmptyShardIteratorDiskTombstoneAndOldCut
+--- PASS: TestCOWEmptyShardIteratorDiskTombstoneAndOldCut (0.12s)
+=== RUN   TestCOWCutPrivatePrepareDoesNotBlockOrMixReaders
+--- PASS: TestCOWCutPrivatePrepareDoesNotBlockOrMixReaders (0.05s)
+=== RUN   TestCOWCutCancelledResourcesDrainOutsideWriter
+--- PASS: TestCOWCutCancelledResourcesDrainOutsideWriter (0.05s)
+=== RUN   TestCOWCutPublicationCaptureCloseRace
+--- PASS: TestCOWCutPublicationCaptureCloseRace (0.07s)
+=== RUN   TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease
+--- PASS: TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease (0.08s)
+=== RUN   TestCOWSnapshotIteratorWrapperAdmissionAndLifetime
+--- PASS: TestCOWSnapshotIteratorWrapperAdmissionAndLifetime (0.05s)
+=== RUN   TestCOWCursorDeniedWrapperDoesNotAllocate
+--- PASS: TestCOWCursorDeniedWrapperDoesNotAllocate (0.05s)
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=1
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=2
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=3
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=1
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=2
+=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=3
+--- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner (0.53s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=1 (0.08s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=2 (0.09s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=false/stage=3 (0.08s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=1 (0.09s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=2 (0.10s)
+    --- PASS: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=3 (0.09s)
+=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership
+=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership/pointer=false/publish=false
+=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership/pointer=false/publish=true
+=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=false
+=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=true
+--- PASS: TestCOWDictionaryCleanupPrivateCutOwnership (0.41s)
+    --- PASS: TestCOWDictionaryCleanupPrivateCutOwnership/pointer=false/publish=false (0.09s)
+    --- PASS: TestCOWDictionaryCleanupPrivateCutOwnership/pointer=false/publish=true (0.11s)
+    --- PASS: TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=false (0.10s)
+    --- PASS: TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=true (0.12s)
+=== RUN   TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor
+--- PASS: TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor (0.07s)
+=== RUN   TestCOWDrainReturnsAcceptedHandoffRefusalAndRetriesWithoutReapply
+--- PASS: TestCOWDrainReturnsAcceptedHandoffRefusalAndRetriesWithoutReapply (0.05s)
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/capture
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; capture refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/install
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; install refusal then retry; captures4 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/capture
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; capture refusal then retry; captures2 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/install
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; install refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; capture refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install
+    cow_maintenance_lifetime_test.go:312: real accepted maintenance1; install refusal then retry; captures4 oldRevision1
+--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (0.79s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/capture (0.14s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/install (0.15s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/capture (0.12s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/install (0.12s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (0.12s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (0.13s)
+=== RUN   TestCOWPointerImmediatePointAndIteratorOldCut
+--- PASS: TestCOWPointerImmediatePointAndIteratorOldCut (0.08s)
+=== RUN   TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry
+--- PASS: TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry (0.08s)
+=== RUN   TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint
+--- PASS: TestCOWMaintenanceRefreshPreservesOldCutsAndSubsequentCheckpoint (0.11s)
+=== RUN   TestCOWMaintenanceOwnsFlushFenceAndWaitingWriterProgress
+--- PASS: TestCOWMaintenanceOwnsFlushFenceAndWaitingWriterProgress (0.11s)
+=== RUN   TestCOWReadAdapterCursorOwnsOldRoot
+--- PASS: TestCOWReadAdapterCursorOwnsOldRoot (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	3.165s
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory
+--- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot (0.39s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest (0.19s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory (0.20s)
+=== RUN   TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry
+--- PASS: TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry (0.03s)
+=== RUN   TestSnapshotAllocationAdmissionFixedCohortPressure
+--- PASS: TestSnapshotAllocationAdmissionFixedCohortPressure (0.07s)
+=== RUN   TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet
+--- PASS: TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet (0.00s)
+=== RUN   TestSnapshotCleanupCompletionSharesOriginalFinalReader
+--- PASS: TestSnapshotCleanupCompletionSharesOriginalFinalReader (0.03s)
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed
+--- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal (0.05s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running (0.03s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed (0.02s)
+=== RUN   TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError
+--- PASS: TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError (0.04s)
+=== RUN   TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors
+--- PASS: TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors (0.04s)
+=== RUN   TestSnapshotAllocationAdmissionRefusesRefreshedExactView
+--- PASS: TestSnapshotAllocationAdmissionRefusesRefreshedExactView (0.03s)
+=== RUN   TestPrimaryMetadataCaptureFinalizesAfterLastRead
+--- PASS: TestPrimaryMetadataCaptureFinalizesAfterLastRead (0.06s)
+=== RUN   TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer
+--- PASS: TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer (0.07s)
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded
+--- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead (0.11s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary (0.06s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded (0.05s)
+=== RUN   TestOwnedPagerOperationWaitsForActualSnapshotFinalization
+--- PASS: TestOwnedPagerOperationWaitsForActualSnapshotFinalization (0.04s)
+=== RUN   TestOwnedPagerOperationJoinsOriginalRunningFinalizer
+--- PASS: TestOwnedPagerOperationJoinsOriginalRunningFinalizer (0.04s)
+=== RUN   TestOwnedPagerOperationFinalReaderAndExportedHandleRace
+--- PASS: TestOwnedPagerOperationFinalReaderAndExportedHandleRace (0.04s)
+=== RUN   TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor
+--- PASS: TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor (0.05s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.121s
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed
+=== RUN   TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed
+--- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion (0.00s)
+    --- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed (0.00s)
+    --- PASS: TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed (0.00s)
+=== RUN   TestOriginalCleanupCustodyOverflowRefusesBeforeEffects
+--- PASS: TestOriginalCleanupCustodyOverflowRefusesBeforeEffects (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.007s

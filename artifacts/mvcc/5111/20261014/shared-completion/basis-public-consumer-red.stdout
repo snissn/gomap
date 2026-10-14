@@ -1,0 +1,6 @@
+=== RUN   TestCOWPublicGetManyViewReportsOriginalBasisCleanup
+    cow_cut_test.go:362: original public consumer discarded actual completion: calls=1 err=<nil>
+--- FAIL: TestCOWPublicGetManyViewReportsOriginalBasisCleanup (0.08s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/caching	0.078s
+FAIL
