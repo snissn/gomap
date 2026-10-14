@@ -1,0 +1,200 @@
+{
+  "status": "ROOT_VERIFIED_EXACT_23_COMMITTED_PREDECESSOR_COMPANIONS_IMPORTED",
+  "at_utc": "2026-10-14T16:54:09.130883+00:00",
+  "source_head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "recipient_head": "22651bfa4cc30f7f71fa8a47f36b7e0d486bfdd5",
+  "frozen_source_sha256": "860f21f2c0cc8210d091b54160232869d53100fa1844589aff08f58b8b4a6348",
+  "imports": [
+    {
+      "path": "TreeDB/db/compact_storage_audit.go",
+      "bytes": 30905,
+      "sha256": "5c8a7eb975655532a71400899e34d0a901b82bc5e58cde39cd4b94a94aebf2a1",
+      "native_before_sha256": "fc044aa47781ec68f9c8a21d9d068b66679433893f306b3cf7c74c8868e41d8f",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/durable_root_projection_test.go",
+      "bytes": 30930,
+      "sha256": "9276368e1bb36277207a899e924606007f9a8c26d1975c482967437644691ab5",
+      "native_before_sha256": "1f7a66d31249d94fd3467ff6d77d38a554d05c5aee1e1df5dc867e098cbeceee",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority_test.go",
+      "bytes": 40157,
+      "sha256": "ec2e9651a3193c82eaeb837e24ad9d7ada2498c47d6767108b636a587dd10302",
+      "native_before_sha256": "c6c3b9ea12f5f23b3b52c0498213d5405918103a5202fdfe66811bec9f18f6bb",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_publication_test.go",
+      "bytes": 41620,
+      "sha256": "7b645ffa8ca61979f53c8429d5d16576da9a696c33b4e468c04183aa07b2db41",
+      "native_before_sha256": "128a73d5a52f68cba93381fcf697ea70afc180cba6c971e282e4d8b04bfc419c",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_rewrite.go",
+      "bytes": 68611,
+      "sha256": "3328be1e80f6728f15c71695b91132342d8d03db13333979cbe74cc4aff63ec4",
+      "native_before_sha256": "cf3a52927c7add6770ec78b5e582361a31abbac17dfa2cc22de50aae8c2420ad",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare_test.go",
+      "bytes": 33317,
+      "sha256": "2b2d0e67277aa4bb940deb85b81b0e9f7a40a7abcfbd8d3e03a49b0270335843",
+      "native_before_sha256": "3cd3dde0101ef53f3506daded2a1456b72be1f4dd850c34b23ba03e3233b723e",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_target_preflight_test.go",
+      "bytes": 863,
+      "sha256": "1a8eddf4b3273b4d93723d676dbb2bb729db9835b5528f89063fb3ed28e52fbf",
+      "native_before_sha256": "bb4753a4f9d05db3a666a4b95175ae43017d393a7e18fac66d4aac4aefb97907",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_test.go",
+      "bytes": 41575,
+      "sha256": "ed25131a55c9c71122c683ac37c225c1fb23a0848409b09754786111e18a7e2e",
+      "native_before_sha256": "4a39925915ed55404822ecf1b7182fee271b3912e725a1bafaf9bea10b915910",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "bytes": 36397,
+      "sha256": "df4a5217f211f4669c7969f26899467df1886772d748f4cfef0e800ae0fb825c",
+      "native_before_sha256": "bc17da03e01599fa34e1595c67a6ae8ea21e26d6c4005b5589632f975a0a4a7a",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/resource_selector_test.go",
+      "bytes": 4991,
+      "sha256": "0166edc8e21cf86e3f81d0dd1789b9091450813ef589ca322118de4413b6125a",
+      "native_before_sha256": "68994ddfc7d450caeb858f6943e0e63c38af64ca9ca38ee33217dddadc13a0a6",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/original_cleanup_diagnostic_test.go",
+      "bytes": 1304,
+      "sha256": "34518a011c89c3bfc5d9c82518f1ee66eef5bf23362ffbe05b4df21b0f122466",
+      "native_before_sha256": null,
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/db/original_rootset_authority_completion_test.go",
+      "bytes": 4415,
+      "sha256": "84601c2f8c7993d8c90a1190a3f43fe03b690dae096bfbd880d2cd59fc6e5bac",
+      "native_before_sha256": null,
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/btree.go",
+      "bytes": 19800,
+      "sha256": "41bcd8825b01d0fe2e934f9550663d81b3819daa6319f42de3383462bc6dc42a",
+      "native_before_sha256": "e58505a76a913bb5b33cfeaa28db278844130fd2254fee67cd53f96d8b9a5a9e",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_baseline_red_test.go",
+      "bytes": 946,
+      "sha256": "7e445ead1f3d0e156a616a6a1a275e2ff92236aa946afa18744b6e1531fd29b9",
+      "native_before_sha256": "c357ca9f6779a3901d7818bc6254e204723c603fc8b373b12db2456c551832c7",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_lookup_safe.go",
+      "bytes": 1437,
+      "sha256": "3c251ecca99f5e11130851b9ea49b86c56ff5efbe4f3b8a84704be44617c688c",
+      "native_before_sha256": "405519808eec9f240fd3134d950eab905b3b7dcaac589d61f132095f2bfa3217",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_lookup_unsafe.go",
+      "bytes": 940,
+      "sha256": "93c1413515cf22bb2f1797ec73de11e11e7b2e59f6f84584953760557c420197",
+      "native_before_sha256": "24e8dbcae53bf69904d99a1c859993a267e31676bf6c7fe22caadc7e11a0efc4",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_test.go",
+      "bytes": 39579,
+      "sha256": "e8cd0b4dc613a695cf9e107286bce7298885159df256635666563ff31ccab98a",
+      "native_before_sha256": "04009aa6780ab3c40e3852671f28101b47a4e8f8290e12809bf9a59d6937ee6e",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_tree.go",
+      "bytes": 18561,
+      "sha256": "fd53cdb37c56b74d6a19f70b7b30ebc2fe1e3e0ec8f496c65d60a188f36a9d98",
+      "native_before_sha256": "a1eca81dab8cfc1a5ab6abab0d38175a361aecb0860472b17b27d0384f9dfe2d",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_view.go",
+      "bytes": 5053,
+      "sha256": "caa290dfaf50774fdaf914bc5d6d10eb1e569d9e03b30161dfbfa2fbde706c91",
+      "native_before_sha256": "02e61682f2c63abf9c0afcb3365758ff4eb0666aa962bdadb7bcfc97bbbf8a2b",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go",
+      "bytes": 14421,
+      "sha256": "7efc9c753eeed6562c5e7f6739064f9be0786dfac2af7efd98227285a11f9ee5",
+      "native_before_sha256": "3b6a309b9e39dd6be8b7845eb44eeff18310d255065065eb85f37e78c054b63a",
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/identity_capacity_table.go",
+      "bytes": 1296,
+      "sha256": "95b98aa75c21b3882d7c8f78a31aca13b709a6ab5bcf9b6fa1ad21ba57adb0e5",
+      "native_before_sha256": null,
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_install_probe_owned_test.go",
+      "bytes": 4013,
+      "sha256": "138c0f2062f43f4d66182899ff1f64dc45384fcab6bfacc6b302ff948ac50605",
+      "native_before_sha256": null,
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_namespace_batch_close_test.go",
+      "bytes": 1368,
+      "sha256": "c5ce77db14e1b4cbc182ea9709869cc19049ee43bbe3260c33ccb31d772609cd",
+      "native_before_sha256": null,
+      "native_original_clean_or_absent": true,
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY"
+    }
+  ],
+  "only_named_23_written": true,
+  "native_owned_45_excluded": true,
+  "HEAD_index_unchanged": true,
+  "native_owned_ongoing_edits_preserved": "No native45 or assigned new files were copied/modified; they remain allowed to change under sole native writer.",
+  "window": "Both direct owners ACKed exact23 readonly companions quiescent and no Go producers.",
+  "qualification": "Original source-family coherence/compile dependency only; native public and full ordinary acceptance OPEN.",
+  "cleanup_release": false
+}

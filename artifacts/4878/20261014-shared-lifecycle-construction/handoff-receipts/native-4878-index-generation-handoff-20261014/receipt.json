@@ -1,0 +1,33 @@
+{
+  "utc": "2026-10-14T11:49:51.866695+00:00",
+  "path": "TreeDB/db/index_gen_db.go",
+  "rows": [
+    {
+      "kind": "released",
+      "sha256": "509bb17a3ea4889f3c9c9bd2797d8260504198aeac34996fdcaffada0fd46276",
+      "bytes": 4018,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/index_gen_db.go"
+    },
+    {
+      "kind": "frozen",
+      "sha256": "509bb17a3ea4889f3c9c9bd2797d8260504198aeac34996fdcaffada0fd46276",
+      "bytes": 4018,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/queued-root-owner-advisory-20261014/source/TreeDB/db/index_gen_db.go"
+    },
+    {
+      "kind": "native",
+      "sha256": "509bb17a3ea4889f3c9c9bd2797d8260504198aeac34996fdcaffada0fd46276",
+      "bytes": 4018,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/index_gen_db.go"
+    }
+  ],
+  "ordinary_head": "b5ace51b3f2605f0d03d38bed42d0bb5fccf2dea",
+  "native_head": "b5723dd42b5089841df6cba121b3cfdad06b8417",
+  "index_before_after": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": "",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": ""
+  },
+  "mutated_source": false,
+  "ownership": "Ordinary explicitly released; native sole writer after root ACK. Ordinary read-only until exact back-import.",
+  "contract": "Preserve original generation refs and registry-retirement gates; first actual physical close failure remains rooted before discovery loss; quiesce only genuinely retired non-current primary. resource_token.go remains ordinary sole writer."
+}

@@ -83,3 +83,29 @@ func bindPrimaryTerminalWorkV6(n *primaryTerminalCompletionV6, removal *retained
 	}
 	return removal.BindPendingWork(n.owner, n.charge, w)
 }
+
+// The original DATA constructor shares the same outside-callback terminal
+// receipt and ACK barrier as PRIMARY. Physical Set release has already completed.
+func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTerminalCompletionV6, error) {
+	if t == nil {
+		return nil, nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.terminalMetadataV6 == nil {
+		return nil, nil
+	}
+	if t.physicalCleanupError != nil {
+		return nil, t.physicalCleanupError
+	}
+	if t.phase != durableRootFinishing || t.ownerLockedV6() != ResourceOwnerCoordinator {
+		return nil, ErrDurableRootOwnership
+	}
+	node := t.terminalMetadataV6
+	t.terminalMetadataV6 = nil
+	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
+	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+	t.releaseOwnerLockedV6()
+	t.phase = durableRootConsumed
+	return node, nil
+}

@@ -1,0 +1,436 @@
+// Package retainedalloc admits added producer-owned metadata before allocation.
+// An Owner is embedded in the existing storage owner, not a publication or
+// retirement registry. Its budget enrollments share that owner's real lifetime.
+package retainedalloc
+
+import (
+ "fmt"
+ "runtime"
+	"errors"
+	"math"
+	"sync"
+	"sync/atomic"
+	"unsafe"
+)
+
+var ErrCapacity = errors.New("retained metadata capacity exhausted")
+var ErrClosed = errors.New("retained metadata owner closed")
+
+type Lease interface {
+	Resize(uint64) error
+	Close()
+}
+type Budget interface{ AcquireRetention(uint64) (Lease, error) }
+
+// AllocationCharge matches the conservative Go allocator capacity policy used
+// by COW. Round separate actual allocations before summing their charges.
+func AllocationCharge(n uint64) uint64 {
+	if n == 0 {
+		return 0
+	}
+	if n > math.MaxInt64-8192-16 {
+		return math.MaxUint64
+	}
+	ptr := uint64(unsafe.Sizeof(uintptr(0)))
+	if n > ptr*ptr*8 && n < 32768 {
+		n += 16
+	}
+	if n <= 32768 {
+		c := uint64(16)
+		for c < n {
+			c *= 2
+		}
+		return c
+	}
+	return (n + 8191) &^ uint64(8191)
+}
+
+type binding struct {
+	budget             Budget
+	lease              Lease
+	refs               uint64
+	producer           bool
+	next               *binding
+	prev               *binding
+	cleanupRefs        uint64
+	admitted, rollback uint64
+}
+type Owner struct {
+	mu                                 sync.Mutex
+	bytes, baseline, controls, pending uint64
+	head                               *binding
+	closed                             bool
+	closeWork                          ownerCloseWork
+	retired, cleanupFailed             bool
+	enrolling                          uint64
+	enrollment                         *EnrollmentWork
+}
+
+// Initialize freezes the actual constructor baseline before any enrollment.
+// It must be called once before this owner becomes visible.
+func (o *Owner) Initialize(bytes uint64, fixed ...uint64) {
+	o.bytes = bytes
+	o.baseline = bytes
+	if len(fixed) != 0 {
+		o.baseline = fixed[0]
+	}
+}
+
+// Bytes is a producer-maintained capacity total; it never walks retained roots.
+func (o *Owner) Bytes() uint64 { o.mu.Lock(); defer o.mu.Unlock(); return o.bytes }
+
+// Add admits exact already-rounded added capacity against every enrolled
+// governing budget. If any refuses, all earlier reservations are rolled back
+// before returning and the producer must allocate nothing.
+func (o *Owner) Add(bytes uint64) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.resizeLocked(bytes, true)
+}
+func (o *Owner) resizeLocked(bytes uint64, grow bool) error {
+	if o.closed && grow {
+		return ErrClosed
+	}
+	target := o.bytes
+	if grow {
+		if bytes > math.MaxUint64-target {
+			return ErrCapacity
+		}
+		target += bytes
+	} else {
+		if bytes > target {
+			return ErrCapacity
+		}
+		target -= bytes
+	}
+	active := o.enrollment
+	pendingTarget := uint64(0)
+	if active != nil && active.pending != nil {
+		pendingTarget = active.pendingAdmitted
+		if err := active.pending.Resize(target); err != nil {
+			return err
+		}
+		active.pendingAdmitted = target
+	}
+	for b := o.head; b != nil; b = b.next {
+		b.rollback = b.admitted
+		if err := b.lease.Resize(target); err != nil {
+			// Shrink back to the prior successful admission. Existing leases always
+			// permit this even after budget Close; no foreign writer can own this lease.
+			for prior := o.head; prior != b; prior = prior.next {
+				if rollback := prior.lease.Resize(prior.rollback); rollback != nil {
+					panic("retained allocation rollback refused")
+				}
+				prior.admitted = prior.rollback
+			}
+			if active != nil && active.pending != nil {
+				if rollback := active.pending.Resize(pendingTarget); rollback != nil {
+					panic("pending retained allocation rollback refused")
+				}
+				active.pendingAdmitted = pendingTarget
+			}
+			return err
+		}
+		b.admitted = target
+	}
+	o.bytes = target
+	return nil
+}
+
+// AddPending admits actual transaction/runtime storage whose existing ownership
+// intentionally survives physical arena shutdown. This is capacity accounting,
+// not another retirement cursor or callback registry.
+func (o *Owner) AddPending(bytes uint64) error {
+ pc,_,line,_:=runtime.Caller(1); fmt.Printf("PENDING ADD owner=%p delta=%d caller=%s:%d\n",o,bytes,runtime.FuncForPC(pc).Name(),line)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.resizeLocked(bytes, true); err != nil {
+		return err
+	}
+	o.pending += bytes
+	return nil
+}
+func (o *Owner) RemovePending(bytes uint64) {
+ pc,_,line,_:=runtime.Caller(1); fmt.Printf("PENDING REMOVE owner=%p delta=%d caller=%s:%d\n",o,bytes,runtime.FuncForPC(pc).Name(),line)
+	var work RemovalWork
+	for {
+		done, err := o.removeUnserialized(bytes, true, false, &work, nil)
+		if err != nil {
+			panic("pending metadata release refused")
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func (o *Owner) releaseClosedBindingsLocked() {
+	link := &o.head
+	for *link != nil {
+		b := *link
+		if b.refs != 0 || b.cleanupRefs != 0 || b.producer {
+			link = &b.next
+			continue
+		}
+		*link = b.next
+		if b.next != nil {
+			b.next.prev = b.prev
+		}
+		b.next, b.prev = nil, nil
+		b.lease.Close()
+		delta := AllocationCharge(uint64(unsafe.Sizeof(binding{})))
+		if err := o.resizeLocked(delta, false); err != nil {
+			panic("retained cleanup release refused")
+		}
+		o.controls -= delta
+	}
+	if o.head == nil && o.enrolling == 0 && o.enrollment == nil {
+		o.bytes = 0
+		o.baseline = 0
+	}
+}
+
+// Remove follows actual storage/edge cleanup, never speculative disposal.
+func (o *Owner) Remove(bytes uint64) {
+	var work RemovalWork
+	for {
+		done, err := o.removeUnserialized(bytes, false, false, &work, nil)
+		if err != nil {
+			panic("retained allocation accounting underflow")
+		}
+		if done {
+			return
+		}
+	}
+}
+
+type Enrollment struct {
+	owner     *Owner
+	binding   *binding
+	closed    atomic.Bool
+	companion *Enrollment
+	closeWork enrollmentCloseWork
+}
+
+// Enroll shares one governing lease for this exact budget/owner identity.
+// Each returned handle owns one actual capture edge. All enrollment and
+// binding storage is included in the aggregate owner before allocation.
+func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
+	if budget == nil {
+		return nil, ErrCapacity
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return nil, ErrClosed
+	}
+	var found *binding
+	for b := o.head; b != nil; b = b.next {
+		if b.budget == budget {
+			found = b
+			break
+		}
+	}
+	delta := AllocationCharge(uint64(unsafe.Sizeof(Enrollment{})))
+	if found == nil {
+		delta += AllocationCharge(uint64(unsafe.Sizeof(binding{})))
+	}
+	if err := o.resizeLocked(delta, true); err != nil {
+		return nil, err
+	}
+	if found == nil {
+		var lease Lease
+		var err error
+		active := o.enrollment
+		if active != nil && active.budget == budget && active.pending != nil {
+			// Promote the SAME preborn constructor; ordinary capture never
+			// waits for another native Step or duplicates its governor.
+			lease = active.pending
+			active.pending = nil
+			active.pendingAdmitted = 0
+		} else {
+			lease, err = budget.AcquireRetention(o.bytes)
+		}
+		if err != nil {
+			if rollback := o.resizeLocked(delta, false); rollback != nil {
+				panic("retained enrollment rollback refused")
+			}
+			return nil, err
+		}
+		found = &binding{budget: budget, lease: lease, next: o.head, admitted: o.bytes}
+		if o.head != nil {
+			o.head.prev = found
+		}
+		o.head = found
+	}
+	if found.refs == math.MaxUint64 {
+		panic("retained enrollment reference overflow")
+	}
+	if active := o.enrollment; active != nil && active.budget == budget && active.found == nil {
+		found.cleanupRefs++
+		active.found = found
+	}
+	o.controls += delta
+	found.refs++
+	return &Enrollment{owner: o, binding: found}, nil
+}
+
+// Close follows the capture's real storage cleanup. It drops this exact
+// enrollment and releases the governing lease only at its last shared capture.
+func (e *Enrollment) Close() {
+	var state EnrollmentReleaseWork
+	for {
+		done, err := e.closePairUnserialized(false, nil, &state)
+		if err != nil {
+			if err == ErrWorkRequired {
+				return
+			}
+			panic("retained enrollment release refused")
+		}
+		if done {
+			return
+		}
+	}
+}
+
+// Close follows actual storage and physical-owner cleanup. Captures can still
+// own the constructor baseline and enrollment descriptors until their normal
+// last release; closed owners never admit more producer growth.
+func (o *Owner) Close() error {
+	for {
+		done, err := o.closeStep(false, nil)
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
+// Retire follows replacement of this exact physical arena. Old captures can
+// release normally, but its existing governor remains until actual old-owner
+// cleanup, including the existing index ghost lifetime.
+func (o *Owner) Retire() { o.mu.Lock(); o.retired = true; o.mu.Unlock() }
+
+// CleanupFailed preserves a governing edge for real remaining storage/debt.
+// Successful cleanup in Close, rather than an error label, releases this edge.
+func (o *Owner) CleanupFailed() { o.mu.Lock(); o.cleanupFailed = true; o.mu.Unlock() }
+
+func (e *Enrollment) BelongsTo(o *Owner) bool {
+	if e == nil {
+		return false
+	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	return !e.closed.Load() && e.owner == o
+}
+func (e *Enrollment) CloseAfterCleanup(err error) {
+	if e == nil {
+		return
+	}
+	if err != nil {
+		e.closeWork.mu.Lock()
+		if e.owner != nil {
+			e.owner.CleanupFailed()
+		}
+		if e.companion != nil {
+			e.companion.closeWork.mu.Lock()
+			if e.companion.owner != nil {
+				e.companion.owner.CleanupFailed()
+			}
+			e.companion.closeWork.mu.Unlock()
+		}
+		e.closeWork.mu.Unlock()
+	}
+	e.Close()
+}
+
+// PhysicalClosed distinguishes actual storage teardown from a failed close.
+func (o *Owner) PhysicalClosed() bool { o.mu.Lock(); defer o.mu.Unlock(); return o.closed }
+
+// TransferPending preserves total admission while an immutable allocation moves
+// from the constructing transaction to an actual durable root bank.
+func (o *Owner) TransferPending(bytes uint64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || bytes > o.pending {
+		panic("invalid pending metadata transfer")
+	}
+	o.pending -= bytes
+}
+
+// EnrollPair admits the two distinct producer owners in fixed order against
+// one governing budget. The second admission and every later failure unwind
+// both actual handles. The pair uses the existing enrollment cells.
+func EnrollPair(first, second *Owner, budget Budget) (*Enrollment, error) {
+	if first != nil && first == second {
+		return nil, ErrCapacity
+	}
+	if first == nil {
+		if second != nil {
+			return nil, ErrCapacity
+		}
+		return nil, nil
+	}
+	a, err := first.Enroll(budget)
+	if err != nil {
+		return nil, err
+	}
+	if second != nil {
+		a.companion, err = second.Enroll(budget)
+		if err != nil {
+			a.Close()
+			return nil, err
+		}
+	}
+	return a, nil
+}
+func (e *Enrollment) BelongsToPair(first, second *Owner) bool {
+	if e == nil {
+		return false
+	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	if e.closed.Load() || e.owner != first {
+		return false
+	}
+	if second == nil {
+		return e.companion == nil
+	}
+	return e.companion.BelongsTo(second)
+}
+
+// ActivateProducer attaches this already-admitted fixed pair to the actual
+// producer lifetime before persistent effects. Capture release cannot remove
+// these governing edges; actual Owner.Close after disposal does. This is not
+// called by temporary dictionary borrowers.
+func (e *Enrollment) ActivateProducer() error {
+	if e == nil {
+		return nil
+	}
+	e.closeWork.mu.Lock()
+	defer e.closeWork.mu.Unlock()
+	if e.closed.Load() {
+		return ErrClosed
+	}
+	a := e.owner
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var b *Owner
+	if e.companion != nil {
+		e.companion.closeWork.mu.Lock()
+		defer e.companion.closeWork.mu.Unlock()
+		if e.companion.closed.Load() {
+			return ErrClosed
+		}
+		b = e.companion.owner
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+	if e.closed.Load() || a.closed || e.companion != nil && (e.companion.closed.Load() || b.closed) {
+		return ErrClosed
+	}
+	e.binding.producer = true
+	if b != nil {
+		e.companion.binding.producer = true
+	}
+	return nil
+}

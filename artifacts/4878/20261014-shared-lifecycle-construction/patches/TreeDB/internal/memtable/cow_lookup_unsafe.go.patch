@@ -1,0 +1,11 @@
+--- a/TreeDB/internal/memtable/cow_lookup_unsafe.go
++++ b/TreeDB/internal/memtable/cow_lookup_unsafe.go
+@@ -2,7 +2,7 @@
+ 
+ package memtable
+ 
+-import "github.com/tidwall/btree"
++import btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
+ 
+ func cowLookupGE(tree *btree.Map[string, cowValue], key []byte) (string, cowValue, bool) {
+ 	var owned string

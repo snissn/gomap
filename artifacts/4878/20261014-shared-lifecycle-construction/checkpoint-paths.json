@@ -1,0 +1,555 @@
+[
+  {
+    "path": "TreeDB/caching/native_mvcc_prune_v6.go",
+    "sha256": "a7e9995caab721956ffd890957c50830b1e8186ed19e329b5740354cb808279a",
+    "bytes": 11587,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/compact_storage_audit.go",
+    "sha256": "5c8a7eb975655532a71400899e34d0a901b82bc5e58cde39cd4b94a94aebf2a1",
+    "bytes": 30905,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/db.go",
+    "sha256": "4d5f082305df4f7638d6d120e84c905908ccd467ab8b001ab2d3f39e01739e3b",
+    "bytes": 209912,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/dependency_directory_v2.go",
+    "sha256": "d0709b189e098005107c4c0df7ed9be41aeef9bb99ef81f2a1ab24758e3bb2ee",
+    "bytes": 6645,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/durable_root_projection_test.go",
+    "sha256": "9276368e1bb36277207a899e924606007f9a8c26d1975c482967437644691ab5",
+    "bytes": 30930,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/durable_root_runtime.go",
+    "sha256": "d94226efaca052f5a8a47ded228e343026ffd27eec3081e13a2cd54177c408fa",
+    "bytes": 134697,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/index_gen.go",
+    "sha256": "529b1239aae6f8ef3ee661bf1c5ac9f0dd365e9a73fcb80fcaa17833c572a6e1",
+    "bytes": 9342,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/index_gen_db.go",
+    "sha256": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "bytes": 4299,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack.go",
+    "sha256": "a12ac9193fd21c0a8ad66c7f0574a3ad9916f82a88571df368925fae7b2720a0",
+    "bytes": 28088,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_authority.go",
+    "sha256": "7d7b92fbab12d478649bc9e67b19aa1252b15da5f65783466ce341d2760a9f4f",
+    "bytes": 32224,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_authority_test.go",
+    "sha256": "ec2e9651a3193c82eaeb837e24ad9d7ada2498c47d6767108b636a587dd10302",
+    "bytes": 40157,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_publication_test.go",
+    "sha256": "7b645ffa8ca61979f53c8429d5d16576da9a696c33b4e468c04183aa07b2db41",
+    "bytes": 41620,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_rewrite.go",
+    "sha256": "3328be1e80f6728f15c71695b91132342d8d03db13333979cbe74cc4aff63ec4",
+    "bytes": 68611,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+    "sha256": "ac54d8346c89992837e5886a67cbf0692d41a41be53082cb9cc11d0584583b68",
+    "bytes": 30266,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_stable_prepare_test.go",
+    "sha256": "2b2d0e67277aa4bb940deb85b81b0e9f7a40a7abcfbd8d3e03a49b0270335843",
+    "bytes": 33317,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_target_preflight_test.go",
+    "sha256": "1a8eddf4b3273b4d93723d676dbb2bb729db9835b5528f89063fb3ed28e52fbf",
+    "bytes": 863,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_generation_pack_test.go",
+    "sha256": "ed25131a55c9c71122c683ac37c225c1fb23a0848409b09754786111e18a7e2e",
+    "bytes": 41575,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/leaf_page_log.go",
+    "sha256": "cf906af9b084413156a740331161253b25a7b7f630e6164543f6e4078ec1cc1c",
+    "bytes": 42639,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "sha256": "f1e26c1b7928f61b707ae1fd845dbb55dda41b46d605f298d2029f796e1d1704",
+    "bytes": 12365,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_snapshot_v6.go",
+    "sha256": "8d1d07eb249ea6978f5d4a7743ed856753f5c58e9cbecc8b8044edc4c80dc655",
+    "bytes": 9682,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/open_readonly.go",
+    "sha256": "2a3ef037825d554debb9ecae50517b716833198ef873922b51bd1691007ba3a0",
+    "bytes": 17456,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/original_startup_generation.go",
+    "sha256": "9583e6480b5b37410bd17e4adf835a331e7a51b85dce84213ce1135a8177e0cc",
+    "bytes": 7612,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/pools.go",
+    "sha256": "4fcc9ba7e405fcdc9d61d05c1745ea4f45dfffe087a5727faa6f54b55ce4ecb2",
+    "bytes": 8041,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/primary_dependency_cleanup_test.go",
+    "sha256": "1e1bf7cd293eeb147e07a66dabe5795093a2a41e121768b24205c14adab4ff57",
+    "bytes": 5335,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/primary_dependency_v5.go",
+    "sha256": "901976acaa83c38bdf04d3efd320817e779e02b17ada092ffd373abbcff004a3",
+    "bytes": 8588,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/recoverable_root_set.go",
+    "sha256": "df4a5217f211f4669c7969f26899467df1886772d748f4cfef0e800ae0fb825c",
+    "bytes": 36397,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/resource_selector_test.go",
+    "sha256": "0166edc8e21cf86e3f81d0dd1789b9091450813ef589ca322118de4413b6125a",
+    "bytes": 4991,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/root_publication_activation.go",
+    "sha256": "3aa156b6f1aa722b60e66234fbf571399ebfac86459e4e7ba35839716ba64998",
+    "bytes": 79101,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/stable_resource.go",
+    "sha256": "554915ad2d16e8655517a441d1d2eab2ff812bf19544c9053e193720106092ca",
+    "bytes": 33797,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+    "sha256": "ce1c42e94ac654d6413addce4982e799f4f56cd7ddd983253e8492ad7b115f9f",
+    "bytes": 34558,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/docs/spec/cow-cache-publication.md",
+    "sha256": "508964ee9e6fc3ae32da9162563f5c4e6cab0f2aacd748075203a119b2a70934",
+    "bytes": 25067,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/docs/spec/recovery.md",
+    "sha256": "b68521ca62aaf6caf148317bd26897a8eb508350dcdcfcc28dd86708e7897a5e",
+    "bytes": 46429,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/docs/spec/storage-format.md",
+    "sha256": "1ca807f58e77b84581badd3b4590245cd55cb2b0b2b11f404b17432cb418e550",
+    "bytes": 230317,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+    "sha256": "7dc3d7d9eb24f26ac4ff82eab9088554a664b5043252f3f8e1420258ec7a7d41",
+    "bytes": 54666,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/btree.go",
+    "sha256": "41bcd8825b01d0fe2e934f9550663d81b3819daa6319f42de3383462bc6dc42a",
+    "bytes": 19800,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/cow_baseline_red_test.go",
+    "sha256": "7e445ead1f3d0e156a616a6a1a275e2ff92236aa946afa18744b6e1531fd29b9",
+    "bytes": 946,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/cow_budget.go",
+    "sha256": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+    "bytes": 10417,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/cow_traversal.go",
+    "sha256": "316ebf8073c8c087bc480d8adbc43b4fd10bd9401e273a1f3a2aaf7e32e9309a",
+    "bytes": 4749,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/cow_tree.go",
+    "sha256": "bee65a57a8275daf1bb0abb8667e44e3fce5b82532e9c239d858fb911edab7d3",
+    "bytes": 18914,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/cow_view.go",
+    "sha256": "fb7d86e6e7f59748f7465e25cf01b53b9488fc3b02bbc27ab6c88005efb010d6",
+    "bytes": 6152,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+    "sha256": "4a1678d15561d73667970789f3118609fe9ab231431cebf1d87068c0bd5c9c96",
+    "bytes": 6931,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/retainedalloc/owner.go",
+    "sha256": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "bytes": 11641,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/retainedalloc/owner_work.go",
+    "sha256": "f6287bb54f7b80b150db0c503eab616c2334e16d21a4aad537bdb6afe1ec4d7e",
+    "bytes": 13063,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/coordinator.go",
+    "sha256": "08308ed3e4ac87a2c6b0c32cad95b29cdf4f215a7ac7bde03f2ef40338b100f2",
+    "bytes": 47144,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go",
+    "sha256": "fc310abbe149e01e0b31a6b72c736c092205fa61977bf76efdd436ed40bbf6e0",
+    "bytes": 11274,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "sha256": "f62efa97fbd13eda17d721a1aa2d6b4ed0b1e861b86d6dff340e32877ba43cf4",
+    "bytes": 23354,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "sha256": "8f91058ed04cf32622975d267895381ebde3fe2afe01a2df099c6109d23b19c5",
+    "bytes": 7897,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "sha256": "b4071a1e337aca02d724e42298a158b6622881b02d20ef9e3d1a0ea1c8649b80",
+    "bytes": 3733,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go",
+    "sha256": "7efc9c753eeed6562c5e7f6739064f9be0786dfac2af7efd98227285a11f9ee5",
+    "bytes": 14421,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_install_probe.go",
+    "sha256": "a98e6aee2813c96cd00487ef949455022a8b99bdf5475867e72a69db9572085d",
+    "bytes": 7409,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_logical_borrow.go",
+    "sha256": "8178283a1e3e3e487d791b4a15324c7a350c09f49a6fb8cd434d33de066106b2",
+    "bytes": 12510,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_logical_walk.go",
+    "sha256": "3d795403d12918ef63c5a015b750ea5a33de5e322aee0e6ca9c6c740351b60cc",
+    "bytes": 7589,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_rope_allocation.go",
+    "sha256": "fd8d10f7828165fb6453664b6730a306cae4ee38b868ee7ff1def9aad8a995ec",
+    "bytes": 5582,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_set.go",
+    "sha256": "aed2c0d6a05b496ec6939df3dea5f3cab004627119046a066661d00c2af12d33",
+    "bytes": 177876,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/stable_pending_successor_supported_test.go",
+    "sha256": "378e3881b4b99b4aa9c67ba5161dd4c117e4026a26e198b1e6d73a798529e513",
+    "bytes": 37115,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/node/primary_directory_v1.go",
+    "sha256": "532160409cbac93085b6884c29994fbdaf8801d8fc7fa4200f6aa9e35bca0230",
+    "bytes": 13901,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/production_authority_matrix_test.go",
+    "sha256": "744770fcbe8d46bd9fda7db90763af024e5f83b87f36d8aa533cf3730472569d",
+    "bytes": 87055,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/caching/native_mvcc_basis_completion_causal_test.go",
+    "sha256": "d7a7791dd45e5e1b5f9e9f5e76723a6960a705442db42c65d66b64ef4f60add5",
+    "bytes": 2822,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/durable_root_owner_continuity_test.go",
+    "sha256": "bd03bb1e4cec91eea9e418b273e21e606d791af339f657b1f06fd7a36fe0aa99",
+    "bytes": 7058,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_generation_containing_completion_test.go",
+    "sha256": "c9c50b0661e0f6c7d93e238689447e0f0f659a88caeee0bbefaca4a7d540cd10",
+    "bytes": 3457,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_data_dependency_release_v6.go",
+    "sha256": "1f625a2f6b58be15e34af34b8c4a50d66f1781f47d139cb70b744188df29313d",
+    "bytes": 3696,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_dependency_release_v6.go",
+    "sha256": "62b5bcc95398fee1d44201f47bb177225a86c37f5a0cc6ee60f958a14417423d",
+    "bytes": 3722,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_generation_completion_v6.go",
+    "sha256": "678245791809e43be4e4d6d23465e083017f9891e1950a255dde25e2d582c5e3",
+    "bytes": 637,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/original_cleanup_diagnostic_test.go",
+    "sha256": "34518a011c89c3bfc5d9c82518f1ee66eef5bf23362ffbe05b4df21b0f122466",
+    "bytes": 1304,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/original_rootset_authority_completion_test.go",
+    "sha256": "84601c2f8c7993d8c90a1190a3f43fe03b690dae096bfbd880d2cd59fc6e5bac",
+    "bytes": 4415,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/db/stable_encoded_capture_completion_test.go",
+    "sha256": "8068c53f6d0efa20550d6d97aca7fc2ff07cef13af1b6856d34c81c93477072e",
+    "bytes": 8544,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/memtable/native_retention_work.go",
+    "sha256": "d297e223e09dc067b7993de55c66a12f8928f7c24eb666ed6a2697004de97fbb",
+    "bytes": 2163,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+    "sha256": "093d470463a37cd6ac19ad8ac781d6c61f951a98f4f9348265e57856734f097c",
+    "bytes": 17368,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/retainedalloc/owner_enroll_work_test.go",
+    "sha256": "e9cb39f91620339479a453afc877362bcadaa52f30a858f1236915c8e24a720c",
+    "bytes": 10038,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go",
+    "sha256": "96cd42e159007174cd757ac9f9c6abf05bd60e1738d92e4819fb1e9611d85030",
+    "bytes": 8098,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/dependency_directory_release_work.go",
+    "sha256": "22388a0fe0956e056484a7c4d83e6b3afb458ee8aa46b93673c42fbe00cb9e17",
+    "bytes": 8758,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/identity_capacity_table.go",
+    "sha256": "95b98aa75c21b3882d7c8f78a31aca13b709a6ab5bcf9b6fa1ad21ba57adb0e5",
+    "bytes": 1296,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_install_probe_owned_test.go",
+    "sha256": "138c0f2062f43f4d66182899ff1f64dc45384fcab6bfacc6b302ff948ac50605",
+    "bytes": 4013,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_logical_walk_selected_test.go",
+    "sha256": "8faa667a4b58650ca71c82422b470235084d47bb2932412cf90407e855b64b5e",
+    "bytes": 2074,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_namespace_batch_close_test.go",
+    "sha256": "c5ce77db14e1b4cbc182ea9709869cc19049ee43bbe3260c33ccb31d772609cd",
+    "bytes": 1368,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/native_mvcc_capture_owner_test.go",
+    "sha256": "7cd230317de72ab438c290518b062289df8ce566d7bb906ea84d75bcceeb765d",
+    "bytes": 2571,
+    "ownership": "readonly frozen predecessor or assigned public construction; ownership unchanged",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/native_mvcc_prune.go",
+    "sha256": "5b83457193e35ac1f04afda4e2621284e8c91474a730d677a6731911f01c8b3f",
+    "bytes": 2166,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/node/primary_directory_native_mvcc.go",
+    "sha256": "e533b030e6a04252fe608a14cc1c308728e2c4aa3ec11c521c2df83ddf4c602e",
+    "bytes": 2789,
+    "ownership": "owned import member",
+    "stage": true
+  },
+  {
+    "path": "TreeDB/node/primary_directory_native_mvcc_test.go",
+    "sha256": "18bc6c8a1b59367b8a8a0a06c1a9e8537ab6bb55c4635d4378f7a486cbafaf75",
+    "bytes": 2411,
+    "ownership": "owned import member",
+    "stage": true
+  }
+]

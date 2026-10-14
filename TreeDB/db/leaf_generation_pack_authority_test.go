@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -213,14 +215,28 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 	if got := fixture.registry.ActivePins(); got != 2 {
 		t.Fatalf("capture+frozen-set pins=%d want 2", got)
 	}
-	descriptors := mustStableResourceDescriptors(t, authority.resources)
-	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafPack ||
-		descriptors[0].Generation() != uint64(fixture.fileID) || descriptors[0].Frontier().Bytes < fixture.pointer.Offset+uint64(fixture.pointer.RecordLength()) {
+	diagnostics, err := authority.resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors := diagnostics.Physical()
+	if len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafPack ||
+		descriptors[0].Generation != uint64(fixture.fileID) || descriptors[0].Frontier().Bytes < fixture.pointer.Offset+uint64(fixture.pointer.RecordLength()) {
 		t.Fatalf("packed descriptors=%+v", descriptors)
 	}
-	resourceStats := authority.resources.Stats(time.Now())
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	statsView, err := authority.resources.AcquireStats(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceStats := statsView.Stats()
 	if len(resourceStats) != 1 || resourceStats[0].NamespaceSyncs != 2 {
 		t.Fatalf("packed namespace sync stats=%+v want two exact parents", resourceStats)
+	}
+	if err := statsView.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 	var createEvents, beforeSync, afterSync int
 	for _, event := range events {
@@ -279,8 +295,12 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 	if _, mutated, err := authority.promote(); err != nil || !mutated {
 		t.Fatalf("promote mutated=%v err=%v", mutated, err)
 	}
+	diagnostics, err := authority.resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var hasDictionary, hasPacked bool
-	for _, descriptor := range mustStableResourceDescriptors(t, authority.resources) {
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityDictionaryGeneration:
@@ -289,6 +309,9 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 				hasPacked = true
 			}
 		}
+	}
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 	if !hasDictionary || !hasPacked || provider.releaseCalls.Load() != 0 {
 		t.Fatalf("promoted closure dictionary=%v packed=%v releaseCalls=%d", hasDictionary, hasPacked, provider.releaseCalls.Load())
@@ -415,11 +438,25 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 	if got := fixture.registry.ActivePins(); got != 4 {
 		t.Fatalf("two capture and two resource-set pins=%d want 4", got)
 	}
-	if descriptors := mustStableResourceDescriptors(t, authority.resources); len(descriptors) != 2 {
+	diagnostics, err := authority.resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptors := diagnostics.Physical(); len(descriptors) != 2 {
 		t.Fatalf("packed descriptors=%d want 2", len(descriptors))
 	}
-	if stats := authority.resources.Stats(time.Now()); len(stats) != 1 || stats[0].NamespaceSyncs != 2 {
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	statsView, err := authority.resources.AcquireStats(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats := statsView.Stats(); len(stats) != 1 || stats[0].NamespaceSyncs != 2 {
 		t.Fatalf("multi-segment namespace stats=%+v want two distinct parents", stats)
+	}
+	if err := statsView.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 	var creates, beforeSyncs, afterSyncs int
 	for _, event := range events {
@@ -520,7 +557,7 @@ func TestLeafGenerationPackTargetProbeFailsBeforePublicationOrStaging(t *testing
 	originalProbe := leafGenerationPackPromotionTargetProbe
 	probeCalls := 0
 	probeErr := fmt.Errorf("%w: injected target filesystem", rootpublication.ErrNamespacePersistenceUnsupported)
-	leafGenerationPackPromotionTargetProbe = func(*os.File) error {
+	leafGenerationPackPromotionTargetProbe = func(*leafGenerationPackPromotionAuthority) error {
 		probeCalls++
 		return probeErr
 	}
@@ -582,7 +619,6 @@ func TestLeafGenerationPackTargetProbePreservesTwoParentSyncContract(t *testing.
 func TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
-	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 	const replacement = "end-to-end-staging-replacement"
 	var stagingPath, originalPath, destinationPath string
@@ -626,6 +662,34 @@ func TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles(t *tes
 	if _, statErr := os.Stat(destinationPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("destination appeared after pre-promotion rebound: %v", statErr)
 	}
+
+	// The real staging cleanup cannot unlink the rebound child using the
+	// original identity. Preserve that hard refusal and both exact operands.
+	closeErr := db.Close()
+	if !errors.Is(closeErr, rootpublication.ErrResourceConflict) || !errors.Is(closeErr, ErrRecoveryRequired) {
+		t.Fatalf("actual rebound cleanup refusal: %v", closeErr)
+	}
+	var receipt *originalDBCleanupFailure
+	if !errors.As(db.backgroundError(), &receipt) {
+		t.Fatal("original rebound cleanup receipt lost")
+	}
+	authority, ok := receipt.payload.(*leafGenerationPackPromotionAuthority)
+	if !ok || authority.metadata == nil || authority.metadataCharge == 0 || !authority.cleanupFailed {
+		t.Fatalf("original failed authority/charge lost: %T", receipt.payload)
+	}
+	charge := authority.metadataCharge
+	if again := db.Close(); !errors.Is(again, rootpublication.ErrResourceConflict) || authority.metadataCharge != charge {
+		t.Fatalf("repeat Close replayed or lost cleanup custody: %v", again)
+	}
+	if got, readErr := os.ReadFile(originalPath); readErr != nil || !bytes.Equal(got, originalBefore) {
+		t.Fatalf("terminal original operand changed: err=%v", readErr)
+	}
+	if got, readErr := os.ReadFile(stagingPath); readErr != nil || string(got) != replacement {
+		t.Fatalf("terminal rebound operand changed: err=%v", readErr)
+	}
+	if e := leafLog.Close(); e != nil {
+		t.Fatalf("Close leaf log: %v", e)
+	}
 }
 
 func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *testing.T) {
@@ -657,8 +721,19 @@ func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *tes
 		return true, testErr
 	}
 	deletionSyncErr := errors.New("injected promoted cleanup deletion sync failure")
+	var unlinkAttempts, syncAttempts, physicalSyncs int
+	priorSync := leafGenerationPackAuthoritySyncDirectory
+	leafGenerationPackAuthoritySyncDirectory = func(parent *os.File) error {
+		physicalSyncs++
+		return priorSync(parent)
+	}
+	defer func() { leafGenerationPackAuthoritySyncDirectory = priorSync }()
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceUnlink {
+			unlinkAttempts++
+		}
 		if event.Point == durabilitycut.BeforeDeletionDirectorySync {
+			syncAttempts++
 			return deletionSyncErr
 		}
 		return nil
@@ -685,14 +760,36 @@ func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *tes
 	if _, statErr := os.Stat(secondDestination); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("uninstalled second segment became a cleanup target: %v", statErr)
 	}
-	if err := fixture.db.runCaptureTeardownHooksLocked(); err != nil {
-		t.Fatalf("teardown retry: %v", err)
+
+	if unlinkAttempts != 1 || syncAttempts != 1 || physicalSyncs != 0 {
+		t.Fatalf("actual cleanup unlink=%d beforeSync=%d physicalSync=%d", unlinkAttempts, syncAttempts, physicalSyncs)
 	}
-	if _, statErr := os.Stat(fixture.stagingRoot); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("teardown retained staging root: %v", statErr)
+	owner, charge, parent := authority.metadata, authority.metadataCharge, authority.destinationParent
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if e := authority.release(); !errors.Is(e, deletionSyncErr) || !errors.Is(e, ErrRecoveryRequired) {
+				t.Errorf("terminal original outcome: %v", e)
+			}
+		}()
 	}
-	if stats := fixture.registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
-		t.Fatalf("teardown retained registry state: %+v", stats)
+	wg.Wait()
+	if e := fixture.db.runCaptureTeardownHooksLocked(); e != nil {
+		t.Fatalf("hard refusal must not register a cleanup retry: %v", e)
+	}
+	if authority.metadata != owner || authority.metadataCharge != charge || charge == 0 || authority.destinationParent != parent || len(authority.segments) != 2 || fixture.registry.ActivePins() == 0 {
+		t.Fatal("terminal original authority/parent/pins/charge lost")
+	}
+	if !errors.Is(fixture.db.backgroundError(), deletionSyncErr) || !errors.Is(fixture.db.backgroundError(), ErrRecoveryRequired) {
+		t.Fatal("original DB receipt lost first cleanup cause")
+	}
+	if _, statErr := os.Stat(fixture.stagingRoot); statErr != nil {
+		t.Fatalf("hard refusal lost original staging custody: %v", statErr)
+	}
+	if len(authority.recoveryCleanup) != 1 || authority.recoveryCleanup[0].path != destination || unlinkAttempts != 1 || syncAttempts != 1 || physicalSyncs != 0 {
+		t.Fatal("terminal observation retried an authorized effect or lost proof")
 	}
 }
 
@@ -840,5 +937,55 @@ func TestCleanupRewriteCreatedSegmentRejectsReboundPath(t *testing.T) {
 	data, readErr := os.ReadFile(fixture.path)
 	if readErr != nil || string(data) != "rebound" {
 		t.Fatalf("rebound path was deleted data=%q err=%v", data, readErr)
+	}
+}
+
+// The containing callback environment is reserved before the method value is
+// created or the existing capture array is changed.
+func TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		t.Run(fmt.Sprint("refuse=", refuse), func(t *testing.T) {
+			fixture := newLeafPackAuthorityFixture(t)
+			defer fixture.close(t)
+			owner := fixture.registry.MetadataOwner()
+			baseline := owner.Bytes()
+			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, originalCharge := owner.Bytes(), authority.metadataCharge
+			if refuse {
+				budget := &primaryScratchBudget{capacity: ^uint64(0)}
+				enrollment, enrollErr := owner.Enroll(budget)
+				if enrollErr != nil {
+					t.Fatal(enrollErr)
+				}
+				defer enrollment.Close()
+				before = owner.Bytes()
+				budget.capacity = before
+			}
+			err = authority.retainForRecovery()
+			if refuse {
+				if !errors.Is(err, retainedalloc.ErrCapacity) || authority.recoveryHook != nil || authority.metadataCharge != originalCharge || owner.Bytes() != before || len(fixture.db.captureTeardownHooks) != 0 {
+					t.Fatalf("callback admission refusal err=%v hook=%t charge=%d bytes=%d", err, authority.recoveryHook != nil, authority.metadataCharge, owner.Bytes())
+				}
+				if !errors.Is(fixture.db.backgroundError(), retainedalloc.ErrCapacity) || !authority.cleanupFailed || authority.stagingParent == nil || authority.destinationParent == nil {
+					t.Fatal("registration refusal lost original authority/parent debt")
+				}
+				return
+			}
+			if err != nil || authority.cleanupFailed || !authority.deferMetadataRefund || authority.recoveryHook == nil || owner.Bytes() <= before {
+				t.Fatalf("ambiguous publication registration: err=%v failed=%t", err, authority.cleanupFailed)
+			}
+			if err := fixture.db.runCaptureTeardownHooksLocked(); err != nil {
+				t.Fatalf("successful original drain: %v", err)
+			}
+			if authority.metadata != nil || authority.metadataCharge != 0 || authority.recoveryHook != nil || owner.Bytes() != baseline {
+				t.Fatalf("post-return containing/environment refund bytes=%d baseline=%d authorityCharge=%d", owner.Bytes(), baseline, authority.metadataCharge)
+			}
+			if err := fixture.db.runCaptureTeardownHooksLocked(); err != nil || owner.Bytes() != baseline {
+				t.Fatalf("repeat drain replayed original contribution: %v", err)
+			}
+		})
 	}
 }

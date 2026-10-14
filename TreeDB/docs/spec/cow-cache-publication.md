@@ -370,3 +370,31 @@ cannot dispose the mapping needed by this finalizer. Cleanup failure retains the
 exact Snapshot at that owner; private one-shot reads cannot reuse a failed owner.
 This extends physical cleanup custody without adding a Snapshot read-after-close
 promise.
+
+
+A successor backend basis preadmits its existing wrapper, retained VLog/leaf
+capacities, pin vector and original cleanup custody before capture effects.
+Startup, handoff and maintenance use the same admission and adoption boundary.
+The original Snapshot finalizer reports actual completion after alias scrub and
+its existing pager callback's available final action. Accepting Snapshot.Close
+while a reader remains does not refund the basis. A physical cleanup failure
+retains that exact basis and its charge in the SAME identity registry, including
+DATA-only captures; repeated Close does not replay cleanup or refund failure.
+Independent surviving pager descriptors retain their own original operations,
+without extending an already scrubbed Snapshot payload's lifetime.
+
+Bounded capture performs external admission before taking the existing state
+read lock. It then revalidates the exact view under rootReuseMu followed by
+db.mu, before reader registration or PRIMARY references. Same-root topology
+refresh during admission refuses this capture; retry uses the successor view.
+The captured VLog Set is acquired after fallible reference admission while the
+state lock excludes replacement, and the lock is released before leaf setup.
+This adds no publication authority, changes no command-WAL acknowledgement,
+and does not qualify the remaining ordinary allocation, platform or cost gates.
+
+Public COW point, many, append, presence and successor reads return any available
+original completion error alongside their operation result. Successful cleanup
+preserves existing missing-key normalization and refusal sentinels. The owned
+iterator closes its bound child after excluding active moves, detaches consumed
+Snapshot aliases and only then releases its wrapper allocation; failed physical
+basis cleanup retains the original basis independently.

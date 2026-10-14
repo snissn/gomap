@@ -945,6 +945,9 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
 				} else {
 					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
+					if err == nil {
+						node, err = txn.finishOrdinaryDataMetadataV6()
+					}
 				}
 				if err != nil {
 					c.removeCompletedPendingPrefixV6(completed, removedBytes)

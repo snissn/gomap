@@ -27,6 +27,10 @@ type primaryDependencyLeaseV5 struct {
 	failedNext           *primaryDependencyLeaseV5
 	directory            *rootpublication.DependencyDirectoryV2
 	recoveryNext         *primaryDependencyLeaseV5
+	releaseWork          primaryArenaReleaseWork
+	releasePhase         uint8
+	releaseMetadata      *retainedalloc.Owner
+	releaseNative        bool
 }
 
 func (lease *primaryDependencyLeaseV5) activate() error {
@@ -59,61 +63,53 @@ func (lease *primaryDependencyLeaseV5) release() error {
 
 // disposed reports this lease's OWN cleanup, independently of prior sibling errors.
 func (lease *primaryDependencyLeaseV5) releaseOutcome() (disposed bool, err error) {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if lease.closed {
-		return !lease.failed, lease.cleanupErr
-	}
-	lease.closed = true
-	owner := lease.owner
-	// This lease remains allocated through its final owner release. Capture the
-	// exact governing owner before that release clears physical arena custody.
-	metadata := owner.arena.MetadataOwner()
-	if lease.ref.PageID != 0 {
-		ready, err := owner.arena.Drop(lease.ref, nil)
-		if !ready || err != nil {
-			lease.failure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
-			lease.cleanupErr = &lease.failure
-			metadata.CleanupFailed()
-			owner.retainFailedDependency(lease, lease.cleanupErr)
-			return false, lease.cleanupErr
+	for {
+		consumed, ready, completion, err := lease.ReleaseDependencyDirectoryWorkV6(nil)
+		if !ready && err == nil {
+			continue
 		}
-		lease.ref = primaryarena.Ref{}
+		lease = nil
+		if consumed && completion.Charge != 0 {
+			completion.Metadata.RemovePending(completion.Charge)
+		}
+		return consumed, err
 	}
-	ready, physicalDebt, err := owner.releaseWithOutcome(nil)
-	lease.ownerReleaseConsumed = ready
-	if !ready || physicalDebt {
-		lease.failure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
-		lease.cleanupErr = &lease.failure
-		metadata.CleanupFailed()
-		owner.retainFailedDependency(lease, lease.cleanupErr)
-		return false, lease.cleanupErr
-	}
-	lease.owner = nil
-	lease.directory = nil
-	charge := lease.metadataCharge
-	lease.metadataCharge = 0
-	metadata.RemovePending(charge)
-	lease.cleanupErr = err
-	return true, err
 }
 
 // Constructor failures retain both causes in their preadmitted lease storage.
-func (lease *primaryDependencyLeaseV5) constructorError(cause error) error {
-	disposed, cleanup := lease.releaseOutcome()
-	if disposed || cleanup == nil {
-		return cause
+func (lease *primaryDependencyLeaseV5) constructorError(cause error) (error, rootpublication.DependencyDirectoryReleaseCompletionV6) {
+	for {
+		disposed, ready, completion, cleanup := lease.ReleaseDependencyDirectoryWorkV6(nil)
+		if !ready && cleanup == nil {
+			continue
+		}
+		if disposed || cleanup == nil {
+			return cause, completion
+		}
+		lease.constructorFailure.causes = [3]error{cause, cleanup}
+		return &lease.constructorFailure, completion
 	}
-	lease.constructorFailure.causes = [3]error{cause, cleanup}
-	return &lease.constructorFailure
+}
+
+// Consume the producer method's completion only after the original caller's
+// lease alias is detached. Failed originals remain in existing owner custody.
+func disposePrimaryDependencyConstructorV6(alias **primaryDependencyLeaseV5, cause error) error {
+	original := *alias
+	result, completion := original.constructorError(cause)
+	*alias = nil
+	original = nil
+	if completion.Charge != 0 {
+		completion.Metadata.RemovePending(completion.Charge)
+	}
+	return result
 }
 func (db *DB) pinPrimaryDependencyV5(idx *indexGen, ref rootpublication.DependencyDirectoryRefV2, extent uint64) (*rootpublication.DependencyDirectoryV2, error) {
 	if idx == nil || idx.primaryOwner == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	// The lease and its bound release method environment are genuine separate
-	// allocations, admitted before acquiring the physical owner edge.
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDependencyLeaseV5{}))) + retainedalloc.AllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+	// The exact containing lease and its embedded physical release controls are
+	// admitted before acquiring the original physical owner edge.
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDependencyLeaseV5{})))
 	if err := idx.primary.MetadataOwner().AddPending(charge); err != nil {
 		return nil, err
 	}
@@ -125,12 +121,12 @@ func (db *DB) pinPrimaryDependencyV5(idx *indexGen, ref rootpublication.Dependen
 	lease := &primaryDependencyLeaseV5{owner: idx.primaryOwner, root: ref.RootPageID, metadataCharge: charge}
 	if idx.primary.Recovered() {
 		if e := lease.activate(); e != nil {
-			return nil, lease.constructorError(e)
+			return nil, disposePrimaryDependencyConstructorV6(&lease, e)
 		}
 	}
-	directory, e := rootpublication.NewOwnedLocalPrimaryDependencyDirectoryV5(lease.owner.arena.Pager(), ref, extent, idx.primary.MetadataOwner(), lease.releaseOutcome)
+	directory, e := rootpublication.NewOwnedWorkLocalPrimaryDependencyDirectoryV6(lease.owner.arena.Pager(), ref, extent, idx.primary.MetadataOwner(), lease)
 	if e != nil {
-		return nil, lease.constructorError(e)
+		return nil, disposePrimaryDependencyConstructorV6(&lease, e)
 	}
 	lease.directory = directory
 	if !idx.primary.Recovered() {

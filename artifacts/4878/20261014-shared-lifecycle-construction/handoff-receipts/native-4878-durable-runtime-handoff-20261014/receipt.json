@@ -1,0 +1,13 @@
+{
+  "at_utc": "2026-10-14T13:36:20.613926+00:00",
+  "path": "TreeDB/db/durable_root_runtime.go",
+  "source_commit": "7a0ef65bad20694e86edd5869dcd115f0af1643c",
+  "source_sha256": "6489a379b73718c90e3dc14b80932d5436d9b44a8d67c8bfa502f083cfa3166b",
+  "source_git_blob": "668a086f7d960f54abc6e5efc29dfd0b5f5344e8",
+  "native_before_sha256": "5788faf2a3a00ed1cb4d0649d15306c37d35f50357c091a2abaa59f1959dd8ff",
+  "native_after_sha256": "6489a379b73718c90e3dc14b80932d5436d9b44a8d67c8bfa502f083cfa3166b",
+  "native_HEAD_unchanged": "0865a8b40c5070a0077ef97cebc5945034821507",
+  "index_unchanged": true,
+  "ownership": "ordinary explicit release; native sole writer after coordinator ACK; ordinary lane retains readonly frozen predecessor",
+  "scope": "One maintained runtime original only; caller companions not released; old evidence stays frozen/unqualified"
+}

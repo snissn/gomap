@@ -1,0 +1,11 @@
+[
+  "TreeDB/db/durable_primary_rebuild_v5.go",
+  "TreeDB/db/vacuum_online.go",
+  "TreeDB/db/vacuum_offline.go",
+  "TreeDB/db/vacuum_collection_roots.go",
+  "TreeDB/db/primary_joint_swap_v6.go",
+  "TreeDB/db/durable_root_owner_continuity_test.go",
+  "TreeDB/db/primary_offline_pair_v6.go",
+  "TreeDB/db/stable_resource.go",
+  "TreeDB/internal/valuelog/mmap_admission_test.go"
+]

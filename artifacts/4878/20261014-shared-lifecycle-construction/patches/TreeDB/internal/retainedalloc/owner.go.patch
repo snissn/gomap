@@ -1,0 +1,118 @@
+--- a/TreeDB/internal/retainedalloc/owner.go
++++ b/TreeDB/internal/retainedalloc/owner.go
+@@ -44,13 +44,14 @@
+ }
+ 
+ type binding struct {
+-	budget      Budget
+-	lease       Lease
+-	refs        uint64
+-	producer    bool
+-	next        *binding
+-	prev        *binding
+-	cleanupRefs uint64
++	budget             Budget
++	lease              Lease
++	refs               uint64
++	producer           bool
++	next               *binding
++	prev               *binding
++	cleanupRefs        uint64
++	admitted, rollback uint64
+ }
+ type Owner struct {
+ 	mu                                 sync.Mutex
+@@ -59,6 +60,8 @@
+ 	closed                             bool
+ 	closeWork                          ownerCloseWork
+ 	retired, cleanupFailed             bool
++	enrolling                          uint64
++	enrollment                         *EnrollmentWork
+ }
+ 
+ // Initialize freezes the actual constructor baseline before any enrollment.
+@@ -98,17 +101,35 @@
+ 		}
+ 		target -= bytes
+ 	}
++	active := o.enrollment
++	pendingTarget := uint64(0)
++	if active != nil && active.pending != nil {
++		pendingTarget = active.pendingAdmitted
++		if err := active.pending.Resize(target); err != nil {
++			return err
++		}
++		active.pendingAdmitted = target
++	}
+ 	for b := o.head; b != nil; b = b.next {
++		b.rollback = b.admitted
+ 		if err := b.lease.Resize(target); err != nil {
+ 			// Shrink back to the prior successful admission. Existing leases always
+ 			// permit this even after budget Close; no foreign writer can own this lease.
+ 			for prior := o.head; prior != b; prior = prior.next {
+-				if rollback := prior.lease.Resize(o.bytes); rollback != nil {
++				if rollback := prior.lease.Resize(prior.rollback); rollback != nil {
+ 					panic("retained allocation rollback refused")
+ 				}
++				prior.admitted = prior.rollback
++			}
++			if active != nil && active.pending != nil {
++				if rollback := active.pending.Resize(pendingTarget); rollback != nil {
++					panic("pending retained allocation rollback refused")
++				}
++				active.pendingAdmitted = pendingTarget
+ 			}
+ 			return err
+ 		}
++		b.admitted = target
+ 	}
+ 	o.bytes = target
+ 	return nil
+@@ -159,7 +180,7 @@
+ 		}
+ 		o.controls -= delta
+ 	}
+-	if o.head == nil {
++	if o.head == nil && o.enrolling == 0 && o.enrollment == nil {
+ 		o.bytes = 0
+ 		o.baseline = 0
+ 	}
+@@ -214,14 +235,25 @@
+ 		return nil, err
+ 	}
+ 	if found == nil {
+-		lease, err := budget.AcquireRetention(o.bytes)
++		var lease Lease
++		var err error
++		active := o.enrollment
++		if active != nil && active.budget == budget && active.pending != nil {
++			// Promote the SAME preborn constructor; ordinary capture never
++			// waits for another native Step or duplicates its governor.
++			lease = active.pending
++			active.pending = nil
++			active.pendingAdmitted = 0
++		} else {
++			lease, err = budget.AcquireRetention(o.bytes)
++		}
+ 		if err != nil {
+ 			if rollback := o.resizeLocked(delta, false); rollback != nil {
+ 				panic("retained enrollment rollback refused")
+ 			}
+ 			return nil, err
+ 		}
+-		found = &binding{budget: budget, lease: lease, next: o.head}
++		found = &binding{budget: budget, lease: lease, next: o.head, admitted: o.bytes}
+ 		if o.head != nil {
+ 			o.head.prev = found
+ 		}
+@@ -229,6 +261,10 @@
+ 	}
+ 	if found.refs == math.MaxUint64 {
+ 		panic("retained enrollment reference overflow")
++	}
++	if active := o.enrollment; active != nil && active.budget == budget && active.found == nil {
++		found.cleanupRefs++
++		active.found = found
+ 	}
+ 	o.controls += delta
+ 	found.refs++

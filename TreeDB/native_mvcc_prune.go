@@ -1,0 +1,62 @@
+package treedb
+
+import (
+	"github.com/snissn/gomap/TreeDB/caching"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+)
+
+// NativeMVCCCaptureV6 is the original cache capture continuation, embedded in
+// its admitted MVCC caller. It creates no independent snapshot owner.
+type NativeMVCCCaptureV6 = caching.NativeMVCCCaptureV6
+
+// NativeMVCCBudgetV6 returns the original cache-lifetime admission governor.
+// A backend-only handle has no supported native cache route.
+func (db *DB) NativeMVCCBudgetV6(w *iterator.OrdinalScanWork) (*memtable.COWBudget, bool, error) {
+	if db == nil {
+		return nil, false, ErrClosed
+	}
+	if w == nil || !w.Reserve(1, 64) {
+		return nil, false, nil
+	}
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.cached == nil || db.backend == nil {
+		return nil, false, caching.ErrCOWUnsupported
+	}
+	return db.cached.NativeMVCCBudgetV6(w)
+}
+
+// StepNativeMVCCCaptureV6 preserves public lifecycle exclusion while the SAME
+// cache cut acquires the original backend Snapshot's admitted physical borrows.
+// Initial acceptance does not establish reader readiness or physical Finish.
+func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
+	if db == nil {
+		return nil, false, ErrClosed
+	}
+	if w == nil || !w.Reserve(1, 64) {
+		return nil, false, nil
+	}
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.cached == nil || db.backend == nil {
+		return nil, false, caching.ErrCOWUnsupported
+	}
+	return db.cached.StepNativeMVCCCaptureV6(c, admit, w)
+}
+
+func (db *DB) StepNativeMVCCOwnedCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
+	if db == nil {
+		return nil, false, ErrClosed
+	}
+	if w == nil || !w.Reserve(1, 64) {
+		return nil, false, nil
+	}
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.cached == nil || db.backend == nil {
+		return nil, false, caching.ErrCOWUnsupported
+	}
+	return db.cached.StepNativeMVCCOwnedCaptureV6(c, w)
+}

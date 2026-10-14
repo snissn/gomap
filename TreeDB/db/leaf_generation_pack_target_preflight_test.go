@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ func TestLeafGenerationPackTargetProbeBypassedForZeroSourceNoOp(t *testing.T) {
 	originalProbe := leafGenerationPackPromotionTargetProbe
 	probeCalls := 0
 	testErr := errors.New("target probe must not run")
-	leafGenerationPackPromotionTargetProbe = func(*os.File) error {
+	leafGenerationPackPromotionTargetProbe = func(*leafGenerationPackPromotionAuthority) error {
 		probeCalls++
 		return testErr
 	}

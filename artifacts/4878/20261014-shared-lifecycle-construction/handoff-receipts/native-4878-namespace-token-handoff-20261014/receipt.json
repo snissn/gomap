@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-14T12:08:56.065339+00:00",
+  "path": "TreeDB/internal/rootpublication/resource_token.go",
+  "before_sha256": "d8c0f0224912de2e5754091bbf18a71c4861380b2edca4484f3038e6d7d4c87c",
+  "before_bytes": 95111,
+  "source_sha256": "f767fc2b5582fbfd33eaec54d4f14e8b80a050acd0e744731c6d3a5f089e650a",
+  "source_bytes": 100978,
+  "source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/queued-root-owner-advisory-20261014/source/TreeDB/internal/rootpublication/resource_token.go",
+  "heads": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": "b5ace51b3f2605f0d03d38bed42d0bb5fccf2dea",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": "b5723dd42b5089841df6cba121b3cfdad06b8417"
+  },
+  "indexes_unchanged": true,
+  "readback_identical": true,
+  "producer_release": "ordinary owner explicitly released token after first-hard-outcome/proof cleanup final shape; no owner-continuity edits remain in this path",
+  "new_sole_writer": "/root/mvcc_native_codec_integration_sol61",
+  "old_owner_readonly": "/root/mvcc_architecture_repair_sol61",
+  "contract": "Preserve source-at-birth containing/name/parent/scratch admissions, distinct two-parent synchronization, sticky first hard physical outcome, unresolved aliases/proof debt. External original preborn parent receipt; ordinary ReleaseWithError drives SAME phases. Preeffect work-budget refusal resumable, no hard-failure poison."
+}

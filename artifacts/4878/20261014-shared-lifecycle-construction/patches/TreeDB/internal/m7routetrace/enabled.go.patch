@@ -1,0 +1,211 @@
+--- /dev/null
++++ b/TreeDB/internal/m7routetrace/enabled.go
+@@ -0,0 +1,208 @@
++//go:build treedb_test && m7_route_trace
++
++package m7routetrace
++
++import "sync/atomic"
++
++type tupleCell struct{ fields [8]atomic.Uint64 }
++
++func (t *tupleCell) store(v Tuple) {
++	for i, x := range [8]uint64{v.Call, v.Attempt, v.Stage, v.Event, v.A, v.B, v.C, v.D} {
++		t.fields[i].Store(x)
++	}
++}
++func (t *tupleCell) load() Tuple {
++	var x [8]uint64
++	for i := range x {
++		x[i] = t.fields[i].Load()
++	}
++	return Tuple{x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]}
++}
++
++type Observer struct {
++	detailCount                     [8]atomic.Uint64
++	detailReasons                   [8][512]atomic.Uint64
++	detailTuples, detailFinalTuples atomic.Uint64
++	detailFirst                     [96]detailCell
++	detailFinalFirst                [96]detailCell
++	detailLast                      [256]detailCell
++
++	// These are non-retaining numeric correlation identities, not object references.
++	owners                                                 [3]uintptr
++	counts                                                 [EventCount]atomic.Uint64
++	stage, highest, attempts, calls, tuples, cancelPending atomic.Uint64
++	cancelScheduled, cancelCompleted, reset, closed        [StageCount]atomic.Uint64
++	actions, phases                                        [32]atomic.Uint64
++	first                                                  [24]tupleCell
++	last                                                   [8]tupleCell
++	admissionCount                                         [8]atomic.Uint64
++	admissionTuples, reserveSeen                           atomic.Uint64
++	firstReserve                                           admissionCell
++	admissionFirst                                         [24]admissionCell
++	admissionLast                                          [8]admissionCell
++}
++
++var active atomic.Pointer[Observer]
++
++func Begin(store, publicDB, backendDB uintptr) *Observer {
++	o := &Observer{owners: [3]uintptr{store, publicDB, backendDB}}
++	if !active.CompareAndSwap(nil, o) {
++		panic("overlapping diagnostic route observer")
++	}
++	return o
++}
++func (o *Observer) End() {
++	if o != nil && !active.CompareAndSwap(o, nil) {
++		panic("diagnostic route observer replaced")
++	}
++}
++func (o *Observer) Snapshot() (s Snapshot) {
++	if o == nil {
++		return
++	}
++	for i := range s.Counts {
++		s.Counts[i] = o.counts[i].Load()
++	}
++	s.MaxStage, s.HighestStage, s.Attempts, s.Calls, s.Tuples = o.stage.Load(), o.highest.Load(), o.attempts.Load(), o.calls.Load(), o.tuples.Load()
++	for i := range s.Reset {
++		s.CancelScheduled[i] = o.cancelScheduled[i].Load()
++		s.CancelCompleted[i] = o.cancelCompleted[i].Load()
++		s.Reset[i] = o.reset[i].Load()
++		s.Closed[i] = o.closed[i].Load()
++	}
++	for i := range s.Actions {
++		s.Actions[i] = o.actions[i].Load()
++		s.Phases[i] = o.phases[i].Load()
++	}
++	for i := range s.First {
++		s.First[i] = o.first[i].load()
++	}
++	for i := range s.Last {
++		s.Last[i] = o.last[i].load()
++	}
++	for i := range s.AdmissionCount {
++		s.AdmissionCount[i] = o.admissionCount[i].Load()
++	}
++	s.AdmissionTuples = o.admissionTuples.Load()
++	s.FirstReserve = o.firstReserve.load()
++	for i := range s.AdmissionFirst {
++		s.AdmissionFirst[i] = o.admissionFirst[i].load()
++	}
++	for i := range s.AdmissionLast {
++		s.AdmissionLast[i] = o.admissionLast[i].load()
++	}
++	for i := range s.DetailCount {
++		s.DetailCount[i] = o.detailCount[i].Load()
++		for j := range s.DetailReasons[i] {
++			s.DetailReasons[i][j] = o.detailReasons[i][j].Load()
++		}
++	}
++	s.DetailTuples = o.detailTuples.Load()
++	s.DetailFinalTuples = o.detailFinalTuples.Load()
++	for i := range s.DetailFirst {
++		s.DetailFirst[i] = o.detailFirst[i].load()
++		s.DetailFinalFirst[i] = o.detailFinalFirst[i].load()
++	}
++	for i := range s.DetailLast {
++		s.DetailLast[i] = o.detailLast[i].load()
++	}
++	return
++}
++func Observe(owner uintptr, e Event, a, b, c, d uint64) {
++	o := active.Load()
++	if o == nil || owner == 0 || (owner != o.owners[0] && owner != o.owners[1] && owner != o.owners[2]) {
++		return
++	}
++	if e == PublicWriteBefore || e == PublicWriteAfter || e == Return || e == FloorSyncReturn {
++		Detail(owner, 7, uint64(e), [4]uint64{}, [48]uint64{a, b, c, d}, [6][]byte{})
++	}
++	o.counts[e].Add(1)
++	if e == Quantum {
++		o.calls.Add(1)
++		if a < 32 {
++			o.actions[a].Add(1)
++		}
++	}
++	if e == NoWALPhase && a < 32 {
++		o.phases[a].Add(1)
++	}
++	if e == PredecessorOwnerCreated {
++		o.attempts.Add(1)
++		o.stage.Store(0)
++		o.cancelPending.Store(0)
++	}
++	st := uint64(0)
++	switch e {
++	case PredecessorOwnerCreated:
++		st = 1
++	case PredecessorReturn:
++		if a != 0 {
++			st = 2
++		}
++	case ConfigureRunDone, ConfigurePrefixDone:
++		st = 3
++	case FloorSyncReturn:
++		if a != 0 {
++			st = 4
++		}
++	case SelectorReached:
++		st = 5
++	case SelectorCalled:
++		st = 6
++	case SelectorCreated:
++		st = 7
++	case SelectorPrepared:
++		st = 8
++	case EnvelopeReady:
++		st = 9
++	case ConsumeEntered:
++		st = 10
++	case CutStarted:
++		st = 11
++	case LeafBound:
++		st = 12
++	case ComposeDone:
++		st = 13
++	case Accepted, NativeGroupAccepted:
++		st = 14
++	case FinishDone:
++		st = 15
++	case PublicACK:
++		st = 16
++	}
++	for old := o.stage.Load(); st > old; old = o.stage.Load() {
++		if o.stage.CompareAndSwap(old, st) {
++			break
++		}
++	}
++	max := o.stage.Load()
++	for old := o.highest.Load(); max > old; old = o.highest.Load() {
++		if o.highest.CompareAndSwap(old, max) {
++			break
++		}
++	}
++	switch e {
++	case CancelStaleScheduled, CancelChangedScheduled, CancelErrorScheduled:
++		if o.cancelPending.CompareAndSwap(0, 1) {
++			o.cancelScheduled[max].Add(1)
++		}
++	case CancelPublicDone:
++		o.cancelCompleted[max].Add(1)
++	case ResetDiscovery, ResetRefresh, ResetCancel:
++		o.reset[max].Add(1)
++	case ResetDone:
++		o.stage.Store(0)
++		o.cancelPending.Store(0)
++	case CloseCursor, CloseNative, CloseBackend:
++		o.closed[max].Add(1)
++	}
++	switch e {
++	case PredecessorReturn, PublicWriteBefore, PublicWriteAfter, RefreshStaleNilPreparation, RefreshStalePreparation, RefreshChangedPreparation, CancelStaleScheduled, CancelChangedScheduled, CancelErrorScheduled, CancelPublicDone, ResetDiscovery, ResetRefresh, ResetCancel, RequestTerminal, EnvelopeError, ConsumeError, InitialConsumerRefusal:
++		n := o.tuples.Add(1) - 1
++		v := Tuple{o.calls.Load(), o.attempts.Load(), max, uint64(e), a, b, c, d}
++		if n < 24 {
++			o.first[n].store(v)
++		}
++		o.last[n%8].store(v)
++	}
++}

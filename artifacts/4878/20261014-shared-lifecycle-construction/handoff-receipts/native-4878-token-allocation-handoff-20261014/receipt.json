@@ -1,0 +1,30 @@
+{
+  "at_utc": "2026-10-14T12:40:41.215210+00:00",
+  "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+  "mode": "NO_SOURCE_WRITE_ALREADY_IDENTICAL",
+  "rows": [
+    {
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "sha256": "7220c07cd3024c83c7f66fd850a55dc375968bc6d931aea2e4195a80c1fd626e",
+      "bytes": 13245
+    },
+    {
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+      "sha256": "7220c07cd3024c83c7f66fd850a55dc375968bc6d931aea2e4195a80c1fd626e",
+      "bytes": 13245
+    }
+  ],
+  "heads": {
+    "ordinary-5111": "b5ace51b3f2605f0d03d38bed42d0bb5fccf2dea",
+    "native-4878-traversal": "b5723dd42b5089841df6cba121b3cfdad06b8417"
+  },
+  "index_sha256": {
+    "ordinary-5111": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-4878-traversal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "producer_release_receipt": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/resource-token-allocation-handoff-20261014/receipt.json",
+  "producer_release_sha256": "489e739cd894fb04d9ec154d41d6dc9493af4b147f0082dc590ef6d07eb3f9ec",
+  "new_sole_writer": "/root/mvcc_native_codec_integration_sol61",
+  "old_owner_readonly": "/root/mvcc_architecture_repair_sol61",
+  "contract": "Same preborn admitted token/obligations/physical payload and original first failure; checked constructor unwind and one ordinary/native release phase engine. No new keeper or premature containing refund."
+}

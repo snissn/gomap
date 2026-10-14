@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -161,16 +163,35 @@ func validateStableEncodedResourceClosure(resources *rootpublication.StableResou
 	keyOf := func(descriptor rootpublication.StableResourcePhysicalDescriptor) key {
 		return key{descriptor.Kind, descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.Generation}
 	}
-	matched := make(map[key]bool)
+	metadata := resources.MetadataOwner()
 	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
 	if captureErr != nil {
 		return captureErr
 	}
 	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
-	for _, descriptor := range diagnostics.Physical() {
+	type match struct {
+		physical key
+		found    bool
+	}
+	physical := diagnostics.Physical()
+	charge := retainedalloc.AllocationCharge(uint64(len(physical)) * uint64(unsafe.Sizeof(match{})))
+	if metadata != nil {
+		if err := metadata.AddPending(charge); err != nil {
+			return err
+		}
+	}
+	matched := make([]match, 0, len(physical))
+	defer func() {
+		clear(matched)
+		matched = nil
+		if metadata != nil {
+			metadata.RemovePending(charge)
+		}
+	}()
+	for _, descriptor := range physical {
 		for _, reachable := range descriptor.ReachabilityFields() {
 			if reachable == field {
-				matched[keyOf(descriptor)] = false
+				matched = append(matched, match{physical: keyOf(descriptor)})
 				break
 			}
 		}
@@ -178,17 +199,52 @@ func validateStableEncodedResourceClosure(resources *rootpublication.StableResou
 	if len(matched) == 0 {
 		return fmt.Errorf("%w: %s %d closure has no resource", rootpublication.ErrUnresolvedResource, field, id)
 	}
-	if err := resources.WalkLogicalObligations(func(descriptor rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
-		physical := keyOf(descriptor)
-		if _, relevant := matched[physical]; relevant && obligation.Generation == id && obligation.FileID == id && obligation.Offset == 0 && obligation.Length == length && obligation.Reachability == field && obligation.Digest == digest {
-			matched[physical] = true
+	compare := func(a, b key) int {
+		if a.kind < b.kind {
+			return -1
+		}
+		if a.kind > b.kind {
+			return 1
+		}
+		if a.lane < b.lane {
+			return -1
+		}
+		if a.lane > b.lane {
+			return 1
+		}
+		if a.resource < b.resource {
+			return -1
+		}
+		if a.resource > b.resource {
+			return 1
+		}
+		if a.generation < b.generation {
+			return -1
+		}
+		if a.generation > b.generation {
+			return 1
+		}
+		return 0
+	}
+	slices.SortFunc(matched, func(a, b match) int { return compare(a.physical, b.physical) })
+	visit := func(descriptor rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		index, relevant := slices.BinarySearchFunc(matched, keyOf(descriptor), func(m match, k key) int { return compare(m.physical, k) })
+		if relevant && obligation.Generation == id && obligation.FileID == id && obligation.Offset == 0 && obligation.Length == length && obligation.Reachability == field && obligation.Digest == digest {
+			matched[index].found = true
 		}
 		return nil
-	}); err != nil {
-		return err
 	}
-	for _, found := range matched {
-		if !found {
+	var walkErr error
+	if metadata != nil {
+		walkErr = diagnostics.WalkLogicalObligations(visit)
+	} else {
+		walkErr = resources.WalkLogicalObligations(visit)
+	}
+	if walkErr != nil {
+		return walkErr
+	}
+	for _, entry := range matched {
+		if !entry.found {
 			return fmt.Errorf("%w: %s %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, field, id)
 		}
 	}
@@ -218,6 +274,34 @@ func (db *DB) stableDictionaryResourceProvider() StableDictionaryResourceProvide
 }
 
 func captureStableDictionaryResources(ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+	return captureStableDictionaryResourcesForDB(nil, ctx, provider, dictID, dictionary, owners...)
+}
+
+func disposeEncodedCapture(db *DB, resources *rootpublication.StableResourceSet) error {
+	if db != nil {
+		return db.releaseCapturedRootResources(resources)
+	}
+	if resources == nil {
+		return nil
+	}
+	return resources.ReleaseWithError()
+}
+
+func captureStableDictionaryResourcesForDB(db *DB, ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte, owners ...*retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if result != nil {
+			original := result
+			result = nil
+			retErr = errors.Join(retErr, disposeEncodedCapture(db, original))
+		}
+		if db != nil && rootpublication.IsOriginalCleanupError(retErr) {
+			db.retainResourceCleanupError(retErr)
+		}
+	}()
+
 	if dictID == 0 || len(dictionary) == 0 {
 		return nil, nil
 	}
@@ -241,21 +325,38 @@ func captureStableDictionaryResources(ctx context.Context, provider StableDictio
 			if err == nil && resources != nil {
 				original := resources
 				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
-				original.Release()
+				err = errors.Join(err, disposeEncodedCapture(db, original))
 			}
 		}
 	}
 	if err != nil {
-		return nil, err
+		return resources, err
 	}
 	if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
-		resources.Release()
-		return nil, err
+		return resources, err
 	}
 	return resources, nil
 }
 
 func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+	return captureStableTemplateResourcesForDB(nil, provider, store, templateID, owners...)
+}
+
+func captureStableTemplateResourcesForDB(db *DB, provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if result != nil {
+			original := result
+			result = nil
+			retErr = errors.Join(retErr, disposeEncodedCapture(db, original))
+		}
+		if db != nil && rootpublication.IsOriginalCleanupError(retErr) {
+			db.retainResourceCleanupError(retErr)
+		}
+	}()
+
 	if templateID == 0 {
 		return nil, nil
 	}
@@ -277,16 +378,15 @@ func captureStableTemplateResources(provider StableTemplateResourceProvider, sto
 			if err == nil && resources != nil {
 				original := resources
 				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
-				original.Release()
+				err = errors.Join(err, disposeEncodedCapture(db, original))
 			}
 		}
 	}
 	if err != nil {
-		return nil, err
+		return resources, err
 	}
 	if err := ValidateStableTemplateResourceClosure(resources, templateID, definition); err != nil {
-		resources.Release()
-		return nil, err
+		return resources, err
 	}
 	return resources, nil
 }

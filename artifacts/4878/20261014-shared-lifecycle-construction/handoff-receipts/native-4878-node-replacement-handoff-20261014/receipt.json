@@ -1,0 +1,27 @@
+{
+ "schema": "original-source-owner-transfer-v1",
+ "at_utc": "2026-10-14T16:03:16.395796+00:00",
+ "path": "TreeDB/node/primary_directory_v1.go",
+ "from": "/root/mvcc_architecture_repair_sol61",
+ "to": "/root/mvcc_native_codec_integration_sol61",
+ "ordinary_explicit_joined_release": true,
+ "scope": "Original ReplacePrimaryComponent delegates SAME actual admitted operand-visitor engine with nil policy for ordinary compatibility; native actual DirectoryDelta current-absence composition; no alternate directory engine. New primary_directory_native_mvcc.go assigned to native. Ordinary source readonly until finite import.",
+ "rows": [
+  {
+   "lane": "ordinary-5111",
+   "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+   "git_blob": "7a83badc4e581a84df425daf927dbf7b1bbd951a",
+   "sha256": "755d3d74bd7e15574e716d273318cd08cc1c5535f7b1b6c57851671f81253a99",
+   "bytes": 14404,
+   "clean": true
+  },
+  {
+   "lane": "native-4878-traversal",
+   "head": "22651bfa4cc30f7f71fa8a47f36b7e0d486bfdd5",
+   "git_blob": "7a83badc4e581a84df425daf927dbf7b1bbd951a",
+   "sha256": "755d3d74bd7e15574e716d273318cd08cc1c5535f7b1b6c57851671f81253a99",
+   "bytes": 14404,
+   "clean": true
+  }
+ ]
+}

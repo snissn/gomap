@@ -1,0 +1,45 @@
+--- a/TreeDB/caching/db.go
++++ b/TreeDB/caching/db.go
+@@ -8959,7 +8959,11 @@
+ }
+ 
+ type DB struct {
+-	cow                          *cowCache
++	cow *cowCache
++	// One original cache-lifetime governor for native legacy captures. COW
++	// uses cow.budget. Every original metadata owner enrolls on this same budget.
++	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
++	nativeMVCCLimits             memtable.COWLimits
+ 	writeWaitForCheckpointActive atomic.Int64
+ 
+ 	mu          sync.RWMutex
+@@ -12500,6 +12504,13 @@
+ 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
+ 	}
+ 	cowMode := modeStr == "cow_btree"
++	nativeMVCCLimits := opts.COWMemtableLimits
++	if nativeMVCCLimits == (memtable.COWLimits{}) {
++		nativeMVCCLimits = memtable.DefaultCOWLimits()
++	}
++	if err := nativeMVCCLimits.Validate(); err != nil {
++		return nil, err
++	}
+ 	var cowLimits memtable.COWLimits
+ 	if cowMode {
+ 		var e error
+@@ -13223,6 +13234,7 @@
+ 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
+ 	}
+ 	db.cow = cowOwner
++	db.nativeMVCCLimits = nativeMVCCLimits
+ 	db.storeMemtableMode(mode)
+ 	if opts.IndexOuterLeavesInValueLog {
+ 		db.leafLog.id = leafLogLaneID
+@@ -26427,6 +26439,7 @@
+ }
+ 
+ func (db *DB) Close() error {
++	defer db.closeNativeMVCCBudgetV6()
+ 	// Keep actual producer governors live through the final backend checkpoint,
+ 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
+ 	if db.cow != nil {

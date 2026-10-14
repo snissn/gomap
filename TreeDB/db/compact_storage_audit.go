@@ -452,7 +452,7 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		return compactStorageAuditRaw{}, fmt.Errorf("compact storage audit: missing input")
 	}
 	result, err := db.maintenanceReachabilityScan(ctx, in.snap, maintenanceReachabilityScanOptions{
-		CountMetadata: db.valueLogRefTracker.metadata,
+		CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
 		Collectors: maintenanceReachabilityValueLogRefCounts |
 			maintenanceReachabilityValueLogLiveBytes |
 			maintenanceReachabilityLeafGenerationTotals,

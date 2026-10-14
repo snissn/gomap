@@ -1,0 +1,89 @@
+--- a/TreeDB/db/original_startup_generation.go
++++ b/TreeDB/db/original_startup_generation.go
+@@ -22,7 +22,12 @@
+ 	}
+ 	custody, err := rootpublication.NewOriginalCleanupCustody(d.valueLogIdentityPins, g.metadata)
+ 	if err != nil {
+-		return nil, errors.Join(err, g.close())
++		metadata, charge, cleanup := g.closeWithCompletionV6()
++		g = nil
++		if metadata != nil && charge != 0 {
++			metadata.RemovePending(charge)
++		}
++		return nil, errors.Join(err, cleanup)
+ 	}
+ 	g.startupDB, g.startupLock, g.startupCustody = d, lock, custody
+ 	return g, nil
+@@ -48,9 +53,9 @@
+ 	return g.startupManagerErr
+ }
+ 
+-func (g *indexGen) finishStartupFailure(operation error, closeLock bool) error {
++func (g *indexGen) finishStartupFailure(operation error, closeLock bool) (*retainedalloc.Owner, uint64, error) {
+ 	if g.startupReceipt.cause != nil {
+-		return errors.Join(operation, &g.startupReceipt)
++		return nil, 0, errors.Join(operation, &g.startupReceipt)
+ 	}
+ 	var cleanup error
+ 	if g.startupConstructed {
+@@ -59,7 +64,7 @@
+ 		cleanup = g.close()
+ 		cleanup = errors.Join(cleanup, g.closeStartupManager())
+ 		if g.startupDB.ghostManager != nil {
+-			g.startupDB.ghostManager.closeAll()
++			g.startupDB.closeGhostManagerCompletionV6(false)
+ 		}
+ 	}
+ 	// A producer may already have retained its partially opened original pager
+@@ -83,14 +88,16 @@
+ 		g.startupReceipt.generation = g
+ 		g.startupCustody.Complete(g, &g.startupReceipt)
+ 		g.metadata.CleanupFailed()
+-		return &g.startupReceipt
++		return nil, 0, &g.startupReceipt
+ 	}
+ 	custody := g.startupCustody
+ 	g.startupDB, g.startupManager, g.startupLock, g.startupCustody = nil, nil, nil, nil
+ 	g.startupConstructed = false
+-	g.scrubAndRefundGeneration()
++	metadata, charge, err := g.detachGenerationMetadataCompletionV6()
++	g = nil
+ 	custody.Complete(nil, nil)
+-	return operation
++	custody = nil
++	return metadata, charge, errors.Join(operation, err)
+ }
+ 
+ // Offline maintenance borrows the already-admitted read-only source wrapper
+@@ -137,12 +144,12 @@
+ // The offline DATA replacement reuses the original admitted index generation
+ // and startup receipt. The source DB, replacement pager and original LOCK stay
+ // in that same payload until both physical completion edges have succeeded.
+-func (g *indexGen) finishOfflineReplacementV1(operation error) error {
++func (g *indexGen) finishOfflineReplacementV1(operation error) (*retainedalloc.Owner, uint64, error) {
+ 	if g.startupReceipt.cause != nil {
+-		return &g.startupReceipt
++		return nil, 0, &g.startupReceipt
+ 	}
+ 	if g.startupDB == nil {
+-		return operation
++		return nil, 0, operation
+ 	}
+ 	cleanup := errors.Join(g.close(), g.startupDB.Close())
+ 	if cleanup != nil {
+@@ -150,11 +157,12 @@
+ 		g.startupReceipt.generation = g
+ 		g.startupCustody.Complete(g, &g.startupReceipt)
+ 		g.metadata.CleanupFailed()
+-		return &g.startupReceipt
++		return nil, 0, &g.startupReceipt
+ 	}
+ 	g.finishStartupSuccess()
+-	g.scrubAndRefundGeneration()
+-	return operation
++	metadata, charge, err := g.detachGenerationMetadataCompletionV6()
++	g = nil
++	return metadata, charge, errors.Join(operation, err)
+ }
+ 
+ // Admit the physical parent/child before opening them. The original generation

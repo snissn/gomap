@@ -3,7 +3,7 @@
 package memtable
 
 import (
-	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
+	btree "github.com/tidwall/btree"
 	"testing"
 )
 

@@ -1,0 +1,6 @@
+{
+  "go_mod_sha256": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+  "go_sum_sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+  "compress": "v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+  "replace": false
+}

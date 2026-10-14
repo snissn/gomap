@@ -1,0 +1,34 @@
+{
+  "status": "ROOT_VERIFIED_TWO_ORIGINAL_GENERATION_CALLERS_RELEASED_IMPORTED",
+  "at_utc": "2026-10-14T18:13:40.683411+00:00",
+  "host": "192.168.0.111",
+  "ordinary_head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "native_head": "22651bfa4cc30f7f71fa8a47f36b7e0d486bfdd5",
+  "imports": [
+    {
+      "path": "TreeDB/db/pools.go",
+      "bytes": 7771,
+      "sha256": "6cb70a64b214cbc9d93ed98361c36a85e8d29380b1f8231380549dfe4f9c47f9",
+      "native_before_bytes": 7771,
+      "native_before_sha256": "6cb70a64b214cbc9d93ed98361c36a85e8d29380b1f8231380549dfe4f9c47f9",
+      "ordinary_source_committed": true,
+      "native_original_clean": true,
+      "ownership": "NATIVE_SOLE_WRITER_ORDINARY_READ_ONLY"
+    },
+    {
+      "path": "TreeDB/db/original_startup_generation.go",
+      "bytes": 7175,
+      "sha256": "401267acaf514a752a81d86514b8c007fa8debf3b2f3c2384e35d95cc3cb7926",
+      "native_before_bytes": 3172,
+      "native_before_sha256": "10a2f2a4d0f155eafbfb21bea3083a401d4133602fa9e88a1d32f2b25baf287f",
+      "ordinary_source_committed": false,
+      "native_original_clean": true,
+      "ownership": "NATIVE_SOLE_WRITER_ORDINARY_READ_ONLY"
+    }
+  ],
+  "ordinary_release_ack": "Original ordinary worker verified both exact sources, no producers, no edits, HEAD/index unchanged; two paths read-only. Other three pending ordinary files protected.",
+  "contract": "Physical close never refunds containing metadata. Use SAME admitted generation and wrapper completion; detach actual discovery, ghost-slot, caller and startup custody aliases and unlock before consuming by-value owner/charge. Preserve original hard-failure receipt and charge, once-only physical outcomes, Manager/LOCK custody and the already-written offline source helpers. No replacement owner/registry, no scope or gate waiver.",
+  "index_HEAD_unchanged": true,
+  "other_sources": "No other path copied, staged, overwritten or reverted; native may continue edits to its prior owned paths.",
+  "qualification": "Ownership/finite source transfer only. Original runtime RED and candidate checks remain separately bound evidence; all product gates and parent remain OPEN."
+}

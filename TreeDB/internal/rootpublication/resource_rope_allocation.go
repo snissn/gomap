@@ -141,14 +141,20 @@ func releaseOwnedResourceRope(root *stableResourceEntryNode) error {
 		metadata.owner, metadata.charge, metadata.releaseNext = nil, 0, nil
 		current.metadata = nil
 		current.cleanupDone.Store(true)
-		owner.RemovePending(charge)
+		// The original parent edge is an alias of this containing node. End it
+		// before refunding the node/header, keeping only the next live parent.
 		if parent != nil {
 			if parent.metadata.releaseStage == 1 {
 				parent.left = nil
 			} else {
 				parent.right = nil
 			}
+		} else {
+			root = nil
 		}
+		metadata = nil
+		current = nil
+		owner.RemovePending(charge)
 		current = parent
 	}
 	return nil

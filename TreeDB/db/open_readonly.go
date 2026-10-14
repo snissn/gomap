@@ -74,7 +74,12 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		if result != nil && retErr == nil {
 			gen.finishStartupSuccess()
 		} else {
-			retErr = gen.finishStartupFailure(retErr, true)
+			metadata, charge, err := gen.finishStartupFailure(retErr, true)
+			gen = nil
+			retErr = err
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
 		}
 	}()
 	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
@@ -267,7 +272,12 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		if result != nil && retErr == nil {
 			gen.finishStartupSuccess()
 		} else {
-			retErr = gen.finishStartupFailure(retErr, false)
+			metadata, charge, err := gen.finishStartupFailure(retErr, false)
+			gen = nil
+			retErr = err
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
 		}
 	}()
 	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{

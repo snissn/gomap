@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -207,7 +208,7 @@ func (d *DependencyDirectoryV2) ValidateWithMetadataV2(owner *retainedalloc.Owne
 	return d.walkBorrowedRecords(owner, nil, check)
 }
 
-func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error, check func() error) error {
+func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {
 	if owner == nil || d == nil {
 		return ErrResourceOwnership
 	}
@@ -219,7 +220,13 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 	if err := d.Retain(); err != nil {
 		return err
 	}
-	defer d.Release()
+	defer func() {
+		consumed, err := d.ReleaseOutcome()
+		if !consumed && err == nil {
+			err = ErrResourceOwnership
+		}
+		retErr = errors.Join(retErr, err)
+	}()
 	s := new(dependencyBorrowScratch)
 	defer func() { clear(s.fields[:]); s.membership.values = nil; s.namespace = DependencyManifestNamespaceV1{} }()
 	it := d.tree.OwnedPointerProjectionIterator(nil, nil, nil)

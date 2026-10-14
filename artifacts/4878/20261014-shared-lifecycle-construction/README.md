@@ -1,0 +1,9 @@
+# Shared lifecycle construction checkpoint — UNQUALIFIED
+
+The finite shared packet preserves original metadata, physical owners and caller custody. It fixes selected DATA transaction/install terminal accounting, DATA/PRIMARY typed directory completion, COW/Owner retained capture, and generation/startup/ghost alias and lock barriers. Public bounded PruneVersions and protected 33/80/4096 fixture have not run and remain OPEN.
+
+import-map.json is the exact root backintegration allowlist, with current ordinary recipient baseline bytes, frozen source bytes and byte patches. Fifty-five released originals and two released tests retain native writer ownership. NEW declarations required for compilation may include inactive public/native construction; this supplies no public qualification. Preserve unrelated ordinary vacuum changes. Ordinary migrates its own two finishOfflineReplacementV1 calls to (Owner, charge, error), consuming nonzero completion after caller alias detachment even when the operation error remains. Its separate nil-metadata offline scope stays ordinary-owned.
+
+checks.json and actual retained receipts bind subprocess argv/environment/script SHA and all3184 TreeDB Go source rows before/after final normal/race. Original COW DATA basis and DB close-all REDs, diagnostic attribution and restored Owner source are retained. Diagnostic tracing is not acceptance. All19/cost/platform/public ACK gates remain OPEN.
+
+Reconstruct by checking out the published construction commit. checkpoint-paths.json and checkpoint-source retain exact dirty prerequisites, including readonly predecessor imports without ownership change. Protected foreign zstd diagnostics remain excluded from staging and are hashed in protected-inputs.json; controls include their exact input bytes. Do not overwrite or claim authorship. No generated database/temp roots are released. Preserve evidence, sources and original fixtures.

@@ -1,0 +1,80 @@
+--- a/TreeDB/internal/memtable/cow_tree.go
++++ b/TreeDB/internal/memtable/cow_tree.go
+@@ -5,9 +5,9 @@
+ 	"sync"
+ 	"unsafe"
+ 
++	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+-	"github.com/tidwall/btree"
+ )
+ 
+ // COWMutation borrows input only during Prepare. Remove erases the physical key;
+@@ -54,14 +54,22 @@
+ type COWRetirement struct {
+ 	generation *cowGeneration
+ 	prepared   *COWPrepared
++	viewLease  *cowViewReleaseLease
+ }
+ 
+ func (r *COWRetirement) Drain() {
+-	if r.generation != nil {
+-		r.generation.drain()
+-	}
+-	if r.prepared != nil {
+-		r.prepared.drain()
++	generation, prepared, lease := r.generation, r.prepared, r.viewLease
++	r.generation, r.prepared, r.viewLease = nil, nil, nil
++	if generation != nil {
++		generation.drain()
++	}
++	generation = nil
++	if prepared != nil {
++		prepared.drain()
++	}
++	prepared = nil
++	if lease != nil {
++		lease.Close()
+ 	}
+ }
+ 
+@@ -523,12 +531,14 @@
+ 	b.mu.Unlock()
+ 	cowReleaseOwners(p.owners)
+ 	b.mu.Lock()
+-	defer b.mu.Unlock()
+-	b.stats.TotalBytes -= p.deferredCharge
+-	b.stats.DeferredBytes -= p.deferredCharge
+-	b.stats.RetiredBytes -= p.deferredCharge
+-	p.owners = nil
++	charge := p.deferredCharge
++	p.owners, p.deferredCharge = nil, 0
++	p = nil
++	b.stats.TotalBytes -= charge
++	b.stats.DeferredBytes -= charge
++	b.stats.RetiredBytes -= charge
+ 	b.releaseControlLocked()
++	b.mu.Unlock()
+ }
+ 
+ // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
+@@ -582,6 +592,7 @@
+ 		b.stats.RetiredBytes += g.history
+ 	}
+ 	b.mu.Unlock()
++	w.generation = nil
+ 	return g.release()
+ }
+ 
+@@ -619,7 +630,9 @@
+ 	if r.refs != 0 {
+ 		return COWRetirement{}
+ 	}
+-	return r.generation.release()
++	generation := r.generation
++	r.tree, r.generation = nil, nil
++	return generation.release()
+ }
+ func (r *COWRoot) Len() int    { return r.tree.Len() }
+ func (r *COWRoot) Height() int { return r.tree.Height() }

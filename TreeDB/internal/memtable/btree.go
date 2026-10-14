@@ -6,10 +6,10 @@ import (
 	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
-	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	btree "github.com/tidwall/btree"
 )
 
 const btreeDefaultDegree = 32

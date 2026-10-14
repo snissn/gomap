@@ -1,0 +1,355 @@
+--- /dev/null
++++ b/TreeDB/internal/cowbtree/string_cursor.go
+@@ -0,0 +1,352 @@
++package cowbtree
++
++import (
++	"errors"
++	"unsafe"
++)
++
++// Work is the existing caller's shared reserve-before-effect allowance.
++// Node/key probes and stack actions reserve records before they run; byte
++// reservations cover source metadata, stack cells and both compared operands.
++// iterator.OrdinalScanWork implements this interface directly. No local counter
++// or authority is maintained by the cursor. Callers charge payloads and cleanup.
++type Work interface {
++	Reserve(records, bytes uint64) bool
++}
++
++func reserve(w Work, records, bytes uint64) bool {
++	return w != nil && w.Reserve(records, bytes)
++}
++
++type Operation uint8
++
++const (
++	SeekGE Operation = iota
++	SeekLE
++	First
++	Last
++	Next
++	Prev
++	Close
++)
++
++var ErrPending = errors.New("cursor operation pending")
++var ErrClosed = errors.New("cursor closed")
++var ErrStack = errors.New("cursor stack capacity insufficient")
++var ErrWork = errors.New("cursor work allowance exhausted")
++var ErrOperation = errors.New("invalid cursor operation")
++
++const (
++	resetPhase uint8 = iota + 1
++	rootPhase
++	enterPhase
++	probePhase
++	comparePhase
++	pushPhase
++	childPhase
++	candidatePhase
++	popPhase
++	movePhase
++	publishPhase
++	closePhase
++	emptyPhase
++)
++
++// StringCursor traverses the SAME Map nodes without mutation, sorting or rank
++// rescans. The Map header/root must be immutable and retained until Close.
++// Seek keys are immutable borrowed strings retained until operation completion.
++// It is single-owner; the enclosing COW adapter serializes it. No unsafe node
++// layout access is used. A result is hidden while an operation is paused.
++type StringCursor[V any] struct {
++	tree                                   *Map[string, V]
++	stack                                  []mapIterStackItem[string, V]
++	item                                   mapPair[string, V]
++	node                                   *mapNode[string, V]
++	key, probe                             string
++	lo, hi, pivot, offset, index, child    int
++	op                                     Operation
++	phase                                  uint8
++	direction                              int
++	valid, started, atstart, atend, closed bool
++}
++
++func StringCursorBytes[V any](depth int) uint64 {
++	return uint64(unsafe.Sizeof(StringCursor[V]{})) + uint64(depth)*uint64(unsafe.Sizeof(mapIterStackItem[string, V]{}))
++}
++
++// NewStringCursor admits initialization before allocating/zeroing its stack.
++// depth is a caller-proved upper bound for this immutable root's height.
++func NewStringCursor[V any](tree *Map[string, V], depth int, work Work) (StringCursor[V], bool) {
++	if depth < 0 || depth > 64 || !reserve(work, 1, StringCursorBytes[V](depth)) {
++		return StringCursor[V]{}, false
++	}
++	return StringCursor[V]{tree: tree, stack: make([]mapIterStackItem[string, V], 0, depth)}, true
++}
++
++func (c *StringCursor[V]) Begin(op Operation, key string, w Work) error {
++	if c.closed {
++		return ErrClosed
++	}
++	if c.phase != 0 && op != Close {
++		return ErrPending
++	}
++	if op > Close {
++		return ErrOperation
++	}
++	if !reserve(w, 1, uint64(unsafe.Sizeof(*c))) {
++		return ErrWork
++	}
++	c.op = op
++	c.key = key
++	c.probe = ""
++	c.offset = 0
++	if op == Close {
++		c.valid = false
++		c.phase = closePhase
++		return nil
++	}
++	if op == Next || op == Prev {
++		if c.valid {
++			c.valid = false
++			c.phase = movePhase
++			return nil
++		}
++		if op == Next && (!c.started || c.atstart) {
++			c.op = First
++		} else if op == Prev && c.atend {
++			c.op = Last
++		} else {
++			return nil
++		}
++	}
++	c.valid = false
++	c.phase = resetPhase
++	return nil
++}
++
++// Current borrows completed metadata. Exporting/copying it is caller-charged.
++func (c *StringCursor[V]) Ready() bool { return c.valid && c.phase == 0 && !c.closed }
++func (c *StringCursor[V]) Current() (string, V, bool) {
++	if !c.valid || c.phase != 0 || c.closed {
++		var zero V
++		return "", zero, false
++	}
++	return c.item.key, c.item.value, true
++}
++func (c *StringCursor[V]) Pending() bool { return c.phase != 0 }
++func (c *StringCursor[V]) Closed() bool  { return c.closed }
++
++// Step returns done=false only after stopping BEFORE an unaffordable action.
++// It retains binary-search bounds, comparison byte offset and traversal stack.
++// No successor is loaded after the current operation's publication boundary.
++func (c *StringCursor[V]) Step(w Work) (done bool, err error) {
++	frameBytes := uint64(unsafe.Sizeof(mapIterStackItem[string, V]{}))
++	nodeBytes := uint64(unsafe.Sizeof(mapNode[string, V]{}))
++	for c.phase != 0 {
++		switch c.phase {
++		case resetPhase:
++			if len(c.stack) > 0 {
++				if !reserve(w, 1, frameBytes) {
++					return false, nil
++				}
++				last := len(c.stack) - 1
++				c.stack[last] = mapIterStackItem[string, V]{}
++				c.stack = c.stack[:last]
++			} else {
++				c.phase = rootPhase
++			}
++		case rootPhase:
++			if !reserve(w, 1, 2*uint64(unsafe.Sizeof(uintptr(0)))) {
++				return false, nil
++			}
++			c.started = true
++			c.atstart = false
++			c.atend = false
++			c.node = c.tree.root
++			c.direction = 1
++			if c.op == Last || c.op == SeekLE {
++				c.direction = -1
++			}
++			if c.node == nil {
++				c.finishEmpty()
++			} else {
++				c.phase = enterPhase
++			}
++		case enterPhase:
++			if !reserve(w, 1, nodeBytes) {
++				return false, nil
++			}
++			if c.op == SeekGE || c.op == SeekLE {
++				c.lo = 0
++				c.hi = len(c.node.items)
++				c.phase = probePhase
++			} else {
++				c.child = 0
++				c.index = 0
++				if c.direction < 0 {
++					c.child = len(c.node.items)
++					c.index = len(c.node.items) - 1
++				}
++				c.phase = pushPhase
++			}
++		case probePhase:
++			if c.lo == c.hi {
++				c.child = c.lo
++				c.index = c.lo
++				if c.direction < 0 {
++					c.index--
++				}
++				c.phase = pushPhase
++				continue
++			}
++			if !reserve(w, 1, 2*uint64(unsafe.Sizeof(""))) {
++				return false, nil
++			}
++			c.pivot = c.lo + (c.hi-c.lo)/2
++			c.probe = c.node.items[c.pivot].key
++			c.offset = 0
++			c.phase = comparePhase
++		case comparePhase:
++			cmp := 0
++			for c.offset < len(c.probe) && c.offset < len(c.key) {
++				if !reserve(w, 0, 2) {
++					return false, nil
++				}
++				a, b := c.probe[c.offset], c.key[c.offset]
++				c.offset++
++				if a < b {
++					cmp = -1
++					break
++				}
++				if a > b {
++					cmp = 1
++					break
++				}
++			}
++			if cmp == 0 {
++				if len(c.probe) < len(c.key) {
++					cmp = -1
++				} else if len(c.probe) > len(c.key) {
++					cmp = 1
++				}
++			}
++			if cmp < 0 || (cmp == 0 && c.direction < 0) {
++				c.lo = c.pivot + 1
++			} else {
++				c.hi = c.pivot
++			}
++			c.probe = ""
++			c.phase = probePhase
++		case pushPhase:
++			if len(c.stack) == cap(c.stack) {
++				return false, ErrStack
++			}
++			if !reserve(w, 1, frameBytes) {
++				return false, nil
++			}
++			c.stack = append(c.stack, mapIterStackItem[string, V]{c.node, c.index})
++			if c.node.leaf() {
++				c.phase = candidatePhase
++			} else {
++				c.phase = childPhase
++			}
++		case childPhase:
++			if !reserve(w, 1, 2*uint64(unsafe.Sizeof(uintptr(0)))) {
++				return false, nil
++			}
++			c.node = (*c.node.children)[c.child]
++			c.phase = enterPhase
++		case candidatePhase:
++			if !reserve(w, 1, frameBytes+nodeBytes) {
++				return false, nil
++			}
++			s := c.stack[len(c.stack)-1]
++			if s.i >= 0 && s.i < len(s.n.items) {
++				c.phase = publishPhase
++			} else {
++				c.phase = popPhase
++			}
++		case popPhase:
++			if !reserve(w, 1, frameBytes) {
++				return false, nil
++			}
++			last := len(c.stack) - 1
++			c.stack[last] = mapIterStackItem[string, V]{}
++			c.stack = c.stack[:last]
++			if len(c.stack) == 0 {
++				c.finishEmpty()
++			} else {
++				c.phase = candidatePhase
++			}
++		case movePhase:
++			if !reserve(w, 1, 2*frameBytes+nodeBytes) {
++				return false, nil
++			}
++			c.direction = 1
++			if c.op == Prev {
++				c.direction = -1
++			}
++			s := &c.stack[len(c.stack)-1]
++			c.node = s.n
++			if s.n.leaf() {
++				s.i += c.direction
++				c.phase = candidatePhase
++			} else {
++				c.child = s.i
++				if c.direction > 0 {
++					c.child++
++				}
++				s.i += c.direction
++				// Endpoint descent within the selected child, not another root seek.
++				if c.direction > 0 {
++					c.op = First
++				} else {
++					c.op = Last
++				}
++				c.phase = childPhase
++			}
++		case publishPhase:
++			if !reserve(w, 1, uint64(unsafe.Sizeof(c.item))) {
++				return false, nil
++			}
++			s := c.stack[len(c.stack)-1]
++			c.item = s.n.items[s.i]
++			c.valid = true
++			c.key = ""
++			c.probe = ""
++			c.node = nil
++			c.phase = 0
++		case emptyPhase:
++			if !reserve(w, 1, uint64(unsafe.Sizeof(*c))) {
++				return false, nil
++			}
++			c.completeEmpty()
++		case closePhase:
++			if len(c.stack) > 0 {
++				if !reserve(w, 1, frameBytes) {
++					return false, nil
++				}
++				last := len(c.stack) - 1
++				c.stack[last] = mapIterStackItem[string, V]{}
++				c.stack = c.stack[:last]
++			} else {
++				if !reserve(w, 1, uint64(unsafe.Sizeof(*c))) {
++					return false, nil
++				}
++				*c = StringCursor[V]{closed: true}
++			}
++		}
++	}
++	return true, nil
++}
++func (c *StringCursor[V]) finishEmpty() { c.phase = emptyPhase }
++func (c *StringCursor[V]) completeEmpty() {
++	c.valid = false
++	c.atstart = c.direction < 0
++	c.atend = c.direction > 0
++	c.item = mapPair[string, V]{}
++	c.node = nil
++	c.key = ""
++	c.probe = ""
++	c.phase = 0
++}

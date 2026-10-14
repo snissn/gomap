@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"sync"
 	"unsafe"
 )
@@ -24,6 +25,25 @@ func (t *DurableRootTransaction) SealPrimaryBaseAbsenceV6(current primaryarena.R
 		return false, ErrDurableRootOwnership
 	}
 	cert, ready, err := c.arena.SealConstructedBaseAbsenceV6(c.root, current, entry, base, sequence, scratch, t, w)
+	if ready && err == nil {
+		c.certificate = cert
+	}
+	return ready, err
+}
+
+// SealPrimaryCurrentAbsenceV6 continues the original constructor with the
+// selected physical record's revision and a fresh current directory predicate.
+func (t *DurableRootTransaction) SealPrimaryCurrentAbsenceV6(current primaryarena.Ref, entry node.PrimaryDirectoryEntry, base node.PrimaryOperand, sequence uint64, selectedRevision page.EntryRevision, scratch []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	if t == nil || w == nil {
+		return false, ErrDurableRootOwnership
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.constructionV6
+	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate != nil || c.componentCount != 0 {
+		return false, ErrDurableRootOwnership
+	}
+	cert, ready, err := c.arena.SealConstructedCurrentAbsenceV6(c.root, current, entry, base, sequence, selectedRevision, scratch, t, w)
 	if ready && err == nil {
 		c.certificate = cert
 	}

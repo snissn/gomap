@@ -154,6 +154,19 @@ If both eligible slots are invalid, Open fails. An embedded parent or older
 bank record is never promoted into an additional recovery candidate.
 DATA META pages supply no fallback authority in this selected format.
 
+Command-WAL replay preserves this selected physical authority. Open constructs
+the same PRIMARY publication runtime and coordinator before replay, with the
+ordinary scheduler dormant. Replay drives the existing Prepare/Publish/Report
+engine synchronously through the original constructor and capsule publication.
+The accepted command LSN, dependency closure and applied frontier remain one
+publication; startup must not write a DATA-format seal using PRIMARY addresses.
+
+The coordinator enters ordinary scheduling only after replay completes and the
+selected visible snapshot, reachability tracker and command-WAL appender are
+ready. An unfinished, failed or pending startup attempt blocks that transition.
+Replay finalizers then use the ordinary publication path. DATA-only recovery
+continues to initialize its publication runtime after recovery.
+
 Arena bank recovery runs once at Open from the actual eligible slot and parent
 closures. Open then constructs genuinely owned copied read roots. Live slot
 reuse cannot change an old Snapshot or captured recoverable-root read operand.

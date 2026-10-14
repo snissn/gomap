@@ -1,0 +1,13 @@
+{
+  "at_utc": "2026-10-14T13:42:16.169677+00:00",
+  "path": "TreeDB/db/root_publication_activation.go",
+  "source_commit": "7a0ef65bad20694e86edd5869dcd115f0af1643c",
+  "source_sha256": "68e0c7075584f3df5dd5695656095f1d429866da7404ed7503d81ec81b5005b5",
+  "source_git_blob": "505e6f382ca1a42c9549f2ae0d08e6e9a5ce089e",
+  "native_before_sha256": "15c2b7c936fd66acc84104b94d7934ae414e14e0b6837d77c4090c993119da0f",
+  "native_after_sha256": "68e0c7075584f3df5dd5695656095f1d429866da7404ed7503d81ec81b5005b5",
+  "native_HEAD_unchanged": "0865a8b40c5070a0077ef97cebc5945034821507",
+  "index_unchanged": true,
+  "ownership": "ordinary explicit release; native sole writer after coordinator ACK; ordinary lane retains readonly frozen predecessor",
+  "scope": "One maintained publisher activation original only; caller companions not released; old evidence stays frozen/unqualified"
+}

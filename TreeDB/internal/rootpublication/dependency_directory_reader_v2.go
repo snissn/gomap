@@ -29,16 +29,29 @@ type DependencyDirectoryV2 struct {
 	release         func()
 	// Selected PRIMARY construction owns these allocations independently of
 	// the physical token rope. Last Retain/Release also joins active reads.
-	metadata       *retainedalloc.Owner
-	metadataCharge uint64
-	ownedRelease   func() (disposed bool, err error)
+	metadata         *retainedalloc.Owner
+	metadataCharge   uint64
+	ownedRelease     func() (disposed bool, err error)
+	ownedReleaseWork DependencyDirectoryReleaseProviderV6
+	releaseNative    bool
 }
 
 func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, totalPages uint64, release func()) (*DependencyDirectoryV2, error) {
-	if p == nil || ref.RootPageID < 2 || ref.RootPageID >= totalPages || totalPages > p.PageCount() || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || release == nil {
+	return newDependencyDirectoryV2(p, ref, totalPages, release, nil, nil)
+}
+
+func newDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, totalPages uint64, release func(), metadata *retainedalloc.Owner, provider DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
+	if p == nil || ref.RootPageID < 2 || ref.RootPageID >= totalPages || totalPages > p.PageCount() || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || (release == nil && provider == nil) {
 		return nil, ErrDependencyManifestFormat
 	}
-	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release}
+	var charge uint64
+	if metadata != nil {
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyDirectoryV2{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(tree.Tree{})))
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release, metadata: metadata, metadataCharge: charge, ownedReleaseWork: provider}
 	directory.refs.Store(1)
 	return directory, nil
 }
@@ -109,60 +122,18 @@ func (directory *DependencyDirectoryV2) Release() { _, _ = directory.ReleaseOutc
 // ReleaseOutcome reports this original edge's consumption separately from
 // earlier physical-owner errors. The last callback runs at most once.
 func (directory *DependencyDirectoryV2) ReleaseOutcome() (bool, error) {
-	if directory == nil {
-		return true, nil
+	var receipt DependencyDirectoryReleaseWork
+	ready, err := receipt.bind(directory, nil)
+	if !ready || err != nil {
+		return false, err
 	}
-	if directory.cleanupDone.Load() {
-		if directory.cleanupFailure.causes[0] != nil {
-			if directory.cleanupConsumed {
-				return true, directory.cleanupFailure.causes[0]
-			}
-			return false, &directory.cleanupFailure
-		}
-		return directory.cleanupConsumed, nil
-	}
-	last := false
-	for refs := directory.refs.Load(); refs > 0; refs = directory.refs.Load() {
-		if directory.refs.CompareAndSwap(refs, refs-1) {
-			last = refs == 1
-			break
+	directory = nil
+	for {
+		consumed, ready, err := receipt.continueWork(nil)
+		if ready || err != nil {
+			return consumed, err
 		}
 	}
-	if !last {
-		return true, nil
-	}
-	disposed, err := true, error(nil)
-	if directory.metadata == nil {
-		directory.release()
-	} else {
-		disposed, err = directory.ownedRelease()
-		if !disposed {
-			if err == nil {
-				err = ErrResourceOwnership
-			}
-			directory.metadata.CleanupFailed()
-		} else {
-			metadata, charge := directory.metadata, directory.metadataCharge
-			directory.tree, directory.ownedRelease = nil, nil
-			directory.metadata, directory.metadataCharge = nil, 0
-			metadata.RemovePending(charge)
-		}
-	}
-	directory.cleanupConsumed = disposed
-	if err != nil {
-		directory.cleanupFailure.causes[0] = err
-		if !disposed {
-			directory.cleanupFailure.original = directory
-		}
-	}
-	directory.cleanupDone.Store(true)
-	if err != nil {
-		if disposed {
-			return true, err
-		}
-		return false, &directory.cleanupFailure
-	}
-	return disposed, nil
 }
 
 // LookupLogical resolves exact identity through the pinned root. Corruption and

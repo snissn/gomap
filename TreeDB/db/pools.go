@@ -157,16 +157,17 @@ func newIndexGhostManager(metadata *retainedalloc.Owner) (*indexGhostManager, er
 	return &indexGhostManager{metadata: metadata, metadataCharge: charge}, nil
 }
 
-func (m *indexGhostManager) closeOriginalGeneration(gen *indexGen) {
+func (m *indexGhostManager) closeOriginalGeneration(gen *indexGen) (*retainedalloc.Owner, uint64) {
 	if gen == nil {
-		return
+		return nil, 0
 	}
-	if err := gen.close(); err != nil {
-		// Existing DB receipt ownership survives removal from both discovery
-		// lists. No callback is invoked under the ghost/index registry mutex.
+	metadata, charge, err := gen.closeWithCompletionV6()
+	if err != nil {
 		m.db.retainOriginalCleanupError(gen.originalCloseFailure(err))
 		m.db.quiesceFailedRetiredGeneration(gen)
 	}
+	gen = nil
+	return metadata, charge
 }
 
 func (m *indexGhostManager) start(db *DB) {
@@ -191,13 +192,13 @@ func (m *indexGhostManager) loop() {
 	}
 }
 
-func (m *indexGhostManager) add(gen *indexGen) error {
+func (m *indexGhostManager) add(gen *indexGen) (*retainedalloc.Owner, uint64, error) {
 	m.retirementMu.Lock()
 	defer m.retirementMu.Unlock()
 	m.mu.Lock()
 	if m.stopped {
 		m.mu.Unlock()
-		return gen.close()
+		return gen.closeWithCompletionV6()
 	}
 	defer m.mu.Unlock()
 	if len(m.ghosts) == cap(m.ghosts) {
@@ -206,11 +207,11 @@ func (m *indexGhostManager) add(gen *indexGen) error {
 			capacity = 4
 		}
 		if capacity < cap(m.ghosts) || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof(ghostIndex{})) {
-			return retainedalloc.ErrCapacity
+			return nil, 0, retainedalloc.ErrCapacity
 		}
 		charge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(ghostIndex{})))
 		if err := m.metadata.AddPending(charge); err != nil {
-			return err
+			return nil, 0, err
 		}
 		old, oldCharge := m.ghosts, m.ghostCharge
 		next := make([]ghostIndex, len(old), capacity)
@@ -221,7 +222,7 @@ func (m *indexGhostManager) add(gen *indexGen) error {
 		m.metadata.RemovePending(oldCharge)
 	}
 	m.ghosts = append(m.ghosts, ghostIndex{gen: gen, retiredAt: time.Now()})
-	return nil
+	return nil, 0, nil
 }
 
 func (m *indexGhostManager) scavenge(maxAge time.Duration) {
@@ -246,12 +247,15 @@ func (m *indexGhostManager) scavenge(maxAge time.Duration) {
 	m.ghosts = original[:boundary]
 	m.mu.Unlock()
 	for i := boundary; i < len(original); i++ {
-		m.closeOriginalGeneration(original[i].gen)
+		metadata, charge := m.closeOriginalGeneration(original[i].gen)
 		original[i] = ghostIndex{}
+		if charge != 0 {
+			metadata.RemovePending(charge)
+		}
 	}
 }
 
-func (m *indexGhostManager) stop() {
+func (m *indexGhostManager) stopWithCompletionV6() (*retainedalloc.Owner, uint64) {
 	stopCh := m.stopCh
 	doneCh := m.doneCh
 	if stopCh != nil {
@@ -260,20 +264,22 @@ func (m *indexGhostManager) stop() {
 	if doneCh != nil {
 		<-doneCh
 	}
-	m.closeAll()
+	return m.closeAllWithCompletionV6()
 }
 
-func (m *indexGhostManager) closeAll() {
+func (m *indexGhostManager) closeAllWithCompletionV6() (*retainedalloc.Owner, uint64) {
 	m.retirementMu.Lock()
-	defer m.retirementMu.Unlock()
 	m.mu.Lock()
 	m.stopped = true
 	original := m.ghosts
 	m.ghosts = nil
 	m.mu.Unlock()
 	for i := range original {
-		m.closeOriginalGeneration(original[i].gen)
+		metadata, charge := m.closeOriginalGeneration(original[i].gen)
 		original[i] = ghostIndex{}
+		if charge != 0 {
+			metadata.RemovePending(charge)
+		}
 	}
 	clear(original[:cap(original)])
 	original = nil
@@ -283,7 +289,6 @@ func (m *indexGhostManager) closeAll() {
 	m.stopCh, m.doneCh = nil, nil
 	m.db = nil
 	m.mu.Unlock()
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
+	m.retirementMu.Unlock()
+	return owner, charge
 }

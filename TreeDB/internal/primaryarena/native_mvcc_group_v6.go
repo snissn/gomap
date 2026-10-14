@@ -17,6 +17,22 @@ import (
 // No remembered directory position or old root is used for negative lookup.
 // A full directory is reported to the caller's phased materialization path.
 func (a *Arena) SealConstructedBaseAbsenceV6(destination, current Ref, entry node.PrimaryDirectoryEntry, base node.PrimaryOperand, sequence uint64, scratch []byte, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (*ReadRootCertificateV6, bool, error) {
+	return a.sealConstructedCurrentAbsenceV6(destination, current, entry, base, sequence, 0, scratch, owner, w)
+}
+
+// SealConstructedCurrentAbsenceV6 composes the SAME selected immutable record
+// over a freshly checked current directory. A matching current component must
+// have the selected record's exact revision; absence or foreign replacement
+// never grants deletion authority. A missing component keeps the fresh DATA
+// base, whose historical selected record remains retained by the caller.
+func (a *Arena) SealConstructedCurrentAbsenceV6(destination, current Ref, entry node.PrimaryDirectoryEntry, base node.PrimaryOperand, sequence uint64, selectedRevision page.EntryRevision, scratch []byte, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (*ReadRootCertificateV6, bool, error) {
+	if selectedRevision == 0 {
+		return nil, false, ErrStale
+	}
+	return a.sealConstructedCurrentAbsenceV6(destination, current, entry, base, sequence, selectedRevision, scratch, owner, w)
+}
+
+func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry node.PrimaryDirectoryEntry, base node.PrimaryOperand, sequence uint64, selectedRevision page.EntryRevision, scratch []byte, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (*ReadRootCertificateV6, bool, error) {
 	if a == nil || w == nil || owner == nil {
 		return nil, false, ErrStale
 	}
@@ -51,9 +67,29 @@ func (a *Arena) SealConstructedBaseAbsenceV6(destination, current Ref, entry nod
 	if !w.Reserve(groupCount, 2*uint64(unsafe.Sizeof(Group{}))) {
 		return nil, false, nil
 	}
-	view, ready, err := src.directory.InsertPrimaryComponentWithVisit(scratch, destination.PageID, entry, func(observed node.PrimaryDirectoryEntry) bool {
+	visit := func(observed node.PrimaryDirectoryEntry) bool {
 		return w.Reserve(1, 2*uint64(len(observed.Key))+2*uint64(len(entry.Key))+2*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{})))
-	})
+	}
+	var view node.PrimaryDirectoryView
+	var ready bool
+	var err error
+	if selectedRevision != 0 {
+		old, found, observed, lookupErr := src.directory.SearchPrimaryComponentWithVisit(entry.Key, visit)
+		if !observed || lookupErr != nil {
+			return nil, observed, lookupErr
+		}
+		if found {
+			if old.Revision != selectedRevision || old.Kind != node.PrimaryPut {
+				return nil, false, ErrStale
+			}
+			entry.ClassSlot = old.ClassSlot
+			view, ready, err = src.directory.ReplacePrimaryComponentWithVisit(scratch, destination.PageID, entry, visit)
+		} else {
+			view, ready, err = src.directory.InsertPrimaryComponentWithVisit(scratch, destination.PageID, entry, visit)
+		}
+	} else {
+		view, ready, err = src.directory.InsertPrimaryComponentWithVisit(scratch, destination.PageID, entry, visit)
+	}
 	if !ready || err != nil {
 		return nil, ready, err
 	}

@@ -321,7 +321,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 			roots.rootResourceIndex = rootpublication.StableIdentity{}
 		}, wantReason: rebuiltDurableResourceFallbackIdentity},
 		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
-			delete(roots.rootResources, key)
+			roots.removeRootResources(key)
 		}, wantReason: rebuiltDurableResourceFallbackMissingSource},
 	}
 	for _, test := range tests {
@@ -370,7 +370,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 				SystemRootPageID: olderRecord.SystemRootPageID, AppliedCommandLSN: olderRecord.AppliedCommandLSN,
 				MaxEntryRevision: olderRecord.MaxEntryRevision,
 			})
-			source, ok := roots.rootResources[key]
+			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
 				database.maintenanceMu.Unlock()
 				t.Fatal("older root has no captured exact closure")
@@ -423,7 +423,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 			roots.rootResourceIndex = rootpublication.StableIdentity{}
 		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackIdentity},
 		{name: "missing-root-closure", mutate: func(roots *RecoverableRootSet, key recoverableRootKey) {
-			delete(roots.rootResources, key)
+			roots.removeRootResources(key)
 		}, wantScan: true, wantFallback: rebuiltDurableResourceFallbackMissingSource},
 	}
 	for _, test := range tests {
@@ -477,7 +477,7 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 				MaxEntryRevision:  uint64(roots.visible.MaxEntryRevision),
 			}
 			key := recoverableRootIdentity(visibleRoot)
-			source, ok := roots.rootResources[key]
+			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
 				database.maintenanceMu.Unlock()
 				t.Fatal("visible root has no captured exact closure")

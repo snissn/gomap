@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-run",
+    "^Test(DependencyDirectory|PrimaryDependency|PrimaryConstructionV6OriginalSiblingFailureCustody|RootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt|COW|OwnedRope|EnrollmentWork|Owner|NativeMVCCOwnedCaptureOriginalSnapshotLifetime|DurableRootTransaction|Coordinator.*(Consume|Recovery|Abort|Stop|Finish)|NativeGeneration|NativeGhost|OpenRecovery|OriginalStartup|PrimaryDirectory)",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/internal/memtable",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/db",
+    "./TreeDB",
+    "./TreeDB/caching",
+    "./TreeDB/node"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "script": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native4878-shared-corrected-producer.py",
+  "script_sha256": "3e8cb3da942d233d462952319e45bfd7cbbf7156be51d693f80350f3e1e2146c"
+}

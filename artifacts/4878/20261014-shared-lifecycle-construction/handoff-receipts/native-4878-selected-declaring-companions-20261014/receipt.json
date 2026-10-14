@@ -1,0 +1,41 @@
+{
+  "status": "ROOT_VERIFIED_THREE_ORIGINAL_DECLARING_COMPANIONS_IMPORTED",
+  "at_utc": "2026-10-14T16:48:18.333275+00:00",
+  "ordinary_head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "native_head": "22651bfa4cc30f7f71fa8a47f36b7e0d486bfdd5",
+  "original_frozen_census_sha256": "860f21f2c0cc8210d091b54160232869d53100fa1844589aff08f58b8b4a6348",
+  "imports": [
+    {
+      "path": "TreeDB/internal/rootpublication/resource_install_probe.go",
+      "bytes": 7409,
+      "sha256": "a98e6aee2813c96cd00487ef949455022a8b99bdf5475867e72a69db9572085d",
+      "native_before_sha256": "24777a46b335079afeb0057af46ff8593367e57ba0ff130e9f4d1f289c087c32",
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY",
+      "native_baseline_clean": true,
+      "ordinary_committed": true
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "bytes": 30266,
+      "sha256": "ac54d8346c89992837e5886a67cbf0692d41a41be53082cb9cc11d0584583b68",
+      "native_before_sha256": "866b1d55244ae6ddced2b5e565e6410a0f5f6851e94851002520462c09426958",
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY",
+      "native_baseline_clean": true,
+      "ordinary_committed": true
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack.go",
+      "bytes": 28088,
+      "sha256": "a12ac9193fd21c0a8ad66c7f0574a3ad9916f82a88571df368925fae7b2720a0",
+      "native_before_sha256": "58e1e06e8311514cfdbd65e6cab3bb8fdf16da27b3af7a1b32f2fdfbad70490e",
+      "ownership": "ORDINARY_OWNED_NATIVE_READONLY",
+      "native_baseline_clean": true,
+      "ordinary_committed": true
+    }
+  ],
+  "index_sha256": "89605aea3c47d4bcc8ecbf26e6691b88cce144e3ad477958a6b5537ecf85a421",
+  "index_HEAD_unchanged": true,
+  "ownership_change": false,
+  "source_window": "Both workers explicitly ACKed the exact three readonly paths; native reported no Go producer. Native45 ongoing edits were not copied or reverted.",
+  "qualification": "Compile closure correction only; focused enrollment controls not public capture qualification. All original product gates OPEN."
+}

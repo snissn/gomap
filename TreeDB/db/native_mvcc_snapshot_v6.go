@@ -237,3 +237,26 @@ func (s *Snapshot) finishNativeMVCCCaptureEpochV6() {
 		s.nativeMVCC.epochLive = false
 	}
 }
+
+// AdoptNativeMVCCMetadataEnrollmentV6 installs exact producer enrollment while
+// this SAME Snapshot is still unreadable. DATA-only captures enroll the original
+// registry as the single producer; PRIMARY captures require the exact pair.
+func (s *Snapshot) AdoptNativeMVCCMetadataEnrollmentV6(e *retainedalloc.Enrollment) error {
+	if s == nil || e == nil {
+		return ErrSnapshotCapacity
+	}
+	s.iteratorMu.Lock()
+	defer s.iteratorMu.Unlock()
+	if !s.nativeMVCC.workOwned || s.nativeMVCC.capturePhase != 2 || s.nativeMVCC.finalizePhase != 0 || s.primaryMetadata != nil || s.db == nil {
+		return ErrSnapshotCapacity
+	}
+	first, second := s.db.valueLogIdentityPins.MetadataOwner(), (*retainedalloc.Owner)(nil)
+	if s.primaryRoot != nil {
+		first, second = s.primaryRoot.arena.MetadataOwner(), first
+	}
+	if !e.BelongsToPair(first, second) {
+		return ErrSnapshotCapacity
+	}
+	s.primaryMetadata = e
+	return nil
+}

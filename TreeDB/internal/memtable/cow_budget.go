@@ -290,25 +290,31 @@ func (g *cowGeneration) drain() {
 	b.mu.Unlock()
 	cowReleaseOwners(g.owners)
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.stats.TotalBytes -= g.history
-	b.stats.HistoryBytes -= g.history
+	history, frozen, retired := g.history, g.frozen, g.retired
+	// All original callback and array aliases end before their containing
+	// generation charge. The original budget serializes the terminal claim.
+	g.owners, g.ids, g.history = nil, nil, 0
+	g = nil
+	b.stats.TotalBytes -= history
+	b.stats.HistoryBytes -= history
 	b.stats.Generations--
-	if g.frozen {
+	if frozen {
 		b.stats.Sources--
 	}
-	if g.retired {
-		b.stats.RetiredBytes -= g.history
+	if retired {
+		b.stats.RetiredBytes -= history
 	}
 	b.releaseControlLocked()
-	g.owners = nil
-	g.ids = nil
+	b.mu.Unlock()
 }
 
 func cowReleaseOwners(owners []cowResourceOwner) {
-	for _, o := range owners {
-		if o.release != nil {
-			o.release()
+	for i := range owners {
+		callback := owners[i].release
+		if callback != nil {
+			callback()
 		}
+		callback = nil
+		owners[i] = cowResourceOwner{}
 	}
 }

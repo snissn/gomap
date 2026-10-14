@@ -1003,10 +1003,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		memberMetadataOwned = false
 		install.metadataCharge = 0
 	} else {
+		transactionSpec.TerminalMetadataOwnerV6 = install.metadata
 		transaction, err = rootpublication.NewDurableRootTransaction(transactionSpec)
 		if err != nil {
 			return nil, false, err
 		}
+		install.metadataCharge = 0 // SAME transaction terminal node owns the admitted header.
 	}
 	member.transaction = transaction
 	preparedOwned = false
@@ -2020,14 +2022,22 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	runtime.metadata, runtime.metadataCharge = nil, 0
 	runtime.idx, runtime.db, runtime.generationBorrowed = nil, nil, false
 	runtime.disposalFailure.payload = nil
+	var generationOwner *retainedalloc.Owner
+	var generationCharge uint64
+	var generationErr error
+	if borrowed {
+		generationOwner, generationCharge, generationErr = idx.releaseWrapperBorrowCompletionV6(nil, nil)
+	}
+	idx = nil
+	runtime.disposalMu.Unlock()
+	runtime = nil
 	if owner != nil {
 		owner.RemovePending(charge)
 	}
-	if borrowed {
-		idx.releaseWrapperBorrow(nil, nil)
+	if generationCharge != 0 {
+		generationOwner.RemovePending(generationCharge)
 	}
-	runtime.disposalMu.Unlock()
-	return nil
+	return generationErr
 }
 
 // visibleMember is a borrowed DB projection of the actual registered owner.

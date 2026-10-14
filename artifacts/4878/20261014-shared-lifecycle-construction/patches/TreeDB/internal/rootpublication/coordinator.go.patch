@@ -1,0 +1,12 @@
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -945,6 +945,9 @@
+ 					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
+ 				} else {
+ 					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
++					if err == nil {
++						node, err = txn.finishOrdinaryDataMetadataV6()
++					}
+ 				}
+ 				if err != nil {
+ 					c.removeCompletedPendingPrefixV6(completed, removedBytes)

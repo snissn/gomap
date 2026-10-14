@@ -1,0 +1,351 @@
+--- /dev/null
++++ b/TreeDB/caching/native_mvcc_prune_v6.go
+@@ -0,0 +1,348 @@
++package caching
++
++import (
++	"errors"
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
++	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
++	"unsafe"
++)
++
++// NativeMVCCBudgetV6 returns the SAME cache-lifetime governor. The original
++// cache's Close owns its final admission shutdown. Captures keep their actual
++// leases and producer metadata enrollments until physical cleanup completes.
++// Calling this method creates no snapshot, retention authority or publisher.
++func (db *DB) NativeMVCCBudgetV6(w *iterator.OrdinalScanWork) (*memtable.COWBudget, bool, error) {
++	if db == nil {
++		return nil, false, backenddb.ErrClosed
++	}
++	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(db.nativeMVCCBudget))+2*uint64(unsafe.Sizeof(db.nativeMVCCLimits))) {
++		return nil, false, nil
++	}
++	db.mu.Lock()
++	defer db.mu.Unlock()
++	if db.closing.Load() {
++		return nil, false, backenddb.ErrClosed
++	}
++	if db.cow != nil {
++		if db.cow.budget == nil {
++			return nil, false, ErrCOWUnsupported
++		}
++		return db.cow.budget, true, nil
++	}
++	if db.nativeMVCCBudget != nil {
++		return db.nativeMVCCBudget, true, nil
++	}
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(memtable.COWBudget{}))+uint64(unsafe.Sizeof(db.nativeMVCCLimits))) {
++		return nil, false, nil
++	}
++	budget, err := memtable.NewCOWBudget(db.nativeMVCCLimits)
++	if err != nil {
++		return nil, false, err
++	}
++	db.nativeMVCCBudget = budget
++	return budget, true, nil
++}
++
++// Close runs after the original cache's physical teardown. An outstanding
++// capture/producer binding keeps its charged governor alive; shutdown neither
++// disposes those physical resources nor refunds their external leases.
++func (db *DB) closeNativeMVCCBudgetV6() {
++	db.mu.Lock()
++	budget := db.nativeMVCCBudget
++	db.mu.Unlock()
++	if budget != nil {
++		budget.Close()
++	}
++}
++
++// NativeMVCCCaptureV6 is embedded in the admitted original pruning owner.
++// It owns the SAME Snapshot after the first accepted capture effect, including
++// a nonnil error outcome. Its caller must finish native cleanup before clearing
++// Snapshot or refunding this containing allocation.
++type NativeMVCCCaptureV6 struct {
++	cache                             *DB
++	version                           uint64
++	probe                             int
++	phase                             uint8
++	Snapshot                          *backenddb.Snapshot
++	budget                            *memtable.COWBudget
++	retention                         *memtable.COWExternalLease
++	enrollment                        retainedalloc.EnrollmentPairWork
++	primaryMetadata, registryMetadata *retainedalloc.Owner
++	currentWork                       *iterator.OrdinalScanWork
++	owned, metadataAdopted            bool
++	ownedPhase                        uint8
++	ownedFailure                      error
++}
++
++var ErrNativeMVCCOverlayV6 = errors.New("native MVCC requires a maintained empty cache frontier")
++
++type nativeMVCCSnapshotBackendV6 interface {
++	BeginNativeMVCCSnapshotV6(func(backenddb.SnapshotAllocationSizes) error, *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error)
++}
++
++// StepNativeMVCCCaptureV6 proves the actual current cache frontier and captures
++// its backend under the SAME write/flush cut. Probes may yield; the maintained
++// publication version invalidates partial observations. No cache lock survives
++// a return, and this path performs no checkpoint, table drain or table copy.
++// A nonempty overlay refuses before any backend epoch/borrow/allocation effect.
++func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
++	if db == nil || c == nil || admit == nil {
++		return nil, false, backenddb.ErrClosed
++	}
++	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+128) {
++		return c.Snapshot, false, nil
++	}
++	if c.cache != nil && c.cache != db {
++		return c.Snapshot, false, ErrNativeMVCCOverlayV6
++	}
++	if c.owned && c.currentWork == nil {
++		return c.Snapshot, false, backenddb.ErrNativeMVCCSnapshotWork
++	}
++	if c.phase == 3 {
++		return c.Snapshot, true, nil
++	}
++	if c.phase == 2 {
++		ready, err := c.Snapshot.StepNativeMVCCSnapshotCaptureV6(w)
++		if ready && err == nil {
++			c.phase = 3
++		}
++		return c.Snapshot, ready, err
++	}
++	// TryLock keeps a competing foreground flush/writer from becoming a hidden
++	// wait or a held exclusion across a bounded return.
++	if !db.flushMu.TryLock() {
++		return nil, false, nil
++	}
++	defer db.flushMu.Unlock()
++	if !db.writeMu.TryLock() {
++		return nil, false, nil
++	}
++	defer db.writeMu.Unlock()
++	db.mu.RLock()
++	defer db.mu.RUnlock()
++	if db.closing.Load() {
++		return nil, false, backenddb.ErrClosed
++	}
++	if db.cow != nil {
++		return nil, false, ErrCOWUnsupported
++	}
++	if !w.Reserve(1, 256) {
++		return nil, false, nil
++	}
++	view := db.memtables.Load()
++	if view == nil || db.mutableBytes.Load() != 0 || len(db.queue) != 0 ||
++		len(view.queue) != 0 || view.queueHasRangeSpans ||
++		db.dirtyRootPublishGroupPending || db.rootPublishRetryPending ||
++		db.conditionalActiveTxnCount.Load() != 0 {
++		return nil, false, ErrNativeMVCCOverlayV6
++	}
++	if c.cache == nil || c.version != view.rootVersion {
++		c.cache, c.version, c.probe, c.phase = db, view.rootVersion, 0, 1
++	}
++	if view.rootVersion != db.rootDomainVersion.Load() || len(view.mutables) != len(db.mutableShards) ||
++		len(view.rootPointShards) != len(db.mutableShards) {
++		return nil, false, ErrNativeMVCCOverlayV6
++	}
++	// These original aggregate domains have no mutable table in production.
++	// Their explicit checks also refuse an unbound/manual producer shape.
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(rootDomainSnapshot{}))) {
++		return nil, false, nil
++	}
++	if rootDomainSnapshotHasInMemoryState(view.rootSystem) ||
++		rootDomainSnapshotHasInMemoryState(view.rootIterator) ||
++		rootDomainSnapshotHasPublishedState(view.rootSystem) ||
++		rootDomainSnapshotHasPublishedState(view.rootIterator) {
++		return nil, false, ErrNativeMVCCOverlayV6
++	}
++	for c.probe < len(db.mutableShards) {
++		if !w.Reserve(1, uint64(unsafe.Sizeof(memShard{}))+2*uint64(unsafe.Sizeof(rootDomainSnapshot{}))) {
++			return nil, false, nil
++		}
++		i := c.probe
++		mt := db.mutableShards[i].mem
++		domain := view.rootPointShards[i]
++		if mt != view.mutables[i] || mt != domain.mutable ||
++			(mt != nil && mt.Len() != 0) || len(domain.immutables) != 0 ||
++			rootDomainSnapshotHasPublishedState(domain) {
++			return nil, false, ErrNativeMVCCOverlayV6
++		}
++		c.probe++
++	}
++	backend, ok := db.backend.(nativeMVCCSnapshotBackendV6)
++	if !ok {
++		return nil, false, backenddb.ErrNativeMVCCSnapshotWork
++	}
++	snapshot, accepted, err := backend.BeginNativeMVCCSnapshotV6(admit, w)
++	if snapshot != nil {
++		c.Snapshot = snapshot
++		c.phase = 2
++	}
++	// accepted means the original capture owns its initial effects, not reader
++	// readiness. Registry registration remains an actual later bounded phase.
++	_ = accepted
++	return c.Snapshot, false, err
++}
++
++var errNativeMVCCCaptureYieldV6 = errors.New("native MVCC capture work exhausted")
++
++// StepNativeMVCCOwnedCaptureV6 binds the native caller to the SAME maintained
++// cache-lifetime governor and physical Snapshot constructor. The initial cut
++// births exact producer leases BEFORE physical borrows. Registry/enrollment
++// readiness follows through original work-bearing phases, never whole Enroll.
++func (db *DB) StepNativeMVCCOwnedCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
++	if db == nil || c == nil || w == nil {
++		return nil, false, backenddb.ErrNativeMVCCSnapshotWork
++	}
++	if c.ownedFailure != nil {
++		return c.Snapshot, false, c.ownedFailure
++	}
++	if c.budget == nil {
++		b, ready, err := db.NativeMVCCBudgetV6(w)
++		if !ready || err != nil {
++			return c.Snapshot, false, err
++		}
++		c.budget = b
++		c.owned = true
++	}
++	if c.Snapshot == nil {
++		c.currentWork = w
++		snapshot, _, err := db.StepNativeMVCCCaptureV6(c, c.admitOwnedSnapshotV6, w)
++		c.currentWork = nil
++		if err == errNativeMVCCCaptureYieldV6 {
++			return snapshot, false, nil
++		}
++		if err != nil {
++			c.ownedFailure = err
++			return snapshot, false, err
++		}
++		if snapshot == nil {
++			return nil, false, nil
++		}
++	}
++	if !c.metadataAdopted {
++		first, second := c.primaryMetadata, c.registryMetadata
++		if first == nil {
++			first, second = second, nil
++		}
++		if first != nil {
++			e, ready, err := retainedalloc.EnrollPairWithWork(first, second, c.budget, &c.enrollment, w)
++			if !ready || err != nil {
++				if err != nil {
++					c.ownedFailure = err
++				}
++				return c.Snapshot, false, err
++			}
++			if err = c.Snapshot.AdoptNativeMVCCMetadataEnrollmentV6(e); err != nil {
++				c.ownedFailure = err
++				return c.Snapshot, false, err
++			}
++			c.enrollment.DetachResult()
++		}
++		c.primaryMetadata = nil
++		c.registryMetadata = nil
++		c.metadataAdopted = true
++	}
++	ready, err := c.Snapshot.StepNativeMVCCSnapshotCaptureV6(w)
++	if ready && err == nil {
++		c.phase = 3
++	}
++	if err != nil {
++		c.ownedFailure = err
++	}
++	return c.Snapshot, ready, err
++}
++func (c *NativeMVCCCaptureV6) admitOwnedSnapshotV6(s backenddb.SnapshotAllocationSizes) error {
++	w := c.currentWork
++	first, second := s.PrimaryMetadata, s.RegistryMetadata
++	if first == nil {
++		first, second = second, nil
++	}
++	count := uint64(0)
++	if first != nil {
++		count++
++	}
++	if second != nil {
++		count++
++	}
++	records := 1 + 2*count
++	bytes := memtable.COWRetentionAcquireWorkBytes() + count*(retainedalloc.EnrollmentConstructorWorkBytes()+memtable.COWRetentionAcquireWorkBytes())
++	// This is a fixed constructor preflight, not effect credit. Every operation
++	// below reserves its own literal geometry immediately before its effect.
++	if w == nil || w.Records > w.RecordLimit || records > w.RecordLimit-w.Records || w.Bytes > w.ByteLimit || bytes > w.ByteLimit-w.Bytes {
++		return errNativeMVCCCaptureYieldV6
++	}
++	if c.retention == nil {
++		lease, ready, err := c.budget.AcquireRetentionWork(cowSnapshotRetentionCharge(s)+2*uint64(unsafe.Sizeof(uintptr(0))), w)
++		if err != nil {
++			return err
++		}
++		if !ready {
++			return errNativeMVCCCaptureYieldV6
++		}
++		c.retention = lease.(*memtable.COWExternalLease)
++	}
++	if first != nil {
++		ready, err := retainedalloc.BeginEnrollmentPairWithWork(first, second, c.budget, &c.enrollment, w)
++		if err != nil {
++			return err
++		}
++		if !ready {
++			return errNativeMVCCCaptureYieldV6
++		}
++	}
++	c.primaryMetadata, c.registryMetadata = s.PrimaryMetadata, s.RegistryMetadata
++	return nil
++}
++
++// CloseNativeMVCCOwnedCaptureV6 consumes real physical Snapshot cleanup first.
++// The caller clears its Snapshot alias before the original retention refund.
++func (c *NativeMVCCCaptureV6) CloseNativeMVCCOwnedCaptureV6(w *iterator.OrdinalScanWork) (bool, error) {
++	if c == nil {
++		return true, nil
++	}
++	if w == nil || !c.owned {
++		return false, backenddb.ErrNativeMVCCSnapshotWork
++	}
++	if c.ownedPhase == 3 {
++		return true, c.ownedFailure
++	}
++	if c.ownedPhase == 0 {
++		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
++			return false, nil
++		}
++		c.primaryMetadata = nil
++		c.registryMetadata = nil
++		ready, err := c.enrollment.CancelWithWork(w)
++		if !ready || err != nil {
++			return false, err
++		}
++		c.primaryMetadata = nil
++		c.registryMetadata = nil
++		c.ownedPhase = 1
++	}
++	if c.ownedPhase == 1 {
++		if c.Snapshot != nil {
++			ready, err := c.Snapshot.CloseNativeMVCCSnapshotStepV6(w)
++			if !ready || err != nil {
++				return false, err
++			}
++			c.Snapshot = nil
++		}
++		c.ownedPhase = 2
++	}
++	if c.retention != nil {
++		if !c.retention.AdmitRetentionClose(w) {
++			return false, nil
++		}
++		lease := c.retention
++		c.retention = nil
++		lease.Close()
++	}
++	c.budget = nil
++	c.cache = nil
++	c.ownedPhase = 3
++	return true, c.ownedFailure
++}

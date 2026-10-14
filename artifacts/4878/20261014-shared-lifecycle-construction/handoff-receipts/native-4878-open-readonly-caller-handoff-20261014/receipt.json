@@ -1,0 +1,13 @@
+{
+  "status": "ROOT_VERIFIED_OPEN_READONLY_ORIGINAL_RELEASED",
+  "at_utc": "2026-10-14T18:16:52.059456+00:00",
+  "path": "TreeDB/db/open_readonly.go",
+  "bytes": 17208,
+  "sha256": "a6eaf36a8c316ac8363a36213e9d7b4b9ea0a2a2bf3f5d7a0329c88aa746f6a9",
+  "both_actual_copies_clean_identical": true,
+  "ordinary_ack_readonly_no_producer": true,
+  "ownership": "NATIVE_SOLE_WRITER_ORDINARY_READ_ONLY",
+  "ordinary_head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "native_head": "22651bfa4cc30f7f71fa8a47f36b7e0d486bfdd5",
+  "contract": "Complete both actual deferred read-only Open startup callers with external owner/charge outcome; clear generation aliases before accounting. Existing admission, error, physical Manager/LOCK and once-only failure custody unchanged. No source copied or other paths released. Native55+two tests/NEW;38 imported companions unchanged."
+}

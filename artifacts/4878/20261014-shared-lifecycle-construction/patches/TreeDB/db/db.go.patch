@@ -1,0 +1,62 @@
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -2327,9 +2327,14 @@
+ 	}
+ 	metadata.CloseAfterCleanup(err)
+ 	if indexBorrowed {
+-		originalIndex.releaseWrapperBorrow(s, err)
+-		if err != nil && originalDB != nil {
++		generationMetadata, generationCharge, generationErr := originalIndex.releaseWrapperBorrowCompletionV6(s, err)
++		if generationErr != nil && originalDB != nil {
+ 			originalDB.retainOriginalCleanupError(&originalIndex.closeFailure)
++		}
++		err = errors.Join(err, generationErr)
++		originalIndex = nil
++		if generationCharge != 0 {
++			generationMetadata.RemovePending(generationCharge)
+ 		}
+ 	}
+ 	// Publish actual completion after alias scrub and every original callback's
+@@ -2625,7 +2630,12 @@
+ 		if result != nil && retErr == nil {
+ 			gen.finishStartupSuccess()
+ 		} else {
+-			retErr = gen.finishStartupFailure(retErr, true)
++			metadata, charge, err := gen.finishStartupFailure(retErr, true)
++			gen = nil
++			retErr = err
++			if metadata != nil && charge != 0 {
++				metadata.RemovePending(charge)
++			}
+ 		}
+ 	}()
+ 	ghostManager, err := newIndexGhostManager(valueLogIdentityPins.MetadataOwner())
+@@ -3499,7 +3509,7 @@
+ 		errs = append(errs, err)
+ 	}
+ 	if db.ghostManager != nil {
+-		db.ghostManager.stop()
++		db.closeGhostManagerCompletionV6(true)
+ 	}
+ 
+ 	db.mu.Lock()
+@@ -4896,8 +4906,17 @@
+ 	if idx == nil {
+ 		return
+ 	}
+-	defer idx.releaseWrapperBorrow(nil, nil)
+-	defer db.releaseIndex(idx)
++	defer func() {
++		db.releaseIndex(idx)
++		metadata, charge, err := idx.releaseWrapperBorrowCompletionV6(nil, nil)
++		if err != nil {
++			db.retainOriginalCleanupError(&idx.closeFailure)
++		}
++		idx = nil
++		if charge != 0 {
++			metadata.RemovePending(charge)
++		}
++	}()
+ 
+ 	min := db.MinPinnedSnapshotCommitSeq()
+ 	state := db.state.Load()

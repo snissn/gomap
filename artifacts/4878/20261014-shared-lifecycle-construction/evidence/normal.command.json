@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=180s",
+    "-json",
+    "-run",
+    "^Test(DependencyDirectory|PrimaryDependency|PrimaryConstructionV6OriginalSiblingFailureCustody|RootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt|COW|OwnedRope|EnrollmentWork|Owner|NativeMVCCOwnedCaptureOriginalSnapshotLifetime)",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/internal/memtable",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/db",
+    "./TreeDB",
+    "./TreeDB/caching"
+  ],
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "script": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native4878-shared-lifecycle-freeze-producer.py",
+  "script_sha256": "54c7e7b93fa9d03c9228808c6cbe3dcc106a4419e11bf5c94091b67247b7e7dc"
+}

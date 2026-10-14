@@ -110,6 +110,8 @@ type LeafGenerationPackStableObservations struct {
 // root or alternate-meta publication makes their pointers reachable.
 type LeafGenerationPackStablePreparedClosure struct {
 	mu                   sync.Mutex
+	completion           sync.Cond
+	activeCompletion     uint64
 	resources            *rootpublication.StableResourceSet
 	segments             []LeafPageLogSegment
 	promoted             []rewriteCreatedSegment
@@ -168,6 +170,8 @@ func (closure *LeafGenerationPackStablePreparedClosure) TakeStableResources() (*
 		return nil, ErrLeafGenerationPackStablePreparedClosureConsumed
 	}
 	closure.mu.Lock()
+	closure.activeCompletion++
+	defer closure.finishCompletionCall()
 	if closure.attempted || closure.consumed || closure.resources == nil {
 		err := closure.cleanupErr
 		closure.mu.Unlock()
@@ -182,6 +186,7 @@ func (closure *LeafGenerationPackStablePreparedClosure) TakeStableResources() (*
 	resources := closure.resources
 	closure.resources, closure.promoted, closure.cleanupPins = nil, nil, nil
 	closure.consumed, closure.attempted, closure.done = true, false, false
+	closure.completion.Broadcast()
 	closure.mu.Unlock()
 	return resources, nil
 }
@@ -193,12 +198,19 @@ func (closure *LeafGenerationPackStablePreparedClosure) Release() error {
 		return nil
 	}
 	closure.mu.Lock()
-	if closure.attempted {
-		err, done := closure.cleanupErr, closure.done
-		closure.mu.Unlock()
-		if !done {
-			return rootpublication.ErrResourceOwnership
+	closure.activeCompletion++
+	defer closure.finishCompletionCall()
+	for closure.attempted && !closure.done {
+		// The containing condition uses the original mutex; no second cleanup
+		// owner or terminal refusal is created while physical Close is active.
+		if closure.completion.L == nil {
+			closure.completion.L = &closure.mu
 		}
+		closure.completion.Wait()
+	}
+	if closure.attempted {
+		err := closure.cleanupErr
+		closure.mu.Unlock()
 		return err
 	}
 	closure.attempted = true
@@ -225,26 +237,48 @@ func (closure *LeafGenerationPackStablePreparedClosure) Release() error {
 	clear(closure.promoted)
 	clear(closure.pointers)
 	closure.resources, closure.segments, closure.promoted, closure.pointers, closure.cleanupPins = nil, nil, nil, nil, nil
-	owner, charge := closure.metadata, closure.metadataCharge
-	closure.metadata, closure.metadataCharge, closure.db = nil, 0, nil
 	closure.consumed, closure.done = true, true
+	closure.completion.Broadcast()
+	closure.mu.Unlock()
+	return nil
+}
+
+// Only the final already-admitted completion caller consumes the containing
+// contribution. Waiting callers still use its original mutex/condition after
+// the physical action finishes. No containing field is touched after refund.
+func (closure *LeafGenerationPackStablePreparedClosure) finishCompletionCall() {
+	closure.mu.Lock()
+	closure.activeCompletion--
+	var owner *retainedalloc.Owner
+	var charge uint64
+	if closure.done && closure.cleanupErr == nil && closure.activeCompletion == 0 {
+		owner, charge = closure.metadata, closure.metadataCharge
+		closure.metadata, closure.metadataCharge, closure.db = nil, 0, nil
+	}
 	closure.mu.Unlock()
 	if owner != nil {
 		owner.RemovePending(charge)
 	}
-	return nil
 }
+
 func (closure *LeafGenerationPackStablePreparedClosure) Abandon() error { return closure.Release() }
 
 func (closure *LeafGenerationPackStablePreparedClosure) retainCleanupFailure(cause error) error {
 	closure.failure.retainCause(0, cause)
 	closure.mu.Lock()
-	closure.cleanupErr, closure.done = &closure.failure, true
+	closure.cleanupErr = &closure.failure
 	db, owner := closure.db, closure.metadata
 	closure.mu.Unlock()
 	if owner != nil {
 		owner.CleanupFailed()
 	}
+	// The physical action is complete. Publish that outcome before arbitrary
+	// prior-error traversal can reenter Release; this original call still owns
+	// the charged payload until DB retention finishes and it returns.
+	closure.mu.Lock()
+	closure.done = true
+	closure.completion.Broadcast()
+	closure.mu.Unlock()
 	if db != nil {
 		db.retainOriginalCleanupError(&closure.failure)
 	}
@@ -258,7 +292,7 @@ func (closure *LeafGenerationPackStablePreparedClosure) closeCleanupParent() err
 		return closure.parentCloseErr
 	}
 	closure.parentCloseAttempted = true
-	closure.parentCloseErr = closure.cleanupDir.Close()
+	closure.parentCloseErr = leafGenerationPackAuthorityCloseFile(closure.cleanupDir)
 	if closure.parentCloseErr == nil {
 		closure.cleanupDir = nil
 	}
@@ -448,9 +482,7 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		// exact identity-verified abandonment before releasing producer
 		// authority. If abandonment is ambiguous, preserve that same parent,
 		// every exact child handle, and the pins for a teardown retry.
-		cleanupErr := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
-			authority.destinationParent, promoted, authority.db.valueLogIdentityPins,
-		)
+		cleanupErr := authority.rollbackPromoted()
 		if cleanupErr != nil {
 			authority.retainPromotedCleanupForRecovery(promoted, stagingRoot)
 			return nil, errors.Join(validationErr, cleanupErr, ErrRecoveryRequired)
@@ -470,17 +502,24 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	// captured physical identity. The authority's pre-token identity came
 	// directly from fstat and therefore has generation zero. Key only by physical
 	// identity here, then validate the descriptor's logical generation below.
-	want := make(map[rootpublication.StableIdentity]uint32, len(authority.segments))
-	for i := range authority.segments {
-		segment := &authority.segments[i]
-		identity := segment.identity
-		identity.Generation = 0
-		want[identity] = segment.created.fileID
+	if len(promoted) != len(authority.segments) {
+		return fail(fmt.Errorf("%w: promoted segment count differs from original authority", rootpublication.ErrResourceConflict))
 	}
-	seen := make(map[rootpublication.StableIdentity]struct{}, len(want))
-	frontiers := make(map[uint32]uint64, len(want))
-	var namespaceSyncs uint64
-	var namespaceObligations uint64
+	for i := range authority.segments {
+		authority.segments[i].descriptorSeen = false
+		authority.segments[i].referenced = false
+	}
+	for _, promotedSegment := range promoted {
+		position := authority.segmentIndex.get(promotedSegment.fileID)
+		if position == 0 {
+			return fail(rootpublication.ErrResourceConflict)
+		}
+		segment := &authority.segments[position-1]
+		if promotedSegment.path != segment.created.path || !rootpublication.SamePhysicalIdentity(promotedSegment.identity, segment.identity) {
+			return fail(rootpublication.ErrResourceConflict)
+		}
+	}
+	var namespaceSyncs, namespaceObligations uint64
 	diagnostics, captureErr := authority.resources.AcquirePhysicalDiagnostics()
 	if captureErr != nil {
 		return fail(captureErr)
@@ -493,36 +532,41 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		if fields := descriptor.ReachabilityFields(); len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafPackedPointer {
 			return fail(fmt.Errorf("%w: packed descriptor reachability=%q", rootpublication.ErrUnresolvedResource, fields))
 		}
+		if descriptor.Generation > math.MaxUint32 {
+			return fail(rootpublication.ErrResourceConflict)
+		}
+		position := authority.segmentIndex.get(uint32(descriptor.Generation))
+		if position == 0 {
+			return fail(rootpublication.ErrResourceConflict)
+		}
+		segment := &authority.segments[position-1]
 		identity := descriptor.Identity()
 		identity.Generation = 0
-		fileID, ok := want[identity]
-		if !ok || descriptor.Generation != uint64(fileID) || descriptor.Frontier().Bytes == 0 {
-			return fail(fmt.Errorf("%w: packed descriptor does not match promoted segment", rootpublication.ErrResourceConflict))
+		if segment.descriptorSeen || identity != segment.identity || descriptor.Frontier().Bytes != segment.frontierBytes || segment.frontierBytes == 0 {
+			return fail(fmt.Errorf("%w: packed descriptor differs from captured original segment", rootpublication.ErrResourceConflict))
 		}
-		seen[identity] = struct{}{}
-		frontiers[page.ValueLogSegmentID(fileID)] = descriptor.Frontier().Bytes
+		segment.descriptorSeen = true
 		namespaceObligations++
-	}
-	if len(seen) != len(want) {
-		return fail(fmt.Errorf("%w: packed closure descriptors=%d promoted_segments=%d", rootpublication.ErrUnresolvedResource, len(seen), len(want)))
 	}
 	if len(pointers) == 0 {
 		return fail(fmt.Errorf("%w: packed closure has no reachable pointers", rootpublication.ErrUnresolvedResource))
 	}
-	referenced := make(map[uint32]struct{}, len(frontiers))
 	for _, pointer := range pointers {
-		frontier, ok := frontiers[pointer.FileID]
+		position := authority.segmentIndex.get(page.ValueLogFileID(pointer.FileID))
 		length := uint64(pointer.RecordLength())
-		if !ok || pointer.FileID == 0 || length == 0 {
+		if position == 0 || pointer.FileID == 0 || length == 0 {
 			return fail(fmt.Errorf("%w: packed closure pointer references foreign or empty segment %d", rootpublication.ErrResourceConflict, pointer.FileID))
 		}
-		if pointer.Offset > ^uint64(0)-length || pointer.Offset+length > frontier {
+		segment := &authority.segments[position-1]
+		if pointer.Offset > ^uint64(0)-length || pointer.Offset+length > segment.frontierBytes {
 			return fail(fmt.Errorf("%w: packed closure pointer exceeds immutable frontier", rootpublication.ErrFrontierBeyondResource))
 		}
-		referenced[pointer.FileID] = struct{}{}
+		segment.referenced = true
 	}
-	if len(referenced) != len(frontiers) {
-		return fail(fmt.Errorf("%w: packed closure pointers cover %d of %d promoted segments", rootpublication.ErrUnresolvedResource, len(referenced), len(frontiers)))
+	for _, segment := range authority.segments {
+		if !segment.descriptorSeen || !segment.referenced {
+			return fail(fmt.Errorf("%w: packed closure lacks exact descriptor or pointer coverage", rootpublication.ErrUnresolvedResource))
+		}
 	}
 	statistics, statsErr := authority.resources.AcquireStats(time.Now())
 	if statsErr != nil {
@@ -575,15 +619,7 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 func packPreparedPayloadCharge(promoted []rewriteCreatedSegment, pointers []page.LeafLogPtr) (uint64, error) {
 	var total uint64
 	add := func(count uint64, size uint64) error {
-		if size != 0 && count > math.MaxUint64/size {
-			return retainedalloc.ErrCapacity
-		}
-		charge := retainedalloc.AllocationCharge(count * size)
-		if charge > math.MaxUint64-total {
-			return retainedalloc.ErrCapacity
-		}
-		total += charge
-		return nil
+		return checkedRetainedPayloadChargeAdd(&total, count, size)
 	}
 	if err := add(uint64(len(promoted)), uint64(unsafe.Sizeof(LeafPageLogSegment{}))); err != nil {
 		return 0, err
@@ -728,4 +764,27 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 		runLeafGenerationPackStablePreparedClosureTestHook()
 	}
 	return closure, retErr
+}
+
+// checkedRetainedPayloadChargeAdd admits explicit producer geometry and overlap;
+// arithmetic refusal happens before allocation or physical effects.
+func checkedRetainedPayloadChargeAdd(total *uint64, count, width uint64) error {
+	if width == 0 || count > math.MaxUint64/width {
+		return retainedalloc.ErrCapacity
+	}
+	charge := retainedalloc.AllocationCharge(count * width)
+	if charge > math.MaxUint64-*total {
+		return retainedalloc.ErrCapacity
+	}
+	*total += charge
+	return nil
+}
+func checkedRetainedCapacity(base int, counts ...int) (int, error) {
+	for _, count := range counts {
+		if count < 0 || count > int(^uint(0)>>1)-base {
+			return 0, retainedalloc.ErrCapacity
+		}
+		base += count
+	}
+	return base, nil
 }

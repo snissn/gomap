@@ -278,7 +278,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	// Exercise the real target filesystem install before publishing a value-log
 	// set or creating a staging directory, writer, or private pager. A true
 	// no-op needs no namespace capability.
-	if err := leafGenerationPackPromotionTargetPreflight(layout.leafVLogDir); err != nil {
+	if err := db.leafGenerationPackPromotionTargetPreflight(layout.leafVLogDir); err != nil {
 		return stats, err
 	}
 	if err := db.publishValueLogSetNoRefresh(); err != nil {

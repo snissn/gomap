@@ -36,7 +36,7 @@ type COWTraversal struct {
 // Allocation/zeroing and owner admission are charged before their effects.
 // extraBytes admits the existing enclosing adapter's allocation, not its work.
 func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWTraversal, error) {
-	if work == nil || !work.Reserve(1, uint64(unsafe.Sizeof(COWTraversal{}))+uint64(unsafe.Sizeof(COWView{}))) {
+	if work == nil || !work.Reserve(2, uint64(unsafe.Sizeof(COWTraversal{}))+uint64(unsafe.Sizeof(COWView{}))+uint64(unsafe.Sizeof(cowViewReleaseLease{}))) {
 		return nil, btree.ErrWork
 	}
 	depth := cowMaximumHeight(r.Len())
@@ -132,10 +132,10 @@ func (c *COWTraversal) CloseStep(work *COWTraversalWork) (bool, COWRetirement, e
 	if err != nil || !done {
 		return false, COWRetirement{}, err
 	}
-	if !work.Reserve(1, uint64(unsafe.Sizeof(COWView{}))+uint64(unsafe.Sizeof(COWRoot{}))) {
-		return false, COWRetirement{}, nil
+	retirement, ready, err := c.view.ReleaseWithWork(work)
+	if !ready || err != nil {
+		return false, COWRetirement{}, err
 	}
-	retirement := c.view.Release()
 	c.view = nil
 	return true, retirement, nil
 }

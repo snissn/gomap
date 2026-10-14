@@ -64,7 +64,12 @@ func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
 	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 	db.SetLeafPageLog(leafLog)
 	t.Cleanup(func() { closeNoErr(t, leafLog) })
-	t.Cleanup(func() { closeNoErr(t, db) })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			logOriginalCleanupDiagnostic(t, err)
+			t.Fatalf("close: %v", err)
+		}
+	})
 	return db, leafLog, dir
 }
 
@@ -240,7 +245,7 @@ func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T)
 		t.Fatalf("listLeafGenerationBootstrapFiles(after): %v", err)
 	}
 	if len(afterFiles) != len(beforeFiles) {
-		t.Fatalf("bootstrap file count=%d, want %d", len(afterFiles), len(beforeFiles))
+		t.Fatalf("bootstrap file count=%d, want %d; original failpoint=%v", len(afterFiles), len(beforeFiles), err)
 	}
 	for i := range beforeFiles {
 		if afterFiles[i] != beforeFiles[i] {
@@ -286,11 +291,30 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 	runtime.mu.Lock()
 	pending := runtime.activeSeal
 	pendingOwnsExactCandidate := pending != nil && pending.resources != nil && pending.token != nil && pending.prepared != nil && pending.manifest != nil
-	var pendingManifestEntries []rootpublication.DependencyManifestEntryV1
+	var pendingManifestRevision uint64
+	var pendingManifestEntryCount int
+	var retainedPack bool
+	var pendingManifestErr error
 	if pendingOwnsExactCandidate {
-		pendingManifestEntries = pending.manifest.Entries()
+		pendingManifestErr = pending.manifest.WithEntriesV1(func(entries []rootpublication.DependencyManifestEntryV1) error {
+			pendingManifestEntryCount = len(entries)
+			for _, entry := range entries {
+				for _, field := range entry.Reachability {
+					switch field {
+					case rootpublication.ReachabilityOuterLeafGeneration:
+						pendingManifestRevision = entry.Generation
+					case rootpublication.ReachabilityOuterLeafPackedPointer:
+						retainedPack = true
+					}
+				}
+			}
+			return nil
+		})
 	}
 	runtime.mu.Unlock()
+	if pendingManifestErr != nil {
+		t.Fatalf("retained candidate manifest scope: %v", pendingManifestErr)
+	}
 	if !pendingOwnsExactCandidate {
 		t.Fatalf("retained coordinator seal=%+v, want exact resources/index/COW ownership", pending)
 	}
@@ -309,19 +333,9 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 	if len(manifestAfter.Generations) <= len(manifestBefore.Generations) {
 		t.Fatalf("manifest generations=%d, want retained packed revision beyond baseline %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
 	}
-	var retainedManifest, retainedPack bool
-	for _, entry := range pendingManifestEntries {
-		for _, field := range entry.Reachability {
-			switch field {
-			case rootpublication.ReachabilityOuterLeafGeneration:
-				retainedManifest = entry.Generation == manifestAfter.ManifestRevision
-			case rootpublication.ReachabilityOuterLeafPackedPointer:
-				retainedPack = true
-			}
-		}
-	}
+	retainedManifest := pendingManifestRevision == manifestAfter.ManifestRevision
 	if !retainedManifest || !retainedPack {
-		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t entries=%+v", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pendingManifestEntries)
+		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t captured_revision=%d entries=%d", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pendingManifestRevision, pendingManifestEntryCount)
 	}
 }
 

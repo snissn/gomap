@@ -72,7 +72,6 @@ func (d *ResourceDiagnostics) CloseWithError() error {
 		return fail(err)
 	}
 	for i := range d.physical {
-		clear(d.physical[i].reachability)
 		d.physical[i] = StableResourcePhysicalDescriptor{}
 	}
 	clear(d.physical)

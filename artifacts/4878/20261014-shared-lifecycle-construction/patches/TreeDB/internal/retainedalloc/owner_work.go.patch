@@ -1,0 +1,63 @@
+--- a/TreeDB/internal/retainedalloc/owner_work.go
++++ b/TreeDB/internal/retainedalloc/owner_work.go
+@@ -63,7 +63,7 @@
+ 	b.prev, b.next = nil, nil
+ }
+ func (o *Owner) disposableBindingLocked(b *binding) bool {
+-	return b.refs == 0 && b.cleanupRefs == 0 && !b.producer && (!o.closed && !o.retired && !o.cleanupFailed || o.closed && o.pending == 0)
++	return b.refs == 0 && b.cleanupRefs == 0 && !b.producer && (!o.closed && !o.retired && !o.cleanupFailed || o.closed && o.pending == 0 && o.enrolling == 0 && (o.enrollment == nil || o.enrollment.pending != nil))
+ }
+ func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error) {
+ 	if s.failure != nil {
+@@ -71,6 +71,25 @@
+ 	}
+ 	if w != nil && (w.RecordLimit == 0 || w.ByteLimit == 0) {
+ 		return false, nil
++	}
++	if active := o.enrollment; active != nil && active.pending != nil && active.pendingAdmitted != o.bytes {
++		var ready bool
++		var err error
++		if w == nil {
++			err = active.pending.Resize(o.bytes)
++			ready = err == nil
++		} else {
++			ready, err = active.pending.(WorkLease).ResizeWork(o.bytes, w)
++		}
++		if err != nil {
++			s.failure = err
++			o.cleanupFailed = true
++			return false, err
++		}
++		if !ready {
++			return false, nil
++		}
++		active.pendingAdmitted = o.bytes
+ 	}
+ 	for {
+ 		if !s.started {
+@@ -90,7 +109,7 @@
+ 				s.restart = false
+ 				continue
+ 			}
+-			if o.closed && o.head == nil && o.pending == 0 {
++			if o.closed && o.head == nil && o.pending == 0 && o.enrolling == 0 && o.enrollment == nil {
+ 				o.bytes = 0
+ 				o.baseline = 0
+ 			}
+@@ -107,6 +126,7 @@
+ 				o.cleanupFailed = true
+ 				return false, err
+ 			}
++			b.admitted = o.bytes
+ 			if o.closed {
+ 				b.producer = false
+ 			}
+@@ -167,7 +187,7 @@
+ 		if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+128) {
+ 			return false, nil
+ 		}
+-		target := o.baseline + o.controls + o.pending
++		target := o.baseline + o.controls + o.pending + o.enrolling
+ 		if target > o.bytes {
+ 			return false, ErrCapacity
+ 		}
