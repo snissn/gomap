@@ -70,6 +70,14 @@ type mapNode[K ordered, V any] struct {
 
 // Copy the node for safe isolation.
 func (tr *Map[K, V]) copy(n *mapNode[K, V]) *mapNode[K, V] {
+	n2, _ := tr.copyWithWork(n, nil)
+	return n2
+}
+
+func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], bool) {
+	if !tr.admitCopy(n, w) {
+		return nil, false
+	}
 	n2 := new(mapNode[K, V])
 	n2.isoid = tr.isoid
 	n2.count = n.count
@@ -91,15 +99,27 @@ func (tr *Map[K, V]) copy(n *mapNode[K, V]) *mapNode[K, V] {
 		*n2.children = make([]*mapNode[K, V], len(*n.children), tr.max+1)
 		copy(*n2.children, *n.children)
 	}
-	return n2
+	return n2, true
 }
 
 // isoLoad loads the provided node and, if needed, performs a copy-on-write.
 func (tr *Map[K, V]) isoLoad(cn **mapNode[K, V], mut bool) *mapNode[K, V] {
-	if mut && (*cn).isoid != tr.isoid {
-		*cn = tr.copy(*cn)
+	n, _ := tr.isoLoadWithWork(cn, mut, nil)
+	return n
+}
+
+func (tr *Map[K, V]) isoLoadWithWork(cn **mapNode[K, V], mut bool, w Work) (*mapNode[K, V], bool) {
+	if !tr.admitLoad(w) {
+		return nil, false
 	}
-	return *cn
+	if mut && (*cn).isoid != tr.isoid {
+		n, ready := tr.copyWithWork(*cn, w)
+		if !ready {
+			return nil, false
+		}
+		*cn = n
+	}
+	return *cn, true
 }
 
 func (tr *Map[K, V]) Copy() *Map[K, V] {
@@ -129,19 +149,52 @@ func (n *mapNode[K, V]) leaf() bool {
 }
 
 func (tr *Map[K, V]) search(n *mapNode[K, V], key K) (index int, found bool) {
+	index, found, _ = tr.searchWithWork(n, key, nil)
+	return index, found
+}
+
+func (tr *Map[K, V]) searchWithWork(n *mapNode[K, V], key K, w Work) (index int, found, ready bool) {
 	low, high := 0, len(n.items)
 	for low < high {
 		h := (low + high) / 2
-		if !(key < n.items[h].key) {
+		var less bool
+		if w == nil {
+			less = key < n.items[h].key
+		} else {
+			if !tr.admitProbe(w) {
+				return 0, false, false
+			}
+			var ok bool
+			less, ok = mutationLess(key, n.items[h].key, w)
+			if !ok {
+				return 0, false, false
+			}
+		}
+		if !less {
 			low = h + 1
 		} else {
 			high = h
 		}
 	}
-	if low > 0 && !(n.items[low-1].key < key) {
-		return low - 1, true
+	if low > 0 {
+		var less bool
+		if w == nil {
+			less = n.items[low-1].key < key
+		} else {
+			if !tr.admitProbe(w) {
+				return 0, false, false
+			}
+			var ok bool
+			less, ok = mutationLess(n.items[low-1].key, key, w)
+			if !ok {
+				return 0, false, false
+			}
+		}
+		if !less {
+			return low - 1, true, true
+		}
 	}
-	return low, false
+	return low, false, true
 }
 
 func (tr *Map[K, V]) init(degree int) {
@@ -155,33 +208,70 @@ func (tr *Map[K, V]) init(degree int) {
 	}
 }
 
-// Set or replace a value for a key
+// Set or replace a value for a key.
 func (tr *Map[K, V]) Set(key K, value V) (V, bool) {
+	previous, replaced, _, _ := tr.SetWithWork(key, value, nil)
+	return previous, replaced
+}
+
+// SetWithWork uses Set's original mutation engine with reserve-before-effect
+// admission. A nil Work is unlimited. On allowance refusal ready is false and
+// err is nil; logical entries and counts are unchanged. Private structural
+// copies or splits can remain, so callers must serialize all mutable methods.
+// There is no pending mutation: another key may be written after any refusal.
+// A node/backing allocation must fit as a whole. Opaque value Copy/IsoCopy
+// callbacks are refused before invocation when isolation needs a bounded copy.
+func (tr *Map[K, V]) SetWithWork(key K, value V, w Work) (previous V, replaced, ready bool, err error) {
+	if !tr.admitHeader(w) {
+		return tr.empty.value, false, false, nil
+	}
 	item := mapPair[K, V]{key: key, value: value}
 	if tr.root == nil {
 		tr.init(0)
-		tr.root = tr.newNode(true)
-		tr.root.items = append([]mapPair[K, V]{}, item)
-		tr.root.count = 1
+		if !tr.admitNewNode(true, w) {
+			return tr.empty.value, false, false, nil
+		}
+		items, ok := tr.growItems(nil, 1, w)
+		if !ok || !tr.admitInitial(w) {
+			return tr.empty.value, false, false, nil
+		}
+		root := tr.newNode(true)
+		root.items = append(items, item)
+		root.count = 1
+		tr.root = root
 		tr.count = 1
-		return tr.empty.value, false
+		return tr.empty.value, false, true, nil
 	}
-	prev, replaced, split := tr.nodeSet(&tr.root, item)
+	prev, replaced, split, ok := tr.nodeSet(&tr.root, item, w)
+	if !ok {
+		return tr.empty.value, false, false, nil
+	}
 	if split {
 		left := tr.root
+		if !tr.admitSplit(left, w) || !tr.admitNewNode(false, w) {
+			return tr.empty.value, false, false, nil
+		}
+		items, ok := tr.growItems(nil, 1, w)
+		if !ok {
+			return tr.empty.value, false, false, nil
+		}
+		children, ok := tr.growChildren(nil, 2, w)
+		if !ok || !tr.admitRootSplit(w) {
+			return tr.empty.value, false, false, nil
+		}
 		right, median := tr.nodeSplit(left)
-		tr.root = tr.newNode(false)
-		*tr.root.children = make([]*mapNode[K, V], 0, tr.max+1)
-		*tr.root.children = append([]*mapNode[K, V]{}, left, right)
-		tr.root.items = append([]mapPair[K, V]{}, median)
-		tr.root.updateCount()
-		return tr.Set(item.key, item.value)
+		root := tr.newNode(false)
+		*root.children = append(children, left, right)
+		root.items = append(items, median)
+		root.updateCount()
+		tr.root = root
+		return tr.SetWithWork(item.key, item.value, w)
 	}
 	if replaced {
-		return prev, true
+		return prev, true, true, nil
 	}
-	tr.count++
-	return tr.empty.value, false
+	tr.count++ // admitted before nodeSet can make the logical insertion
+	return tr.empty.value, false, true, nil
 }
 
 func (tr *Map[K, V]) nodeSplit(n *mapNode[K, V],
@@ -216,43 +306,72 @@ func (n *mapNode[K, V]) updateCount() {
 	}
 }
 
-func (tr *Map[K, V]) nodeSet(pn **mapNode[K, V], item mapPair[K, V],
-) (prev V, replaced bool, split bool) {
-	n := tr.isoLoad(pn, true)
-	i, found := tr.search(n, item.key)
+func (tr *Map[K, V]) nodeSet(pn **mapNode[K, V], item mapPair[K, V], w Work,
+) (prev V, replaced bool, split bool, ready bool) {
+	n, ok := tr.isoLoadWithWork(pn, true, w)
+	if !ok {
+		return tr.empty.value, false, false, false
+	}
+	i, found, ok := tr.searchWithWork(n, item.key, w)
+	if !ok {
+		return tr.empty.value, false, false, false
+	}
 	if found {
+		if !tr.admitReplacement(w) {
+			return tr.empty.value, false, false, false
+		}
 		prev = n.items[i].value
 		n.items[i] = item
-		return prev, true, false
+		return prev, true, false, true
 	}
 	if n.leaf() {
 		if len(n.items) == tr.max {
-			return tr.empty.value, false, true
+			return tr.empty.value, false, true, true
 		}
-		n.items = append(n.items, tr.empty)
+		items, ok := tr.growItems(n.items, 1, w)
+		if !ok || !tr.admitInsert(len(n.items)-i, w) {
+			return tr.empty.value, false, false, false
+		}
+		n.items = append(items, tr.empty)
 		copy(n.items[i+1:], n.items[i:])
 		n.items[i] = item
 		n.count++
-		return tr.empty.value, false, false
+		return tr.empty.value, false, false, true
 	}
-	prev, replaced, split = tr.nodeSet(&(*n.children)[i], item)
+	// These count/child actions are admitted before descent: after a child makes
+	// a logical insertion no parent is allowed to yield with a stale count.
+	if !tr.admitDescent(w) {
+		return tr.empty.value, false, false, false
+	}
+	prev, replaced, split, ready = tr.nodeSet(&(*n.children)[i], item, w)
+	if !ready {
+		return tr.empty.value, false, false, false
+	}
 	if split {
 		if len(n.items) == tr.max {
-			return tr.empty.value, false, true
+			return tr.empty.value, false, true, true
+		}
+		items, ok := tr.growItems(n.items, 1, w)
+		if !ok {
+			return tr.empty.value, false, false, false
+		}
+		children, ok := tr.growChildren(*n.children, 1, w)
+		if !ok || !tr.admitSplit((*n.children)[i], w) || !tr.admitParentSplit(len(n.items)-i, len(*n.children)-i, w) {
+			return tr.empty.value, false, false, false
 		}
 		right, median := tr.nodeSplit((*n.children)[i])
-		*n.children = append(*n.children, nil)
+		*n.children = append(children, nil)
 		copy((*n.children)[i+1:], (*n.children)[i:])
 		(*n.children)[i+1] = right
-		n.items = append(n.items, tr.empty)
+		n.items = append(items, tr.empty)
 		copy(n.items[i+1:], n.items[i:])
 		n.items[i] = median
-		return tr.nodeSet(&n, item)
+		return tr.nodeSet(&n, item, w)
 	}
 	if !replaced {
 		n.count++
 	}
-	return prev, replaced, false
+	return prev, replaced, false, true
 }
 
 func (tr *Map[K, V]) Scan(iter func(key K, value V) bool) {

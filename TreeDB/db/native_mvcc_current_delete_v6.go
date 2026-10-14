@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
@@ -163,6 +164,14 @@ func (s *Snapshot) ValidateNativeMVCCSelectionV6(selection tree.NativeMVCCSelect
 	return s.tree.MatchesNativeMVCCSelectionV6(selection, w)
 }
 
+// NativeMVCCSelectionSourceV6 borrows an actual producer-owned composite cut.
+// It validates and returns that cut's stationary selected winner, including its
+// original revision. The caller retains the producer until transaction cleanup;
+// a borrowed backend Snapshot alone cannot witness an overlay winner.
+type NativeMVCCSelectionSourceV6 interface {
+	NativeMVCCSelectedRecordV6(*Snapshot, *iterator.OrdinalScanWork) (node.LeafEntry, bool, error)
+}
+
 // NativeMVCCCurrentDeleteV6 is the original caller's admitted construction
 // continuation. The Snapshot and physical selection remain stationary until
 // the same transaction is either published or physically cancelled. Preparing
@@ -172,6 +181,8 @@ type NativeMVCCCurrentDeleteV6 struct {
 	db          *DB
 	snapshot    *Snapshot
 	selection   tree.NativeMVCCSelectionV6
+	source      NativeMVCCSelectionSourceV6
+	record      node.LeafEntry
 	request     mvccadmission.Request
 	transaction *rootpublication.DurableRootTransaction
 	release     rootpublication.PrimaryConstructionReleaseWork
@@ -179,16 +190,31 @@ type NativeMVCCCurrentDeleteV6 struct {
 }
 
 func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
+	return c.bindNativeMVCCCurrentDeleteV6(s, selection, nil, request, w)
+}
+
+// BindNativeMVCCCompositeDeleteV6 retains no new Snapshot edge: source owns the
+// SAME composite cut and its basis. Its original producer validates the winner
+// before constructor creation, and the Request is checked again at current cut.
+func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCompositeDeleteV6(s *Snapshot, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
+	if source == nil {
+		return false, ErrNativeMVCCSnapshotWork
+	}
+	return c.bindNativeMVCCCurrentDeleteV6(s, tree.NativeMVCCSelectionV6{}, source, request, w)
+}
+
+func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
 	if c == nil || s == nil || w == nil {
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(selection))) {
 		return false, nil
 	}
-	if c.phase != 0 || c.snapshot != nil || s.db == nil || !s.nativeMVCC.workOwned || s.nativeMVCC.capturePhase != 4 {
+	if c.phase != 0 || c.snapshot != nil || s.db == nil ||
+		(source == nil && (!s.nativeMVCC.workOwned || s.nativeMVCC.capturePhase != 4)) {
 		return false, ErrNativeMVCCSnapshotWork
 	}
-	c.db, c.snapshot, c.selection, c.request, c.phase = s.db, s, selection, request, 1
+	c.db, c.snapshot, c.selection, c.source, c.request, c.phase = s.db, s, selection, source, request, 1
 	return true, nil
 }
 
@@ -200,11 +226,23 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.Or
 	if c == nil || c.db == nil || w == nil {
 		return false, ErrNativeMVCCSnapshotWork
 	}
-	if c.phase >= 3 && c.phase < 5 {
+	if c.phase == 3 {
+		return c.transaction.PreparePrimaryPromotionStorageV6(w)
+	}
+	if c.phase == 4 {
 		return true, nil
 	}
 	if c.phase == 1 {
-		ready, err := c.snapshot.ValidateNativeMVCCSelectionV6(c.selection, w)
+		var ready bool
+		var err error
+		if c.source != nil {
+			c.record, ready, err = c.source.NativeMVCCSelectedRecordV6(c.snapshot, w)
+		} else {
+			ready, err = c.snapshot.ValidateNativeMVCCSelectionV6(c.selection, w)
+			if ready && err == nil {
+				c.record = c.selection.Record()
+			}
+		}
 		if !ready || err != nil {
 			return ready, err
 		}
@@ -244,7 +282,10 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.Or
 		}
 		c.phase = 3
 	}
-	return ready, err
+	if !ready || err != nil {
+		return ready, err
+	}
+	return c.transaction.PreparePrimaryPromotionStorageV6(w)
 }
 
 // composeNativeMVCCCurrentDeleteLockedV6 uses the actual current immutable
@@ -276,7 +317,16 @@ func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scrat
 	if cert != current.certificate {
 		return false, rootpublication.ErrDurableRootOwnership
 	}
-	record := c.selection.Record()
+	record := c.record
+	if c.source != nil {
+		selected, ready, err := c.source.NativeMVCCSelectedRecordV6(c.snapshot, w)
+		if !ready || err != nil {
+			return ready, err
+		}
+		if !bytes.Equal(selected.Key, record.Key) || selected.Revision != record.Revision || selected.Flags != record.Flags || selected.ValuePtr != record.ValuePtr {
+			return false, rootpublication.ErrDurableRootOwnership
+		}
+	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(mvccadmission.Cut{}))+2*uint64(unsafe.Sizeof(mvccadmission.Authority{}))) {
 		return false, nil
 	}
@@ -311,6 +361,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	}
 	if c.transaction == nil && c.phase != 5 {
 		c.db, c.snapshot, c.selection, c.request, c.phase = nil, nil, tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
+		c.source, c.record = nil, node.LeafEntry{}
 		return true, nil
 	}
 	if c.phase != 5 {
@@ -325,6 +376,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	if ready && err == nil {
 		c.transaction, c.db, c.snapshot = nil, nil, nil
 		c.selection, c.request, c.phase = tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
+		c.source, c.record = nil, node.LeafEntry{}
 	}
 	return ready, err
 }

@@ -404,3 +404,21 @@ func (c *NativeMVCCCaptureV6) closeNativeCOWCaptureV6(w *iterator.OrdinalScanWor
 	}
 	return true, nil
 }
+
+// NativeMVCCSelectedRecordV6 validates a stationary winner in this SAME retained
+// composite cut. No backend leaf claim is synthesized for an overlay record.
+// The original request owns this capture and prevents traversal advancement
+// until the bound current-delete transaction has finished or been cancelled.
+func (c *NativeMVCCCaptureV6) NativeMVCCSelectedRecordV6(snapshot *backenddb.Snapshot, w *iterator.OrdinalScanWork) (node.LeafEntry, bool, error) {
+	if c == nil || w == nil {
+		return node.LeafEntry{}, false, backenddb.ErrNativeMVCCSnapshotWork
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(node.LeafEntry{}))+128) {
+		return node.LeafEntry{}, false, nil
+	}
+	m := &c.composite
+	if !c.IsCompositeCOWV6() || c.Snapshot != snapshot || m.cut.basis == nil || m.cut.basis.snapshot != snapshot || m.pending || !m.valid || m.cutReleased || m.winner < 0 || m.winner > m.count {
+		return node.LeafEntry{}, false, tree.ErrProjectionOwner
+	}
+	return m.record, true, nil
+}

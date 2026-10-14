@@ -205,6 +205,48 @@ func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {
 	return t.constructionV6.promotion
 }
 
+// PreparePrimaryPromotionStorageV6 admits and allocates only the original
+// transaction's private promotion image. No current root, slot, parent, physical
+// fence or visible resource edge is selected here. The SAME constructor owns the
+// image through cancellation or later promotion, including allowance refusal.
+func (t *DurableRootTransaction) PreparePrimaryPromotionStorageV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if t == nil || w == nil {
+		return false, ErrDurableRootOwnership
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
+		return false, nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.constructionV6
+	if c == nil || !c.nativeWorkOwned || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 {
+		return false, ErrDurableRootOwnership
+	}
+	if c.promotion != nil {
+		return c.promotion.Root == (primaryarena.Ref{}) && len(c.promotion.Image) == PrimaryCapsuleSizeV6, nil
+	}
+	promotion, charge, ready, err := allocatePrimaryPromotionStorageV6(c.arena.MetadataOwner(), w)
+	if !ready || err != nil {
+		return ready, err
+	}
+	c.promotion = promotion
+	c.metadataCharge += charge
+	return true, nil
+}
+
+// Both ordinary and work-owned preparation allocate the same concrete storage
+// under the original arena metadata owner, before any allocation effect.
+func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, uint64, bool, error) {
+	if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
+		return nil, 0, false, nil
+	}
+	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
+	if err := owner.AddPending(charge); err != nil {
+		return nil, 0, false, err
+	}
+	return &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil
+}
+
 // Fresh promotion selects actual parent/target and acquires independent physical
 // closure edges. These head-bound operands never survive as private preparation.
 func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (result *PrimaryPromotionV6, completed bool, returnErr error) {
@@ -217,21 +259,30 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
-	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || c.promotion != nil || parent == nil || parentRoot == (primaryarena.Ref{}) {
+	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || (c.promotion != nil && c.promotion.Root != (primaryarena.Ref{})) || parent == nil || parentRoot == (primaryarena.Ref{}) {
 		return nil, false, ErrDurableRootOwnership
 	}
 	target := uint64(1) - parent.Slot()
-	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
-	if err := c.arena.MetadataOwner().AddPending(charge); err != nil {
-		return nil, false, err
+	promotion := c.promotion
+	charge := uint64(0)
+	if promotion == nil {
+		var ready bool
+		var err error
+		promotion, charge, ready, err = allocatePrimaryPromotionStorageV6(c.arena.MetadataOwner(), w)
+		if !ready || err != nil {
+			return nil, ready, err
+		}
 	}
-	chargeTransferred := false
+	image := promotion.Image
+	chargeTransferred := charge == 0
 	defer func() {
 		if !chargeTransferred {
+			image = nil
+			promotion.Image = nil
+			promotion = nil
 			c.arena.MetadataOwner().RemovePending(charge)
 		}
 	}()
-	image := make([]byte, PrimaryCapsuleSizeV6)
 	view, ready, err := ConstructPrimaryCapsuleV6(image, target, DurablePrimaryRootRecordV5{Record: record, Primary: projection}, t.input.PreparedPrimary, parent, w)
 	if !ready || err != nil {
 		return nil, ready, err
@@ -259,7 +310,8 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	if ready, err = c.arena.Acquire(parentRoot, w); !ready || err != nil {
 		return nil, ready, err
 	}
-	c.promotion = &PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
+	*promotion = PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
+	c.promotion = promotion
 	c.metadataCharge += charge
 	chargeTransferred = true
 	retained = true

@@ -103,14 +103,16 @@ func TestNativePruneCOWCommandWALCompositePublication(t *testing.T) {
 					pruneErr = e
 					break
 				}
-				if ack != 0 {
-					break
-				}
-				if cursor != nil && cursor.integrityDone && !cursor.loadingFloor {
+				// Every legal nonterminal return must let this same caller complete
+				// an ordinary durable write, including an ACK-bearing return.
+				if !x.Complete {
 					if e = s.CommitAt(100, []Mutation{{Key: future, Value: []byte("future-after")}}, CommitDurable); e != nil {
 						t.Fatal(e)
 					}
 					writes++
+				}
+				if ack != 0 {
+					break
 				}
 				if x.Complete {
 					break

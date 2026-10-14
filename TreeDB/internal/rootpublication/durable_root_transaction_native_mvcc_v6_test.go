@@ -126,7 +126,22 @@ func TestNativeMVCCPrivateConstructorPhysicalAbortV6(t *testing.T) {
 	}
 	txn := owner.(*DurableRootTransaction)
 	ref := txn.PrimaryConstructionReferenceV6()
+	constructorBytes := a.MetadataOwner().Bytes()
+	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{}); ready || err != nil || txn.PrimaryPromotionV6() != nil || a.MetadataOwner().Bytes() != constructorBytes {
+		t.Fatalf("promotion storage pre-effect refusal: %t %v", ready, err)
+	}
+	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil {
+		t.Fatalf("private promotion storage: %t %v", ready, err)
+	}
+	promotion := txn.PrimaryPromotionV6()
+	if promotion == nil || len(promotion.Image) != PrimaryCapsuleSizeV6 || promotion.Root != (primaryarena.Ref{}) || promotion.Parent != (primaryarena.Ref{}) || a.MetadataOwner().Bytes() <= constructorBytes {
+		t.Fatal("private storage was not admitted or selected publication authority")
+	}
+	promotion = nil
 	before := a.MetadataOwner().Bytes()
+	if ready, err := txn.PreparePrimaryPromotionStorageV6(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil || a.MetadataOwner().Bytes() != before {
+		t.Fatalf("private storage replay: %t %v", ready, err)
+	}
 	counts := a.Counters()
 	var receipt PrimaryConstructionReleaseWork
 	if ready, err := receipt.Bind(txn, &iterator.OrdinalScanWork{}); ready || err != nil || txn.constructionV6.cleanupPhase != 0 || a.Counters() != counts {

@@ -374,20 +374,35 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			}
 			c.phase = 14
 		case 14:
-			if !c.capture.NativeProjectionUsesBackendV6() {
-				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			var ready bool
+			var err error
+			if c.capture.IsCompositeCOWV6() {
+				var record node.LeafEntry
+				record, ready, err = c.capture.NativeMVCCSelectedRecordV6(c.reader.Snapshot, w)
+				if !ready || err != nil {
+					return err
+				}
+				if !w.Reserve(1, uint64(c.selectedSize)+64) {
+					return nil
+				}
+				if !bytes.Equal(record.Key, c.selected[:c.selectedSize]) {
+					return tree.ErrProjectionOwner
+				}
+				ready, err = c.prepared.BindNativeMVCCCompositeDeleteV6(c.reader.Snapshot, &c.capture, c.request, w)
+			} else {
+				var selection tree.NativeMVCCSelectionV6
+				selection, ready, err = c.projection.NativeMVCCSelectionV6(w)
+				if !ready || err != nil {
+					return err
+				}
+				if !w.Reserve(1, uint64(c.selectedSize)+64) {
+					return nil
+				}
+				if !bytes.Equal(selection.Record().Key, c.selected[:c.selectedSize]) {
+					return tree.ErrProjectionOwner
+				}
+				ready, err = c.prepared.BindNativeMVCCCurrentDeleteV6(c.reader.Snapshot, selection, c.request, w)
 			}
-			selection, ready, err := c.projection.NativeMVCCSelectionV6(w)
-			if !ready || err != nil {
-				return err
-			}
-			if !w.Reserve(1, uint64(c.selectedSize)+64) {
-				return nil
-			}
-			if !bytes.Equal(selection.Record().Key, c.selected[:c.selectedSize]) {
-				return tree.ErrProjectionOwner
-			}
-			ready, err = c.prepared.BindNativeMVCCCurrentDeleteV6(c.reader.Snapshot, selection, c.request, w)
 			if !ready || err != nil {
 				return err
 			}
