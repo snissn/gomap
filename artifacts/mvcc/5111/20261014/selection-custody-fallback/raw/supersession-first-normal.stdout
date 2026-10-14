@@ -1,0 +1,15 @@
+=== RUN   TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff
+--- PASS: TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff (0.04s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader
+--- PASS: TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader (0.03s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt
+--- PASS: TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt (0.02s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor
+--- PASS: TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor (0.02s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth
+    root_publication_build_group_primary_v6_test.go:392: first refusal lost: write=primary arena: stale ownership
+        durable-root transaction ownership violation close=primary physical cleanup failed
+--- FAIL: TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth (0.02s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.139s
+FAIL

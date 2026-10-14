@@ -1,0 +1,56 @@
+=== RUN   TestCOWPublicPrimarySelectionLayeredPublication
+=== RUN   TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=false
+=== RUN   TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=true
+=== RUN   TestCOWPublicPrimarySelectionLayeredPublication/command_wal_relaxed/pointer=false
+=== RUN   TestCOWPublicPrimarySelectionLayeredPublication/command_wal_relaxed/pointer=true
+--- PASS: TestCOWPublicPrimarySelectionLayeredPublication (0.52s)
+    --- PASS: TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=false (0.12s)
+    --- PASS: TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=true (0.14s)
+    --- PASS: TestCOWPublicPrimarySelectionLayeredPublication/command_wal_relaxed/pointer=false (0.12s)
+    --- PASS: TestCOWPublicPrimarySelectionLayeredPublication/command_wal_relaxed/pointer=true (0.14s)
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/append_only/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/append_only/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/btree/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/cow_btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/cow_btree/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/append_only/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/append_only/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/btree/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/cow_btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/cow_btree/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/append_only/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/append_only/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/btree/explicit=true
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/cow_btree/explicit=false
+=== RUN   TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/cow_btree/explicit=true
+--- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag (0.95s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/append_only/explicit=false (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/append_only/explicit=true (0.08s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/btree/explicit=false (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/btree/explicit=true (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/cow_btree/explicit=false (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_durable/cow_btree/explicit=true (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/append_only/explicit=false (0.07s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/append_only/explicit=true (0.06s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/btree/explicit=false (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/btree/explicit=true (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/cow_btree/explicit=false (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/command_wal_relaxed/cow_btree/explicit=true (0.05s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/append_only/explicit=false (0.06s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/append_only/explicit=true (0.08s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/btree/explicit=false (0.04s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/btree/explicit=true (0.04s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/cow_btree/explicit=false (0.04s)
+    --- PASS: TestCOWPublicPrimarySelectionModeAndExplicitFlag/no_wal_fast/cow_btree/explicit=true (0.04s)
+=== RUN   TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild
+=== RUN   TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild/command_wal_durable
+=== RUN   TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild/command_wal_relaxed
+--- PASS: TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild (0.20s)
+    --- PASS: TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild/command_wal_durable (0.10s)
+    --- PASS: TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild/command_wal_relaxed (0.10s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	1.683s

@@ -1,0 +1,10 @@
+=== RUN   TestCOWPublicOrdinaryPrimarySelectionDiagnostic
+=== RUN   TestCOWPublicOrdinaryPrimarySelectionDiagnostic/command_wal_durable
+    cow_public_contract_test.go:581: C1 foreground retained backend basis; DirtyCheckpoint physical successor seq=2 root=5764607523034234882 PRIMARY=true
+=== RUN   TestCOWPublicOrdinaryPrimarySelectionDiagnostic/command_wal_relaxed
+    cow_public_contract_test.go:581: C1 foreground retained backend basis; DirtyCheckpoint physical successor seq=2 root=5764607523034234882 PRIMARY=true
+--- PASS: TestCOWPublicOrdinaryPrimarySelectionDiagnostic (0.24s)
+    --- PASS: TestCOWPublicOrdinaryPrimarySelectionDiagnostic/command_wal_durable (0.12s)
+    --- PASS: TestCOWPublicOrdinaryPrimarySelectionDiagnostic/command_wal_relaxed (0.12s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	0.245s

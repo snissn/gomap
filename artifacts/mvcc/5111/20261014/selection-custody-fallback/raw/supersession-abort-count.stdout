@@ -1,0 +1,5 @@
+=== RUN   TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth
+COW_ORIGINAL_ABORT owner=0x3fae84caa508 root=5764607523034234882 incarnation=1
+--- PASS: TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.026s

@@ -1,0 +1,44 @@
+=== RUN   TestRefreshCommandWALPrimaryCheckpointFallbackV6
+--- PASS: TestRefreshCommandWALPrimaryCheckpointFallbackV6 (0.05s)
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/changed-system
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/changed-slot-record
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/wrong-coverage
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/missing-view
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/missing-image
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/corrupt-directory
+--- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands (0.04s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/changed-system (0.00s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/changed-slot-record (0.00s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/wrong-coverage (0.00s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/missing-view (0.00s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/missing-image (0.00s)
+    --- PASS: TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands/corrupt-directory (0.00s)
+=== RUN   TestCommandWALPrimaryCheckpointFallbackV6ChangedDirectory
+--- PASS: TestCommandWALPrimaryCheckpointFallbackV6ChangedDirectory (0.05s)
+=== RUN   TestRefreshCommandWALPrimaryCheckpointFallbackV6ActualAuthorityRefusal
+--- PASS: TestRefreshCommandWALPrimaryCheckpointFallbackV6ActualAuthorityRefusal (0.05s)
+=== RUN   TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN
+--- PASS: TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN (0.05s)
+=== RUN   TestCommandWALCheckpointFallbackNeedsRefreshForDifferentRoots
+--- PASS: TestCommandWALCheckpointFallbackNeedsRefreshForDifferentRoots (0.00s)
+=== RUN   TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot
+--- PASS: TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot (0.05s)
+=== RUN   TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu
+--- PASS: TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu (0.08s)
+=== RUN   TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback
+--- PASS: TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback (0.07s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff
+--- PASS: TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff (0.03s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader
+--- PASS: TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader (0.03s)
+=== RUN   TestPrimaryConstructionV6AbortDetachesRetainedReader
+--- PASS: TestPrimaryConstructionV6AbortDetachesRetainedReader (0.02s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt
+--- PASS: TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt (0.02s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor
+--- PASS: TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor (0.02s)
+=== RUN   TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth
+--- PASS: TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.586s
