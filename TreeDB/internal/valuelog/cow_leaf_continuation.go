@@ -13,6 +13,8 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+var ErrCOWCodecWorkUnbound = errors.New("valuelog: configured codec requires scoped SAME work binding")
+
 var ErrCOWReadPending = errors.New("valuelog: COW leaf continuation pending")
 
 // COWLeafContinuation is the resumable sibling of the ORIGINAL COW leaf reader.
@@ -20,10 +22,13 @@ var ErrCOWReadPending = errors.New("valuelog: COW leaf continuation pending")
 // exclusive and retained under the SAME immutable registered file/root owner.
 // This core neither discovers files nor adds owners, refreshes, or closes files.
 // Limits cover actual containing capacities, not only returned subslices.
-// ZSTD/dictionary require a genuinely phased original-library hook; they refuse
-// before payload/decode effects. This temporary construction gap is not a
-// reduced native eligibility contract.
+// ZSTD/dictionary borrow the caller-admitted SAME original codec continuation.
+// Exact immutable definition custody remains with its existing read owner.
 type COWLeafContinuation struct {
+	TemplateScratch                          []byte
+	templateDecoded                          bool
+	ZSTD                                     *COWZSTDContinuation
+	Template                                 *COWTemplateContinuation
 	f                                        *os.File
 	record                                   iterator.OrdinalRecordCursor
 	limits, requestedLimits                  COWReadLimits
@@ -72,18 +77,36 @@ func (c *COWLeafContinuation) beginAdmitted(f *os.File, ptr page.ValuePtr, limit
 		c.record.Retarget = true
 		c.record.SelectedOffsets = 0
 		c.value = nil
+		c.templateDecoded = false
 		c.copyAt = 0
 		c.phase = 15
 		return true, nil
 	}
-	*c = COWLeafContinuation{f: f, record: iterator.OrdinalRecordCursor{Pointer: ptr, Active: true}, limits: limits, requestedLimits: requestedLimits, input: input, raw: raw, dst: dst[:page.PageSize], verifyCRC: verifyCRC, active: true}
+	detach := c.completed && (c.ZSTD != nil && c.ZSTD.begun || c.Template != nil && c.Template.active)
+	*c = COWLeafContinuation{ZSTD: c.ZSTD, Template: c.Template, TemplateScratch: c.TemplateScratch, f: f, record: iterator.OrdinalRecordCursor{Pointer: ptr, Active: true}, limits: limits, requestedLimits: requestedLimits, input: input, raw: raw, dst: dst[:page.PageSize], verifyCRC: verifyCRC, active: true}
+	if detach {
+		c.phase = 19
+	}
 	return true, nil
 }
 
 // Step reserves BEFORE every actual metadata/file read, RID/offset probe,
 // record CRC/hash, literal/match decode, selected copy and compact expansion.
 // A caller may pause/cancel anywhere; no scalar loop replays accepted work.
+// StepWithCodec binds the SAME preadmitted work object for library callbacks.
+// Callers of configured ZSTD leaves use this entry; ordinary block/raw readers
+// retain Step's allocation-free stack work path.
+func (c *COWLeafContinuation) StepWithCodec(w *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if c.ZSTD != nil {
+		c.ZSTD.BindWork(w)
+		defer c.ZSTD.DropWork()
+	}
+	return c.Step(w)
+}
 func (c *COWLeafContinuation) Step(w *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if c.ZSTD != nil && (w == nil || c.ZSTD.work != w) {
+		return nil, false, ErrCOWCodecWorkUnbound
+	}
 	if c.err != nil {
 		return nil, false, c.err
 	}
@@ -108,6 +131,19 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 	}
 	for {
 		switch c.phase {
+		case 19:
+			if c.ZSTD != nil && c.ZSTD.begun {
+				ok, err := c.ZSTD.detachBound(w)
+				if err != nil || !ok {
+					return nil, false, err
+				}
+			}
+			if c.Template != nil && c.Template.active {
+				if !c.Template.detach(w) {
+					return nil, false, nil
+				}
+			}
+			c.phase = 0
 		case 0:
 			if !w.Reserve(1, uint64(2*HeaderSize+len(c.f.Name())+128)) {
 				return nil, false, nil
@@ -161,7 +197,12 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			}
 			// Existing compression IDs/definitions stay original. No fallback decoder.
 			if c.shape.Compressed && (c.shape.DictID != 0 || c.shape.Codec == BlockCodecNone || c.shape.Codec == BlockCodecZSTD) {
-				return nil, false, ErrCOWReadUnsupported
+				if c.ZSTD == nil {
+					return nil, false, ErrCOWReadUnsupported
+				}
+				if c.ZSTD.ProducerID != c.shape.DictID {
+					return nil, false, ErrMissingDict
+				}
 			}
 			c.phase = 2
 		case 2:
@@ -261,7 +302,13 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			c.crcAt += n
 		case 7:
 			if c.shape.Compressed {
-				ok, err := c.decoder.Begin(c.shape.Codec, c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes)], w)
+				var ok bool
+				var err error
+				if c.shape.Codec == BlockCodecNone || c.shape.Codec == BlockCodecZSTD {
+					ok, err = c.ZSTD.Begin(c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes):int(c.shape.RawBytes)], w)
+				} else {
+					ok, err = c.decoder.Begin(c.shape.Codec, c.input[HeaderSize+c.prefix:int(c.shape.RecordBytes)], c.raw[:int(c.shape.RawBytes)], w)
+				}
 				if err != nil || !ok {
 					return nil, false, err
 				}
@@ -274,7 +321,20 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			c.value = c.input[HeaderSize+c.prefix+int(c.shape.valueStart) : HeaderSize+c.prefix+int(c.shape.valueStart)+int(c.shape.ValueBytes)]
 			c.phase = 9
 		case 8:
-			done, err := c.decoder.Step(w)
+			var done bool
+			var err error
+			if c.shape.Codec == BlockCodecNone || c.shape.Codec == BlockCodecZSTD {
+				_, done, err = c.ZSTD.stepBound(nil, w)
+				if done && err == nil {
+					var raw []byte
+					raw, err = c.ZSTD.RawResult()
+					if err == nil && uint64(len(raw)) != c.shape.RawBytes {
+						err = ErrCorrupt
+					}
+				}
+			} else {
+				done, err = c.decoder.Step(w)
+			}
 			if err != nil || !done {
 				return nil, false, err
 			}
@@ -287,8 +347,12 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 			if !w.Reserve(1, uint64(compactLeafPagePayloadHeaderSize+32)) {
 				return nil, false, nil
 			}
-			if templ.IsEncodedPayload(c.value) {
-				return nil, false, ErrCOWReadUnsupported
+			if !c.templateDecoded && templ.IsEncodedPayload(c.value) {
+				if c.Template == nil {
+					return nil, false, ErrCOWReadUnsupported
+				}
+				c.phase = 17
+				continue
 			}
 			pre, suf, compact, err := compactLeafLogPayloadBounds(c.value)
 			if err != nil {
@@ -304,6 +368,26 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 				c.phase = 10
 			}
 			c.copyAt = 0
+		case 17:
+			if !w.Reserve(1, 96) {
+				return nil, false, nil
+			}
+			if len(c.TemplateScratch) < page.PageSize || cowBuffersOverlap(c.TemplateScratch, c.dst) || cowBuffersOverlap(c.TemplateScratch, c.input) || cowBuffersOverlap(c.TemplateScratch, c.raw) {
+				return nil, false, ErrCOWReadCapacity
+			}
+			ok, err := c.Template.Begin(c.value, c.TemplateScratch[:page.PageSize], w)
+			if err != nil || !ok {
+				return nil, false, err
+			}
+			c.phase = 18
+		case 18:
+			value, done, err := c.Template.Step(w)
+			if err != nil || !done {
+				return nil, false, err
+			}
+			c.value = value
+			c.templateDecoded = true
+			c.phase = 9
 		case 10:
 			if c.copyAt == page.PageSize {
 				c.phase = 14
@@ -401,8 +485,28 @@ func (c *COWLeafContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, e
 
 // Cancel removes this consumer's aliases in charged phases. It never closes the
 // borrowed file, frees caller storage, drains original owners or claims refund.
+func (c *COWLeafContinuation) CancelWithCodec(w *iterator.OrdinalScanWork) (bool, error) {
+	if c.ZSTD != nil {
+		z := c.ZSTD
+		z.BindWork(w)
+		defer z.DropWork()
+	}
+	return c.Cancel(w)
+}
 func (c *COWLeafContinuation) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
+	if c.ZSTD != nil && (w == nil || c.ZSTD.work != w) {
+		return false, ErrCOWCodecWorkUnbound
+	}
 	if !c.cancelling {
+		if c.Template != nil && !c.Template.Cancel(w) {
+			return false, nil
+		}
+		if c.ZSTD != nil {
+			done, err := c.ZSTD.cancelBound(w)
+			if err != nil || !done {
+				return false, err
+			}
+		}
 		if !c.decoder.Cancel(w) {
 			return false, nil
 		}

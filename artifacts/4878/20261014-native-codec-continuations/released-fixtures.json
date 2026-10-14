@@ -1,0 +1,272 @@
+[
+  {
+    "path": "/tmp/native4878-projection-3348390772",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-1801215400",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-337225412",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-4098276377",
+    "source": "focused-normal.log",
+    "allocated_kib": 1024,
+    "logical_bytes": 1048576,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-1960260076",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-4180039408",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-2744836889",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-3258624090",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-47530226",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-2642344591",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-2954872712",
+    "source": "focused-normal.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-1974487680",
+    "source": "focused-normal.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66584,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-1739884352",
+    "source": "focused-normal.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66111,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-1128132400",
+    "source": "focused-normal.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66030,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-408094099",
+    "source": "focused-normal.log",
+    "allocated_kib": 68,
+    "logical_bytes": 65952,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-4102962229",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-649202175",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-651155532",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-4259916469",
+    "source": "focused-race.log",
+    "allocated_kib": 1024,
+    "logical_bytes": 1048576,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-4083856882",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-1361360997",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-2224577171",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-3629167265",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-1922760684",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-3496524181",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-projection-1843126346",
+    "source": "focused-race.log",
+    "allocated_kib": 64,
+    "logical_bytes": 65536,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-2878957655",
+    "source": "focused-race.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66584,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-1610174491",
+    "source": "focused-race.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66111,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-3995883226",
+    "source": "focused-race.log",
+    "allocated_kib": 68,
+    "logical_bytes": 66030,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  },
+  {
+    "path": "/tmp/native4878-frame-390683655",
+    "source": "focused-race.log",
+    "allocated_kib": 68,
+    "logical_bytes": 65952,
+    "consumers": [],
+    "released": true,
+    "custody": "test process exited GREEN; test-owned File/pager handles closed on return"
+  }
+]

@@ -70,9 +70,32 @@ func (r *externalLeafFixture) CancelProjectionFrame(w *iterator.OrdinalScanWork)
 func frameWork() *iterator.OrdinalScanWork {
 	return &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 16384}
 }
+
+type externalCodecOwner struct{ live uint64 }
+
+func (o *externalCodecOwner) RetainCodecBytes(n uint64) bool {
+	if n > 8<<20-o.live {
+		return false
+	}
+	o.live += n
+	return true
+}
+func (o *externalCodecOwner) ReleaseCodecBytes(n uint64) {
+	if n > o.live {
+		panic("unowned codec release")
+	}
+	o.live -= n
+}
+
 func TestChargedProjectionRealExternalProducerFrames(t *testing.T) {
-	for _, codec := range []valuelog.BlockCodec{valuelog.BlockCodecNone, valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4} {
+	for _, codec := range []valuelog.BlockCodec{valuelog.BlockCodecNone, valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4, valuelog.BlockCodecZSTD} {
 		t.Run(fmt.Sprint(codec), func(t *testing.T) {
+			work := frameWork
+			if codec == valuelog.BlockCodecZSTD {
+				work = func() *iterator.OrdinalScanWork {
+					return &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+				}
+			}
 			dir, err := os.MkdirTemp(os.TempDir(), "native4878-frame-")
 			if err != nil {
 				t.Fatal(err)
@@ -157,29 +180,33 @@ func TestChargedProjectionRealExternalProducerFrames(t *testing.T) {
 			b.FinishNoNode()
 			r := &externalLeafFixture{root: root, parent: bytes.Clone(parent), leaf: valuelog.COWLeafProjectionReader{File: f, FileID: page.ValueLogSegmentID(id), Limits: valuelog.COWReadLimits{MaxRecordBytes: 2 << 20, MaxRawBytes: valuelog.MaxFrameK * page.PageSize, MaxValueBytes: page.PageSize}, Input: make([]byte, 2<<20), Raw: make([]byte, valuelog.MaxFrameK*page.PageSize), VerifyCRC: true}}
 			tr := tree.New(p, nil, root)
+			codecOwner := &externalCodecOwner{}
+			if codec == valuelog.BlockCodecZSTD {
+				r.leaf.ZSTD = &valuelog.COWZSTDContinuation{Owner: f, Retention: codecOwner}
+			}
 			cursor, err := tr.NewChargedProjection(nil, nil, nil, r, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
 			if err != nil {
 				t.Fatal(err)
 			}
 			run := func(op tree.ProjectionOperation) (node.LeafEntry, bool) {
-				if err = cursor.Begin(op, nil, frameWork()); err != nil {
+				if err = cursor.Begin(op, nil, work()); err != nil {
 					t.Fatal(err)
 				}
 				done := false
 				for turns := 0; turns < 10000 && !done; turns++ {
-					w := frameWork()
+					w := work()
 					done, err = cursor.Step(w)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if w.Records > 1 || w.Bytes > 16384 {
+					if w.Records > w.RecordLimit || w.Bytes > w.ByteLimit {
 						t.Fatal("quantum overrun")
 					}
 				}
 				if !done {
 					t.Fatal("stalled")
 				}
-				e, ok, err := cursor.Record(frameWork())
+				e, ok, err := cursor.Record(work())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -204,13 +231,16 @@ func TestChargedProjectionRealExternalProducerFrames(t *testing.T) {
 			}
 			done := false
 			for turns := 0; turns < 1000 && !done; turns++ {
-				done, err = cursor.CloseStep(frameWork())
+				done, err = cursor.CloseStep(work())
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 			if !done {
 				t.Fatal("close stalled")
+			}
+			if codecOwner.live != 0 {
+				t.Fatal("tree kept actual codec storage", codecOwner.live)
 			}
 			if r.leaf.File != nil || r.leaf.Input != nil || r.leaf.Raw != nil {
 				t.Fatal("leaf reader custody retained")

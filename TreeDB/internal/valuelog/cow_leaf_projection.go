@@ -17,12 +17,15 @@ import (
 // Parent frames require their own genuinely phased reader. Caller must retain
 // binding fields immutable until Cancel; repeated Begin resumes SAME ref/dst.
 type COWLeafProjectionReader struct {
-	File       *os.File
-	FileID     uint32
-	Limits     COWReadLimits
-	Input, Raw []byte
-	VerifyCRC  bool
-	leaf       COWLeafContinuation
+	TemplateScratch []byte
+	File            *os.File
+	FileID          uint32
+	Limits          COWReadLimits
+	Input, Raw      []byte
+	VerifyCRC       bool
+	ZSTD            *COWZSTDContinuation
+	Template        *COWTemplateContinuation
+	leaf            COWLeafContinuation
 
 	clearing bool
 }
@@ -37,14 +40,17 @@ func (r *COWLeafProjectionReader) BeginProjectionFrame(ref page.ChildRef, dst []
 	if !ref.IsLeafLog() || ref.Page != 0 || ref.Log.FileID != r.FileID || ref.Log.SubIndex > 255 || (!ref.Log.IsGrouped() && ref.Log.SubIndex != 0) {
 		return false, ErrCOWReadUnsupported
 	}
+	r.leaf.ZSTD = r.ZSTD
+	r.leaf.Template = r.Template
+	r.leaf.TemplateScratch = r.TemplateScratch
 	return r.leaf.beginAdmitted(r.File, ref.Log.ValuePtr(), r.Limits, r.Input, r.Raw, dst, r.VerifyCRC)
 }
 func (r *COWLeafProjectionReader) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	return r.leaf.Step(w)
+	return r.leaf.StepWithCodec(w)
 }
 func (r *COWLeafProjectionReader) CancelProjectionFrame(w *iterator.OrdinalScanWork) (bool, error) {
 	if !r.clearing {
-		done, err := r.leaf.Cancel(w)
+		done, err := r.leaf.CancelWithCodec(w)
 		if err != nil || !done {
 			return false, err
 		}

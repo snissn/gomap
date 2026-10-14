@@ -1,0 +1,6 @@
+=== RUN   TestCOWLeafContinuationNoHiddenAllocations
+    cow_continuation_test.go:370: codec 0 hidden scan allocation=1
+--- FAIL: TestCOWLeafContinuationNoHiddenAllocations (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.002s
+FAIL
