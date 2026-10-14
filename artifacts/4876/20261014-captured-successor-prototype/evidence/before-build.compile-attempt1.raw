@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/mvcc/sprintperf [github.com/snissn/gomap/TreeDB/mvcc/sprintperf.test]
+TreeDB/mvcc/sprintperf/benchmark_test.go:171:71: cannot use proof (variable of interface type treedb.Snapshot) as *treedb.Snapshot value in argument to populatedTreeProof: treedb.Snapshot does not implement *treedb.Snapshot (type *treedb.Snapshot is pointer to interface, not interface)
+TreeDB/mvcc/sprintperf/captured_successor_test.go:21:13: s.Pager undefined (type *treedb.Snapshot is pointer to interface, not interface)
+TreeDB/mvcc/sprintperf/captured_successor_test.go:31:31: s.State undefined (type *treedb.Snapshot is pointer to interface, not interface)
+TreeDB/mvcc/sprintperf/captured_successor_test.go:42:65: cannot use snap (variable of interface type treedb.Snapshot) as *treedb.Snapshot value in argument to populatedTreeProof: treedb.Snapshot does not implement *treedb.Snapshot (type *treedb.Snapshot is pointer to interface, not interface)

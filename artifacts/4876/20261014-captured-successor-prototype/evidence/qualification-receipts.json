@@ -1,0 +1,118 @@
+[
+  {
+    "label": "race",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-race",
+      "./TreeDB/caching",
+      "./TreeDB/mvcc",
+      "-run=^(TestCOWSuccessorCapturedSourcesPrecedenceAndPressure|TestCOWSuccessorPointerOwnershipRefusalRetry|TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose|TestCOWPointerCheckpointCapturedBasisAndTombstones|TestCOWSuccessorLogicalTombstoneAndEmptyValue|TestCOWSuccessorPublicEmptyKeyValue)$",
+      "-v",
+      "-count=1",
+      "-timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 22.282933235168457,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/race.raw",
+    "sha256": "1ae49358225504dd76b779bd28192b06afabe3452dd41a052e379443e23f41be"
+  },
+  {
+    "label": "before-build-final",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-overlay=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/baseline-overlay.json",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "./TreeDB/mvcc/sprintperf"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 0.5546693801879883,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-build-final.raw",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "after-build-final",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "./TreeDB/mvcc/sprintperf"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 0.5775835514068604,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-build-final.raw",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "public-final-red",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^TestPopulatedCapturedSuccessorAllocation$",
+      "-test.v",
+      "-test.benchtime=16x",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 1,
+    "elapsed_s": 0.13303804397583008,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/public-final-red.raw",
+    "sha256": "798116cf4571e490ba4667e5f5994a0a9628be20843000dbc453bf30f9cc95aa"
+  },
+  {
+    "label": "public-final-green",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "-test.run=^TestPopulatedCapturedSuccessorAllocation$",
+      "-test.v",
+      "-test.benchtime=16x",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 0.1384589672088623,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/public-final-green.raw",
+    "sha256": "0bab521014b5ac1af0a2218973acb5ccfc9695dd087a002652c1afda72f8bc48"
+  }
+]

@@ -1,0 +1,9 @@
+=== RUN   TestPopulatedCapturedSuccessorAllocation
+=== RUN   TestPopulatedCapturedSuccessorAllocation/0
+    captured_successor_test.go:128: depth=1 leaves=1
+=== RUN   TestPopulatedCapturedSuccessorAllocation/8192
+    captured_successor_test.go:128: depth=3 leaves=1812
+--- PASS: TestPopulatedCapturedSuccessorAllocation (0.10s)
+    --- PASS: TestPopulatedCapturedSuccessorAllocation/0 (0.02s)
+    --- PASS: TestPopulatedCapturedSuccessorAllocation/8192 (0.09s)
+PASS

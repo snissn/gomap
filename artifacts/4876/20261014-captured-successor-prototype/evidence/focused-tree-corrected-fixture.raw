@@ -1,0 +1,38 @@
+=== RUN   TestOwnedPointerProjectionFixedScratch
+--- PASS: TestOwnedPointerProjectionFixedScratch (0.00s)
+=== RUN   TestOwnedPointerProjectionExternalLeafRequiresBoundedReader
+--- PASS: TestOwnedPointerProjectionExternalLeafRequiresBoundedReader (0.00s)
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/plain_empty
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/primary_empty
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/nonempty_base
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/internal_base
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/put
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/absence
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/directory_corrupt
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/base_digest
+=== RUN   TestOwnedUserRootEmptyCapturedPrimary/missing_base
+--- PASS: TestOwnedUserRootEmptyCapturedPrimary (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/plain_empty (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/primary_empty (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/nonempty_base (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/internal_base (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/put (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/absence (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/directory_corrupt (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/base_digest (0.00s)
+    --- PASS: TestOwnedUserRootEmptyCapturedPrimary/missing_base (0.00s)
+=== RUN   TestOwnedSuccessorPrimarySelectionAndErrors
+=== RUN   TestOwnedSuccessorPrimarySelectionAndErrors/put
+=== RUN   TestOwnedSuccessorPrimarySelectionAndErrors/absence
+=== RUN   TestOwnedSuccessorPrimarySelectionAndErrors/bad_base
+=== RUN   TestOwnedSuccessorPrimarySelectionAndErrors/bad_component
+--- PASS: TestOwnedSuccessorPrimarySelectionAndErrors (0.00s)
+    --- PASS: TestOwnedSuccessorPrimarySelectionAndErrors/put (0.00s)
+    --- PASS: TestOwnedSuccessorPrimarySelectionAndErrors/absence (0.00s)
+    --- PASS: TestOwnedSuccessorPrimarySelectionAndErrors/bad_base (0.00s)
+    --- PASS: TestOwnedSuccessorPrimarySelectionAndErrors/bad_component (0.00s)
+=== RUN   TestOwnedSuccessorExternalLeafRefusesUnownedBuffer
+--- PASS: TestOwnedSuccessorExternalLeafRefusesUnownedBuffer (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/tree	0.003s

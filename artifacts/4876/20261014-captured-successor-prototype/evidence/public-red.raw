@@ -1,0 +1,11 @@
+=== RUN   TestPopulatedCapturedSuccessorAllocation
+=== RUN   TestPopulatedCapturedSuccessorAllocation/0
+    captured_successor_test.go:52: depth=1 leaves=1
+    captured_successor_test.go:56: public historical GetAt allocates 58500 B/op; want <48KiB
+=== RUN   TestPopulatedCapturedSuccessorAllocation/8192
+    captured_successor_test.go:52: depth=3 leaves=1812
+    captured_successor_test.go:56: public historical GetAt allocates 68068 B/op; want <48KiB
+--- FAIL: TestPopulatedCapturedSuccessorAllocation (0.10s)
+    --- FAIL: TestPopulatedCapturedSuccessorAllocation/0 (0.01s)
+    --- FAIL: TestPopulatedCapturedSuccessorAllocation/8192 (0.09s)
+FAIL

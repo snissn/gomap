@@ -1,0 +1,13 @@
+=== RUN   TestPopulatedCapturedSuccessorAllocation
+=== RUN   TestPopulatedCapturedSuccessorAllocation/0
+    captured_successor_test.go:140: depth=1 leaves=1
+    captured_successor_test.go:152: historical GetAt allocation: 11796 B/op, 12 allocs/op
+=== RUN   TestPopulatedCapturedSuccessorAllocation/8192
+    captured_successor_test.go:132: proven cross-leaf historical key="bulk-00000004"
+    captured_successor_test.go:140: depth=3 leaves=2728
+    captured_successor_test.go:152: historical GetAt allocation: 21264 B/op, 20 allocs/op
+--- PASS: TestPopulatedCapturedSuccessorAllocation (0.13s)
+    --- PASS: TestPopulatedCapturedSuccessorAllocation/0 (0.01s)
+    --- PASS: TestPopulatedCapturedSuccessorAllocation/8192 (0.12s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc/sprintperf	0.136s

@@ -1,0 +1,38 @@
+=== RUN   TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose
+=== RUN   TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=false/pointer=false
+=== RUN   TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=false/pointer=true
+=== RUN   TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=true/pointer=false
+=== RUN   TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=true/pointer=true
+--- PASS: TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose (0.04s)
+    --- PASS: TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=false/pointer=false (0.02s)
+    --- PASS: TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=false/pointer=true (0.01s)
+    --- PASS: TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=true/pointer=false (0.01s)
+    --- PASS: TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose/disk=true/pointer=true (0.01s)
+=== RUN   TestCOWSuccessorCapturedSourcesPrecedenceAndPressure
+--- PASS: TestCOWSuccessorCapturedSourcesPrecedenceAndPressure (0.01s)
+=== RUN   TestCOWSuccessorPointerOwnershipRefusalRetry
+--- PASS: TestCOWSuccessorPointerOwnershipRefusalRetry (0.01s)
+=== RUN   TestCOWPointerCheckpointCapturedBasisAndTombstones
+--- PASS: TestCOWPointerCheckpointCapturedBasisAndTombstones (0.01s)
+=== RUN   TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose
+--- PASS: TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.096s
+=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue
+=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable
+=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed
+=== RUN   TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast
+--- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue (0.04s)
+    --- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_durable (0.02s)
+    --- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/command_wal_relaxed (0.01s)
+    --- PASS: TestCOWSuccessorLogicalTombstoneAndEmptyValue/no_wal_fast (0.01s)
+=== RUN   TestCOWSuccessorPublicEmptyKeyValue
+=== RUN   TestCOWSuccessorPublicEmptyKeyValue/command_wal_durable
+=== RUN   TestCOWSuccessorPublicEmptyKeyValue/command_wal_relaxed
+=== RUN   TestCOWSuccessorPublicEmptyKeyValue/no_wal_fast
+--- PASS: TestCOWSuccessorPublicEmptyKeyValue (0.06s)
+    --- PASS: TestCOWSuccessorPublicEmptyKeyValue/command_wal_durable (0.02s)
+    --- PASS: TestCOWSuccessorPublicEmptyKeyValue/command_wal_relaxed (0.02s)
+    --- PASS: TestCOWSuccessorPublicEmptyKeyValue/no_wal_fast (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	1.104s

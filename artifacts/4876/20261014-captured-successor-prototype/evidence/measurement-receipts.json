@@ -1,0 +1,325 @@
+[
+  {
+    "label": "before-build-measurement",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-overlay=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/baseline-overlay.json",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "./TreeDB/mvcc/sprintperf"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 0.6093742847442627,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-build-measurement.raw",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "after-build-measurement",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "./TreeDB/mvcc/sprintperf"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1"
+    },
+    "exit": 0,
+    "elapsed_s": 0.5379514694213867,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-build-measurement.raw",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "small-inline-pair1-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.06856393814086914,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-inline-pair1-before.raw",
+    "sha256": "f6098e4c13b456f8e13488d46c6083768c3ff7a29cf19cafc10d98f51f132a6a"
+  },
+  {
+    "label": "small-inline-pair1-after",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.029903650283813477,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-inline-pair1-after.raw",
+    "sha256": "5a01cf0fe6b72ac1027982f994ffc1e3cf15f3355b08ac44b29ed859cf18599a"
+  },
+  {
+    "label": "small-inline-pair2-after",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.028700590133666992,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-inline-pair2-after.raw",
+    "sha256": "498c83b07205286ac7e15b44fdbcba45a383ae78f9c1bd992cd81aed9c099176"
+  },
+  {
+    "label": "small-inline-pair2-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.02877211570739746,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-inline-pair2-before.raw",
+    "sha256": "fe2539c30ad0a703dd4e1aca7f5dd717bf81385164fa44a0d5ab5f9701f681e7"
+  },
+  {
+    "label": "small-forced_pointer-pair1-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.04176735877990723,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-forced_pointer-pair1-before.raw",
+    "sha256": "33e7ad319d37cdd80b3753acb4b902695c1b3619429b422309a8e0b8cbd2603b"
+  },
+  {
+    "label": "small-forced_pointer-pair1-after",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.04604530334472656,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-forced_pointer-pair1-after.raw",
+    "sha256": "d5fb6f51a305da9c8f7facf6d451e51be677b5f3aef5ba1e7c20fb21d7396dc8"
+  },
+  {
+    "label": "small-forced_pointer-pair2-after",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/after-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.046228885650634766,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-forced_pointer-pair2-after.raw",
+    "sha256": "c566f19b24f1ee26554689f8ab0fc9cd572066e86dd40bf632a99cd0684a2467"
+  },
+  {
+    "label": "small-forced_pointer-pair2-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "small"
+    },
+    "exit": 0,
+    "elapsed_s": 0.03995513916015625,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/small-forced_pointer-pair2-before.raw",
+    "sha256": "961230dca1d9deb1cd60772e6ed32e486c0a149dbbb84bf99f54ca32f8dff406"
+  },
+  {
+    "label": "multilevel-inline-pair1-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "multilevel"
+    },
+    "exit": 1,
+    "elapsed_s": 0.6014540195465088,
+    "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/multilevel-inline-pair1-before.raw",
+    "sha256": "a488e7129acee07281f1f7c72b4744e8bb363e7bc68cac1d972850d6f868d5f3"
+  }
+]

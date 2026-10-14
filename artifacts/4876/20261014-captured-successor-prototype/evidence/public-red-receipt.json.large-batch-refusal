@@ -1,0 +1,20 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-probe-20261014/prototype-v1/before-mvcc.test",
+  "-test.run=^TestPopulatedCapturedSuccessorAllocation$",
+  "-test.v",
+  "-test.benchtime=16x",
+  "-test.timeout=60s"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "GOMAXPROCS": "4",
+  "CGO_ENABLED": "1"
+ },
+ "exit": 1,
+ "seconds": 0.03352190274745226,
+ "binary_sha256": "8edcf2241078706e3aa8afeee870740ad4e8d85607fd924b05c2bfa3472ee3c0",
+ "raw_sha256": "487c77cf6b0cd8e613e1bfbc2c760832088b30ca0aa5a0ab9b12226d9621ec5e"
+}

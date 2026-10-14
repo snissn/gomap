@@ -1,0 +1,2 @@
+# github.com/snissn/gomap/TreeDB/tree
+TreeDB/tree/owned_successor.go:137:18: cannot use n.SearchInternal(start) (value of type bool) as error value in assignment: bool does not implement error (missing method Error)
