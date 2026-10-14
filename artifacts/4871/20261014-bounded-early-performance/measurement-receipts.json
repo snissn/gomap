@@ -1,0 +1,788 @@
+{
+  "kind": "BOUNDED_EARLY_SMOKE_NOT_ACCEPTANCE",
+  "baseline": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "candidate": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+  "elapsed_seconds": 15.339901010040194,
+  "receipts": [
+    {
+      "revision": "baseline",
+      "sample": 1,
+      "group": "get_versioned",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkGetVersioned$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-1-get_versioned",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002979.0961764,
+      "elapsed_seconds": 0.9289056961424649,
+      "exit": 0,
+      "log": "baseline-1-get_versioned.log",
+      "log_sha256": "0e5e4f5d9ffd1bcc5672c37b4870ae8e1396fab7bc1adf372ad5d3b5da1e1fae",
+      "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8",
+      "benchmark_rows": [
+        "BenchmarkGetVersioned \t  388287\t       624.7 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "get_versioned",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkGetVersioned$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-get_versioned",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002980.0790305,
+      "elapsed_seconds": 0.928235421422869,
+      "exit": 0,
+      "log": "candidate-1-get_versioned.log",
+      "log_sha256": "301cda7b892e4f587eb6e1a9a4a8162675f5800d2c2eeddc4420d6345288f5c1",
+      "binary_sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2",
+      "benchmark_rows": [
+        "BenchmarkGetVersioned \t  246492\t       858.1 ns/op\t     112 B/op\t       1 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 1,
+      "group": "batch_write",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.benchmem",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-1-batch_write",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002981.0657434,
+      "elapsed_seconds": 0.32742146495729685,
+      "exit": 0,
+      "log": "baseline-1-batch_write.log",
+      "log_sha256": "0fdf3323e17017fb78ecde2e7aaf425437c32f63fb84daebd62f0c49609814c2",
+      "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8",
+      "benchmark_rows": [
+        "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     79984 ns/op\t  152789 B/op\t     281 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "batch_write",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.benchmem",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-batch_write",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002981.4455566,
+      "elapsed_seconds": 0.3775069057010114,
+      "exit": 0,
+      "log": "candidate-1-batch_write.log",
+      "log_sha256": "3b395155ed205e1ae5d5f5e0c7306597fa0039b07481ddb3e6b1cd69f05e26c0",
+      "binary_sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2",
+      "benchmark_rows": [
+        "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     92941 ns/op\t  155006 B/op\t     286 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 1,
+      "group": "snapshot_seek",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-1-snapshot_seek",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002981.8817632,
+      "elapsed_seconds": 0.3775157118216157,
+      "exit": 0,
+      "log": "baseline-1-snapshot_seek.log",
+      "log_sha256": "b3771c58ca32628c2ec02506c1a191b32c5c0e1dc6fd503f43025ec189351e42",
+      "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763",
+      "benchmark_rows": [
+        "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t  809317\t       292.4 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "snapshot_seek",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-snapshot_seek",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002982.310291,
+      "elapsed_seconds": 0.3770991303026676,
+      "exit": 0,
+      "log": "candidate-1-snapshot_seek.log",
+      "log_sha256": "520729b3d50bb404210a0033a6d73e917d154b1d732fd56bb4851baa5626cc10",
+      "binary_sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "benchmark_rows": [
+        "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t  801996\t       299.8 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 1,
+      "group": "repeated_iterator",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-caching.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkRepeatedIterator$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-1-repeated_iterator",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002982.7410948,
+      "elapsed_seconds": 0.8282998083159328,
+      "exit": 0,
+      "log": "baseline-1-repeated_iterator.log",
+      "log_sha256": "147213f12925a607d34c5063aeb7d151b96ad5a91a20338d4966027de5434bcf",
+      "binary_sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4",
+      "benchmark_rows": [
+        "BenchmarkRepeatedIterator \t  727572\t       316.3 ns/op\t     113 B/op\t       2 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "repeated_iterator",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-caching.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkRepeatedIterator$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-repeated_iterator",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002983.6010373,
+      "elapsed_seconds": 0.8838368537835777,
+      "exit": 0,
+      "log": "candidate-1-repeated_iterator.log",
+      "log_sha256": "a372fb0368a58641a99ba73daa5da28ac815a729538f0223ce949e4232e36978",
+      "binary_sha256": "a04291d8211b74f4dc2a3a2aa568cf6e1979f8dc70c28604c91f905c8413349a",
+      "benchmark_rows": [
+        "BenchmarkRepeatedIterator \t  708205\t       313.9 ns/op\t     113 B/op\t       2 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 1,
+      "group": "durable_sync",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-1-durable_sync",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002984.5195775,
+      "elapsed_seconds": 0.5773058366030455,
+      "exit": 0,
+      "log": "baseline-1-durable_sync.log",
+      "log_sha256": "4109520e314b5ef9beada1e6a0316e0efff9ff52ccbc5ee73539aa3e3359d8b7",
+      "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763",
+      "benchmark_rows": [
+        "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      50\t   4986251 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      2018 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   4961292 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   4967234 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      5490 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       200.6 iterations/s\t        51.42 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      2018 public.batch.write_sync.phase.command_append.ns/op\t   4972574 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       230.1 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   4967399 public.batch.write_sync.phase.command_sync.ns/op\t      3176 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      3065 public.batch.write_sync.phase.preflight_materialization.ns/op\t      1911 public.batch.write_sync.phase.residual.ns/op\t   4980777 public.batch.write_sync.phase.wall.ns/op\t   6094065 writesync_max_ns\t   5270427 writesync_p50_ns\t   5571491 writesync_p95_ns\t   6094065 writesync_p99_ns\t    4663 B/op\t      18 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "durable_sync",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-durable_sync",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002985.1472876,
+      "elapsed_seconds": 0.5275135510601103,
+      "exit": 0,
+      "log": "candidate-1-durable_sync.log",
+      "log_sha256": "b07db75e3d92afd117b01198c47afe4aedb92efac226fca6bfee8719b81b29a0",
+      "binary_sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "benchmark_rows": [
+        "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      43\t   4975815 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      2527 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   4944030 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   4951612 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      6963 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       201.0 iterations/s\t        60.23 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      2527 public.batch.write_sync.phase.command_append.ns/op\t   4958099 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       284.0 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   4951773 public.batch.write_sync.phase.command_sync.ns/op\t      4773 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      3701 public.batch.write_sync.phase.preflight_materialization.ns/op\t      1860 public.batch.write_sync.phase.residual.ns/op\t   4968493 public.batch.write_sync.phase.wall.ns/op\t   5506118 writesync_max_ns\t   5329028 writesync_p50_ns\t   5474873 writesync_p95_ns\t   5506118 writesync_p99_ns\t    4698 B/op\t      18 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 2,
+      "group": "get_versioned",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkGetVersioned$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-2-get_versioned",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002985.7282147,
+      "elapsed_seconds": 0.9779103030450642,
+      "exit": 0,
+      "log": "candidate-2-get_versioned.log",
+      "log_sha256": "eb3c8bb8432405a40028fb70f6e9ead20dc188d5b9420b58c50f7fec4387af94",
+      "binary_sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2",
+      "benchmark_rows": [
+        "BenchmarkGetVersioned \t  273824\t       871.1 ns/op\t     112 B/op\t       1 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 2,
+      "group": "get_versioned",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkGetVersioned$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-2-get_versioned",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002986.7639265,
+      "elapsed_seconds": 0.8281117947772145,
+      "exit": 0,
+      "log": "baseline-2-get_versioned.log",
+      "log_sha256": "afe2f2fb5a8abf0afc72fe341e4a27a1e7230af71a0d8a9f6f6af4663bee4d2e",
+      "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8",
+      "benchmark_rows": [
+        "BenchmarkGetVersioned \t  386634\t       562.3 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 2,
+      "group": "batch_write",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.benchmem",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-2-batch_write",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002987.6451523,
+      "elapsed_seconds": 0.4274566830135882,
+      "exit": 0,
+      "log": "candidate-2-batch_write.log",
+      "log_sha256": "9cf558e5434a062333c551dfdd565a1f834a6c0ff6d7e4867da47a92c37cd31f",
+      "binary_sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2",
+      "benchmark_rows": [
+        "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     92485 ns/op\t  155006 B/op\t     286 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 2,
+      "group": "batch_write",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-db.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.benchmem",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-2-batch_write",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002988.1305425,
+      "elapsed_seconds": 0.427496531046927,
+      "exit": 0,
+      "log": "baseline-2-batch_write.log",
+      "log_sha256": "86e32cbd16192cb00cfcc46ea2408d5222ac56cb32a35c2d22353e0ce132ff91",
+      "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8",
+      "benchmark_rows": [
+        "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     99869 ns/op\t  152792 B/op\t     281 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 2,
+      "group": "snapshot_seek",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-2-snapshot_seek",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002988.6112232,
+      "elapsed_seconds": 0.42703907703980803,
+      "exit": 0,
+      "log": "candidate-2-snapshot_seek.log",
+      "log_sha256": "6af3cbc7ae6373f2a86814727df0dd4c968986fa896a731681e65796bbc60681",
+      "binary_sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "benchmark_rows": [
+        "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t  795651\t       298.8 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 2,
+      "group": "snapshot_seek",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-2-snapshot_seek",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002989.0921874,
+      "elapsed_seconds": 0.4272598959505558,
+      "exit": 0,
+      "log": "baseline-2-snapshot_seek.log",
+      "log_sha256": "452aa6e564fe74f69a3eefd02af5e6666e97c795f1a3cfeb36bbbd243d5a8504",
+      "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763",
+      "benchmark_rows": [
+        "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t  813087\t       310.8 ns/op\t       0 B/op\t       0 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 2,
+      "group": "repeated_iterator",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-caching.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkRepeatedIterator$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-2-repeated_iterator",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002989.5711644,
+      "elapsed_seconds": 0.8777705789543688,
+      "exit": 0,
+      "log": "candidate-2-repeated_iterator.log",
+      "log_sha256": "4a9bf00d70184982e98fe58a55303f78cd762f637eafc71338a3d6db949406e9",
+      "binary_sha256": "a04291d8211b74f4dc2a3a2aa568cf6e1979f8dc70c28604c91f905c8413349a",
+      "benchmark_rows": [
+        "BenchmarkRepeatedIterator \t  690116\t       318.6 ns/op\t     113 B/op\t       2 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 2,
+      "group": "repeated_iterator",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-caching.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkRepeatedIterator$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-2-repeated_iterator",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002990.4845862,
+      "elapsed_seconds": 0.8779350030235946,
+      "exit": 0,
+      "log": "baseline-2-repeated_iterator.log",
+      "log_sha256": "083a333c833204950ace0fa7e111b4e569faba77b345d89a959f3cbfb9c58185",
+      "binary_sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4",
+      "benchmark_rows": [
+        "BenchmarkRepeatedIterator \t  687664\t       324.6 ns/op\t     113 B/op\t       2 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 2,
+      "group": "durable_sync",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-2-durable_sync",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002991.3933282,
+      "elapsed_seconds": 0.5775595689192414,
+      "exit": 0,
+      "log": "candidate-2-durable_sync.log",
+      "log_sha256": "0e12796ca518e1ed391d4186b15d5ab6545f674bdc76ac6d4a2df1d9da8d47e3",
+      "binary_sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "benchmark_rows": [
+        "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      34\t   6155451 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      2648 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   6119979 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   6127714 command_wal.sync.ns/op\t       134.7 command_wal.write.bytes/op\t      7071 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       162.5 iterations/s\t        66.65 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      2648 public.batch.write_sync.phase.command_append.ns/op\t   6134747 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       288.4 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   6127918 public.batch.write_sync.phase.command_sync.ns/op\t      5825 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      4424 public.batch.write_sync.phase.preflight_materialization.ns/op\t      2089 public.batch.write_sync.phase.residual.ns/op\t   6147151 public.batch.write_sync.phase.wall.ns/op\t   7854628 writesync_max_ns\t   6289921 writesync_p50_ns\t   7254409 writesync_p95_ns\t   7854628 writesync_p99_ns\t    4736 B/op\t      18 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "baseline",
+      "sample": 2,
+      "group": "durable_sync",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/baseline-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$",
+        "-test.benchmem",
+        "-test.benchtime=200ms",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/baseline-2-durable_sync",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002992.0256016,
+      "elapsed_seconds": 0.6277195899747312,
+      "exit": 0,
+      "log": "baseline-2-durable_sync.log",
+      "log_sha256": "6a0a648fbc58edba207b09fa5368f462a42a1d8b9f39e53b1cb546d02c6071b8",
+      "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763",
+      "benchmark_rows": [
+        "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      43\t   6316816 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      3160 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   6284534 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   6292442 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      7357 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       158.3 iterations/s\t        56.12 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      3160 public.batch.write_sync.phase.command_append.ns/op\t   6299465 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       278.1 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   6292616 public.batch.write_sync.phase.command_sync.ns/op\t      4216 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      3852 public.batch.write_sync.phase.preflight_materialization.ns/op\t      1875 public.batch.write_sync.phase.residual.ns/op\t   6309464 public.batch.write_sync.phase.wall.ns/op\t   7213438 writesync_max_ns\t   6284299 writesync_p50_ns\t   7191972 writesync_p95_ns\t   7213438 writesync_p99_ns\t    4843 B/op\t      18 allocs/op"
+      ],
+      "remaining_temp_files": []
+    },
+    {
+      "revision": "candidate",
+      "sample": 1,
+      "group": "cow_current_cost",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/measured-binaries/candidate-treedb.test",
+        "-test.run",
+        "^$",
+        "-test.bench",
+        "^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^cow_btree$/^(Inline64|Pointer4096)$/^N=1024$/^(CaptureReadRelease|IncrementalWriteSync)$",
+        "-test.benchmem",
+        "-test.benchtime=16x",
+        "-test.count=1",
+        "-test.v",
+        "-test.timeout=30s"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/fast4tb/mvcc-4871-earlyperf-20261014-sol61/tmp/candidate-1-cow_current_cost",
+        "GOMAXPROCS": "1",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOROOT": "/home/mikers/.gvm/gos/go1.26.3"
+      },
+      "unix_start": 1792002992.7035913,
+      "elapsed_seconds": 1.6792225814424455,
+      "exit": 0,
+      "log": "candidate-1-cow_current_cost.log",
+      "log_sha256": "6a9e875badfbaf48e8938e232757d77f3ad3dc9c2b0700c3ebc10000c6b69ff9",
+      "binary_sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "benchmark_rows": [
+        "BenchmarkCOWPublicDirtyCost/command_wal_durable/cow_btree/Inline64/N=1024/CaptureReadRelease         \t      16\t       944.5 ns/op\t         0 fixture_checkpoint_runs\t         1.000 fixture_command_wal_file_sync_calls\t         1.000 fixture_command_wal_sync_count\t         1.000 fixture_cow_active_cuts\t        17.00 fixture_cow_capture_calls_total\t       256.0 fixture_cow_control_bytes\t         2.000 fixture_cow_current_roots\t         0 fixture_cow_deferred_bytes\t    328096 fixture_cow_external_bytes\t         7.000 fixture_cow_external_leases\t         0 fixture_cow_frozen_roots\t         2.000 fixture_cow_generations\t         0 fixture_cow_handoffs_total\t   2940352 fixture_cow_history_bytes\t   3959824 fixture_cow_peak_bytes\t         1.000 fixture_cow_prepare_calls_total\t         1.000 fixture_cow_publications_total\t    328096 fixture_cow_reserved_bytes\t         0 fixture_cow_retired_bytes\t         0 fixture_cow_rollovers_total\t         0 fixture_cow_sources\t   3268704 fixture_cow_total_bytes\t         0 fixture_cow_views\t         0 fixture_value_log_sync_calls\t       721.0 p50-ns\t      3339 p95-ns\t      3339 p99-ns\t         0 snapshot_rotations/op\t         0 warm_snapshot_rotations\t     464 B/op\t       4 allocs/op",
+        "BenchmarkCOWPublicDirtyCost/command_wal_durable/cow_btree/Inline64/N=1024/IncrementalWriteSync       \t      16\t   4990923 ns/op\t         0 fixture_checkpoint_runs\t        17.00 fixture_command_wal_file_sync_calls\t        17.00 fixture_command_wal_sync_count\t         1.000 fixture_cow_active_cuts\t         2.000 fixture_cow_capture_calls_total\t       256.0 fixture_cow_control_bytes\t         2.000 fixture_cow_current_roots\t         0 fixture_cow_deferred_bytes\t    180640 fixture_cow_external_bytes\t         7.000 fixture_cow_external_leases\t         0 fixture_cow_frozen_roots\t         2.000 fixture_cow_generations\t         0 fixture_cow_handoffs_total\t   3276736 fixture_cow_history_bytes\t   3959824 fixture_cow_peak_bytes\t        17.00 fixture_cow_prepare_calls_total\t        17.00 fixture_cow_publications_total\t    180640 fixture_cow_reserved_bytes\t         0 fixture_cow_retired_bytes\t         0 fixture_cow_rollovers_total\t         0 fixture_cow_sources\t   3457632 fixture_cow_total_bytes\t         0 fixture_cow_views\t         0 fixture_value_log_sync_calls\t   4779370 p50-ns\t   5902630 p95-ns\t   5902630 p99-ns\t         0 snapshot_rotations/op\t         0 warm_snapshot_rotations\t   10784 B/op\t      71 allocs/op",
+        "BenchmarkCOWPublicDirtyCost/command_wal_durable/cow_btree/Pointer4096/N=1024/CaptureReadRelease      \t      16\t     28938 ns/op\t         0 fixture_checkpoint_runs\t         1.000 fixture_command_wal_file_sync_calls\t         1.000 fixture_command_wal_sync_count\t         1.000 fixture_cow_active_cuts\t        17.00 fixture_cow_capture_calls_total\t       256.0 fixture_cow_control_bytes\t         2.000 fixture_cow_current_roots\t         0 fixture_cow_deferred_bytes\t    351456 fixture_cow_external_bytes\t         7.000 fixture_cow_external_leases\t         0 fixture_cow_frozen_roots\t         2.000 fixture_cow_generations\t         0 fixture_cow_handoffs_total\t   2898912 fixture_cow_history_bytes\t   8337024 fixture_cow_peak_bytes\t         1.000 fixture_cow_prepare_calls_total\t         1.000 fixture_cow_publications_total\t    351456 fixture_cow_reserved_bytes\t         0 fixture_cow_retired_bytes\t         0 fixture_cow_rollovers_total\t         0 fixture_cow_sources\t   3250624 fixture_cow_total_bytes\t         0 fixture_cow_views\t         1.000 fixture_value_log_sync_calls\t     27087 p50-ns\t     40785 p95-ns\t     40785 p99-ns\t         0 snapshot_rotations/op\t         0 warm_snapshot_rotations\t   43800 B/op\t      17 allocs/op",
+        "BenchmarkCOWPublicDirtyCost/command_wal_durable/cow_btree/Pointer4096/N=1024/IncrementalWriteSync    \t      16\t   5797791 ns/op\t         0 fixture_checkpoint_runs\t        17.00 fixture_command_wal_file_sync_calls\t        17.00 fixture_command_wal_sync_count\t         1.000 fixture_cow_active_cuts\t         2.000 fixture_cow_capture_calls_total\t       256.0 fixture_cow_control_bytes\t         2.000 fixture_cow_current_roots\t         0 fixture_cow_deferred_bytes\t    250720 fixture_cow_external_bytes\t         7.000 fixture_cow_external_leases\t         0 fixture_cow_frozen_roots\t         2.000 fixture_cow_generations\t         0 fixture_cow_handoffs_total\t   3282464 fixture_cow_history_bytes\t   8337024 fixture_cow_peak_bytes\t        17.00 fixture_cow_prepare_calls_total\t        17.00 fixture_cow_publications_total\t    250720 fixture_cow_reserved_bytes\t         0 fixture_cow_retired_bytes\t         0 fixture_cow_rollovers_total\t         0 fixture_cow_sources\t   3533440 fixture_cow_total_bytes\t         0 fixture_cow_views\t         1.000 fixture_value_log_sync_calls\t   5401386 p50-ns\t  10466273 p95-ns\t  10466273 p99-ns\t         0 snapshot_rotations/op\t         0 warm_snapshot_rotations\t  555268 B/op\t     117 allocs/op"
+      ],
+      "remaining_temp_files": []
+    }
+  ]
+}

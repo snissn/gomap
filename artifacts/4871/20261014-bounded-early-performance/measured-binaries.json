@@ -1,0 +1,61 @@
+{
+  "files": [
+    {
+      "path": "measured-binaries/baseline-caching.test",
+      "sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4",
+      "bytes": 32654209,
+      "mode": "0o775",
+      "source_commit": "3f87d74b98e8b1e809d151611be03785f85e2283",
+      "package": "./TreeDB/caching",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    },
+    {
+      "path": "measured-binaries/baseline-db.test",
+      "sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8",
+      "bytes": 55403889,
+      "mode": "0o775",
+      "source_commit": "3f87d74b98e8b1e809d151611be03785f85e2283",
+      "package": "./TreeDB/db",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    },
+    {
+      "path": "measured-binaries/baseline-treedb.test",
+      "sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763",
+      "bytes": 52349078,
+      "mode": "0o775",
+      "source_commit": "3f87d74b98e8b1e809d151611be03785f85e2283",
+      "package": "./TreeDB",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    },
+    {
+      "path": "measured-binaries/candidate-caching.test",
+      "sha256": "a04291d8211b74f4dc2a3a2aa568cf6e1979f8dc70c28604c91f905c8413349a",
+      "bytes": 36594295,
+      "mode": "0o775",
+      "source_commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+      "package": "./TreeDB/caching",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    },
+    {
+      "path": "measured-binaries/candidate-db.test",
+      "sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2",
+      "bytes": 60960561,
+      "mode": "0o775",
+      "source_commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+      "package": "./TreeDB/db",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    },
+    {
+      "path": "measured-binaries/candidate-treedb.test",
+      "sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d",
+      "bytes": 56521212,
+      "mode": "0o775",
+      "source_commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+      "package": "./TreeDB",
+      "retention_reason": "exactactualmeasured executable retained per landed mvcc_raw_path_gate.md"
+    }
+  ],
+  "build_argv_receipt": "build-argv-attempt2.txt",
+  "environment_receipt": "go-env-corrected.txt",
+  "source_binding": "source-binding.json"
+}

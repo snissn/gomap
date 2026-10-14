@@ -1,0 +1,1 @@
+baseline: GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/baseline-db.test ./TreeDB/db

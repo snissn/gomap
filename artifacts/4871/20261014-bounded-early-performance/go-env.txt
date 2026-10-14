@@ -1,0 +1,7 @@
+linux
+amd64
+v1
+1
+
+/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod
+/home/mikers/.cache/go-build

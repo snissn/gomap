@@ -1,0 +1,15 @@
+    PID    PPID     ELAPSED %CPU COMMAND
+   6357    5809 41-10:02:15  4.7 /usr/bin/clickhouse-server --config=/etc/clickhouse-server/config.xml --pid-file=/run/clickhouse-server/clickhouse-server.pid
+ 681192    1620 29-16:07:11  4.6 /opt/polystore/polystorechain/polystorechaind start --home /var/lib/nilstore/nilchaind --rpc.laddr tcp://127.0.0.1:26657 --grpc.address 127.0.0.1:9091 --minimum-gas-prices 0.001aatom --api.enable
+   1949    1620 41-10:02:20  2.0 /usr/bin/pulseaudio --daemonize=no --log-target=journal
+   1881    1620 41-10:02:20  1.9 /usr/bin/fluidsynth -is /usr/share/sounds/sf3/default-GM.sf3
+3140140  949719  3-23:37:40  1.9 htop
+3037228       1    01:17:17  0.7 /home/mikers/.codex/packages/app-server-daemon/releases/0.162.1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --analytics-default-enabled --managed-daemon
+ 874030  873199  5-01:22:58  0.3 top
+1194972 1194964 32-18:01:52  0.3 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+   5838       1 41-10:02:15  0.2 /usr/local/node_exporter/node_exporter
+1595344 1595337 28-22:07:04  0.2 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+2645070       1 28-02:12:55  0.2 /usr/libexec/polkitd --no-debug
+3434909 3434902 33-17:43:42  0.2 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a07d6b-7d35-7160-a1ae-964cdda07668
+3875558 3875551 36-15:13:40  0.2 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+     95       2 41-10:02:29  0.1 [kcompactd0]

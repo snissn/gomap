@@ -1,0 +1,44 @@
+{
+  "absent": {
+    "baseline": true,
+    "candidate": true,
+    "repo": true,
+    "tmp": true
+  },
+  "measured_binaries": [
+    {
+      "name": "baseline-caching.test",
+      "bytes": 32654209,
+      "sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4"
+    },
+    {
+      "name": "baseline-db.test",
+      "bytes": 55403889,
+      "sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8"
+    },
+    {
+      "name": "baseline-treedb.test",
+      "bytes": 52349078,
+      "sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763"
+    },
+    {
+      "name": "candidate-caching.test",
+      "bytes": 36594295,
+      "sha256": "a04291d8211b74f4dc2a3a2aa568cf6e1979f8dc70c28604c91f905c8413349a"
+    },
+    {
+      "name": "candidate-db.test",
+      "bytes": 60960561,
+      "sha256": "928824da1ce6515e11f2f46153b9713842e37c049b348406c3718b84ae0319f2"
+    },
+    {
+      "name": "candidate-treedb.test",
+      "bytes": 56521212,
+      "sha256": "fb36299f907fad7c853c09d7a2ee675d73d71d8ff5cd100558f0b15ef1ab048d"
+    }
+  ],
+  "retained_evidence": true,
+  "retained_driver": true,
+  "cleanup_receipt_sha256": "e8159d43083281f040383a884f6e74c57f4fb0cf32f811a09824ed41dd42df69",
+  "consumer_scope": "Worker inspected accessible proc cwd/root/fd/maps; three identified privileged infrastructure exclusions explicitly disclosed. Root readback proves exact paths absent and retained binaries unchanged."
+}

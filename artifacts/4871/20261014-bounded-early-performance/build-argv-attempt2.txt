@@ -1,0 +1,6 @@
+baseline: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/baseline-db.test ./TreeDB/db
+baseline: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/baseline-caching.test ./TreeDB/caching
+baseline: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/baseline-treedb.test ./TreeDB
+candidate: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/candidate-db.test ./TreeDB/db
+candidate: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/candidate-caching.test ./TreeDB/caching
+candidate: GOROOT=/home/mikers/.gvm/gos/go1.26.3 GOWORK=off GOTOOLCHAIN=local go test -c -trimpath -buildvcs=false -o measured-binaries/candidate-treedb.test ./TreeDB

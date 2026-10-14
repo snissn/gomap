@@ -1,0 +1,85 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkGetVersioned
+BenchmarkGetVersioned 	  388287	       624.7 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkConditionalTxnBaselineBatchWrite
+BenchmarkConditionalTxnBaselineBatchWrite 	     100	     79984 ns/op	  152789 B/op	     281 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkSnapshotIteratorSeekNext
+BenchmarkSnapshotIteratorSeekNext/keys=1024
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	  809317	       292.4 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRepeatedIterator
+BenchmarkRepeatedIterator 	  727572	       316.3 ns/op	     113 B/op	       2 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	      50	   4986251 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      2018 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	   4961292 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	   4967234 command_wal.sync.ns/op	       134.8 command_wal.write.bytes/op	      5490 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	       200.6 iterations/s	        51.42 public.batch.write_sync.phase.checkpoint_gate.ns/op	      2018 public.batch.write_sync.phase.command_append.ns/op	   4972574 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       230.1 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	   4967399 public.batch.write_sync.phase.command_sync.ns/op	      3176 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      3065 public.batch.write_sync.phase.preflight_materialization.ns/op	      1911 public.batch.write_sync.phase.residual.ns/op	   4980777 public.batch.write_sync.phase.wall.ns/op	   6094065 writesync_max_ns	   5270427 writesync_p50_ns	   5571491 writesync_p95_ns	   6094065 writesync_p99_ns	    4663 B/op	      18 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkGetVersioned
+BenchmarkGetVersioned 	  386634	       562.3 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkConditionalTxnBaselineBatchWrite
+BenchmarkConditionalTxnBaselineBatchWrite 	     100	     99869 ns/op	  152792 B/op	     281 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkSnapshotIteratorSeekNext
+BenchmarkSnapshotIteratorSeekNext/keys=1024
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	  813087	       310.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkRepeatedIterator
+BenchmarkRepeatedIterator 	  687664	       324.6 ns/op	     113 B/op	       2 allocs/op
+PASS
+
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	      43	   6316816 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      3160 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	   6284534 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	   6292442 command_wal.sync.ns/op	       134.8 command_wal.write.bytes/op	      7357 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	       158.3 iterations/s	        56.12 public.batch.write_sync.phase.checkpoint_gate.ns/op	      3160 public.batch.write_sync.phase.command_append.ns/op	   6299465 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       278.1 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	   6292616 public.batch.write_sync.phase.command_sync.ns/op	      4216 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      3852 public.batch.write_sync.phase.preflight_materialization.ns/op	      1875 public.batch.write_sync.phase.residual.ns/op	   6309464 public.batch.write_sync.phase.wall.ns/op	   7213438 writesync_max_ns	   6284299 writesync_p50_ns	   7191972 writesync_p95_ns	   7213438 writesync_p99_ns	    4843 B/op	      18 allocs/op
+PASS

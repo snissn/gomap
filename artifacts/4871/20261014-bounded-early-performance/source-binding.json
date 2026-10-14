@@ -1,0 +1,54 @@
+{
+  "baseline_commit": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "candidate_commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+  "manifest_sha256": "e3c9e1576cd9bbb3295f3fbbd798bcd94e781ab950fc618348e29ab4729bc6ec",
+  "verified_packet_members": 432,
+  "verified_TreeDB_go_sources": 3184,
+  "overlays": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+      "bytes": 7036,
+      "stage": false
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7",
+      "bytes": 6899,
+      "stage": false
+    }
+  ],
+  "harnesses": [
+    {
+      "path": "scripts/mvcc_raw_path_gate.sh",
+      "candidate_sha256": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06",
+      "baseline_sha256": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06",
+      "identical": true
+    },
+    {
+      "path": "TreeDB/db/conditional_kv_contract_bench_test.go",
+      "candidate_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+      "baseline_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+      "identical": true
+    },
+    {
+      "path": "TreeDB/command_wal_public_test.go",
+      "candidate_sha256": "970ef668e65576be46d40b39ceb6c31b7861c4afc41c44c1de2a484de3571074",
+      "baseline_sha256": "970ef668e65576be46d40b39ceb6c31b7861c4afc41c44c1de2a484de3571074",
+      "identical": true
+    },
+    {
+      "path": "TreeDB/cow_public_cost_bench_test.go",
+      "candidate_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "baseline_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "identical": true
+    },
+    {
+      "path": "TreeDB/caching/bench_test.go",
+      "candidate_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+      "baseline_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+      "identical": true
+    }
+  ],
+  "source_state": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n"
+}

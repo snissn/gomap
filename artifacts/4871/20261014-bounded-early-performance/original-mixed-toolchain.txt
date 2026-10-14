@@ -1,0 +1,2 @@
+/home/mikers/.gvm/gos/go1.25
+/home/mikers/.gvm/gos/go1.25/pkg/tool/linux_amd64

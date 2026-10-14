@@ -1,0 +1,328 @@
+{
+  "status": "ROOT_VERIFIED_BOUNDED_EARLY_CONCERNS_NOT_FINAL_ACCEPTANCE",
+  "utc": "2026-10-14T18:46:11.192484+00:00",
+  "source_binding": {
+    "baseline_commit": "3f87d74b98e8b1e809d151611be03785f85e2283",
+    "candidate_commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+    "manifest_sha256": "e3c9e1576cd9bbb3295f3fbbd798bcd94e781ab950fc618348e29ab4729bc6ec",
+    "verified_packet_members": 432,
+    "verified_TreeDB_go_sources": 3184,
+    "overlays": [
+      {
+        "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+        "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+        "bytes": 7036,
+        "stage": false
+      },
+      {
+        "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+        "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7",
+        "bytes": 6899,
+        "stage": false
+      }
+    ],
+    "harnesses": [
+      {
+        "path": "scripts/mvcc_raw_path_gate.sh",
+        "candidate_sha256": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06",
+        "baseline_sha256": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06",
+        "identical": true
+      },
+      {
+        "path": "TreeDB/db/conditional_kv_contract_bench_test.go",
+        "candidate_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+        "baseline_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+        "identical": true
+      },
+      {
+        "path": "TreeDB/command_wal_public_test.go",
+        "candidate_sha256": "970ef668e65576be46d40b39ceb6c31b7861c4afc41c44c1de2a484de3571074",
+        "baseline_sha256": "970ef668e65576be46d40b39ceb6c31b7861c4afc41c44c1de2a484de3571074",
+        "identical": true
+      },
+      {
+        "path": "TreeDB/cow_public_cost_bench_test.go",
+        "candidate_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+        "baseline_sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+        "identical": true
+      },
+      {
+        "path": "TreeDB/caching/bench_test.go",
+        "candidate_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+        "baseline_sha256": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+        "identical": true
+      }
+    ],
+    "source_state": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n"
+  },
+  "invocations": 21,
+  "raw_logs": [
+    {
+      "log": "baseline-1-get_versioned.log",
+      "sha256": "0e5e4f5d9ffd1bcc5672c37b4870ae8e1396fab7bc1adf372ad5d3b5da1e1fae",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-get_versioned.log",
+      "sha256": "301cda7b892e4f587eb6e1a9a4a8162675f5800d2c2eeddc4420d6345288f5c1",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-1-batch_write.log",
+      "sha256": "0fdf3323e17017fb78ecde2e7aaf425437c32f63fb84daebd62f0c49609814c2",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-batch_write.log",
+      "sha256": "3b395155ed205e1ae5d5f5e0c7306597fa0039b07481ddb3e6b1cd69f05e26c0",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-1-snapshot_seek.log",
+      "sha256": "b3771c58ca32628c2ec02506c1a191b32c5c0e1dc6fd503f43025ec189351e42",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-snapshot_seek.log",
+      "sha256": "520729b3d50bb404210a0033a6d73e917d154b1d732fd56bb4851baa5626cc10",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-1-repeated_iterator.log",
+      "sha256": "147213f12925a607d34c5063aeb7d151b96ad5a91a20338d4966027de5434bcf",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-repeated_iterator.log",
+      "sha256": "a372fb0368a58641a99ba73daa5da28ac815a729538f0223ce949e4232e36978",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-1-durable_sync.log",
+      "sha256": "4109520e314b5ef9beada1e6a0316e0efff9ff52ccbc5ee73539aa3e3359d8b7",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-durable_sync.log",
+      "sha256": "b07db75e3d92afd117b01198c47afe4aedb92efac226fca6bfee8719b81b29a0",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-2-get_versioned.log",
+      "sha256": "eb3c8bb8432405a40028fb70f6e9ead20dc188d5b9420b58c50f7fec4387af94",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-2-get_versioned.log",
+      "sha256": "afe2f2fb5a8abf0afc72fe341e4a27a1e7230af71a0d8a9f6f6af4663bee4d2e",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-2-batch_write.log",
+      "sha256": "9cf558e5434a062333c551dfdd565a1f834a6c0ff6d7e4867da47a92c37cd31f",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-2-batch_write.log",
+      "sha256": "86e32cbd16192cb00cfcc46ea2408d5222ac56cb32a35c2d22353e0ce132ff91",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-2-snapshot_seek.log",
+      "sha256": "6af3cbc7ae6373f2a86814727df0dd4c968986fa896a731681e65796bbc60681",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-2-snapshot_seek.log",
+      "sha256": "452aa6e564fe74f69a3eefd02af5e6666e97c795f1a3cfeb36bbbd243d5a8504",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-2-repeated_iterator.log",
+      "sha256": "4a9bf00d70184982e98fe58a55303f78cd762f637eafc71338a3d6db949406e9",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-2-repeated_iterator.log",
+      "sha256": "083a333c833204950ace0fa7e111b4e569faba77b345d89a959f3cbfb9c58185",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-2-durable_sync.log",
+      "sha256": "0e12796ca518e1ed391d4186b15d5ab6545f674bdc76ac6d4a2df1d9da8d47e3",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "baseline-2-durable_sync.log",
+      "sha256": "6a0a648fbc58edba207b09fa5368f462a42a1d8b9f39e53b1cb546d02c6071b8",
+      "exit": 0,
+      "rows": 1
+    },
+    {
+      "log": "candidate-1-cow_current_cost.log",
+      "sha256": "6a9e875badfbaf48e8938e232757d77f3ad3dc9c2b0700c3ebc10000c6b69ff9",
+      "exit": 0,
+      "rows": 4
+    }
+  ],
+  "timed_wall_seconds": 15.339901010040194,
+  "landed_checker_exit": 1,
+  "failures": [
+    "BenchmarkGetVersioned",
+    "BenchmarkConditionalTxnBaselineBatchWrite"
+  ],
+  "results": [
+    {
+      "acceptance_pass": false,
+      "acceptance_verdict": "FAIL",
+      "allocs_pass": false,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 593.5
+      },
+      "benchmark": "BenchmarkGetVersioned",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": 112.0,
+      "bytes_pass": false,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 1.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 864.6
+      },
+      "measurement_pass": false,
+      "ns_delta_percent": 45.6781802864364,
+      "paired_ns_delta_percent": 46.139618829237925,
+      "timing_pass": false
+    },
+    {
+      "acceptance_pass": false,
+      "acceptance_verdict": "FAIL",
+      "allocs_pass": false,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 281.0,
+        "bytes_per_op": 152790.5,
+        "ns_per_op": 89926.5
+      },
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": 2215.5,
+      "bytes_pass": false,
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 286.0,
+        "bytes_per_op": 155006.0,
+        "ns_per_op": 92713.0
+      },
+      "measurement_pass": false,
+      "ns_delta_percent": 3.0986416684736895,
+      "paired_ns_delta_percent": 4.402902084837756,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 301.6
+      },
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 299.3
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -0.7625994694960281,
+      "paired_ns_delta_percent": -0.6651120536209365,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 113.0,
+        "ns_per_op": 320.45000000000005
+      },
+      "benchmark": "BenchmarkRepeatedIterator",
+      "binary_equivalent": false,
+      "binary_package": "caching",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 1.13,
+      "candidate": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 113.0,
+        "ns_per_op": 316.25
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -1.3106568887502057,
+      "paired_ns_delta_percent": -1.303601075980776,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 18.0,
+        "bytes_per_op": 4753.0,
+        "ns_per_op": 5651533.5
+      },
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": -36.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 47.53,
+      "candidate": {
+        "allocs_per_op": 18.0,
+        "bytes_per_op": 4717.0,
+        "ns_per_op": 5565633.0
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -1.519950293137251,
+      "paired_ns_delta_percent": -1.381913078888486,
+      "timing_pass": true
+    }
+  ],
+  "interpretation": "Deterministic allocations are candidate concerns; two short pairs provide early timing signal only. Original full raw/COW/M7/Dgraph gates open. Source-only 112B OrdinalScanWork escape hypothesis requires compiler/profile proof and semantics-preserving fix.",
+  "source_binding_basis": "Committed production/prerequisite sources c3ba; producer source3184 census verified previously by root shared packet receipt f004a1baf309d8d5a40eedf2bc307b9d51e5c35d102fa3a8c58651f144c1fcfa; separate retained test-only overlays.",
+  "preserved": "Dirty primary, ordinary active111, native solewriter paths, foreign roots, all6 actual measured binaries retained on185."
+}
