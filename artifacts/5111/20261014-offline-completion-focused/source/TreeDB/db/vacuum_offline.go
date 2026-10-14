@@ -1,0 +1,619 @@
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
+)
+
+type vacuumFailpoint string
+
+const (
+	vacuumFailNone           vacuumFailpoint = ""
+	vacuumFailAfterNewSync   vacuumFailpoint = "after_new_sync"
+	vacuumFailAfterReady     vacuumFailpoint = "after_ready"
+	vacuumFailAfterRenameOld vacuumFailpoint = "after_rename_old"
+	vacuumFailAfterRenameNew vacuumFailpoint = "after_rename_new"
+)
+
+var errVacuumFailpoint = errors.New("vacuum failpoint")
+
+// VacuumIndexOffline rewrites index.db into a fresh file and swaps it in.
+//
+// This is intended to reclaim space (reduce `index.db` chunk count) and restore
+// locality after long churn. It is an offline operation (requires exclusive
+// open lock).
+func VacuumIndexOffline(opts Options) error {
+	return vacuumIndexOffline(opts, vacuumFailNone)
+}
+
+func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
+	if opts.Dir == "" {
+		return errors.New("db dir required")
+	}
+	if err := applyFormatConfigForMaintenanceWithOptions(&opts, true); err != nil {
+		return err
+	}
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
+	opts.DisableBackgroundPrune = true
+	opts.ReadOnly = true
+
+	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !recoveryCleanupOwnsLockV6(retErr, lock) {
+			retErr = errors.Join(retErr, lock.Close())
+		}
+	}()
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	defer valueLogIdentityPins.Close()
+
+	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
+		return err
+	}
+	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
+		return err
+	}
+
+	// Open the DB without acquiring a second lock (we already hold it).
+	d, err := openReadOnlyNoLockWithRegistryV6(opts, valueLogIdentityPins, lock)
+	if err != nil {
+		return err
+	}
+
+	// The source generation exists before maintenance writer setup and before
+	// replacement admission. Keep its SAME containing wrapper/receipt through
+	// every early return and checked physical source Close.
+	source := d.idx.Load()
+	source.retainOfflineSourceV1(d, lock)
+	defer func() {
+		metadata, charge, err := source.finishOfflineSourceV1(retErr)
+		source, d = nil, nil
+		retErr = err
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+
+	var offlineScope *indexGen
+	var offlineParent *os.File
+	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		offlineScope, err = d.captureOfflinePrimaryScopeV6()
+		if err != nil {
+			return err
+		}
+		offlineParent = offlineScope.stableNamespaceParent
+		defer func() {
+			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
+			offlineScope, offlineParent = nil, nil
+			retErr = errors.Join(retErr, cleanupErr)
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}()
+	}
+
+	var maintenanceLeafLog LeafPageLogCloser
+	if opts.IndexOuterLeavesInValueLog {
+		maintenanceLeafLog, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
+			Compression: opts.ValueLog.Compression,
+			AutoPolicy:  opts.ValueLog.AutoPolicy,
+			BlockCodec:  opts.ValueLog.BlockCodec,
+		})
+		if err != nil {
+			return err
+		}
+		d.SetLeafPageLog(maintenanceLeafLog)
+		defer func() {
+			retErr = errors.Join(retErr, maintenanceLeafLog.Close())
+		}()
+	}
+
+	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		roots, e := d.CaptureRecoverableRootSetForInspection(context.Background())
+		if e != nil {
+			return e
+		}
+		defer func() { retErr = errors.Join(retErr, roots.ReleaseWithError()) }()
+		pair, e := d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
+		if e != nil {
+			return e
+		}
+		newPager := pair.pager
+		produce := func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
+			rebuilt, _, e := d.rebuildRecoverableRootWithPublicationLockV1(context.Background(), roots, root, newPager, pair.allocator, false)
+			return rebuilt, e
+		}
+		e = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, false, func() error {
+			if maintenanceLeafLog != nil {
+				return maintenanceLeafLog.Close()
+			}
+			return nil
+		})
+		pair, newPager, produce = nil, nil, nil
+		return e
+	}
+
+	replacement, err := newStartupIndexGeneration(d, lock)
+	if err != nil {
+		return err
+	}
+	var newPager *pager.Pager
+	var alloc *pagerAllocator
+	defer func() {
+		if replacement == nil {
+			return
+		}
+		metadata, charge, completionErr := replacement.finishOfflineReplacementV1(retErr)
+		replacement, newPager, alloc = nil, nil, nil
+		retErr = completionErr
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+	state := d.State()
+	if state == nil {
+		return fmt.Errorf("vacuum: missing db state")
+	}
+	acquiredValueLogSet := state.ValueLogSet
+	if acquiredValueLogSet != nil {
+		d.valueLogManager.Acquire(acquiredValueLogSet)
+		defer func() {
+			if acquiredValueLogSet != nil {
+				releaseSet := acquiredValueLogSet
+				acquiredValueLogSet = nil
+				releaseErr := d.valueLogManager.Release(releaseSet)
+				d.retainOriginalCleanupError(releaseErr)
+				retErr = errors.Join(retErr, releaseErr)
+			}
+		}()
+	}
+
+	indexPath := filepath.Join(opts.Dir, indexFileName)
+	newPath := filepath.Join(opts.Dir, indexNewFileName)
+	bakPath := filepath.Join(opts.Dir, indexBakFileName)
+	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
+
+	// Clean up any previous partial artifacts (best-effort).
+	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+
+	_, newStatErr := os.Stat(newPath)
+	newCreated := os.IsNotExist(newStatErr)
+	if err := replacement.openOfflineReplacementPagerV1(opts.Dir, opts.ChunkSize); err != nil {
+		return err
+	}
+	newPager = replacement.pager
+	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+		return err
+	}
+
+	if _, err := newPager.Alloc(2); err != nil {
+		return err
+	}
+
+	alloc = &pagerAllocator{p: newPager}
+	reader := newValueReader(state.ValueLogSet)
+
+	collectionRootReplacements, err := vacuumRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, alloc, newPager)
+	if err != nil {
+		return err
+	}
+
+	effectiveInternalBaseDelta := opts.IndexInternalBaseDelta && !opts.IndexOuterLeavesInValueLog
+
+	buildOpts := bulk.BuildOptions{
+		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
+		InternalBaseDelta:     effectiveInternalBaseDelta,
+	}
+	sysRoot, systemLeafAppended, err := d.vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
+	if err != nil {
+		return err
+	}
+	if systemLeafAppended {
+		if err := maintenanceLeafLog.Sync(); err != nil {
+			return err
+		}
+	}
+
+	var userRoot uint64
+	if opts.IndexOuterLeavesInValueLog {
+		rootData, err := d.Pager().Get(state.RootPageID)
+		if err != nil {
+			return err
+		}
+		rootNode := node.NewNode(rootData)
+		if rootNode.Type() == page.PageTypeLeaf {
+			userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
+			if err != nil {
+				return err
+			}
+		} else {
+			allLeafRefs, err := vacuumTreeAllLeafRefsIfComplete(d.Pager(), state.RootPageID)
+			if err != nil {
+				return err
+			}
+			if allLeafRefs {
+				userRoot, err = vacuumBuildInternalTreeFromLeafRefs(d.Pager(), state.RootPageID, newPager, alloc, effectiveInternalBaseDelta)
+			} else {
+				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		userIter := tree.New(d.Pager(), reader, state.RootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		userRoot, err = bulk.BuildWithOptions(userIter, alloc, newPager, buildOpts)
+		err = errors.Join(err, userIter.Close())
+		if err != nil {
+			return err
+		}
+	}
+
+	meta := d.meta
+	meta.CommitSeq++
+	meta.UserRootPageID = userRoot
+	meta.SystemRootPageID = sysRoot
+	meta.FreelistHeadID = 0
+	meta.TotalPages = newPager.PageCount()
+
+	var stagedLeafManifest *leafGenerationManifest
+	if systemLeafAppended {
+		d.mu.RLock()
+		baseLeafManifest := d.leafGenerationManifest
+		d.mu.RUnlock()
+		if baseLeafManifest == nil {
+			return errors.New("vacuum: leaf generation manifest unavailable")
+		}
+		staged, err := d.stagedLeafGenerationManifestWithPendingResult(baseLeafManifest, 0, meta.CommitSeq)
+		if err != nil {
+			return err
+		}
+		stagedLeafManifest = staged.manifest
+	}
+
+	durableResources, err := d.captureRebuiltIndexDurableResourcesV1(newPager, meta)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, d.releaseCapturedRootResources(durableResources)) }()
+	if stagedLeafManifest != nil {
+		persistedManifest, preparedResources, _, err := d.prepareDurableRootManifestResourcesV1(
+			stagedLeafManifest, durableResources, nil,
+		)
+		if err != nil {
+			return err
+		}
+		durableResources = preparedResources
+		d.mu.Lock()
+		d.leafGenerationManifest = persistedManifest
+		d.mu.Unlock()
+	}
+	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
+	if err != nil {
+		return err
+	}
+	if !outputHasLeafLogRefs {
+		if err := writeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
+			return err
+		}
+	}
+
+	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
+		return err
+	}
+	if fail == vacuumFailAfterNewSync {
+		return errVacuumFailpoint
+	}
+
+	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			return err
+		}
+	}
+	if fail == vacuumFailAfterReady {
+		return errVacuumFailpoint
+	}
+
+	releaseResources := durableResources
+	durableResources = nil
+	if err := d.releaseCapturedRootResources(releaseResources); err != nil {
+		return err
+	}
+
+	if err := replacement.close(); err != nil {
+		return err
+	}
+	if acquiredValueLogSet != nil {
+		releaseSet := acquiredValueLogSet
+		acquiredValueLogSet = nil
+		if err := d.valueLogManager.Release(releaseSet); err != nil {
+			d.retainOriginalCleanupError(err)
+			return err
+		}
+	}
+	metadata, charge, completionErr := replacement.finishOfflineReplacementV1(nil)
+	replacement, newPager, alloc = nil, nil, nil
+	if metadata != nil && charge != 0 {
+		metadata.RemovePending(charge)
+	}
+	if completionErr != nil {
+		return completionErr
+	}
+
+	// Swap in the new index file.
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if _, err := renamePersistentFile(opts.Dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if fail == vacuumFailAfterRenameOld {
+		return errVacuumFailpoint
+	}
+	if renamed, err := renamePersistentFile(opts.Dir, newPath, indexPath, durabilitycut.ResourceIndex); err != nil {
+		if !renamed {
+			_, rollbackErr := renamePersistentFile(opts.Dir, bakPath, indexPath, durabilitycut.ResourceIndex)
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	if fail == vacuumFailAfterRenameNew {
+		return errVacuumFailpoint
+	}
+
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			return err
+		}
+	}
+
+	if !outputHasLeafLogRefs {
+		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq, nil); err != nil {
+			return err
+		}
+		if err := removeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func vacuumOutputHasLeafLogRefs(p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot uint64) (bool, error) {
+	for _, rootID := range []uint64{userRoot, systemRoot} {
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	seen := make(map[uint64]struct{}, len(descriptors))
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == 0 {
+			continue
+		}
+		if _, ok := seen[descriptor.rootID]; ok {
+			continue
+		}
+		seen[descriptor.rootID] = struct{}{}
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, descriptor.rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	return false, nil
+}
+
+func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
+	if p == nil || rootID == 0 {
+		return false, nil
+	}
+	var walk func(uint64) (bool, error)
+	walk = func(id uint64) (bool, error) {
+		data, err := p.Get(id)
+		if err != nil {
+			return false, err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			directory, err := node.DecodePrimaryDirectory(data)
+			if err != nil {
+				return false, err
+			}
+			base, _ := directory.Base()
+			found, err := walk(base.Ref.Page)
+			if err != nil || found {
+				return found, err
+			}
+			for i := 0; i < directory.Count(); i++ {
+				entry, _ := directory.Entry(i)
+				if entry.Operand.Ref.Kind == page.ChildRefLeafLog {
+					return true, nil
+				}
+			}
+			return false, nil
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return false, err
+				}
+				if childRef.Kind == page.ChildRefLeafLog {
+					return true, nil
+				}
+				if childRef.Kind != page.ChildRefPage {
+					return false, fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
+				}
+				hasRefs, err := walk(childRef.Page)
+				if err != nil || hasRefs {
+					return hasRefs, err
+				}
+			}
+			return false, nil
+		case page.PageTypeLeaf:
+			return false, nil
+		default:
+			return false, fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	return walk(rootID)
+}
+
+func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSegment func(uint32) error) error {
+	leafDir := LeafLogDirPath(dir)
+	if leafDir == "" {
+		return nil
+	}
+	if _, err := os.Stat(leafDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("vacuum: stat leaf_vlog dir: %w", err)
+	}
+
+	files, err := listLeafGenerationBootstrapFiles(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf_vlog files: %w", err)
+	}
+	_, manifestExists, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: load leaf generation manifest: %w", err)
+	}
+	sidecarPaths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"+leafGenerationRecordLengthIndexSuffix))
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf generation record-length indexes: %w", err)
+	}
+	if len(files) == 0 && !manifestExists && len(sidecarPaths) == 0 {
+		return nil
+	}
+	if err := saveLeafGenerationManifest(leafDir, newLeafGenerationManifest(commitSeq)); err != nil {
+		return fmt.Errorf("vacuum: reset leaf generation manifest: %w", err)
+	}
+	if err := syncNewFileNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after manifest reset: %w", err)
+	}
+
+	for _, file := range files {
+		if evictSegment != nil {
+			if err := evictSegment(page.ValueLogFileID(file.rawFileID)); err != nil {
+				return fmt.Errorf("vacuum: evict stale leaf generation file %s: %w", leafGenerationFallbackPath(dir, file.rawFileID), err)
+			}
+		}
+		path := leafGenerationFallbackPath(dir, file.rawFileID)
+		if _, err := removePersistentFile(leafDir, path, durabilitycut.ResourceOuterLeaf); err != nil {
+			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
+		}
+		indexPath := leafGenerationRecordLengthIndexPath(dir, file.rawFileID)
+		if _, err := removePersistentFile(leafDir, indexPath, durabilitycut.ResourceAuxiliary); err != nil {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	for _, indexPath := range sidecarPaths {
+		if _, err := removePersistentFile(leafDir, indexPath, durabilitycut.ResourceAuxiliary); err != nil {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	if err := syncDeletionNamespaceDirectory(leafDir, durabilitycut.ResourceOuterLeaf); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after stale file removal: %w", err)
+	}
+	return nil
+}
+
+const leafGenerationOfflineVacuumResetPendingFileName = "offline-vacuum-reset.pending"
+
+func leafGenerationResetPendingAfterOfflineVacuumPath(dir string) string {
+	return filepath.Join(LeafLogDirPath(dir), leafGenerationOfflineVacuumResetPendingFileName)
+}
+
+func writeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	if err := os.MkdirAll(leafDir, 0o700); err != nil {
+		return fmt.Errorf("vacuum: create leaf_vlog dir for reset marker: %w", err)
+	}
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if err := writePersistentFile(leafDir, path, []byte("v1\n"), 0o600, durabilitycut.ResourceAuxiliary); err != nil {
+		return fmt.Errorf("vacuum: write leaf_vlog reset marker: %w", err)
+	}
+	if err := syncNewFileNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker: %w", err)
+	}
+	return nil
+}
+
+func removeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if _, err := removePersistentFile(leafDir, path, durabilitycut.ResourceAuxiliary); err != nil {
+		return fmt.Errorf("vacuum: remove leaf_vlog reset marker: %w", err)
+	}
+	if err := syncDeletionNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker removal: %w", err)
+	}
+	return nil
+}
+
+func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot, commitSeq uint64, beforeReset func() error, evictSegment func(uint32) error) (bool, error) {
+	markerPath := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if _, err := os.Stat(markerPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("vacuum: stat leaf_vlog reset marker: %w", err)
+	}
+	hasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(p, reader, userRoot, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	if !hasLeafLogRefs {
+		if beforeReset != nil {
+			if err := beforeReset(); err != nil {
+				return false, err
+			}
+		}
+		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq, evictSegment); err != nil {
+			return false, err
+		}
+		return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
+	}
+	return false, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
+}

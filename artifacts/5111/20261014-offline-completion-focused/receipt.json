@@ -1,0 +1,351 @@
+{
+  "at_utc": "2026-10-14T19:28:41.557672+00:00",
+  "status": "FOCUSED NORMAL/RACE PASS; FULL CANDIDATE UNQUALIFIED",
+  "head": "a99d3c8474b8898b98624c47758653e7c8cb9b7f",
+  "index_tree": "3ddd99b63a71328803a40d5a0f8725f612852445",
+  "tested_source_sha256": "c484ea4b81d94ec1dd061c34f17a879929b98701a1ea3a8dfb5d18bc04e06d3f",
+  "tested_go_module_rows": 4241,
+  "owned_rows": [
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "bytes": 15812,
+      "sha256": "49db8d323ccf32f6cf3bbb030457f7427e344c7ebbcbb58e0754b98b170e3ea4",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "6fbc6e6f35937ecc6b41f867b8a3747af6afc60dba2046d64b3601020ffb4210",
+      "delta": "delta/TreeDB/db/primary_offline_pair_v6.go.patch",
+      "delta_sha256": "cb40a87ac57b7e2ad4f1a28042c5fecd4483530343b2bf8919abe3b917ed6793"
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "bytes": 19928,
+      "sha256": "a6561ae2a8330ecbb0bf96693887f97178cd2ee99e15b059b10de91f85166f1a",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "adf995de2235d37055443b539356f580df0c54829bc6ed728ab13a12df56a023",
+      "delta": "delta/TreeDB/db/vacuum_offline.go.patch",
+      "delta_sha256": "c7c837f384296d1fbdcda2285a0053df373acb14f2b43119c8005523fddc93d2"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "bytes": 188668,
+      "sha256": "993904cef908eec8b0864779aea1b9efe826aa00733a98012b60c59872caf105",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "aef28239915f09526aec8fce995f88317fc0e79636f94f51007f11cd3b50a34c",
+      "delta": "delta/TreeDB/db/vlog_rewrite.go.patch",
+      "delta_sha256": "e1fd0869ae14d31607662d8f3a8935e7e96b62947111bfadabf7d8905626234b"
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6_test.go",
+      "bytes": 27557,
+      "sha256": "f70e86aea042564b8aab16a2cf254239e59a88e001b2a51cc26adc06ed878f50",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "17ca3fa4dbbd10e1aa6944956de03ef61ca9ad9bb5fa5532197416bd2657199d",
+      "delta": "delta/TreeDB/db/primary_offline_pair_v6_test.go.patch",
+      "delta_sha256": "92ee0a0894495573c662d0d1446e1cf8c306d50dd5b1c8a42cf4ec5dfdfb88fa"
+    },
+    {
+      "path": "TreeDB/db/vacuum_original_completion_test.go",
+      "bytes": 28186,
+      "sha256": "30fdffe08675c22b2cba3239f474347fd41403e76404ad1e79a83279b7534521",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": null,
+      "delta": "delta/TreeDB/db/vacuum_original_completion_test.go.patch",
+      "delta_sha256": "13464731eaca09f42be7dcc0b7d72bc2b76a8e1768391d03d0a25b956d6ebd7c"
+    },
+    {
+      "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "bytes": 39339,
+      "sha256": "bf2add96f9f87b5278679d8626d9932850687e789562d2b3790ea6f2a5645f6b",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "9db6a883da23d5b17ddf96a1bf3754334be5b3cbb7c6082d4712d8838afe0ec3",
+      "delta": "delta/TreeDB/docs/design/ordinary-primary-allocation-5111.md.patch",
+      "delta_sha256": "e7b9a439cbf23b4837e9071f94dcf2b8ff1b4f6ee4e2b63377db1da4fd2634b0"
+    },
+    {
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "bytes": 56588,
+      "sha256": "b02d33837406d7d11fde516fc64a0055891a16c80690bccb034cbf256976a895",
+      "ownership": "ordinary-owned",
+      "baseline_head_sha256": "7dc3d7d9eb24f26ac4ff82eab9088554a664b5043252f3f8e1420258ec7a7d41",
+      "delta": "delta/TreeDB/docs/spec/value-log-lifecycle.md.patch",
+      "delta_sha256": "548b7a917d8b262780caccd4ec72df25305e1253da10f2b7ed698f197baa13e8"
+    }
+  ],
+  "literal_top_controls": [
+    "TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt",
+    "TestNativeGenerationContainingCompletionAfterOriginalClose",
+    "TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach",
+    "TestOfflineReplacementOriginalPagerCompletion",
+    "TestOfflineRewriteNoSegmentsOriginalSourceCompletion",
+    "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+    "TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock",
+    "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+    "TestOfflineVacuumSetupRefusalConsumesOriginalSourceSuccessfully",
+    "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+    "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+    "TestOriginalGenerationPublishedFailureConcurrentInspection",
+    "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+    "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+    "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+    "TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload",
+    "TestPrimaryJointNamespaceRebindKeepsOriginalParents",
+    "TestPrimaryOfflinePairChildProducerAdmission",
+    "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+    "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+    "TestPrimaryOfflinePairV6RetainsUncertainDecision",
+    "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOfflineVlogV6CacheInvalidationRecovery",
+    "TestPrimaryOfflineVlogV6IndependentFallback",
+    "TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig",
+    "TestValueLogRewriteOffline_RewritesAndShrinks",
+    "TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot"
+  ],
+  "commands": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-p",
+        "1",
+        "-count",
+        "1",
+        "-timeout",
+        "30m",
+        "-run",
+        "^(TestOfflineVacuum.*|TestOfflineReplacementOriginalPagerCompletion|TestPrimaryOfflineScopeV6.*|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestOriginalStartup.*|TestOriginalReadOnlyStartup.*|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOfflineRewriteNoSegmentsOriginalSourceCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestPrimaryOfflineVlogV6CacheInvalidationRecovery|TestPrimaryOfflineVlogV6IndependentFallback|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement|TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure|TestPrimaryOfflinePairV6RetainsUncertainDecision|TestPrimaryOfflinePairV6ConstructionUsesRetainedParent|TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage|TestValueLogRewriteOffline_RewritesAndShrinks|TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot|TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig)$",
+        "./TreeDB/db"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "GOWORK": "off",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": null,
+        "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111"
+      },
+      "at_start_utc": "2026-10-14T19:26:12.676966+00:00",
+      "source_sha256": "c484ea4b81d94ec1dd061c34f17a879929b98701a1ea3a8dfb5d18bc04e06d3f",
+      "status": "COMPLETE",
+      "exit": 0,
+      "elapsed_seconds": 39.697606828063726,
+      "at_end_utc": "2026-10-14T19:26:52.375166+00:00",
+      "raw_sha256": "b893f10249ae27b992ff288e01caa8394fa6dd0e9585616878a8d42954ec8dda",
+      "raw_bytes": 53485,
+      "source_unchanged": true
+    },
+    {
+      "argv": [
+        "go",
+        "test",
+        "-json",
+        "-race",
+        "-p",
+        "1",
+        "-count",
+        "1",
+        "-timeout",
+        "30m",
+        "-run",
+        "^(TestOfflineVacuum.*|TestOfflineReplacementOriginalPagerCompletion|TestPrimaryOfflineScopeV6.*|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestOriginalStartup.*|TestOriginalReadOnlyStartup.*|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOfflineRewriteNoSegmentsOriginalSourceCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestPrimaryOfflineVlogV6CacheInvalidationRecovery|TestPrimaryOfflineVlogV6IndependentFallback|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement|TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure|TestPrimaryOfflinePairV6RetainsUncertainDecision|TestPrimaryOfflinePairV6ConstructionUsesRetainedParent|TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage|TestValueLogRewriteOffline_RewritesAndShrinks|TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot|TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig)$",
+        "./TreeDB/db"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "env": {
+        "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "GOWORK": "off",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "4GiB",
+        "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111"
+      },
+      "at_start_utc": "2026-10-14T19:26:52.545219+00:00",
+      "source_sha256": "c484ea4b81d94ec1dd061c34f17a879929b98701a1ea3a8dfb5d18bc04e06d3f",
+      "status": "COMPLETE",
+      "exit": 0,
+      "elapsed_seconds": 53.3306190809235,
+      "at_end_utc": "2026-10-14T19:27:45.876496+00:00",
+      "raw_sha256": "636f815d26b3863902776b1ac8b3cf7fe492f6ba48711fb2ec06494ab699b759",
+      "raw_bytes": 53495,
+      "source_unchanged": true
+    }
+  ],
+  "source_after_sha256": "ab65fce37140415f9757e3a73ac18230918bd933fa97b022e5c23d01c8a03edd",
+  "members": [
+    {
+      "path": "README.md",
+      "bytes": 1099,
+      "sha256": "6729b46498fe70ab8e6fb63779df055f4c90a1dc2362a25c26979e682186e22b"
+    },
+    {
+      "path": "baseline/TreeDB/db/primary_offline_pair_v6.go",
+      "bytes": 14905,
+      "sha256": "6fbc6e6f35937ecc6b41f867b8a3747af6afc60dba2046d64b3601020ffb4210"
+    },
+    {
+      "path": "baseline/TreeDB/db/primary_offline_pair_v6_test.go",
+      "bytes": 26812,
+      "sha256": "17ca3fa4dbbd10e1aa6944956de03ef61ca9ad9bb5fa5532197416bd2657199d"
+    },
+    {
+      "path": "baseline/TreeDB/db/vacuum_offline.go",
+      "bytes": 19134,
+      "sha256": "adf995de2235d37055443b539356f580df0c54829bc6ed728ab13a12df56a023"
+    },
+    {
+      "path": "baseline/TreeDB/db/vlog_rewrite.go",
+      "bytes": 186726,
+      "sha256": "aef28239915f09526aec8fce995f88317fc0e79636f94f51007f11cd3b50a34c"
+    },
+    {
+      "path": "baseline/TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "bytes": 31168,
+      "sha256": "9db6a883da23d5b17ddf96a1bf3754334be5b3cbb7c6082d4712d8838afe0ec3"
+    },
+    {
+      "path": "baseline/TreeDB/docs/spec/value-log-lifecycle.md",
+      "bytes": 54666,
+      "sha256": "7dc3d7d9eb24f26ac4ff82eab9088554a664b5043252f3f8e1420258ec7a7d41"
+    },
+    {
+      "path": "candidate-offline-combined-normal-v1.command.json",
+      "bytes": 2330,
+      "sha256": "b41db7912b8d1dbeca57d3b211a10362f35fced7f3f625b9a0e6dba98e52022e"
+    },
+    {
+      "path": "candidate-offline-combined-normal-v1.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "candidate-offline-combined-normal-v1.jsonl",
+      "bytes": 53485,
+      "sha256": "b893f10249ae27b992ff288e01caa8394fa6dd0e9585616878a8d42954ec8dda"
+    },
+    {
+      "path": "candidate-offline-combined-race-v1.command.json",
+      "bytes": 2343,
+      "sha256": "0d9191ff311592c6d37c4a12208618c0026827280d452addfaf302c142e01d86"
+    },
+    {
+      "path": "candidate-offline-combined-race-v1.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "candidate-offline-combined-race-v1.jsonl",
+      "bytes": 53495,
+      "sha256": "636f815d26b3863902776b1ac8b3cf7fe492f6ba48711fb2ec06494ab699b759"
+    },
+    {
+      "path": "delta/TreeDB/db/primary_offline_pair_v6.go.patch",
+      "bytes": 7279,
+      "sha256": "cb40a87ac57b7e2ad4f1a28042c5fecd4483530343b2bf8919abe3b917ed6793"
+    },
+    {
+      "path": "delta/TreeDB/db/primary_offline_pair_v6_test.go.patch",
+      "bytes": 5434,
+      "sha256": "92ee0a0894495573c662d0d1446e1cf8c306d50dd5b1c8a42cf4ec5dfdfb88fa"
+    },
+    {
+      "path": "delta/TreeDB/db/vacuum_offline.go.patch",
+      "bytes": 10588,
+      "sha256": "c7c837f384296d1fbdcda2285a0053df373acb14f2b43119c8005523fddc93d2"
+    },
+    {
+      "path": "delta/TreeDB/db/vacuum_original_completion_test.go.patch",
+      "bytes": 29414,
+      "sha256": "13464731eaca09f42be7dcc0b7d72bc2b76a8e1768391d03d0a25b956d6ebd7c"
+    },
+    {
+      "path": "delta/TreeDB/db/vlog_rewrite.go.patch",
+      "bytes": 12491,
+      "sha256": "e1fd0869ae14d31607662d8f3a8935e7e96b62947111bfadabf7d8905626234b"
+    },
+    {
+      "path": "delta/TreeDB/docs/design/ordinary-primary-allocation-5111.md.patch",
+      "bytes": 9342,
+      "sha256": "e7b9a439cbf23b4837e9071f94dcf2b8ff1b4f6ee4e2b63377db1da4fd2634b0"
+    },
+    {
+      "path": "delta/TreeDB/docs/spec/value-log-lifecycle.md.patch",
+      "bytes": 2701,
+      "sha256": "548b7a917d8b262780caccd4ec72df25305e1253da10f2b7ed698f197baa13e8"
+    },
+    {
+      "path": "offline-combined-after-shared-correction-plan-v1.json",
+      "bytes": 8363,
+      "sha256": "86adb50ba91e878250d34a4a5b0f9543773db14190ad99044f0412a2769cd56f"
+    },
+    {
+      "path": "run-offline-combined-after-shared-v1.py",
+      "bytes": 2472,
+      "sha256": "b8d0959bd7599781d98c712386d1992fef6bdcb9b85f6eaa4409cf2d78c9a761"
+    },
+    {
+      "path": "shared-backimport-receipt.json",
+      "bytes": 3754,
+      "sha256": "58c26e4945c4c6600511382d2f015588a2975b9b89c956f5a66d906c54da7300"
+    },
+    {
+      "path": "source/TreeDB/db/primary_offline_pair_v6.go",
+      "bytes": 15812,
+      "sha256": "49db8d323ccf32f6cf3bbb030457f7427e344c7ebbcbb58e0754b98b170e3ea4"
+    },
+    {
+      "path": "source/TreeDB/db/primary_offline_pair_v6_test.go",
+      "bytes": 27557,
+      "sha256": "f70e86aea042564b8aab16a2cf254239e59a88e001b2a51cc26adc06ed878f50"
+    },
+    {
+      "path": "source/TreeDB/db/vacuum_offline.go",
+      "bytes": 19928,
+      "sha256": "a6561ae2a8330ecbb0bf96693887f97178cd2ee99e15b059b10de91f85166f1a"
+    },
+    {
+      "path": "source/TreeDB/db/vacuum_original_completion_test.go",
+      "bytes": 28186,
+      "sha256": "30fdffe08675c22b2cba3239f474347fd41403e76404ad1e79a83279b7534521"
+    },
+    {
+      "path": "source/TreeDB/db/vlog_rewrite.go",
+      "bytes": 188668,
+      "sha256": "993904cef908eec8b0864779aea1b9efe826aa00733a98012b60c59872caf105"
+    },
+    {
+      "path": "source/TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "bytes": 39339,
+      "sha256": "bf2add96f9f87b5278679d8626d9932850687e789562d2b3790ea6f2a5645f6b"
+    },
+    {
+      "path": "source/TreeDB/docs/spec/value-log-lifecycle.md",
+      "bytes": 56588,
+      "sha256": "b02d33837406d7d11fde516fc64a0055891a16c80690bccb034cbf256976a895"
+    },
+    {
+      "path": "source-after.json",
+      "bytes": 1157560,
+      "sha256": "ab65fce37140415f9757e3a73ac18230918bd933fa97b022e5c23d01c8a03edd"
+    },
+    {
+      "path": "source-offline-combined-after-shared-v1.json",
+      "bytes": 1154281,
+      "sha256": "c484ea4b81d94ec1dd061c34f17a879929b98701a1ea3a8dfb5d18bc04e06d3f"
+    }
+  ],
+  "remaining": [
+    "all19 original containing/caller criteria beyond selected focus",
+    "equivalent no-regression costs incl early GetVersioned/BatchWrite discriminator",
+    "full format/fault/persistent outer-leaf/structural shrink/platform applicability",
+    "current-head CI and independent review"
+  ],
+  "no_producer": "The serial normal/race runner completed and no producer remains from this packet.",
+  "protected_original_reds": [
+    "offline-late-parent-red-v1/receipt.json",
+    "original-offline-rewrite-normal-v2.jsonl",
+    "original-offline-setup-normal-v1.jsonl"
+  ]
+}

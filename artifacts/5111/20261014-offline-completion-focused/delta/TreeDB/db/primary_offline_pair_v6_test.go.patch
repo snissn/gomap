@@ -1,0 +1,137 @@
+diff --git a/TreeDB/db/primary_offline_pair_v6_test.go b/TreeDB/db/primary_offline_pair_v6_test.go
+index eabc87d5f..c1c66987d 100644
+--- a/TreeDB/db/primary_offline_pair_v6_test.go
++++ b/TreeDB/db/primary_offline_pair_v6_test.go
+@@ -192,7 +192,11 @@ func TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	defer scope.releaseOfflineNamespaceScopeV6()
++	defer func() {
++		if e := completeOfflineScopeForTestV6(&scope); e != nil {
++			t.Errorf("scope completion: %v", e)
++		}
++	}()
+ 	parent := scope.stableNamespaceParent
+ 	pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
+ 	if err != nil {
+@@ -459,7 +463,11 @@ func TestPrimaryOfflinePairV6ConstructionUsesRetainedParent(t *testing.T) {
+ 			if err != nil {
+ 				t.Fatal(err)
+ 			}
+-			defer scope.releaseOfflineNamespaceScopeV6()
++			defer func() {
++				if e := completeOfflineScopeForTestV6(&scope); e != nil {
++					t.Errorf("scope completion: %v", e)
++				}
++			}()
+ 			parent := scope.stableNamespaceParent
+ 			testHookPrimaryJointSwapV6 = func(actual string) error {
+ 				if actual != phase {
+@@ -524,7 +532,11 @@ func TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage(t *testing.
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	defer scope.releaseOfflineNamespaceScopeV6()
++	defer func() {
++		if e := completeOfflineScopeForTestV6(&scope); e != nil {
++			t.Errorf("scope completion: %v", e)
++		}
++	}()
+ 	if err := os.WriteFile(filepath.Join(dir, indexNewFileName), []byte("foreign"), 0600); err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -590,7 +602,8 @@ func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
+ 	if !metadata.PhysicalClosed() || metadata.Bytes() == 0 {
+ 		t.Fatal("original metadata scope was not retained after source physical Close")
+ 	}
+-	if err := scope.releaseOfflineNamespaceScopeV6(); err != nil {
++	pair = nil
++	if err := completeOfflineScopeForTestV6(&scope); err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	if metadata.Bytes() != 0 {
+@@ -599,7 +612,7 @@ func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
+ 	if _, err := parent.Stat(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("original parent not closed: %v", err)
+ 	}
+-	if err := scope.releaseOfflineNamespaceScopeV6(); err != nil {
++	if err := completeOfflineScopeForTestV6(&scope); err != nil {
+ 		t.Fatalf("completed phase not idempotent: %v", err)
+ 	}
+ }
+@@ -636,7 +649,7 @@ func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
+ 	if err := pair.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	err = scope.releaseOfflineNamespaceScopeV6()
++	err = completeOfflineScopeForTestV6(&scope)
+ 	if !errors.Is(err, os.ErrClosed) || !errors.Is(err, ErrRecoveryRequired) {
+ 		t.Fatalf("lost physical uncertainty: %v", err)
+ 	}
+@@ -655,7 +668,7 @@ func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
+ 	if !retained {
+ 		t.Fatal("original physical owner lost failed generation")
+ 	}
+-	if err := scope.releaseOfflineNamespaceScopeV6(); !errors.Is(err, os.ErrClosed) {
++	if err := completeOfflineScopeForTestV6(&scope); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("cached physical debt disappeared: %v", err)
+ 	}
+ 	if metadata.Bytes() != before-fileCharge {
+@@ -680,7 +693,7 @@ func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
+ 	if err := parent.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	err = scope.releaseOfflineNamespaceScopeV6()
++	err = completeOfflineScopeForTestV6(&scope)
+ 	if !errors.Is(err, os.ErrClosed) || !errors.Is(err, ErrRecoveryRequired) {
+ 		t.Fatalf("lost parent uncertainty: %v", err)
+ 	}
+@@ -693,7 +706,7 @@ func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
+ 	if !retained {
+ 		t.Fatal("original producer lost exact namespace scope")
+ 	}
+-	if err := scope.releaseOfflineNamespaceScopeV6(); !errors.Is(err, os.ErrClosed) {
++	if err := completeOfflineScopeForTestV6(&scope); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("cached parent debt disappeared: %v", err)
+ 	}
+ 	owner.mu.Lock()
+@@ -722,7 +735,11 @@ func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
+ 			if err != nil {
+ 				t.Fatal(err)
+ 			}
+-			defer idx.releaseOfflineNamespaceScopeV6()
++			defer func() {
++				if e := completeOfflineScopeForTestV6(&idx); e != nil {
++					t.Errorf("scope completion: %v", e)
++				}
++			}()
+ 			before := metadata.Bytes()
+ 			budget := &primaryScratchBudget{capacity: ^uint64(0)}
+ 			enrolled, err := metadata.Enroll(budget)
+@@ -767,7 +784,7 @@ func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
+ 					t.Fatal("physical child completion did not refund", metadata.Bytes(), admitted)
+ 				}
+ 			}
+-			if e := idx.releaseOfflineNamespaceScopeV6(); e != nil {
++			if e := completeOfflineScopeForTestV6(&idx); e != nil {
+ 				t.Fatal(e)
+ 			}
+ 			if metadata.Bytes() >= before {
+@@ -776,3 +793,16 @@ func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// Complete the caller-owned alias before consuming whole containing storage.
++// A refused physical edge keeps the exact original scope for custody assertions.
++func completeOfflineScopeForTestV6(scope **indexGen) error {
++	metadata, charge, err := (*scope).releaseOfflineNamespaceScopeV6()
++	if err == nil {
++		*scope = nil
++	}
++	if metadata != nil && charge != 0 {
++		metadata.RemovePending(charge)
++	}
++	return err
++}

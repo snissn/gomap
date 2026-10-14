@@ -1,0 +1,33 @@
+{
+  "argv": [
+    "go",
+    "test",
+    "-json",
+    "-p",
+    "1",
+    "-count",
+    "1",
+    "-timeout",
+    "30m",
+    "-run",
+    "^(TestOfflineVacuum.*|TestOfflineReplacementOriginalPagerCompletion|TestPrimaryOfflineScopeV6.*|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestOriginalStartup.*|TestOriginalReadOnlyStartup.*|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOfflineRewriteNoSegmentsOriginalSourceCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestPrimaryOfflineVlogV6CacheInvalidationRecovery|TestPrimaryOfflineVlogV6IndependentFallback|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement|TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure|TestPrimaryOfflinePairV6RetainsUncertainDecision|TestPrimaryOfflinePairV6ConstructionUsesRetainedParent|TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage|TestValueLogRewriteOffline_RewritesAndShrinks|TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot|TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig)$",
+    "./TreeDB/db"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "env": {
+    "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": null,
+    "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111"
+  },
+  "at_start_utc": "2026-10-14T19:26:12.676966+00:00",
+  "source_sha256": "c484ea4b81d94ec1dd061c34f17a879929b98701a1ea3a8dfb5d18bc04e06d3f",
+  "status": "COMPLETE",
+  "exit": 0,
+  "elapsed_seconds": 39.697606828063726,
+  "at_end_utc": "2026-10-14T19:26:52.375166+00:00",
+  "raw_sha256": "b893f10249ae27b992ff288e01caa8394fa6dd0e9585616878a8d42954ec8dda",
+  "raw_bytes": 53485,
+  "source_unchanged": true
+}

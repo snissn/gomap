@@ -1,0 +1,45 @@
+diff --git a/TreeDB/docs/spec/value-log-lifecycle.md b/TreeDB/docs/spec/value-log-lifecycle.md
+index 5a2ce4651..d3a0c94e8 100644
+--- a/TreeDB/docs/spec/value-log-lifecycle.md
++++ b/TreeDB/docs/spec/value-log-lifecycle.md
+@@ -669,6 +669,20 @@ time, copy attempts, `B/op`, and `allocs/op`.
+ 
+ Offline rewrite rewrites live pointer records into fresh segments and swaps index.
+ 
++The already-admitted read-only source generation retains the actual source DB,
++Manager and exclusive LOCK through all setup refusals and cleanup. Checked
++source completion joins physical Close failures with the operation error; a
++hard physical refusal preserves that original fatal receipt and LOCK without
++replaying cleanup. Successful no-segment or setup refusal drains the source
++normally. Writer and acquired Set cleanup outcomes are checked and retained
++through the same original error graph before source teardown. A late checked
++namespace-parent Close refusal after successful source DB.Close is still a
++physical cleanup failure: the outer completion preserves the same generation,
++fatal receipt, original parent, charge and LOCK. A semantic operation error
++alone does not create cleanup debt when all physical cleanup succeeds.
++Completed temporary generation Close-call borrows drain independently of
++retained failed Snapshot or maintenance-source edges.
++
+ #### Preconditions
+ 
+ - exclusive DB lock,
+@@ -903,3 +917,19 @@ Each File retains its actual physical parent; exact removal does not rebuild a g
+ parent map. Physical aliases share identity, borrowers retain the parent handle, and
+ value/outer-leaf/foreign parents remain supported. This ordinary lifetime path does not
+ qualify bounded native Set or Snapshot retirement.
++
++## Index vacuum and outer-leaf closure
++
++When rebuilding PRIMARY roots with outer leaves enabled, vacuum uses the
++existing outer-leaf writer and completes its flush and registration before
++sealing the replacement leaf manifest. Both recoverable durable slots and their
++embedded proof roots contribute to that final closure. No retained slot or proof
++root may reference a segment outside the manifest's captured frontier.
++
++Joint DATA/PRIMARY replacement retains the original admitted namespace parent
++handles across COMMIT, canonical roll-forward and decision-marker removal.
++Canonical rebinding checks the retained parent before retiring the old proof,
++then creates the new proof on that same parent. A hard cleanup refusal preserves
++the original proof/handle payload, first error and charge rather than replaying a
++physical action or refunding unresolved custody. Persistent leaf references
++remain protected by the original reader and deletion authorities.

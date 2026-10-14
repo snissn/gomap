@@ -1,0 +1,159 @@
+diff --git a/TreeDB/db/primary_offline_pair_v6.go b/TreeDB/db/primary_offline_pair_v6.go
+index 232a186b8..fddfee484 100644
+--- a/TreeDB/db/primary_offline_pair_v6.go
++++ b/TreeDB/db/primary_offline_pair_v6.go
+@@ -42,7 +42,14 @@ func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
+ 	idx.stableNamespaceParentCharge = charge
+ 	idx.stableNamespaceParent, err = rootpublication.OpenStableParent(db.dir)
+ 	if err != nil {
+-		return idx, errors.Join(err, idx.releaseOfflineNamespaceScopeV6())
++		metadata, charge, cleanupErr := idx.releaseOfflineNamespaceScopeV6()
++		if cleanupErr == nil {
++			idx = nil
++		}
++		if metadata != nil && charge != 0 {
++			metadata.RemovePending(charge)
++		}
++		return idx, errors.Join(err, cleanupErr)
+ 	}
+ 	parent := idx.stableNamespaceParent
+ 	err = source.pager.WithStableResourceFile(func(f *os.File) error { return rootpublication.ValidateStableChildLink(parent, f, indexFileName) })
+@@ -52,7 +59,14 @@ func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
+ 		})
+ 	}
+ 	if err != nil {
+-		return idx, errors.Join(err, idx.releaseOfflineNamespaceScopeV6())
++		metadata, charge, cleanupErr := idx.releaseOfflineNamespaceScopeV6()
++		if cleanupErr == nil {
++			idx = nil
++		}
++		if metadata != nil && charge != 0 {
++			metadata.RemovePending(charge)
++		}
++		return idx, errors.Join(err, cleanupErr)
+ 	}
+ 	return idx, nil
+ }
+@@ -60,30 +74,35 @@ func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
+ // The private generation's physical Close leaves only its admitted operation
+ // parent live through COMMIT. This final namespace phase uses the original
+ // close operand and never treats a failed Close as disposal or refund.
+-func (idx *indexGen) releaseOfflineNamespaceScopeV6() error {
++func (idx *indexGen) releaseOfflineNamespaceScopeV6() (*retainedalloc.Owner, uint64, error) {
+ 	if idx == nil {
+-		return nil
++		return nil, 0, nil
+ 	}
+-	// Join the same physical close once before disposing namespace scope storage.
+-	// Its cached failure remains real custody; this phase does not retry it.
++	// Physical disposal is once-only on the SAME generation. Namespace
++	// completion is separate because this original parent spans COMMIT.
+ 	physicalErr := idx.close()
+ 	idx.stableNamespaceMu.Lock()
+-	defer idx.stableNamespaceMu.Unlock()
+ 	if !idx.offlineNamespaceScope {
+-		return physicalErr
++		idx.stableNamespaceMu.Unlock()
++		return nil, 0, physicalErr
++	}
++	if idx.stableNamespaceFailure.causes[1] != nil {
++		idx.stableNamespaceMu.Unlock()
++		return nil, 0, errors.Join(&idx.closeFailure, ErrRecoveryRequired)
+ 	}
+ 	if idx.stableNamespaceParent != nil {
+ 		if err := idx.stableNamespaceParent.Close(); err != nil {
+ 			idx.stableNamespaceFailure.causes[1] = err
+ 			idx.stableNamespaceMetadata.CleanupFailed()
+ 			idx.closeFailure.retainCause(1, &idx.stableNamespaceFailure)
+-			// A failed physical close already links this generation to its actual
+-			// owner. Do not put its one intrusive link on a second failure list.
++			// Physical refusal has already retained this exact generation.
++			// A namespace-only refusal uses its existing source-owner edge.
+ 			if physicalErr == nil && !idx.offlineScopeRetained && idx.offlineScopePhysicalOwner != nil {
+ 				idx.offlineScopePhysicalOwner.retainFailedDataGeneration(idx)
+ 				idx.offlineScopeRetained = true
+ 			}
+-			return errors.Join(physicalErr, &idx.stableNamespaceFailure, ErrRecoveryRequired)
++			idx.stableNamespaceMu.Unlock()
++			return nil, 0, errors.Join(&idx.closeFailure, ErrRecoveryRequired)
+ 		}
+ 	}
+ 	metadata, charge := idx.stableNamespaceMetadata, idx.stableNamespaceParentCharge
+@@ -91,11 +110,12 @@ func (idx *indexGen) releaseOfflineNamespaceScopeV6() error {
+ 	idx.stableNamespaceParentCharge = 0
+ 	idx.offlineNamespaceScope = false
+ 	if physicalErr != nil {
+-		// Parent-file cleanup completed, but the exact physical generation and its
+-		// controls remain reachable/charged on the existing physical failure owner.
+-		idx.stableNamespaceMetadata.CleanupFailed()
+-		metadata.RemovePending(charge - idx.offlineScopeControlCharge)
+-		return errors.Join(physicalErr, ErrRecoveryRequired)
++		// Only the successfully consumed parent file completes. The original
++		// physical payload and its containing controls stay charged.
++		charge -= idx.offlineScopeControlCharge
++		metadata.CleanupFailed()
++		idx.stableNamespaceMu.Unlock()
++		return metadata, charge, errors.Join(physicalErr, ErrRecoveryRequired)
+ 	}
+ 	idx.stableNamespaceMetadata = nil
+ 	idx.offlineScopeControlCharge = 0
+@@ -103,8 +123,9 @@ func (idx *indexGen) releaseOfflineNamespaceScopeV6() error {
+ 	idx.pager, idx.allocator, idx.zipper = nil, nil, nil
+ 	idx.primary, idx.primaryOwner = nil, nil
+ 	idx.registry, idx.graveyard = nil, nil
+-	metadata.RemovePending(charge)
+-	return nil
++	idx.stableNamespaceMu.Unlock()
++	// Caller clears its final generation aliases before consuming this tuple.
++	return metadata, charge, nil
+ }
+ 
+ func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexGen, err error) {
+@@ -227,9 +248,9 @@ func (db *DB) finishOfflinePrimaryPairV6(parent *os.File, idx *indexGen, roots *
+ 	started := false
+ 	var staging primaryJointDecisionV6
+ 	defer func() {
+-		roots.Release()
++		rootCloseErr := roots.ReleaseWithError()
+ 		closeErr := idx.close()
+-		err = errors.Join(err, closeErr)
++		err = errors.Join(err, rootCloseErr, closeErr)
+ 		if !started && closeErr == nil {
+ 			if rootpublication.SamePhysicalIdentity(staging.Data, staging.Data) {
+ 				err = errors.Join(err, cleanupOfflinePrimaryStageV6(db.dir, parent, indexNewFileName, staging.Data))
+@@ -250,15 +271,15 @@ func (db *DB) finishOfflinePrimaryPairV6(parent *os.File, idx *indexGen, roots *
+ 	if err != nil {
+ 		return err
+ 	}
+-	defer older.resources.Release()
++	defer func() { err = errors.Join(err, db.releaseCapturedRootResources(older.resources)) }()
+ 	older.meta.LastCommitHeight = source.slotRecord[source.slot^1].LastCommitHeight
+ 	latest, err := produce(primaryOfflineRootV6(source, source.slot))
+ 	if err != nil {
+ 		return err
+ 	}
+-	defer latest.resources.Release()
++	defer func() { err = errors.Join(err, db.releaseCapturedRootResources(latest.resources)) }()
+ 	latest.meta.LastCommitHeight = source.slotRecord[source.slot].LastCommitHeight
+-	selected, runtime, err := db.writeRebuiltPrimaryRootsWithProducerV5(context.Background(), idx, roots, older, latest, filepath.Join(db.dir, indexNewFileName), produce)
++	selected, runtime, err := db.writeRebuiltPrimaryRootsWithProducerV5(context.Background(), idx, roots, older, latest, filepath.Join(db.dir, indexNewFileName), produce, nil)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -278,10 +299,13 @@ func (db *DB) finishOfflinePrimaryPairV6(parent *os.File, idx *indexGen, roots *
+ 		return err
+ 	}
+ 	// These are actual cleanup completions, not merely DB discovery removal.
+-	older.resources.Release()
+-	latest.resources.Release()
++	if err = errors.Join(db.releaseCapturedRootResources(older.resources), db.releaseCapturedRootResources(latest.resources)); err != nil {
++		return err
++	}
+ 	stable := roots.stableSnapshot
+-	roots.Release()
++	if err = roots.ReleaseWithError(); err != nil {
++		return err
++	}
+ 	if stable != nil {
+ 		if err = stable.Close(); err != nil {
+ 			return err

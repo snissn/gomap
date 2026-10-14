@@ -1,0 +1,165 @@
+{
+  "at_utc": "2026-10-14T19:12:36.078524+00:00",
+  "status": "PREPARED ONLY; NOT EXECUTED",
+  "requires": "Root coherent transient-call borrow, late source receipt and performance correction backimport. Restore provisional +1 borrow assertions to actual original edge count before freezing source.",
+  "normal_argv": [
+    "go",
+    "test",
+    "-json",
+    "-p",
+    "1",
+    "-count",
+    "1",
+    "-timeout",
+    "30m",
+    "-run",
+    "^(TestOfflineVacuum.*|TestOfflineReplacementOriginalPagerCompletion|TestPrimaryOfflineScopeV6.*|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestOriginalStartup.*|TestOriginalReadOnlyStartup.*|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOfflineRewriteNoSegmentsOriginalSourceCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestPrimaryOfflineVlogV6CacheInvalidationRecovery|TestPrimaryOfflineVlogV6IndependentFallback|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement|TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure|TestPrimaryOfflinePairV6RetainsUncertainDecision|TestPrimaryOfflinePairV6ConstructionUsesRetainedParent|TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage|TestValueLogRewriteOffline_RewritesAndShrinks|TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot|TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig)$",
+    "./TreeDB/db"
+  ],
+  "race_argv": [
+    "go",
+    "test",
+    "-json",
+    "-race",
+    "-p",
+    "1",
+    "-count",
+    "1",
+    "-timeout",
+    "30m",
+    "-run",
+    "^(TestOfflineVacuum.*|TestOfflineReplacementOriginalPagerCompletion|TestPrimaryOfflineScopeV6.*|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestOriginalStartup.*|TestOriginalReadOnlyStartup.*|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOfflineRewriteNoSegmentsOriginalSourceCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestPrimaryOfflineVlogV6CacheInvalidationRecovery|TestPrimaryOfflineVlogV6IndependentFallback|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement|TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure|TestPrimaryOfflinePairV6RetainsUncertainDecision|TestPrimaryOfflinePairV6ConstructionUsesRetainedParent|TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage|TestValueLogRewriteOffline_RewritesAndShrinks|TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot|TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig)$",
+    "./TreeDB/db"
+  ],
+  "literal_tests": [
+    {
+      "test": "TestNativeGenerationContainingCompletionAfterOriginalClose",
+      "source": "TreeDB/db/native_generation_containing_completion_test.go"
+    },
+    {
+      "test": "TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach",
+      "source": "TreeDB/db/native_generation_containing_completion_test.go"
+    },
+    {
+      "test": "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "source": "TreeDB/db/original_startup_generation_test.go"
+    },
+    {
+      "test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+      "source": "TreeDB/db/original_startup_generation_test.go"
+    },
+    {
+      "test": "TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload",
+      "source": "TreeDB/db/original_startup_generation_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflineVlogV6CacheInvalidationRecovery",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflineVlogV6IndependentFallback",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6RetainsUncertainDecision",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestPrimaryOfflinePairChildProducerAdmission",
+      "source": "TreeDB/db/primary_offline_pair_v6_test.go"
+    },
+    {
+      "test": "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+      "source": "TreeDB/db/snapshot_manager_cleanup_test.go"
+    },
+    {
+      "test": "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+      "source": "TreeDB/db/snapshot_manager_cleanup_test.go"
+    },
+    {
+      "test": "TestOriginalGenerationPublishedFailureConcurrentInspection",
+      "source": "TreeDB/db/snapshot_manager_cleanup_test.go"
+    },
+    {
+      "test": "TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineReplacementOriginalPagerCompletion",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestPrimaryJointNamespaceRebindKeepsOriginalParents",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineVacuumSetupRefusalConsumesOriginalSourceSuccessfully",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineRewriteNoSegmentsOriginalSourceCompletion",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+      "source": "TreeDB/db/vacuum_original_completion_test.go"
+    },
+    {
+      "test": "TestValueLogRewriteOffline_PreservesLeafPagesInValueLogFormatConfig",
+      "source": "TreeDB/db/vlog_leafref_maintenance_test.go"
+    },
+    {
+      "test": "TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt",
+      "source": "TreeDB/db/vlog_ref_incarnation_test.go"
+    },
+    {
+      "test": "TestValueLogRewriteOffline_RewritesAndShrinks",
+      "source": "TreeDB/db/vlog_rewrite_test.go"
+    },
+    {
+      "test": "TestValueLogRewriteOffline_RewritesCollectionLeafRefRoot",
+      "source": "TreeDB/db/vlog_rewrite_test.go"
+    }
+  ],
+  "scope": "One combined changed-risk original generation/ghost/late Snapshot/source setup/admission/source Close + actual V6 namespace/rewrite/fallback and legacy DATA/leafref rewrite. Existing shared394 and unchanged original six stages reused by source applicability only; no total qualification credit."
+}
