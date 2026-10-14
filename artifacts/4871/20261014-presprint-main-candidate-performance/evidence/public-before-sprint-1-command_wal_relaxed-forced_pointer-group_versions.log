@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc/sprintperf
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkSprintMVCC
+BenchmarkSprintMVCC/command_wal_relaxed/adaptive/forced_pointer/group_versions
+    benchmark_test.go:122: phase=open profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:122: phase=open profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+BenchmarkSprintMVCC/command_wal_relaxed/adaptive/forced_pointer/group_versions-4         	      64	    555673 ns/op	         1.000 ack_routing_after_ok	         1.000 ack_routing_before_ok	         1.000 close_ok	         0 enqueued_records/op	         0 layout_after_inline	         4.000 layout_after_pointer	         0 layout_before_inline	         4.000 layout_before_pointer	         4.000 layout_expected_records	         2.000 output/op	         0 point_calls/op	         0 public_checkpoints/op	         0 public_checkpoints_after	         0 public_checkpoints_before	      1800 reader_ops/s	         0 readers_while_writer_active/op	         0 rotated_shards/op	         1.000 scan_calls/op	     54020 scan_p50_ns	    162332 scan_p95_ns	   5197080 scan_p99_ns	         0 snapshot_rotations/op	         2.000 visited/op	         0 vlog_syncs/op	         0 vlog_syncs_after	         0 vlog_syncs_before	         1.000 wal_appends/op	        65.00 wal_appends_after	         1.000 wal_appends_before	         0 wal_syncs/op	         0 wal_syncs_after	         0 wal_syncs_before	      1800 writer_ops/s	     25611 writer_p50_ns	     95851 writer_p95_ns	   5330182 writer_p99_ns	  335602 B/op	     431 allocs/op
+PASS

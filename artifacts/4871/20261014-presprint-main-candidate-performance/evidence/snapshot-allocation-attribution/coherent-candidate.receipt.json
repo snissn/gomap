@@ -1,0 +1,25 @@
+{
+ "scope": "Attribution ONLY, instrumented timing not used",
+ "argv": [
+  "taskset",
+  "-c",
+  "0-3",
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/coherent-candidate-mvcc.test",
+  "-test.run",
+  "^$",
+  "-test.bench",
+  "^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^inline$/^point$",
+  "-test.benchmem",
+  "-test.benchtime=64x",
+  "-test.memprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/evidence/snapshot-allocation-attribution/coherent-candidate.allocs.pprof",
+  "-test.memprofilerate=1",
+  "-test.count=1",
+  "-test.v",
+  "-test.timeout=30s"
+ ],
+ "exit": 0,
+ "elapsed": 0.5645394679158926,
+ "binary_sha256": "84ce45f656ea61e7d462f040a673acdde0d1cb0561d49e2bb22ff897aca21b81",
+ "raw_sha256": "43b1c8e61edbe7de5cfb65ef0e72d10d72e902181260c9d91e15a4f9729cbc11",
+ "profile_sha256": "9af8cdf915eed2c858412a3b30271d071d9695dd8d69fb952a54a41f1a91fbd4"
+}

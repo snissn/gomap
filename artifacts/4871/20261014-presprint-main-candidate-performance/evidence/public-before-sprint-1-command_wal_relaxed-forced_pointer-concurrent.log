@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc/sprintperf
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkSprintMVCC
+BenchmarkSprintMVCC/command_wal_relaxed/adaptive/forced_pointer/concurrent
+    benchmark_test.go:122: phase=open profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:122: phase=open profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+    benchmark_test.go:313: phase=boundary profile=command_wal_relaxed requested=adaptive resolved=append_only config=adaptive ordinary_ack=relaxed
+BenchmarkSprintMVCC/command_wal_relaxed/adaptive/forced_pointer/concurrent-4         	      64	    418950 ns/op	         1.000 ack_routing_after_ok	         1.000 ack_routing_before_ok	         1.000 close_ok	         0 enqueued_records/op	         0 layout_after_inline	         4.000 layout_after_pointer	         0 layout_before_inline	         4.000 layout_before_pointer	         4.000 layout_expected_records	         3.000 output/op	         1.000 point_calls/op	     72071 point_p50_ns	    468735 point_p95_ns	   5484662 point_p99_ns	  26177183 point_phase_elapsed_ns	      2445 point_phase_ops/s	         0 public_checkpoints/op	         0 public_checkpoints_after	         0 public_checkpoints_before	      4774 reader_ops/s	         1.938 readers_while_writer_active/op	         0 rotated_shards/op	         1.000 scan_calls/op	     80751 scan_p50_ns	    465675 scan_p95_ns	   5465902 scan_p99_ns	  26811319 scan_phase_elapsed_ns	      2387 scan_phase_ops/s	         0 snapshot_rotations/op	         2.000 visited/op	         0 vlog_syncs/op	         0 vlog_syncs_after	         0 vlog_syncs_before	         1.000 wal_appends/op	        65.00 wal_appends_after	         1.000 wal_appends_before	         0 wal_syncs/op	         0 wal_syncs_after	         0 wal_syncs_before	      2387 writer_ops/s	     80831 writer_p50_ns	    519825 writer_p95_ns	   5394952 writer_p99_ns	  324186 B/op	     429 allocs/op
+PASS

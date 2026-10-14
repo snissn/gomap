@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkRepeatedIterator
+BenchmarkRepeatedIterator 	 1015995	       228.2 ns/op	     113 B/op	       2 allocs/op
+PASS

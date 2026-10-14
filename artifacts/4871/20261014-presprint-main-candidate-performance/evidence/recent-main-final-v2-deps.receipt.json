@@ -1,0 +1,24 @@
+{
+ "label": "recent-main",
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "list",
+  "-deps",
+  "-test",
+  "-json",
+  "./TreeDB/mvcc/sprintperf"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "CGO_ENABLED": "1",
+  "GOMAXPROCS": "4"
+ },
+ "exit": 0,
+ "wall_seconds": 0.05934023857116699,
+ "raw_sha256": "8dbf3928c49726fdfc7ae3b76d45628f66474d0d303d86badb76e1ebee64e3e5",
+ "packages": 275,
+ "inputs": 1858,
+ "compiled_inputs_sha256": "7a93b113b468c9c98b77fe91aa8fdeab6f35b66596ec59250f3229f37edd4bee"
+}

@@ -1,0 +1,2 @@
+# github.com/snissn/gomap/TreeDB/mvcc/sprintperf [github.com/snissn/gomap/TreeDB/mvcc/sprintperf.test]
+TreeDB/mvcc/sprintperf/benchmark_test.go:362:23: undefined: CWALDurable

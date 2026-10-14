@@ -1,0 +1,7 @@
+# Bounded sprint performance comparison
+
+See evidence/sprint-report.md for the full three-version comparison and limitations. All 105 invocations and their commands, compiler/binary hashes, source inventories, actual ACK/selector/placement counters, failures, and raw rows are retained. The separate two allocation profiles are attribution only, not timing samples.
+
+Original: 28aea01e19f1d62743dec5625ec3d22c1acb6703. Recent-main: 3f87d74b98e8b1e809d151611be03785f85e2283. Candidate: actual ordinary source based on a99d, coherent shared c3ba + finite 62253 corrections + seven ordinary caller completion paths; exact production inventory and overlay retained. No claim that artifact parent 62253 equals the compiled candidate. All versions ran on the same quiet .111 host, exact Go1.26.3, balanced two samples; short observations do not pass original M0/M9.
+
+Conclusion: original >10% relative TreeDB/Badger targets in BOTH modes remain unmeasured. Raw regression guard fails. COW concurrency benefits are largely already present in recent main. In-flight candidate adds about 58KB per COW read: profiles attribute this to the PRIMARY empty-root eligibility miss leading to OwnedPointerProjectionIterator. Fix that shared proof seam before broad correctness qualification. Focused semantics/durability/ownership checks remain mandatory per changed seam; exhaustive final qualification is preserved.

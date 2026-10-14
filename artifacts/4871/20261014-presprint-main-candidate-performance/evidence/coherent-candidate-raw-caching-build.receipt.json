@@ -1,0 +1,25 @@
+{
+ "label": "coherent-candidate",
+ "package": "caching",
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "-c",
+  "-trimpath",
+  "-buildvcs=false",
+  "-o",
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/coherent-candidate-raw-caching.test",
+  "./TreeDB/caching"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "CGO_ENABLED": "1",
+  "GOMAXPROCS": "4"
+ },
+ "exit": 0,
+ "wall_seconds": 7.355284848250449,
+ "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "binary_sha256": "c8d90b02659cae6e57e5082e6d002931f66ea4e8873707fe86849b54f838706d"
+}

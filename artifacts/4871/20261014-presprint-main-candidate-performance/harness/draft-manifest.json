@@ -1,0 +1,20 @@
+{
+ "derived_from": {
+  "commit": "c3ba82a5ef6d6590f6c70734045c8d640c4c1255",
+  "benchmark": "TreeDB/mvcc/cowbench/cow_c3_public_bench_test.go",
+  "helper": "TreeDB/internal/cowbench/admission.go"
+ },
+ "changes": [
+  "Common owned Entry() and logical bounds instead of new-only EntryView/ExactKey",
+  "Explicit CommitDurable for durable profile",
+  "Only command-WAL durable/relaxed",
+  "SPRINT_MEMTABLE selects original adaptive(empty Options.MemtableMode) or actual cow_btree; actual selector/ACK receipts preserved",
+  "Actual public checkpoint/vlog-sync deltas and exact WAL syncs required per ACK contract"
+ ],
+ "purpose": "Bounded public immutable snapshot read/write mechanism diagnostic, not M9/whole-native/Dgraph acceptance",
+ "source_identity": "Same two test-only files compiled against original28aea, recentmain3f87 and coherentcandidate once frozen; no production patch",
+ "files": {
+  "admission_test.go": "2978839f31fd5e5f511c4375ffc1109745ad5344d80bdaccdbdaa003f9b356ad",
+  "benchmark_test.go": "9785066d7a74d1fb962c03ac57ea43866e036c66b92aff1c07bab0acd818edfb"
+ }
+}

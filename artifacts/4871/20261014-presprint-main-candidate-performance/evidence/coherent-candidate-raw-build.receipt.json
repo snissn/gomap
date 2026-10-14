@@ -1,0 +1,16 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "-c",
+  "-trimpath",
+  "-buildvcs=false",
+  "-o",
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/sprint-performance-20261014/binaries/coherent-candidate-raw-db.test",
+  "./TreeDB/db"
+ ],
+ "exit": 0,
+ "wall_seconds": 15.581318855285645,
+ "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "production_source_unchanged": true
+}

@@ -1,0 +1,43 @@
+File: coherent-candidate-mvcc.test
+Build ID: d2f9a9b3fa8445c12deb65123e3ef1351be88243
+Type: alloc_objects
+Time: 2026-10-14 09:38:24 HST
+Showing nodes accounting for 968, 0.85% of 113944 total
+Dropped 200 nodes (cum <= 569)
+Showing top 35 nodes out of 702
+      flat  flat%   sum%        cum   cum%
+       402  0.35%  0.35%       1080  0.95%  github.com/snissn/gomap/TreeDB/caching.(*cowTable).NewIterator
+       351  0.31%  0.66%        351  0.31%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).Acquire
+       268  0.24%   0.9%        678   0.6%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).CursorWithExtraBytes
+      -236  0.21%  0.69%       -496  0.44%  path/filepath.walkSymlinks
+       162  0.14%  0.83%        162  0.14%  github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value string; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).IsoCopy
+      -162  0.14%  0.69%       -162  0.14%  github.com/tidwall/btree.(*Map[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value string; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).IsoCopy
+       142  0.12%  0.81%        142  0.12%  github.com/snissn/gomap/TreeDB/internal/cowbtree.(*MapIter[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value string; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).Seek
+       140  0.12%  0.94%       1287  1.13%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowIteratorSources
+       140  0.12%  1.06%        138  0.12%  github.com/snissn/gomap/TreeDB/internal/merging.NewMergingIteratorWithFixedHeap
+      -135  0.12%  0.94%       1541  1.35%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowSeekGE
+       134  0.12%  1.06%       1676  1.47%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowSeekGEMergeAdmitted
+      -134  0.12%  0.94%       -134  0.12%  syscall.ByteSliceFromString
+      -132  0.12%  0.82%       -260  0.23%  os.lstatNolog
+       130  0.11%  0.94%        130  0.11%  github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value string; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).copy
+      -130  0.11%  0.82%       -130  0.11%  github.com/tidwall/btree.(*Map[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value string; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).copy
+       -90 0.079%  0.75%        -90 0.079%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode
+        86 0.075%  0.82%          7 0.0061%  github.com/snissn/gomap/TreeDB/db.writeCommandWALLifecycleStats
+       -72 0.063%  0.76%        -72 0.063%  os.newFile
+        71 0.062%  0.82%         71 0.062%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWBudget).AcquireExternal
+        71 0.062%  0.88%         71 0.062%  github.com/snissn/gomap/TreeDB/tree.(*Tree).OwnedPointerProjectionIterator
+        67 0.059%  0.94%       1559  1.37%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).buildCOWIteratorLocked
+       -64 0.056%  0.89%        -64 0.056%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized
+       -60 0.053%  0.83%        -60 0.053%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage
+        60 0.053%  0.89%         60 0.053%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourceAllocation
+       -54 0.047%  0.84%        -52 0.046%  fmt.Sprintf
+        51 0.045%  0.88%         51 0.045%  internal/strconv.FormatUint
+       -44 0.039%  0.84%        -44 0.039%  github.com/snissn/gomap/TreeDB/zipper.newMergeScratch (inline)
+        40 0.035%  0.88%         84 0.074%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan
+       -38 0.033%  0.85%         69 0.061%  github.com/snissn/gomap/TreeDB/db.(*DB).Stats
+       -38 0.033%  0.81%       -901  0.79%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+        38 0.033%  0.85%         38 0.033%  internal/stringslite.Clone
+        36 0.032%  0.88%         66 0.058%  github.com/snissn/gomap/TreeDB/pager.(*Growth).stepLockedAtCount
+       -36 0.032%  0.85%        -36 0.032%  golang.org/x/sys/unix.ByteSliceFromString
+        34  0.03%  0.88%         34  0.03%  github.com/snissn/gomap/TreeDB/db.(*primaryArenaOwnerV5).releaseWithOutcome
+       -30 0.026%  0.85%        -30 0.026%  github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata

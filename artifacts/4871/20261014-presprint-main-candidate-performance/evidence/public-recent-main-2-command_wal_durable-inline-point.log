@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc/sprintperf
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkSprintMVCC
+BenchmarkSprintMVCC/command_wal_durable/cow_btree/inline/point
+    benchmark_test.go:122: phase=open profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+    benchmark_test.go:313: phase=boundary profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+    benchmark_test.go:313: phase=boundary profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+    benchmark_test.go:122: phase=open profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+    benchmark_test.go:313: phase=boundary profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+    benchmark_test.go:313: phase=boundary profile=command_wal_durable requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=durable_wal_prefix
+BenchmarkSprintMVCC/command_wal_durable/cow_btree/inline/point-4         	      64	   4612792 ns/op	         1.000 ack_routing_after_ok	         1.000 ack_routing_before_ok	         1.000 close_ok	         1.000 cow_capture_calls_total/op	         1.000 cow_end_active_cuts	         7.000 cow_end_external_leases	    174272 cow_end_peak_bytes	    168752 cow_end_total_bytes	         0 cow_end_views	         1.000 cow_prepare_calls_total/op	         1.000 cow_publications_total/op	         0 enqueued_records/op	         4.000 layout_after_inline	         0 layout_after_pointer	         4.000 layout_before_inline	         0 layout_before_pointer	         4.000 layout_expected_records	         1.000 output/op	         1.000 point_calls/op	      3890 point_p50_ns	     19490 point_p95_ns	     20000 point_p99_ns	         0 public_checkpoints/op	         0 public_checkpoints_after	         0 public_checkpoints_before	       216.8 reader_ops/s	         0 readers_while_writer_active/op	         0 rotated_shards/op	         0 scan_calls/op	         0 snapshot_rotations/op	         0 visited/op	         0 vlog_syncs/op	         0 vlog_syncs_after	         0 vlog_syncs_before	         1.000 wal_appends/op	        65.00 wal_appends_after	         1.000 wal_appends_before	         1.000 wal_syncs/op	        65.00 wal_syncs_after	         1.000 wal_syncs_before	       216.8 writer_ops/s	   3809046 writer_p50_ns	   6499483 writer_p95_ns	   6516014 writer_p99_ns	    9163 B/op	      77 allocs/op
+PASS

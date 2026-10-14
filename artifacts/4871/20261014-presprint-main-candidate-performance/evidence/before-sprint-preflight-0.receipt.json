@@ -1,0 +1,19 @@
+{
+ "argv": [
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "list",
+  "-deps",
+  "-f",
+  "{{if not .Standard}}{{.Dir}}{{end}}",
+  "./TreeDB/mvcc/sprintperf"
+ ],
+ "env": {
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOWORK": "off",
+  "GOTOOLCHAIN": "local",
+  "CGO_ENABLED": "1"
+ },
+ "exit": 0,
+ "wall_seconds": 0.009131193161010742,
+ "raw_sha256": "d3bcc8bfff8c32dda932347ffa9d33de7d84922dedd200ca4f780fb29e93d7b4"
+}

@@ -1,0 +1,1586 @@
+{
+ "diagnostic_only": true,
+ "invocations": 105,
+ "timed_wall_seconds": 56.93324327422306,
+ "micro": [
+  {
+   "group": "get_versioned",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 458.29999999999995,
+     "B/op": 512.0,
+     "allocs/op": 1.0
+    },
+    "recent-main": {
+     "ns/op": 326.85,
+     "B/op": 0.0,
+     "allocs/op": 0.0
+    },
+    "coherent-candidate": {
+     "ns/op": 458.20000000000005,
+     "B/op": 0.0,
+     "allocs/op": 0.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -0.020677708355298918,
+   "paired_time_change_from_recentmain_percent": 40.18562318047694,
+   "samples": {
+    "before-sprint": [
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "get_versioned",
+      "sample": 1,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 439125,
+      "metrics": {
+       "ns/op": 461.2,
+       "B/op": 512.0,
+       "allocs/op": 1.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "get_versioned",
+      "sample": 2,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 458448,
+      "metrics": {
+       "ns/op": 455.4,
+       "B/op": 512.0,
+       "allocs/op": 1.0
+      }
+     }
+    ],
+    "recent-main": [
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "get_versioned",
+      "sample": 1,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 674228,
+      "metrics": {
+       "ns/op": 326.3,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "get_versioned",
+      "sample": 2,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 677186,
+      "metrics": {
+       "ns/op": 327.4,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     }
+    ],
+    "coherent-candidate": [
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "get_versioned",
+      "sample": 1,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 488865,
+      "metrics": {
+       "ns/op": 456.3,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "get_versioned",
+      "sample": 2,
+      "name": "BenchmarkGetVersioned",
+      "iterations": 441385,
+      "metrics": {
+       "ns/op": 460.1,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     }
+    ]
+   },
+   "raw_guards": [
+    {
+     "control": "before-sprint",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    },
+    {
+     "control": "recent-main",
+     "verdict": "FAIL",
+     "reasons": [
+      "paired time >5%"
+     ]
+    }
+   ]
+  },
+  {
+   "group": "batch_write",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 64087.0,
+     "B/op": 152721.5,
+     "allocs/op": 281.0
+    },
+    "recent-main": {
+     "ns/op": 66764.5,
+     "B/op": 152787.5,
+     "allocs/op": 281.0
+    },
+    "coherent-candidate": {
+     "ns/op": 68145.0,
+     "B/op": 154894.0,
+     "allocs/op": 285.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 6.171688496376371,
+   "paired_time_change_from_recentmain_percent": 1.8893281364054326,
+   "samples": {
+    "before-sprint": [
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "batch_write",
+      "sample": 1,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 65494.0,
+       "B/op": 152726.0,
+       "allocs/op": 281.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "batch_write",
+      "sample": 2,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 62680.0,
+       "B/op": 152717.0,
+       "allocs/op": 281.0
+      }
+     }
+    ],
+    "recent-main": [
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "batch_write",
+      "sample": 1,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 66683.0,
+       "B/op": 152786.0,
+       "allocs/op": 281.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "batch_write",
+      "sample": 2,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 66846.0,
+       "B/op": 152789.0,
+       "allocs/op": 281.0
+      }
+     }
+    ],
+    "coherent-candidate": [
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "batch_write",
+      "sample": 1,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 72173.0,
+       "B/op": 154894.0,
+       "allocs/op": 285.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "batch_write",
+      "sample": 2,
+      "name": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "iterations": 100,
+      "metrics": {
+       "ns/op": 64117.0,
+       "B/op": 154894.0,
+       "allocs/op": 285.0
+      }
+     }
+    ]
+   },
+   "raw_guards": [
+    {
+     "control": "before-sprint",
+     "verdict": "FAIL",
+     "reasons": [
+      "paired time >5%",
+      "added allocations",
+      "added B/op above unchanged smaller-of1%-or64B tolerance"
+     ]
+    },
+    {
+     "control": "recent-main",
+     "verdict": "FAIL",
+     "reasons": [
+      "added allocations",
+      "added B/op above unchanged smaller-of1%-or64B tolerance"
+     ]
+    }
+   ]
+  },
+  {
+   "group": "snapshot_seek",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 157.2,
+     "B/op": 0.0,
+     "allocs/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 171.10000000000002,
+     "B/op": 0.0,
+     "allocs/op": 0.0
+    },
+    "coherent-candidate": {
+     "ns/op": 174.7,
+     "B/op": 0.0,
+     "allocs/op": 0.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 11.13233800727691,
+   "paired_time_change_from_recentmain_percent": 2.104102484072601,
+   "samples": {
+    "before-sprint": [
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "snapshot_seek",
+      "sample": 1,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1428319,
+      "metrics": {
+       "ns/op": 157.3,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "snapshot_seek",
+      "sample": 2,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1532002,
+      "metrics": {
+       "ns/op": 157.1,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     }
+    ],
+    "recent-main": [
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "snapshot_seek",
+      "sample": 1,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1405508,
+      "metrics": {
+       "ns/op": 170.9,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "snapshot_seek",
+      "sample": 2,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1396180,
+      "metrics": {
+       "ns/op": 171.3,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     }
+    ],
+    "coherent-candidate": [
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "snapshot_seek",
+      "sample": 1,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1376361,
+      "metrics": {
+       "ns/op": 174.7,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "snapshot_seek",
+      "sample": 2,
+      "name": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "iterations": 1283294,
+      "metrics": {
+       "ns/op": 174.7,
+       "B/op": 0.0,
+       "allocs/op": 0.0
+      }
+     }
+    ]
+   },
+   "raw_guards": [
+    {
+     "control": "before-sprint",
+     "verdict": "FAIL",
+     "reasons": [
+      "paired time >5%"
+     ]
+    },
+    {
+     "control": "recent-main",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    }
+   ]
+  },
+  {
+   "group": "repeated_iterator",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 229.45,
+     "B/op": 113.0,
+     "allocs/op": 2.0
+    },
+    "recent-main": {
+     "ns/op": 228.2,
+     "B/op": 113.0,
+     "allocs/op": 2.0
+    },
+    "coherent-candidate": {
+     "ns/op": 230.55,
+     "B/op": 113.0,
+     "allocs/op": 2.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 0.4750485529442683,
+   "paired_time_change_from_recentmain_percent": 1.0280517428464586,
+   "samples": {
+    "before-sprint": [
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "repeated_iterator",
+      "sample": 1,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 1011810,
+      "metrics": {
+       "ns/op": 228.5,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "repeated_iterator",
+      "sample": 2,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 1001571,
+      "metrics": {
+       "ns/op": 230.4,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     }
+    ],
+    "recent-main": [
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "repeated_iterator",
+      "sample": 1,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 1030075,
+      "metrics": {
+       "ns/op": 230.1,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "repeated_iterator",
+      "sample": 2,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 997600,
+      "metrics": {
+       "ns/op": 226.3,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     }
+    ],
+    "coherent-candidate": [
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "repeated_iterator",
+      "sample": 1,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 1015995,
+      "metrics": {
+       "ns/op": 228.2,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "repeated_iterator",
+      "sample": 2,
+      "name": "BenchmarkRepeatedIterator",
+      "iterations": 1020972,
+      "metrics": {
+       "ns/op": 232.9,
+       "B/op": 113.0,
+       "allocs/op": 2.0
+      }
+     }
+    ]
+   },
+   "raw_guards": [
+    {
+     "control": "before-sprint",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    },
+    {
+     "control": "recent-main",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    }
+   ]
+  },
+  {
+   "group": "durable_sync",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 5264670.5,
+     "B/op": 4784.0,
+     "allocs/op": 18.0
+    },
+    "recent-main": {
+     "ns/op": 5201904.0,
+     "B/op": 4711.0,
+     "allocs/op": 18.0
+    },
+    "coherent-candidate": {
+     "ns/op": 4649302.5,
+     "B/op": 4698.0,
+     "allocs/op": 18.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -11.371540000245794,
+   "paired_time_change_from_recentmain_percent": -10.312802294559775,
+   "samples": {
+    "before-sprint": [
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "durable_sync",
+      "sample": 1,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 44,
+      "metrics": {
+       "ns/op": 5756652.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 4949.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 5690938.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 5706069.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 13769.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 173.7,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 75.0,
+       "public.batch.write_sync.phase.command_append.ns/op": 4949.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 5719302.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 657.3,
+       "public.batch.write_sync.phase.command_sync.ns/op": 5706494.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 10064.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 7265.0,
+       "public.batch.write_sync.phase.residual.ns/op": 3716.0,
+       "public.batch.write_sync.phase.wall.ns/op": 5740423.0,
+       "writesync_max_ns": 7398040.0,
+       "writesync_p50_ns": 5521623.0,
+       "writesync_p95_ns": 6865327.0,
+       "writesync_p99_ns": 7398040.0,
+       "B/op": 4834.0,
+       "allocs/op": 18.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "before-sprint",
+      "group": "durable_sync",
+      "sample": 2,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 60,
+      "metrics": {
+       "ns/op": 4772689.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 3900.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 4723083.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 4734451.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 10345.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 209.5,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 67.83,
+       "public.batch.write_sync.phase.command_append.ns/op": 3900.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 4744746.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 472.5,
+       "public.batch.write_sync.phase.command_sync.ns/op": 4734775.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 6971.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 5829.0,
+       "public.batch.write_sync.phase.residual.ns/op": 2965.0,
+       "public.batch.write_sync.phase.wall.ns/op": 4760579.0,
+       "writesync_max_ns": 6975578.0,
+       "writesync_p50_ns": 4276970.0,
+       "writesync_p95_ns": 6942616.0,
+       "writesync_p99_ns": 6975578.0,
+       "B/op": 4734.0,
+       "allocs/op": 18.0
+      }
+     }
+    ],
+    "recent-main": [
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "durable_sync",
+      "sample": 1,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 44,
+      "metrics": {
+       "ns/op": 4722391.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 3301.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 4677525.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 4687458.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 8994.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 211.8,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 67.73,
+       "public.batch.write_sync.phase.command_append.ns/op": 3301.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 4696628.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 448.9,
+       "public.batch.write_sync.phase.command_sync.ns/op": 4687770.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 6293.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 5395.0,
+       "public.batch.write_sync.phase.residual.ns/op": 2511.0,
+       "public.batch.write_sync.phase.wall.ns/op": 4710895.0,
+       "writesync_max_ns": 6964648.0,
+       "writesync_p50_ns": 4166581.0,
+       "writesync_p95_ns": 6771415.0,
+       "writesync_p99_ns": 6964648.0,
+       "B/op": 4693.0,
+       "allocs/op": 18.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "recent-main",
+      "group": "durable_sync",
+      "sample": 2,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 61,
+      "metrics": {
+       "ns/op": 5681417.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 6028.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 5604924.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 5622871.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 16328.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 176.0,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 79.67,
+       "public.batch.write_sync.phase.command_append.ns/op": 6028.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 5638583.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 845.4,
+       "public.batch.write_sync.phase.command_sync.ns/op": 5623414.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 11112.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 8997.0,
+       "public.batch.write_sync.phase.residual.ns/op": 4990.0,
+       "public.batch.write_sync.phase.wall.ns/op": 5663760.0,
+       "writesync_max_ns": 7286670.0,
+       "writesync_p50_ns": 5467943.0,
+       "writesync_p95_ns": 6862955.0,
+       "writesync_p99_ns": 7286670.0,
+       "B/op": 4729.0,
+       "allocs/op": 18.0
+      }
+     }
+    ],
+    "coherent-candidate": [
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "durable_sync",
+      "sample": 1,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 60,
+      "metrics": {
+       "ns/op": 4835363.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 5251.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 4766478.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 4782565.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 14723.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 206.8,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 77.85,
+       "public.batch.write_sync.phase.command_append.ns/op": 5251.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 4796951.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 682.2,
+       "public.batch.write_sync.phase.command_sync.ns/op": 4783061.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 10599.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 7927.0,
+       "public.batch.write_sync.phase.residual.ns/op": 3998.0,
+       "public.batch.write_sync.phase.wall.ns/op": 4819553.0,
+       "writesync_max_ns": 7443912.0,
+       "writesync_p50_ns": 4287172.0,
+       "writesync_p95_ns": 7111938.0,
+       "writesync_p99_ns": 7443912.0,
+       "B/op": 4734.0,
+       "allocs/op": 18.0
+      }
+     },
+     {
+      "kind": "micro",
+      "label": "coherent-candidate",
+      "group": "durable_sync",
+      "sample": 2,
+      "name": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "iterations": 52,
+      "metrics": {
+       "ns/op": 4463242.0,
+       "batch_keys/iteration": 1.0,
+       "cache.checkpoint.barrier_wait_ns/op": 0.0,
+       "cache.checkpoint.runs/op": 0.0,
+       "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+       "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+       "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+       "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+       "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+       "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+       "cache.value_log.file_sync.calls/op": 0.0,
+       "cache.value_log.file_sync.ns/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+       "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+       "cache.value_log.sync.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.calls/op": 0.0,
+       "cache.value_log.sync.external_ref.ns/op": 0.0,
+       "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+       "cache.value_log.sync.materialization.calls/op": 0.0,
+       "cache.value_log.sync.materialization.ns/op": 0.0,
+       "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+       "cache.value_log.sync.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+       "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+       "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+       "cache.value_log.sync.wait_ns/op": 0.0,
+       "cache.vlog_io.bytes/op": 0.0,
+       "command_wal.append.count/op": 1.0,
+       "command_wal.append.ns/op": 1132.0,
+       "command_wal.directory_sync.calls/op": 0.0,
+       "command_wal.directory_sync.ns/op": 0.0,
+       "command_wal.file_sync.calls/op": 1.0,
+       "command_wal.file_sync.ns/op": 4445607.0,
+       "command_wal.flush.count/op": 0.0,
+       "command_wal.flush.ns/op": 0.0,
+       "command_wal.sync.count/op": 1.0,
+       "command_wal.sync.ns/op": 4449313.0,
+       "command_wal.write.bytes/op": 134.8,
+       "command_wal.write.ns/op": 3315.0,
+       "command_wal.write.syscalls/op": 1.0,
+       "iterations/s": 224.1,
+       "public.batch.write_sync.phase.checkpoint_gate.ns/op": 62.88,
+       "public.batch.write_sync.phase.command_append.ns/op": 1132.0,
+       "public.batch.write_sync.phase.command_callback.ns/op": 4453010.0,
+       "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+       "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 102.7,
+       "public.batch.write_sync.phase.command_sync.ns/op": 4449465.0,
+       "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 2199.0,
+       "public.batch.write_sync.phase.preflight_materialization.ns/op": 2326.0,
+       "public.batch.write_sync.phase.residual.ns/op": 1238.0,
+       "public.batch.write_sync.phase.wall.ns/op": 4458836.0,
+       "writesync_max_ns": 6399613.0,
+       "writesync_p50_ns": 3781776.0,
+       "writesync_p95_ns": 6313602.0,
+       "writesync_p99_ns": 6399613.0,
+       "B/op": 4662.0,
+       "allocs/op": 18.0
+      }
+     }
+    ]
+   },
+   "raw_guards": [
+    {
+     "control": "before-sprint",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    },
+    {
+     "control": "recent-main",
+     "verdict": "NO_THRESHOLD_CROSSING_OBSERVED_SHORT_NOT_ACCEPTANCE",
+     "reasons": []
+    }
+   ]
+  }
+ ],
+ "public": [
+  {
+   "group": "command_wal_durable-forced_pointer-concurrent",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 6499203.0,
+     "B/op": 465681.5,
+     "allocs/op": 389.5,
+     "writer_p50_ns": 5418007.5,
+     "point_p50_ns": 5373247.0,
+     "scan_p50_ns": 5389221.0,
+     "writer_ops/s": 153.85,
+     "point_phase_ops/s": 164.6,
+     "scan_phase_ops/s": 155.1,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 5248129.5,
+     "B/op": 99517.0,
+     "allocs/op": 187.0,
+     "writer_p50_ns": 5197535.0,
+     "point_p50_ns": 8550.0,
+     "scan_p50_ns": 11080.0,
+     "writer_ops/s": 190.55,
+     "point_phase_ops/s": 96325.5,
+     "scan_phase_ops/s": 82544.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 5166957.0,
+     "B/op": 216486.0,
+     "allocs/op": 217.0,
+     "writer_p50_ns": 5197595.0,
+     "point_p50_ns": 15250.0,
+     "scan_p50_ns": 18060.0,
+     "writer_ops/s": 193.55,
+     "point_phase_ops/s": 57102.0,
+     "scan_phase_ops/s": 49602.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -20.506325738272636,
+   "paired_time_change_from_recentmain_percent": -1.5518504242405973
+  },
+  {
+   "group": "command_wal_durable-forced_pointer-group_versions",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 5864544.5,
+     "B/op": 374796.0,
+     "allocs/op": 382.5,
+     "writer_p50_ns": 5157485.0,
+     "scan_p50_ns": 30055.0,
+     "writer_ops/s": 170.55,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 5073334.5,
+     "B/op": 94294.5,
+     "allocs/op": 167.0,
+     "writer_p50_ns": 4528174.0,
+     "scan_p50_ns": 20835.5,
+     "writer_ops/s": 197.7,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 5865736.5,
+     "B/op": 152501.5,
+     "allocs/op": 173.0,
+     "writer_p50_ns": 5452212.5,
+     "scan_p50_ns": 43070.5,
+     "writer_ops/s": 170.64999999999998,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -0.025902596530980038,
+   "paired_time_change_from_recentmain_percent": 15.721489720903703
+  },
+  {
+   "group": "command_wal_durable-forced_pointer-point",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 4681990.5,
+     "B/op": 2013.0,
+     "allocs/op": 18.0,
+     "writer_p50_ns": 3923482.5,
+     "point_p50_ns": 11330.0,
+     "writer_ops/s": 213.6,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 4798715.0,
+     "B/op": 84363.0,
+     "allocs/op": 107.0,
+     "writer_p50_ns": 3833177.5,
+     "point_p50_ns": 13030.0,
+     "writer_ops/s": 208.39999999999998,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 5278791.5,
+     "B/op": 143424.0,
+     "allocs/op": 131.0,
+     "writer_p50_ns": 5115829.0,
+     "point_p50_ns": 35140.5,
+     "writer_ops/s": 189.45,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 12.754849226775345,
+   "paired_time_change_from_recentmain_percent": 9.998068125337412
+  },
+  {
+   "group": "command_wal_durable-inline-concurrent",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 5718664.0,
+     "B/op": 319512.5,
+     "allocs/op": 276.5,
+     "writer_p50_ns": 5159800.5,
+     "point_p50_ns": 4790361.0,
+     "scan_p50_ns": 4572694.0,
+     "writer_ops/s": 174.95,
+     "point_phase_ops/s": 226.75,
+     "scan_phase_ops/s": 174.95,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 4893425.5,
+     "B/op": 17959.5,
+     "allocs/op": 137.0,
+     "writer_p50_ns": 5049809.0,
+     "point_p50_ns": 1340.0,
+     "scan_p50_ns": 2745.0,
+     "writer_ops/s": 204.35000000000002,
+     "point_phase_ops/s": 432476.5,
+     "scan_phase_ops/s": 236163.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 4822382.5,
+     "B/op": 134875.0,
+     "allocs/op": 167.0,
+     "writer_p50_ns": 5049489.5,
+     "point_p50_ns": 15650.5,
+     "scan_p50_ns": 12205.0,
+     "writer_ops/s": 207.5,
+     "point_phase_ops/s": 58256.5,
+     "scan_phase_ops/s": 71333.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -15.678864587610686,
+   "paired_time_change_from_recentmain_percent": -1.4825914843470511
+  },
+  {
+   "group": "command_wal_durable-inline-group_versions",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 5621801.5,
+     "B/op": 329654.5,
+     "allocs/op": 322.0,
+     "writer_p50_ns": 5111330.0,
+     "scan_p50_ns": 20285.5,
+     "writer_ops/s": 178.05,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 4907302.5,
+     "B/op": 17227.0,
+     "allocs/op": 130.0,
+     "writer_p50_ns": 5094459.0,
+     "scan_p50_ns": 8280.0,
+     "writer_ops/s": 204.1,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 5061681.0,
+     "B/op": 75330.5,
+     "allocs/op": 136.0,
+     "writer_p50_ns": 5124689.5,
+     "scan_p50_ns": 26345.0,
+     "writer_ops/s": 197.8,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -9.981952231840797,
+   "paired_time_change_from_recentmain_percent": 3.1631860746400564
+  },
+  {
+   "group": "command_wal_durable-inline-point",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 4711120.5,
+     "B/op": 2156.0,
+     "allocs/op": 15.0,
+     "writer_p50_ns": 4945487.5,
+     "point_p50_ns": 3745.0,
+     "writer_ops/s": 212.3,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 4633965.5,
+     "B/op": 9163.0,
+     "allocs/op": 77.0,
+     "writer_p50_ns": 3847447.0,
+     "point_p50_ns": 3815.0,
+     "writer_ops/s": 215.8,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 4564766.5,
+     "B/op": 68138.5,
+     "allocs/op": 101.0,
+     "writer_p50_ns": 3793436.5,
+     "point_p50_ns": 23925.0,
+     "writer_ops/s": 219.1,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 1.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -3.100031205911269,
+   "paired_time_change_from_recentmain_percent": -1.4931215924399277
+  },
+  {
+   "group": "command_wal_relaxed-forced_pointer-concurrent",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 514888.5,
+     "B/op": 325135.0,
+     "allocs/op": 433.5,
+     "writer_p50_ns": 86531.0,
+     "point_p50_ns": 75510.5,
+     "scan_p50_ns": 84991.0,
+     "writer_ops/s": 2012.0,
+     "point_phase_ops/s": 2053.5,
+     "scan_phase_ops/s": 2012.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 250460.0,
+     "B/op": 37989.5,
+     "allocs/op": 269.0,
+     "writer_p50_ns": 24610.0,
+     "point_p50_ns": 6135.0,
+     "scan_p50_ns": 7995.0,
+     "writer_ops/s": 3994.5,
+     "point_phase_ops/s": 139069.0,
+     "scan_phase_ops/s": 100272.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 247454.0,
+     "B/op": 219639.5,
+     "allocs/op": 298.0,
+     "writer_p50_ns": 28920.5,
+     "point_p50_ns": 19460.5,
+     "scan_p50_ns": 17895.0,
+     "writer_ops/s": 4056.5,
+     "point_phase_ops/s": 50904.5,
+     "scan_phase_ops/s": 48083.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -51.17615331774182,
+   "paired_time_change_from_recentmain_percent": -1.3639030960950649
+  },
+  {
+   "group": "command_wal_relaxed-forced_pointer-group_versions",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 624563.5,
+     "B/op": 335596.0,
+     "allocs/op": 431.0,
+     "writer_p50_ns": 25895.5,
+     "scan_p50_ns": 53010.5,
+     "writer_ops/s": 1621.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 282908.5,
+     "B/op": 32767.0,
+     "allocs/op": 249.0,
+     "writer_p50_ns": 26330.0,
+     "scan_p50_ns": 9620.0,
+     "writer_ops/s": 3637.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 277416.5,
+     "B/op": 155654.0,
+     "allocs/op": 254.0,
+     "writer_p50_ns": 24540.0,
+     "scan_p50_ns": 19475.0,
+     "writer_ops/s": 3633.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -55.48612151019999,
+   "paired_time_change_from_recentmain_percent": -0.9213028781845156
+  },
+  {
+   "group": "command_wal_relaxed-forced_pointer-point",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 7103.5,
+     "B/op": 1921.0,
+     "allocs/op": 18.0,
+     "writer_p50_ns": 2845.0,
+     "point_p50_ns": 2750.0,
+     "writer_ops/s": 140873.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 298836.5,
+     "B/op": 24131.5,
+     "allocs/op": 182.0,
+     "writer_p50_ns": 17440.0,
+     "point_p50_ns": 4755.0,
+     "writer_ops/s": 3361.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 319727.5,
+     "B/op": 147901.5,
+     "allocs/op": 205.0,
+     "writer_p50_ns": 17765.0,
+     "point_p50_ns": 16395.0,
+     "writer_ops/s": 3135.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 4396.437556314892,
+   "paired_time_change_from_recentmain_percent": 7.094975661780012
+  },
+  {
+   "group": "command_wal_relaxed-inline-concurrent",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 150224.0,
+     "B/op": 204789.0,
+     "allocs/op": 267.5,
+     "writer_p50_ns": 58090.0,
+     "point_p50_ns": 10645.0,
+     "scan_p50_ns": 48475.5,
+     "writer_ops/s": 6659.5,
+     "point_phase_ops/s": 7420.5,
+     "scan_phase_ops/s": 6716.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 11400.0,
+     "B/op": 17860.0,
+     "allocs/op": 137.0,
+     "writer_p50_ns": 8750.0,
+     "point_p50_ns": 935.0,
+     "scan_p50_ns": 3165.0,
+     "writer_ops/s": 88261.0,
+     "point_phase_ops/s": 628164.0,
+     "scan_phase_ops/s": 246247.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 18198.5,
+     "B/op": 134733.5,
+     "allocs/op": 167.0,
+     "writer_p50_ns": 12405.0,
+     "point_p50_ns": 12090.0,
+     "scan_p50_ns": 13460.5,
+     "writer_ops/s": 55304.5,
+     "point_phase_ops/s": 73786.5,
+     "scan_phase_ops/s": 64011.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 2.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -87.92148083661091,
+   "paired_time_change_from_recentmain_percent": 59.608848242001635
+  },
+  {
+   "group": "command_wal_relaxed-inline-group_versions",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 185609.5,
+     "B/op": 257640.5,
+     "allocs/op": 311.0,
+     "writer_p50_ns": 8645.0,
+     "scan_p50_ns": 46975.5,
+     "writer_ops/s": 5392.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 12556.0,
+     "B/op": 17128.5,
+     "allocs/op": 130.0,
+     "writer_p50_ns": 8375.0,
+     "scan_p50_ns": 2705.0,
+     "writer_ops/s": 79673.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 23753.5,
+     "B/op": 75233.0,
+     "allocs/op": 136.0,
+     "writer_p50_ns": 9170.0,
+     "scan_p50_ns": 11790.5,
+     "writer_ops/s": 42181.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": -87.20855737791553,
+   "paired_time_change_from_recentmain_percent": 89.02961228815478
+  },
+  {
+   "group": "command_wal_relaxed-inline-point",
+   "medians": {
+    "before-sprint": {
+     "ns/op": 4415.5,
+     "B/op": 2057.0,
+     "allocs/op": 15.0,
+     "writer_p50_ns": 1885.0,
+     "point_p50_ns": 1455.0,
+     "writer_ops/s": 226551.0,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0
+    },
+    "recent-main": {
+     "ns/op": 7712.5,
+     "B/op": 9065.5,
+     "allocs/op": 77.0,
+     "writer_p50_ns": 5605.5,
+     "point_p50_ns": 795.0,
+     "writer_ops/s": 130263.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    },
+    "coherent-candidate": {
+     "ns/op": 19067.0,
+     "B/op": 68040.0,
+     "allocs/op": 101.0,
+     "writer_p50_ns": 5880.0,
+     "point_p50_ns": 10505.0,
+     "writer_ops/s": 52468.5,
+     "wal_appends/op": 1.0,
+     "wal_syncs/op": 0.0,
+     "public_checkpoints/op": 0.0,
+     "vlog_syncs/op": 0.0,
+     "snapshot_rotations/op": 0.0,
+     "cow_capture_calls_total/op": 1.0,
+     "cow_publications_total/op": 1.0
+    }
+   },
+   "paired_time_change_from_presprint_percent": 331.7572276805853,
+   "paired_time_change_from_recentmain_percent": 147.73132344716885
+  }
+ ]
+}
