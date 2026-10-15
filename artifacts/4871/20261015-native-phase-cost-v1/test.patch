@@ -1,0 +1,45 @@
+diff --git a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+index 00d265aba..d199801f0 100644
+--- a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
++++ b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+@@ -117,15 +117,27 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 			var pruneErr error
+ 			var elapsed time.Duration
+ 			var allocBytes, allocCount uint64
++			// Entry-phase buckets include all work performed by that public call.
++			// A call may advance through multiple phases; these are not inner-phase timings.
++			var phaseCalls, phaseNS, phaseBytes, phaseAllocs [256]uint64
+ 			for call := 0; call < 4096; call++ {
++				phase := uint8(0)
++				if cursor != nil {
++					phase = cursor.phase
++				}
+ 				var before, after runtime.MemStats
+ 				runtime.ReadMemStats(&before)
+ 				started := time.Now()
+ 				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
+-				elapsed += time.Since(started)
++				callElapsed := time.Since(started)
++				elapsed += callElapsed
+ 				runtime.ReadMemStats(&after)
+ 				allocBytes += after.TotalAlloc - before.TotalAlloc
+ 				allocCount += after.Mallocs - before.Mallocs
++				phaseCalls[phase]++
++				phaseNS[phase] += uint64(callElapsed.Nanoseconds())
++				phaseBytes[phase] += after.TotalAlloc - before.TotalAlloc
++				phaseAllocs[phase] += after.Mallocs - before.Mallocs
+ 				if x.Cursor != nil {
+ 					cursor = x.Cursor
+ 				}
+@@ -173,6 +185,11 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 				}
+ 			}
+ 			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
++			for phase, calls := range phaseCalls {
++				if calls != 0 {
++					t.Logf("NATIVE_PUBLIC_ENTRY_PHASE phase=%d calls=%d ns=%d alloc_bytes=%d alloc_count=%d", phase, calls, phaseNS[phase], phaseBytes[phase], phaseAllocs[phase])
++				}
++			}
+ 			t.Logf("COW_NATIVE_UNBOUNDED_DIAGNOSTIC pointers=%t overlayBytes=%d ACK=%d writes=%d nativePrepared=%d nativeCut=%d error=%v", pointers, mutable, ack, writes, prepared, cut, pruneErr)
+ 			if ack == 1 {
+ 				got, e := d.Get(selectedKey)

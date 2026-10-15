@@ -1,0 +1,88 @@
+{
+  "at_utc": "2026-10-15T00:51:58.538396+00:00",
+  "head": "7df5c8277ace70d8551417d92e8fe4a84842f472",
+  "own_changed_paths": [
+    {
+      "path": "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10224,
+      "sha256": "e38734cd1e3a03939021577eb8340ea66a96d62b5f5308fb3776d47c50531c99"
+    }
+  ],
+  "full_source_rows": 4343,
+  "source_before_equals_after": true,
+  "state_head_index_status_before_equals_after": true,
+  "other4342_source_rows_match_prior_verified_checkpoint": true,
+  "exact_test_runs": 1,
+  "result": {
+    "exit_code": 0,
+    "outer_timeout": false,
+    "started_utc": "2026-10-15T00:51:17.078143+00:00",
+    "elapsed_seconds": 1.4157461761496961
+  },
+  "no_production_edits": true,
+  "foreign_and_protected_unchanged": true,
+  "public_activation": "ACK1/writes2276/prepared1; original37 children,38after,36shared; all public/oldcut/postACK/Close/reopen checks PASS",
+  "claim": "entry-phase cost observation only; unbounded publication remains explicit and work counters incomplete; no native/Q32/performance acceptance",
+  "files": [
+    {
+      "path": "command.json",
+      "bytes": 635,
+      "sha256": "e90e001f29f4cab914dfc01cabb1b7ad0b165ce928f08e658a27f244d09b9ecd"
+    },
+    {
+      "path": "exit.json",
+      "bytes": 141,
+      "sha256": "59fc7fd2a40ae9dcc903f804b4628f282445826432fa4236935bc6a24c93fd94"
+    },
+    {
+      "path": "interpretation.md",
+      "bytes": 1229,
+      "sha256": "8caec9505250b3ffcd15455b77bdc10833e9be28b76097666212ba8f87d5f1e6"
+    },
+    {
+      "path": "phase-summary.json",
+      "bytes": 2074,
+      "sha256": "28317672e091de22ff59173f77051c0f648e42079d4c33446c43257647b3beee"
+    },
+    {
+      "path": "preimage.go",
+      "bytes": 9457,
+      "sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+    },
+    {
+      "path": "raw.jsonl",
+      "bytes": 6829,
+      "sha256": "3049d43749b259f94d8264c920b7835b4d569d31d622d4f5d1524a083d85acf6"
+    },
+    {
+      "path": "source-after.json",
+      "bytes": 781034,
+      "sha256": "8c1b71a7e1d192a71b9abc0ed37e9227ab6631e8f9eed51a904f468a0adf408a"
+    },
+    {
+      "path": "source-before.json",
+      "bytes": 781034,
+      "sha256": "8c1b71a7e1d192a71b9abc0ed37e9227ab6631e8f9eed51a904f468a0adf408a"
+    },
+    {
+      "path": "state-after.json",
+      "bytes": 341,
+      "sha256": "e5947516f123e11b9c8e497a97cda3ff794a0ac37e8c537a6b112ccb4cfa40eb"
+    },
+    {
+      "path": "state-before.json",
+      "bytes": 341,
+      "sha256": "e5947516f123e11b9c8e497a97cda3ff794a0ac37e8c537a6b112ccb4cfa40eb"
+    },
+    {
+      "path": "test.go",
+      "bytes": 10224,
+      "sha256": "e38734cd1e3a03939021577eb8340ea66a96d62b5f5308fb3776d47c50531c99"
+    },
+    {
+      "path": "test.patch",
+      "bytes": 2368,
+      "sha256": "e89ccfe493ac9deb3128a6cc14b80455338890facc902182eb3feb21b68626ec"
+    }
+  ]
+}
