@@ -1,0 +1,100 @@
+{
+  "artifact_only": true,
+  "cleanup_result_sha256": "a68751641c7c729bfc5cbaa6929fad131558c58e347a0f632086d554aea1f363",
+  "member_count": 18,
+  "members": [
+    {
+      "bytes": 18250,
+      "path": "checkpoint-github-readback.json",
+      "sha256": "b5c14c570450899172e1141a72f82b7917442b0a1672aaf094160651154d7c1a"
+    },
+    {
+      "bytes": 45025,
+      "path": "checkpoint-local-receipt.json",
+      "sha256": "3737a1f8f2179d57b1e251da3cc056a0b7c963edc81d0cfc71d85dc6c7fae3df"
+    },
+    {
+      "bytes": 1203,
+      "path": "checkpoint-protection-after.json",
+      "sha256": "637a91ee022a9e1b46d3e984cb57be91736074d2b36a75f8dc9c687b0c9c0663"
+    },
+    {
+      "bytes": 291,
+      "path": "checkpoint-push.receipt.json",
+      "sha256": "594aee140dbb3517eb6f8aff2c9b1b1f265c1862cd99e77b7230406048795f11"
+    },
+    {
+      "bytes": 394,
+      "path": "checkpoint-push.stderr",
+      "sha256": "be3c26c499b9e1ccaeda92bd2b2d89df09b44f084ab9e13ca31a24a57be214dd"
+    },
+    {
+      "bytes": 0,
+      "path": "checkpoint-push.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 3602129,
+      "path": "cleanup/clean-snapshot.json",
+      "sha256": "aa03e341f3203a483890982425e9ba66591e8bd7d70992af9837b92309f5b5fc"
+    },
+    {
+      "bytes": 1054,
+      "path": "cleanup/normalization-attempts.json",
+      "sha256": "a3dbecf16e4b879cd27503239a5d8a52bb10d338094a5490ec4e7bd7c75dd0ae"
+    },
+    {
+      "bytes": 925,
+      "path": "cleanup/normalization-index-stat-refresh.json",
+      "sha256": "601d0d671a6199b30d5f3b4fa259b5140fa12533e349d4d2d18ec241d59380ff"
+    },
+    {
+      "bytes": 307,
+      "path": "cleanup/normalize-tracked.receipt.json",
+      "sha256": "131d5ecf423d1ccdae3e4cbd1c41eb282dba7086ccee519023776bf039b368b3"
+    },
+    {
+      "bytes": 4304,
+      "path": "cleanup/preflight.json",
+      "sha256": "0bbad3b9304a66b3b747dbee15b1bf931c02fc1a0cf601ef9705af82f26ecfe5"
+    },
+    {
+      "bytes": 2034,
+      "path": "cleanup/release-authority.json",
+      "sha256": "a61f83adbd47f88c782dc8e7460ba8f804b2426b2ebcb942049adc2cbed59e02"
+    },
+    {
+      "bytes": 250,
+      "path": "cleanup/remove-worktree.receipt.json",
+      "sha256": "5df78644cb647ad9b7f2d4901e021530b4de0de8c4f8b9c89fb2941bd85dfc9b"
+    },
+    {
+      "bytes": 2403,
+      "path": "cleanup/result.json",
+      "sha256": "a68751641c7c729bfc5cbaa6929fad131558c58e347a0f632086d554aea1f363"
+    },
+    {
+      "bytes": 2115,
+      "path": "cleanup/resume-preflight.json",
+      "sha256": "cbad7597eaaea4dab5e5b2a6a68ccc4b313a070fb5d910ecb120c05a2841253c"
+    },
+    {
+      "bytes": 8376,
+      "path": "cleanup/resume.py",
+      "sha256": "16061698ef055e6f659497d189afc6df7eaca33df10054627c9a34b73f9e61e7"
+    },
+    {
+      "bytes": 2239,
+      "path": "cleanup-consumer-preflight.json",
+      "sha256": "3e620f7966924c8f1a680018b2430fa8e7114e8bb6256cab13181bc6bf946ee4"
+    },
+    {
+      "bytes": 12242,
+      "path": "run-cleanup.py",
+      "sha256": "526a4870c1714349445562d00b6c39a4c3cae46404839a08f003d165baa9853a"
+    }
+  ],
+  "note": "All original frozen publication members remain unchanged; only cleanup/decoded-readback/protection receipts added. ELFs and privateindex removed after root release; no Go/source or acceptance change.",
+  "prefix": "artifacts/4871/20261015-ordinary-2a-routing",
+  "source_checkpoint": "1594f5fc19baddfe30a31e8d9d668c75b181d8fb"
+}

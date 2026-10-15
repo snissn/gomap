@@ -1,0 +1,23 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "error": "AssertionError: raw helper index SHA after authorized git restore --worktree",
+      "explanation": "Git refreshed helper-only index stat cache. Subsequent write-tree exactly4b00f962d2e9844e8f6b5a47422ed8dd8cff38d7; staged diff0; no source/index-content mismatch.",
+      "outcome": "Stopped before worktree/ELF deletion"
+    },
+    {
+      "attempt": 2,
+      "error": "AssertionError: TreeDB/db",
+      "explanation": "Authorized git restore replaced one file in this parent, so its directory mtime legitimately changed; all directory identities remained same. Resume explicitly checked restored/unlinked parent identities and exact2a filebytes.",
+      "outcome": "Stopped before worktree/ELF deletion"
+    },
+    {
+      "attempt": 3,
+      "explanation": "Fresh complete normalized membership, no consumers, evidence+protected identities checked; noforceworktreeremove and exactELF/privateindex unlinks succeeded.",
+      "outcome": "DONE"
+    }
+  ],
+  "no_force": true,
+  "no_go": true
+}

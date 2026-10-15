@@ -1,0 +1,48 @@
+{
+  "checkpoint": "1594f5fc19baddfe30a31e8d9d668c75b181d8fb",
+  "no_branch_deletion": true,
+  "no_force": true,
+  "readback_sha256": "b5c14c570450899172e1141a72f82b7917442b0a1672aaf094160651154d7c1a",
+  "restore_tracked_exact": [
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go"
+  ],
+  "root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+  "root_independent_receipt_sha256": "bc7136e628ba1763c9511543df5400bed36fdb29047c4b0690944dabc51afae5",
+  "root_release": "Explicit parent release exacthelper+2ELFs; privateindex maydelete after complete byteproof",
+  "snapshot_sha256": "03fa3a0aba818ab0a13bc753ad31933622848313b79356f8f67cdf4c969f3225",
+  "unlink_exact_files": [
+    {
+      "bytes": 28978815,
+      "dev": 66306,
+      "inode": 108277479,
+      "mode": 33277,
+      "mtime_ns": 1792056146213216370,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+      "sha256": "0ba930b08d892326d80ae7af37b8a28c06b171560d025c9d14b552ba125b0158"
+    },
+    {
+      "bytes": 28979039,
+      "dev": 66306,
+      "inode": 108277483,
+      "mode": 33277,
+      "mtime_ns": 1792056163948370981,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+      "sha256": "8b2c50f15e415a6b6bfb39bd81a4fe15d0b75801fd0b13be9eb02e2cae9bfa0e"
+    },
+    {
+      "bytes": 1597889,
+      "dev": 66306,
+      "inode": 108277537,
+      "mode": 33204,
+      "mtime_ns": 1792056607875241015,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/checkpoint-private.index",
+      "sha256": "10812b3eac10eff7833cc25a8cfb3941b096f82a8d87aec647286366e5a7ec0b"
+    }
+  ],
+  "unlink_untracked_exact": [
+    "TreeDB/freelist/generation_v1_routing_test.go",
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go"
+  ]
+}

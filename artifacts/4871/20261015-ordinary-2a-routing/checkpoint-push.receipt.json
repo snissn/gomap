@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "git",
+    "--git-dir",
+    "/home/mikers/dev/snissn/gomap/.git",
+    "push",
+    "origin",
+    "refs/heads/codex/5111-primary-generation-routing-20261015:refs/heads/codex/5111-primary-generation-routing-20261015"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 9.251719263847917
+}

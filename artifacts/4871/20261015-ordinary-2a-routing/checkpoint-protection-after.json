@@ -1,0 +1,32 @@
+{
+  "helper_head_index_status_preserved": true,
+  "native-4878-traversal": {
+    "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+    "index_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596"
+  },
+  "native_protected3_equal": true,
+  "only_checkpoint_local_remote_refs_added": {
+    "refs/heads/codex/5111-primary-generation-routing-20261015": {
+      "after": "1594f5fc19baddfe30a31e8d9d668c75b181d8fb",
+      "before": null
+    },
+    "refs/remotes/origin/codex/5111-primary-generation-routing-20261015": {
+      "after": "1594f5fc19baddfe30a31e8d9d668c75b181d8fb",
+      "before": null
+    }
+  },
+  "ordinary-5111": {
+    "all_tracked_go_module_equal": true,
+    "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "ignored_custody_equal": true,
+    "index_sha256": "9320f73fa78aba4fdc2223e55beae4b243faa86ef7bc03dce1595fda65e53275",
+    "status_equal": true
+  },
+  "ordinary-5130-allocation-integration-20261015": {
+    "all_tracked_go_module_equal": true,
+    "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "ignored_custody_equal": true,
+    "index_sha256": "15e7969ca2030be0be4a993aa26eef00799794e8e6ce62e6b0daf6643075d1e7",
+    "status_equal": true
+  }
+}

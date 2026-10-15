@@ -1,0 +1,84 @@
+{
+  "consumers": [],
+  "denials": [
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2148
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2175
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2448
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 1552181
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 1552181
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 1552181
+    }
+  ],
+  "no_external_target_consumers": true,
+  "note": "Own inspection process/ancestors are transient; must stop before cleanup. Unrelated unreadable long-lived user daemons alone are not target consumers.",
+  "targets": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test"
+  ]
+}

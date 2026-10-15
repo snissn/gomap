@@ -1,0 +1,51 @@
+{
+  "all_branches_and_other_refs_unchanged": true,
+  "checkpoint": "1594f5fc19baddfe30a31e8d9d668c75b181d8fb",
+  "delta_note": "Observed filesystem delta includes filesystem metadata/concurrent host changes; logical estimates are separate attribution.",
+  "elapsed_seconds": 0.29552288306877017,
+  "elfs_absent": true,
+  "foreign_demo": {
+    "bytes": 15130,
+    "dev": 66306,
+    "inode": 106735061,
+    "mode": 33204,
+    "mtime_ns": 1792046610538684775,
+    "sha256": "176e418116243bfc126641b4270c89a27bfdb12dad1f210dfde09c77ef4187ad"
+  },
+  "free_after_bytes": 273186664448,
+  "free_before_bytes": 272170627072,
+  "helper_absent": true,
+  "logical_bytes": {
+    "elfs": 57957854,
+    "helper_before_normalization": 927247849,
+    "helper_clean_before_remove": 927238623,
+    "private_index": 1597889
+  },
+  "native_head_index_protected4_unchanged": true,
+  "no_go": true,
+  "normalization_index_stat_refresh": "Retained failed assertion and subsequent exact2a index-tree proof; no staged/source difference. Restored/unlinked paths parent-directory mtime changes explicitly classified.",
+  "normalized_tracked": [
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go"
+  ],
+  "observed_free_delta_bytes": 1016037376,
+  "original_ordinary_and_integration_unchanged": true,
+  "private_git_dir_absent": true,
+  "private_index_absent": true,
+  "protected_evidence_count": 123,
+  "protected_evidence_fingerprint_after": "a2042c6294e6b5d69fefa28cd43bc0d50c6b9324e52cbe5a8737c93216fb78cb",
+  "protected_evidence_fingerprint_before": "a2042c6294e6b5d69fefa28cd43bc0d50c6b9324e52cbe5a8737c93216fb78cb",
+  "removed_elfs": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test"
+  ],
+  "removed_preserved_untracked": [
+    "TreeDB/freelist/generation_v1_routing_test.go",
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go"
+  ],
+  "removed_private_index": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/checkpoint-private.index",
+  "removed_worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+  "status": "DONE",
+  "unregistered": true
+}

@@ -1,0 +1,24 @@
+{
+  "current_index_tree": "4b00f962d2e9844e8f6b5a47422ed8dd8cff38d7",
+  "head_tree": "4b00f962d2e9844e8f6b5a47422ed8dd8cff38d7",
+  "interpretation": "Authorized git restore --worktree updated Git index stat metadata; exact tracked index tree still equals2a and no staged/content changes. No noforce removal or ELF/privateindex deletion yet.",
+  "new_index_sha256": "f3eab9d1255ae539c743735d87926087424a6cdbff1be7e3d71b5da40e801ab1",
+  "normalize_receipt": {
+    "argv": [
+      "git",
+      "restore",
+      "--source=2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+      "--worktree",
+      "--",
+      "TreeDB/freelist/generation_v1_txn.go",
+      "TreeDB/freelist/allocator_cow.go",
+      "TreeDB/db/root_publication_activation.go"
+    ],
+    "exit": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "old_index_sha256": "717905e8df83d8ac3d297619999b77a307c34748d829d3413d9494b7bb586809",
+  "staged_diff_bytes": 0,
+  "status": ""
+}

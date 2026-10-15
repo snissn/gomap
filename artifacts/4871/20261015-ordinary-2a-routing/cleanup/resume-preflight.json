@@ -1,0 +1,85 @@
+{
+  "all_non_normalization_members_equal": true,
+  "consumers": [],
+  "denials": [
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2148
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2175
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2448
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 1562909
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 1562909
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 1562909
+    }
+  ],
+  "evidence_equal": true,
+  "exact_normalized_state": true,
+  "foreign4_equal": true,
+  "index_tree_equals2a": true,
+  "normalized_parent_directory_identity_equal": true,
+  "note": "Authorized restore updates helper-only Git stat cache and restored/unlinked files parent mtimes; source/index tree exactly2a. No target worktree/ELF deletion before this fresh verification.",
+  "staged_diff_empty": true
+}

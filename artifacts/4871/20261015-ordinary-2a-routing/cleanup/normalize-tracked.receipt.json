@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "git",
+    "restore",
+    "--source=2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+    "--worktree",
+    "--",
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": ""
+}

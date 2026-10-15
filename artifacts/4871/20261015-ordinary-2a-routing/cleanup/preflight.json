@@ -1,0 +1,152 @@
+{
+  "consumers": [],
+  "denials": [
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2148
+    },
+    {
+      "cmd": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2148
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2175
+    },
+    {
+      "cmd": "(sd-pam) ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2175
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 2448
+    },
+    {
+      "cmd": "/usr/bin/ssh-agent -D ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 2448
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "cwd",
+      "pid": 1558963
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "exe",
+      "pid": 1558963
+    },
+    {
+      "cmd": "sshd-session: mikers@notty               ",
+      "error": "PermissionError",
+      "field": "maps",
+      "pid": 1558963
+    }
+  ],
+  "foreign_before": {
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "bytes": 6899,
+      "dev": 66306,
+      "inode": 106604412,
+      "mode": 33204,
+      "mtime_ns": 1791955432669924371,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "bytes": 7036,
+      "dev": 66306,
+      "inode": 106604411,
+      "mode": 33204,
+      "mtime_ns": 1791954909474480382,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "bytes": 6429,
+      "dev": 66306,
+      "inode": 106735588,
+      "mode": 33204,
+      "mtime_ns": 1792013924007110430,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    },
+    "cmd/treedb_column_graph_demo/main.go": {
+      "bytes": 15130,
+      "dev": 66306,
+      "inode": 106735061,
+      "mode": 33204,
+      "mtime_ns": 1792046610538684775,
+      "sha256": "176e418116243bfc126641b4270c89a27bfdb12dad1f210dfde09c77ef4187ad"
+    }
+  },
+  "full_snapshot_equal": true,
+  "no_nested_mount": true,
+  "no_nested_worktree": true,
+  "private_index": {
+    "bytes": 1597889,
+    "dev": 66306,
+    "inode": 108277537,
+    "mode": 33204,
+    "mtime_ns": 1792056607875241015,
+    "sha256": "10812b3eac10eff7833cc25a8cfb3941b096f82a8d87aec647286366e5a7ec0b"
+  },
+  "protected_evidence_count": 123,
+  "protected_evidence_fingerprint": "a2042c6294e6b5d69fefa28cd43bc0d50c6b9324e52cbe5a8737c93216fb78cb",
+  "protected_overlap": false,
+  "protected_path_identity": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence": {
+      "dev": 66306,
+      "inode": 104636573
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "dev": 66306,
+      "inode": 106209646
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": {
+      "dev": 66306,
+      "inode": 104636575
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015": {
+      "dev": 66306,
+      "inode": 108285424
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "dev": 66306,
+      "inode": 105555390
+    },
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "dev": 66306,
+      "inode": 101712074
+    }
+  },
+  "registered_worktree": "worktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015\nHEAD 2a46465e8b4aeb8c3fff13a610518d289aa85d53\nbranch refs/heads/codex/ordinary-2a-routing-20261015"
+}
