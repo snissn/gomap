@@ -1,0 +1,188 @@
+{
+  "GetVersioned": {
+    "baseline": {
+      "samples": [
+        {
+          "ns": 318.4,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1888502\t       318.4 ns/op\t       0 B/op\t       0 allocs/op"
+        },
+        {
+          "ns": 322.6,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1883138\t       322.6 ns/op\t       0 B/op\t       0 allocs/op"
+        },
+        {
+          "ns": 319.1,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1886268\t       319.1 ns/op\t       0 B/op\t       0 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 319.1,
+        "bytes": 0,
+        "objects": 0
+      }
+    },
+    "candidate": {
+      "samples": [
+        {
+          "ns": 335.9,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1592552\t       335.9 ns/op\t       0 B/op\t       0 allocs/op"
+        },
+        {
+          "ns": 327.8,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1832070\t       327.8 ns/op\t       0 B/op\t       0 allocs/op"
+        },
+        {
+          "ns": 331.8,
+          "bytes": 0,
+          "objects": 0,
+          "generation_advances": null,
+          "raw": "BenchmarkGetVersioned \t 1777734\t       331.8 ns/op\t       0 B/op\t       0 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 331.8,
+        "bytes": 0,
+        "objects": 0
+      }
+    }
+  },
+  "ConditionalTxnBaselineBatchWrite": {
+    "baseline": {
+      "samples": [
+        {
+          "ns": 21303.0,
+          "bytes": 31944,
+          "objects": 127,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21303 ns/op\t   31944 B/op\t     127 allocs/op"
+        },
+        {
+          "ns": 21244.0,
+          "bytes": 31943,
+          "objects": 127,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21244 ns/op\t   31943 B/op\t     127 allocs/op"
+        },
+        {
+          "ns": 20923.0,
+          "bytes": 31944,
+          "objects": 127,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20923 ns/op\t   31944 B/op\t     127 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 21244.0,
+        "bytes": 31944,
+        "objects": 127
+      }
+    },
+    "candidate": {
+      "samples": [
+        {
+          "ns": 20356.0,
+          "bytes": 31448,
+          "objects": 105,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20356 ns/op\t   31448 B/op\t     105 allocs/op"
+        },
+        {
+          "ns": 20517.0,
+          "bytes": 31447,
+          "objects": 105,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20517 ns/op\t   31447 B/op\t     105 allocs/op"
+        },
+        {
+          "ns": 20223.0,
+          "bytes": 31448,
+          "objects": 104,
+          "generation_advances": null,
+          "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20223 ns/op\t   31448 B/op\t     104 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 20356.0,
+        "bytes": 31448,
+        "objects": 105
+      }
+    }
+  },
+  "CommitAtPrimaryOnlyAfterDataGeneration": {
+    "baseline": {
+      "samples": [
+        {
+          "ns": 148545.0,
+          "bytes": 279181,
+          "objects": 474,
+          "generation_advances": 2.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    148545 ns/op\t         2.000 generation_advances/op\t  279181 B/op\t     474 allocs/op"
+        },
+        {
+          "ns": 142471.0,
+          "bytes": 279177,
+          "objects": 474,
+          "generation_advances": 2.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    142471 ns/op\t         2.000 generation_advances/op\t  279177 B/op\t     474 allocs/op"
+        },
+        {
+          "ns": 143190.0,
+          "bytes": 279177,
+          "objects": 474,
+          "generation_advances": 2.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    143190 ns/op\t         2.000 generation_advances/op\t  279177 B/op\t     474 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 143190.0,
+        "bytes": 279177,
+        "objects": 474
+      }
+    },
+    "candidate": {
+      "samples": [
+        {
+          "ns": 499802.0,
+          "bytes": 368448,
+          "objects": 473,
+          "generation_advances": 0.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    499802 ns/op\t         0 generation_advances/op\t  368448 B/op\t     473 allocs/op"
+        },
+        {
+          "ns": 499290.0,
+          "bytes": 368445,
+          "objects": 473,
+          "generation_advances": 0.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    499290 ns/op\t         0 generation_advances/op\t  368445 B/op\t     473 allocs/op"
+        },
+        {
+          "ns": 500317.0,
+          "bytes": 368444,
+          "objects": 473,
+          "generation_advances": 0.0,
+          "raw": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    500317 ns/op\t         0 generation_advances/op\t  368444 B/op\t     473 allocs/op"
+        }
+      ],
+      "median": {
+        "ns": 499802.0,
+        "bytes": 368445,
+        "objects": 473
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 4457,
+    "sha256": "40748d2ddd2ac493dbed86da7904a90da4e5f6b527d5d50ba03b2a473d7e480a"
+  },
+  {
+    "path": "absent-closure-primary-guard.tar.gz",
+    "bytes": 4056664,
+    "sha256": "5f0dc2cfcdf40c1bae0a4daf09edcab8703246fa8b703b15ecce922e52402603"
+  },
+  {
+    "path": "performance-summary.json",
+    "bytes": 5823,
+    "sha256": "972128082fa26008816c40a4b8392bd4c18e5f01be6de0c5a98e5465eed19138"
+  },
+  {
+    "path": "source-manifest.json",
+    "bytes": 3086,
+    "sha256": "b8e825578a7edb865c76220b33c1726165f80c4fc981c864382e4440f98b880b"
+  }
+]
