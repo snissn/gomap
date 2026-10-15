@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -8,6 +9,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -138,7 +143,11 @@ func TestOwnedPagerOperationFinalReaderAndExportedHandleRace(t *testing.T) {
 }
 
 func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	dir, child := permanentFailureFixtureProcess(t)
+	if !child {
+		return
+	}
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,12 +179,15 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	})
 	// A separate genuine manager-owned Set supplies a deterministic last-file
 	// zombie. The real Snapshot finalizer consumes its original Set edge.
-	dir := t.TempDir()
+	vlogDir := filepath.Join(dir, "zombie-vlog")
+	if err = os.Mkdir(vlogDir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	id, err := valuelog.EncodeFileID(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := valuelog.SegmentPath(dir, id)
+	path := valuelog.SegmentPath(vlogDir, id)
 	writer, err := valuelog.NewWriter(path, id)
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +198,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	if err = writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := valuelog.NewManager(dir)
+	manager, err := valuelog.NewManager(vlogDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,4 +497,44 @@ func TestOwnedPagerSuppliedMetadataBorrowsExistingOriginalNamespaceProof(t *test
 			t.Fatal("supplied capture replaced/relabelled original proof custody")
 		}
 	}
+}
+
+// A permanent cleanup failure intentionally retains original owner handles and
+// admission through process shutdown. The parent owns the directory so its
+// removal runs only after the child has checked every failure/refund oracle and
+// actually exited; no failed owner is completed just to make teardown succeed.
+func permanentFailureFixtureProcess(t *testing.T) (string, bool) {
+	t.Helper()
+	const childName = "TREEDB_PERMANENT_FAILURE_TEST"
+	const childDir = "TREEDB_PERMANENT_FAILURE_DIR"
+	if os.Getenv(childName) == t.Name() {
+		dir := os.Getenv(childDir)
+		if dir == "" {
+			t.Fatal("missing parent-owned fixture directory")
+		}
+		return dir, true
+	}
+	dir := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	components := strings.Split(t.Name(), "/")
+	for i, component := range components {
+		components[i] = "^" + regexp.QuoteMeta(component) + "$"
+	}
+	command := exec.CommandContext(ctx, executable, "-test.run="+strings.Join(components, "/"), "-test.v")
+	command.Env = append(os.Environ(), childName+"="+t.Name(), childDir+"="+dir)
+	output, err := command.CombinedOutput()
+	t.Logf("isolated permanent-failure fixture:\n%s", output)
+	if err != nil {
+		t.Fatalf("permanent-failure child did not complete: %v (context: %v)", err, ctx.Err())
+	}
+	return "", false
 }

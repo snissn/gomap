@@ -5,6 +5,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -64,8 +66,16 @@ func TestArenaPhysicalCloseWorkOriginalCaptureRemains(t *testing.T) {
 		if done {
 			break
 		}
+		// The same bounded pager close polls its original asynchronous grower.
+		// Scheduling that worker is separate from this turn's measured work.
+		runtime.Gosched()
 		if calls > 4096 {
-			t.Fatal("physical finish did not complete")
+			pagerState := reflect.ValueOf(a.pager).Elem()
+			stack := make([]byte, 64<<10)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("physical finish did not complete: arenaPhase=%d pagerPhase=%d growDone=%#x work=%+v metadataBytes=%d physicalClosed=%t\n%s",
+				a.closeWork.phase, pagerState.FieldByName("closeWork").FieldByName("phase").Int(), pagerState.FieldByName("growDone").Pointer(),
+				w, a.MetadataOwner().Bytes(), a.MetadataOwner().PhysicalClosed(), stack)
 		}
 	}
 	if calls < 2 || !a.MetadataOwner().PhysicalClosed() || b.bytes == 0 {

@@ -22,6 +22,11 @@ func cowCutFixture(t *testing.T) (*DB, *cowCache) {
 	if err := backend.Set([]byte("disk"), []byte("basis")); err != nil {
 		t.Fatal(err)
 	}
+	// Finish the seed publication before enrolling its live metadata owner.
+	// Exact cut/wrapper/dictionary budget baselines must exclude that setup work.
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)

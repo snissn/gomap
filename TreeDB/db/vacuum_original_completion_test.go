@@ -361,7 +361,16 @@ func TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots(t *testing.T) {
 func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
 	for _, fault := range []bool{false, true} {
 		t.Run(map[bool]string{false: "consumed-proof", true: "physical-parent-refusal"}[fault], func(t *testing.T) {
-			dir := t.TempDir()
+			var dir string
+			if fault {
+				var child bool
+				dir, child = permanentFailureFixtureProcess(t)
+				if !child {
+					return
+				}
+			} else {
+				dir = t.TempDir()
+			}
 			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)

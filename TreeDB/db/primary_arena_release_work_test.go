@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -95,9 +97,18 @@ func TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt(t *tes
 		if !debt {
 			t.Fatal("paused physical cleanup lost exact custody")
 		}
+		// Physical close polls the original pager grower without waiting inside
+		// its bounded turn. Give that worker a chance to observe its stop signal.
+		runtime.Gosched()
 		turns++
 		if turns > 4096 {
-			t.Fatal("physical finish permanently refused")
+			pagerState := reflect.ValueOf(a.Pager()).Elem()
+			stack := make([]byte, 64<<10)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("physical finish permanently refused: receiptPhase=%d arenaPhase=%d pagerPhase=%d growDone=%#x work=%+v ownerRefs=%d metadataBytes=%d physicalClosed=%t\n%s",
+				receipt.phase, reflect.ValueOf(a).Elem().FieldByName("closeWork").FieldByName("phase").Int(),
+				pagerState.FieldByName("closeWork").FieldByName("phase").Int(), pagerState.FieldByName("growDone").Pointer(),
+				w, held.refs, metadata.Bytes(), metadata.PhysicalClosed(), stack)
 		}
 	}
 	if turns < 2 || receipt.owner != nil || held.arena != nil || held.namespaceParent != nil || held.namespaceProof != nil || held.metadataCharge != 0 || !metadata.PhysicalClosed() {
