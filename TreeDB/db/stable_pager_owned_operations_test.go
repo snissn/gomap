@@ -148,6 +148,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	}
 	faultForPostConsumptionVLogTest := errors.New("post-unlink parent sync failure")
 	physicalPager := snapshot.primaryRoot.arena.Pager()
+	originalIndex, originalLock := d.idx.Load(), d.lock
 	t.Cleanup(func() {
 		// The failure intentionally retains the exact owner and its admitted
 		// charge. After all consumers/assertions finish, explicit fixture-only
@@ -156,6 +157,16 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 			t.Errorf("terminal owner lost original cleanup error: %v", closeErr)
 		}
 		_ = physicalPager.Close()
+		_ = originalIndex.pager.Close()
+		if originalIndex.stableNamespaceParent != nil {
+			_ = originalIndex.stableNamespaceParent.Close()
+		}
+		if originalIndex.primaryOwner.namespaceParent != nil {
+			_ = originalIndex.primaryOwner.namespaceParent.Close()
+		}
+		if originalLock != nil {
+			_ = originalLock.Close()
+		}
 	})
 	// A separate genuine manager-owned Set supplies a deterministic last-file
 	// zombie. The real Snapshot finalizer consumes its original Set edge.

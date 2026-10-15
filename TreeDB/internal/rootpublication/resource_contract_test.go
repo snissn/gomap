@@ -3521,6 +3521,8 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 	candidate := *prior
 	candidate.token = &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}
 	candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
+	// Match generic construction: diagnostics capture immutable namespace operands.
+	candidate.token.diagnostics = newGenericResourceDiagnostics(candidate.token.namespace, nil)
 	if stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("new namespace credited by namespace-free baseline")
 	}
@@ -3528,6 +3530,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		t.Fatal("new namespace received durable-prefix credit")
 	}
 	prior.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
+	prior.token.diagnostics = newGenericResourceDiagnostics(prior.token.namespace, nil)
 	if !stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("equal namespace not covered")
 	}
@@ -3540,11 +3543,13 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 	} {
 		candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
 		change(candidate.token.namespace)
+		candidate.token.diagnostics = newGenericResourceDiagnostics(candidate.token.namespace, nil)
 		if stableResourceEntryCoversPublication(prior, &candidate) {
 			t.Fatal("different namespace credited")
 		}
 	}
 	candidate.token.namespace = nil
+	candidate.token.diagnostics = nil
 	candidate.reachability = newGenericResourceReachability(ReachabilityTypedColumnValue)
 	if stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("new reachability credited")

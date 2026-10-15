@@ -1046,7 +1046,7 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if existing.namespace == nil && token.namespace != nil {
+		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
 			entry.token = token
 			entry.pins = nil
 			entry.pinIndex = nil
@@ -1103,7 +1103,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if existing.namespace == nil && token.namespace != nil {
+		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
 			// Preserve the one namespace-creation obligation independently of
 			// insertion order by making its exact-handle token representative.
 			entry.token = token
@@ -1249,7 +1249,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 				appendUniquePins(entry, incoming.pins...)
 			}
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if !existing.hasDiagnosticNamespace() && incoming.token.hasDiagnosticNamespace() {
 			entry.token = incoming.token
 			lookup.replaceRepresentative(i, existing, incoming.token)
 			if mode != stableResourceViewPinned && mode != stableResourceViewPhysicalPinned {
@@ -1319,7 +1319,7 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 				appendUniquePins(entry, incoming.pins...)
 			}
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if !existing.hasDiagnosticNamespace() && incoming.token.hasDiagnosticNamespace() {
 			entry.token = incoming.token
 			if mode != stableResourceViewPinned && mode != stableResourceViewPhysicalPinned {
 				entry.pins = nil
@@ -1372,7 +1372,7 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		for field := range incoming.reachability.reachableFields() {
 			entry.reachability.addReachable(field)
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if !existing.hasDiagnosticNamespace() && incoming.token.hasDiagnosticNamespace() {
 			entry.token = incoming.token
 			entry.pins = nil
 			entry.pinIndex = nil
@@ -2060,7 +2060,7 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming *resourceKindBacking, 
 			}
 			// Representative replacement remains on the exact path because the
 			// canonical token would otherwise move between ownership ropes.
-			if existing.token.namespace == nil && child.token.namespace != nil {
+			if !existing.token.hasDiagnosticNamespace() && child.token.hasDiagnosticNamespace() {
 				certified = false
 				return false
 			}
@@ -2430,7 +2430,7 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 			for field := range incoming.reachability.reachableFields() {
 				entry.reachability.addReachable(field)
 			}
-			if existing.namespace == nil && incoming.token.namespace != nil {
+			if !existing.hasDiagnosticNamespace() && incoming.token.hasDiagnosticNamespace() {
 				entry.token = incoming.token
 				lookup.replaceRepresentative(i, existing, incoming.token)
 				entry.pins = nil
@@ -3396,10 +3396,10 @@ func physicalDescriptorFromEntry(entry *stableResourceEntry) StableResourcePhysi
 		diagnosticPath: entry.diagnosticPath, identity: entry.token.identity,
 		digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
 	}
-	if namespace := entry.token.namespace; namespace != nil {
+	if namespace, ok := entry.token.diagnosticNamespace(); ok {
 		descriptor.namespace = &StableNamespaceDescriptor{
-			ParentIdentity: namespace.parentIdentity, Operation: namespace.operation,
-			OldName: namespace.oldName, NewName: namespace.newName, DiagnosticPath: namespace.diagnosticPath,
+			ParentIdentity: namespace.ParentIdentity, Operation: namespace.Operation,
+			OldName: namespace.OldName, NewName: namespace.NewName, DiagnosticPath: namespace.DiagnosticPath,
 		}
 	}
 	return descriptor
@@ -3589,10 +3589,9 @@ func (set *StableResourceSet) IdentityPinRegistryStats() []IdentityPinRegistrySt
 			tokens = []*StableResourceToken{entry.token}
 		}
 		for _, token := range tokens {
-			if token == nil || token.identityPin == nil || token.identityPin.registry == nil {
-				continue
+			if registry := token.diagnosticRegistry(); registry != nil {
+				registries[registry] = struct{}{}
 			}
-			registries[token.identityPin.registry] = struct{}{}
 		}
 		return true
 	})
@@ -3727,10 +3726,10 @@ func dependencyManifestEntryV1FromStableResourceEntry(entry stableResourceEntry)
 		Digest: entry.token.digest, Frontier: cloneDurableFrontier(entry.frontier), Reachability: fields,
 		LogicalObligations: logicalObligations,
 	}
-	if namespace := entry.token.namespace; namespace != nil {
+	if namespace, ok := entry.token.diagnosticNamespace(); ok {
 		result.Namespace = &DependencyManifestNamespaceV1{
-			ParentIdentity: namespace.parentIdentity, Operation: namespace.operation,
-			OldName: namespace.oldName, NewName: namespace.newName, DiagnosticPath: namespace.diagnosticPath,
+			ParentIdentity: namespace.ParentIdentity, Operation: namespace.Operation,
+			OldName: namespace.OldName, NewName: namespace.NewName, DiagnosticPath: namespace.DiagnosticPath,
 		}
 	}
 	return result
@@ -4468,6 +4467,30 @@ func stableUnionLogicalMembershipEvidence(entries []stableResourceEntry, candida
 	return summaries
 }
 
+// rawLogicalUnionAllowedLocked also checks internal flat views: their selected
+// source flag/backing may already have been lost by an older raw pointer copy.
+func (set *StableResourceSet) rawLogicalUnionAllowedLocked() bool {
+	if set.selected || (set.kindViews != nil && set.kindViews.allocation != nil) {
+		return false
+	}
+	generic := func(token *StableResourceToken) bool {
+		return token != nil && token.metadata == nil && token.kind != ""
+	}
+	return set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		if !generic(entry.token) {
+			return false
+		}
+		for _, pin := range entry.pins {
+			if pin != nil && !generic(pin) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// UnionStableResourceSets preserves generic immutable diagnostics. Selected
+// operands require their admitted diagnostic or scoped physical API instead.
 func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, error) {
 	return unionStableResourceSets(stableResourceViewPinned, sets...)
 }
@@ -4514,6 +4537,13 @@ func unionStableResourceSets(mode stableResourceViewMode, sets ...*StableResourc
 			continue
 		}
 		set.mu.Lock()
+		// A raw logical view has no admitted owner or retained selected edge.
+		// Counts stay synchronous; physical publication/maintenance has its
+		// separate candidate or independently cloned physical custody.
+		if mode == stableResourceViewPinned && !set.rawLogicalUnionAllowedLocked() {
+			set.mu.Unlock()
+			return nil, ErrResourceOwnership
+		}
 		if set.physicalOnly && !physicalOnly {
 			set.mu.Unlock()
 			return nil, ErrResourceOwnership
@@ -4611,7 +4641,11 @@ func (set *StableResourceSet) union(other immutableExtension) (immutableExtensio
 	if !ok {
 		return nil, fmt.Errorf("%w: resource extension has type %T", ErrResourceConflict, other)
 	}
-	return UnionStableResourceSets(set, otherSet)
+	view, err := UnionStableResourceSets(set, otherSet)
+	if err != nil {
+		return nil, err
+	}
+	return view, nil
 }
 
 type StableResourceDeletionGuard struct {
@@ -4708,7 +4742,7 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 	if err != nil || !coalesce || prior.token.kind != entry.token.kind || entry.token.stability != ResourceMutableAppend || entry.token.kind == ResourceIndex {
 		return 0, false
 	}
-	if entry.token.namespace != nil && (prior.token.namespace == nil || !prior.token.namespace.compatible(entry.token.namespace)) {
+	if entry.token.hasDiagnosticNamespace() && (!prior.token.hasDiagnosticNamespace() || !prior.token.namespaceCompatible(entry.token)) {
 		return 0, false
 	}
 	if !durableFrontierCovers(entry.frontier, prior.frontier) {
@@ -4755,7 +4789,7 @@ func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) boo
 	}
 	// Namespace compatibility during union permits a missing operation on either
 	// side. Credit is directional: a new operation needs existing exact authority.
-	if entry.token.namespace != nil && (prior.token.namespace == nil || !prior.token.namespace.compatible(entry.token.namespace)) {
+	if entry.token.hasDiagnosticNamespace() && (!prior.token.hasDiagnosticNamespace() || !prior.token.namespaceCompatible(entry.token)) {
 		return false
 	}
 	// Registration validates and owns frontiers; frozen entry updates only clone
@@ -4787,7 +4821,7 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	set.mu.Lock()
 	defer set.mu.Unlock()
 	byKind := make(map[ResourceKind]*ResourceKindStats)
-	seenNamespaces := make(map[*StableNamespaceToken]struct{})
+	seenNamespaces := make(map[any]struct{})
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		token := activeEntryToken(*entry)
 		if token == nil {
@@ -4812,10 +4846,9 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		stats.SyncDuration += time.Duration(token.metrics.syncNanos.Load())
 		stats.PhysicalFileSyncs += token.metrics.physicalFileSyncs.Load()
 		stats.PhysicalFileSyncDuration += time.Duration(token.metrics.physicalFileSyncNanos.Load())
-		if token.namespace != nil {
-			if _, seen := seenNamespaces[token.namespace]; !seen {
-				seenNamespaces[token.namespace] = struct{}{}
-				syncs, duration := token.namespace.physicalSyncStats()
+		if namespace, syncs, duration := token.diagnosticNamespaceSyncStats(); namespace != nil {
+			if _, seen := seenNamespaces[namespace]; !seen {
+				seenNamespaces[namespace] = struct{}{}
 				stats.NamespaceSyncs += syncs
 				stats.NamespaceSyncDuration += duration
 			}

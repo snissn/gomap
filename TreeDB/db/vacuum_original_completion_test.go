@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -79,6 +78,10 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
 	if receipt.Close() != receipt.Unwrap() ||
 		g.metadata.Bytes() != charge || attempts != 1 {
 		t.Fatal("repeat completion replayed or refunded physical refusal")
+	}
+	// Modeled process shutdown follows all fatal custody and no-replay checks.
+	if err = g.startupLock.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -219,6 +222,12 @@ func TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots(t *testing.T) {
 	}
 	if d.idx.Load().primary == nil || !d.idx.Load().primary.CapsuleFormatV6() {
 		t.Fatal("fixture missed actual V6 producer")
+	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		if err = d.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	beforeProof := map[uint32]bool{}
 	d.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
@@ -381,18 +390,29 @@ func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
 			if dataParent == nil || primaryParent == nil || dataCharge == 0 || primaryCharge == 0 {
 				t.Fatal("original admitted parent birth missing")
 			}
+			var originalParentError error
 			if fault {
 				if err = dataParent.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if fault {
+				_, originalParentError = rootpublication.StableNamespaceParentGeneration(dataParent)
+				if originalParentError == nil {
+					t.Fatal("closed original parent remained usable")
+				}
+				if cause := errors.Unwrap(originalParentError); cause != nil {
+					originalParentError = cause
+				}
+			}
+			originalLock := d.lock
 			first := g.rebindPrimaryJointNamespaceV6(dir)
 			if g.stableNamespaceParent != dataParent || g.primaryOwner.namespaceParent != primaryParent ||
 				g.stableNamespaceParentCharge != dataCharge || g.primaryOwner.namespaceParentCharge != primaryCharge {
 				t.Fatal("canonical rebind replaced/refunded original admitted parents")
 			}
 			if fault {
-				if !errors.Is(first, syscall.EBADF) && !errors.Is(first, os.ErrClosed) {
+				if !errors.Is(first, originalParentError) {
 					t.Fatalf("original parent refusal lost: %v", first)
 				}
 				d.retainOriginalCleanupError(first)
@@ -401,8 +421,18 @@ func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
 					t.Fatalf("failed rebinding replayed or refunded: %v", again)
 				}
 				// Genuine terminal cleanup still observes the failed original parent.
-				if err = d.Close(); !errors.Is(err, os.ErrClosed) {
+				if err = d.Close(); !errors.Is(err, first) {
 					t.Fatalf("terminal custody lost: %v", err)
+				}
+				// Explicit process shutdown after original error/custody/no-refund assertions.
+				// Do not replay the failed parent primitive or complete its metadata receipt.
+				_ = g.pager.Close()
+				_ = g.primary.Pager().Close()
+				if err = primaryParent.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err = originalLock.Close(); err != nil {
+					t.Fatal(err)
 				}
 			} else {
 				if first != nil {
@@ -743,6 +773,22 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if primaryOfflineScopePlatformRefusal(t, d) {
+				if err = d.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err = lock.Close(); err != nil {
+					t.Fatal(err)
+				}
+				next, e := lockfile.Acquire(filepath.Join(dir, "LOCK"))
+				if e != nil {
+					t.Fatal(e)
+				}
+				if e = next.Close(); e != nil {
+					t.Fatal(e)
+				}
+				return
+			}
 			source := d.idx.Load()
 			source.retainOfflineSourceV1(d, lock)
 			scope, err := d.captureOfflinePrimaryScopeV6()
@@ -825,6 +871,10 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			}
 			if !errors.Is(lockErr, lockfile.ErrLocked) {
 				t.Fatalf("late namespace refusal released LOCK: %v", lockErr)
+			}
+			// All sticky failure and retained LOCK assertions precede process shutdown.
+			if err = lock.Close(); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

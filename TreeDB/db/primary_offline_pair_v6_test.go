@@ -487,6 +487,9 @@ func TestPrimaryOfflinePairV6RetainsUncertainDecision(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
+			if primaryOfflinePlatformRefusal(t, Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}, false) {
+				return
+			}
 			injected := fmt.Errorf("offline injected %s", phase)
 			testHookPrimaryJointSwapV6 = func(p string) error {
 				if p == phase {

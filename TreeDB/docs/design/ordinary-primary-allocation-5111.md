@@ -25,6 +25,36 @@ to the SAME containing Set and all selected containing admissions use actual
 `unsafe.Sizeof(StableResourceSet{})`; it adds no directory root or cleanup
 authority. Genuine generic flat diagnostic behavior remains separate.
 
+Generic diagnostic entries now read immutable copied namespace identity, shared
+atomic namespace sync totals, and the exact registry identity instead of the
+operational namespace/pin fields cleared by physical release. The backing has
+no file, namespace, pin or cleanup-owner backpointer. Generic namespace/registry
+registrations allocate that diagnostic backing; absent operands allocate none.
+Namespace text, including platform identity strings, is independently copied.
+The first generic namespace capture also allocates shared counter storage;
+clones share its exact identity so mixed generic/owned observations deduplicate
+the same namespace. Selected tokens allocate no generic backing, keep their
+original presence/merge fast paths, and retain existing admitted descriptor
+lifetimes. Their original namespace cleanup clears any shared-counter alias
+before its containing refund. Actual token/namespace admissions include the
+added pointer fields through `unsafe.Sizeof`.
+
+Raw logical Union and extension Union refuse selected allocations, including
+admitted tokens hidden in flat views, before copying an unadmitted alias.
+Selected diagnostics use their existing admitted observation, and publication
+uses its candidate-scoped physical union. Internal admission counts remain
+synchronous under original candidate custody. Generic released diagnostic
+Unions retain their existing behavior. Mixed namespace comparison holds the
+original selected namespace mutex and retains its released-state refusal.
+
+The private one-shot read pool never publishes a Snapshot, alternate-root
+reader, historical rebind or iterator. Those unused fields stay empty from
+birth and need no repeated reset; main Tree, value reader, state, pager and
+original ownership edges still complete and scrub before reuse. Exported
+Snapshot cache and iterator cleanup remains unchanged. Focused controls cover
+that private invariant, failed cleanup non-reuse and exported iterator aliases;
+this source simplification is not a performance qualification.
+
 The mmap concurrency fixture reopens its original files through the production
 `Manager.RegisterSegment` constructor. That constructor admits the original
 File and creates its Manager alias edge before map publication. Tests retain

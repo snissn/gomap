@@ -168,26 +168,19 @@ func TestPrimaryFinishAccountingBeforeAckAndStop(t *testing.T) {
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			defer unblock()
-			var observed, violation atomic.Bool
+			var observed atomic.Bool
+			var violation atomic.Uint32
 			wrapper := &containingUnlockBudget{actual: budget, observe: func() {
 				if txn.constructionV6 != nil || !observed.CompareAndSwap(false, true) {
 					return
 				}
 				if txn.owner != ResourceOwnerReleased || txn.phase != durableRootConsumed {
-					violation.Store(true)
+					violation.Or(1)
 				}
 				if !txn.mu.TryLock() {
-					violation.Store(true)
+					violation.Or(2)
 				} else {
 					txn.mu.Unlock()
-				}
-				if !c.mu.TryLock() {
-					violation.Store(true)
-				} else {
-					if c.durable.commitSeq != 0 || !c.publishing || c.activeAttempt.id != 0 || c.retryAttempt.id != 0 || len(c.pending) != 0 || c.activeDispatch != 1 {
-						violation.Store(true)
-					}
-					c.mu.Unlock()
 				}
 				close(held)
 				<-release
@@ -207,8 +200,28 @@ func TestPrimaryFinishAccountingBeforeAckAndStop(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("containing refund was not reached")
 			}
-			if violation.Load() || c.Stats().DurableCommitSeq != 0 {
-				t.Fatal("terminal refund retained an original lock/alias or advanced ACK")
+			// The scheduler can briefly hold c.mu even during startup. Prove
+			// another goroutine can acquire it while this SAME refund is paused;
+			// TryLock alone cannot distinguish that contention from a caller lock.
+			checked, checkDone := make(chan bool, 1), make(chan struct{})
+			go func() {
+				defer close(checkDone)
+				c.mu.Lock()
+				invalid := c.durable.commitSeq != 0 || !c.publishing || c.activeAttempt.id != 0 || c.retryAttempt.id != 0 || len(c.pending) != 0 || c.activeDispatch != 1
+				c.mu.Unlock()
+				checked <- invalid
+			}()
+			defer func() { unblock(); <-checkDone }()
+			select {
+			case invalid := <-checked:
+				if invalid {
+					violation.Or(4)
+				}
+			case <-ctx.Done():
+				t.Fatal("coordinator lock unavailable during paused containing refund")
+			}
+			if flags, durable := violation.Load(), c.Stats().DurableCommitSeq; flags != 0 || durable != 0 {
+				t.Fatalf("terminal refund retained an original lock/alias or advanced ACK: owner/phase=%t transaction-lock=%t coordinator-state=%t durable=%d", flags&1 != 0, flags&2 != 0, flags&4 != 0, durable)
 			}
 			if e = c.CompleteStartup(); !errors.Is(e, ErrPublisherProtocol) {
 				t.Fatalf("startup accepted active accounting: %v", e)

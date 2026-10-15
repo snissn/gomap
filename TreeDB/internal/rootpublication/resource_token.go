@@ -469,6 +469,8 @@ type resourceTokenMetrics struct {
 }
 
 type StableResourceToken struct {
+	// Generic immutable diagnostics contain no physical cleanup aliases.
+	diagnostics        *genericResourceDiagnostics
 	releaseWork        stableResourceTokenReleaseStateV6
 	cleanupFailure     originalReleaseFailure
 	cleanupDone        atomic.Bool
@@ -676,6 +678,9 @@ func initializeStableResourceToken(spec StableResourceSpec, normalized []StableL
 			return nil, err
 		}
 	}
+	if token.metadata == nil {
+		token.diagnostics = newGenericResourceDiagnostics(token.namespace, spec.PinRegistry)
+	}
 	closeOnError = false
 	physicalTransferred = true
 	return token, nil
@@ -753,6 +758,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
 		onRelease: onRelease, identityPin: identityPin, physicalBacking: token.physicalBacking, observationCleanup: observation,
 	}
+	cloned.diagnostics = token.diagnostics
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
 	if cloned.hasSyncedFrontier {
@@ -1069,13 +1075,22 @@ func (token *StableResourceToken) mutablePhysicalKey() stablePhysicalResourceKey
 }
 
 func (token *StableResourceToken) namespaceCompatible(other *StableResourceToken) bool {
-	if token.namespace == nil || other.namespace == nil {
-		// A later range in an already-created append-only object legitimately has
-		// no new namespace operation. The coalesced entry retains whichever token
-		// carries the creation obligation.
-		return true
+	if token.metadata != nil && other.metadata != nil {
+		if token.namespace == nil || other.namespace == nil {
+			return true
+		}
+		return token.namespace.compatible(other.namespace)
 	}
-	return token.namespace.compatible(other.namespace)
+	// Mixed callers still own the selected token's physical edge. Generic
+	// diagnostics no longer own the namespace, so compare its immutable copy
+	// under the same selected namespace lock/released check as compatible.
+	if token.metadata != nil {
+		return token.namespace.compatibleGenericDiagnostics(other.diagnostics)
+	}
+	if other.metadata != nil {
+		return other.namespace.compatibleGenericDiagnostics(token.diagnostics)
+	}
+	return genericNamespaceDiagnosticsCompatible(token.diagnostics, other.diagnostics)
 }
 
 func frontierCompatible(older, newer DurableFrontier) bool {
@@ -1531,6 +1546,8 @@ func (failure *ownedNamespaceCleanupFailure) add(err error) {
 }
 
 type StableNamespaceToken struct {
+	// Allocated only for generic diagnostic consumers; holds counters, no owner.
+	diagnosticSyncs        atomic.Pointer[genericNamespaceSyncMetrics]
 	batch                  *stableNamespaceBatchCleanup
 	batchIndex             int
 	cleanupFailure         ownedNamespaceCleanupFailure
@@ -2360,7 +2377,9 @@ func (token *StableNamespaceToken) syncSharedPersistence() error {
 	started := time.Now()
 	err := token.adapter.Sync(token.persistence)
 	token.syncs.Add(1)
-	token.syncNanos.Add(uint64(time.Since(started)))
+	duration := uint64(time.Since(started))
+	token.syncNanos.Add(duration)
+	token.recordDiagnosticSync(duration)
 	return err
 }
 
@@ -2409,7 +2428,9 @@ func (token *StableNamespaceToken) Stabilize() error {
 	}
 	err := token.adapter.Sync(token.persistence)
 	token.syncs.Add(1)
-	token.syncNanos.Add(uint64(time.Since(started)))
+	duration := uint64(time.Since(started))
+	token.syncNanos.Add(duration)
+	token.recordDiagnosticSync(duration)
 	if err != nil {
 		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
 			err = errors.Join(ErrNamespacePersistenceUnsupported, err)
@@ -2701,6 +2722,7 @@ func (token *StableNamespaceToken) releaseLocked() {
 	token.newName = ""
 	token.diagnosticPath = ""
 	token.adapter = nil
+	token.diagnosticSyncs.Store(nil)
 	token.cleanupRegistry = nil
 	metadata.RemovePending(charge)
 }

@@ -558,7 +558,7 @@ type DB struct {
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
-	testValueLogStateCapturedHook func(string, *DBState)
+	testValueLogStateCapturedHook func(string, *valuelog.Set, uint64)
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.

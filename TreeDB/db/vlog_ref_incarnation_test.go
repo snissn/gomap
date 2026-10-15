@@ -218,6 +218,12 @@ func TestValueLogRefCountOwnerSurvivesPrimaryVacuum(t *testing.T) {
 	if err = d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		if err = d.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	original := d.idx.Load()
 	originalMetadata := original.primary.MetadataOwner()
 	if err = d.VacuumIndexOnline(context.Background()); err != nil {
@@ -285,6 +291,12 @@ func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T)
 	}
 	if err = d.Checkpoint(); err != nil {
 		t.Fatal(err)
+	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		if err = d.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	original := d.idx.Load()
 	if err = d.VacuumIndexOnline(context.Background()); err != nil {

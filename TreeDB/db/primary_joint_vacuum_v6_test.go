@@ -200,6 +200,12 @@ func TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody(t *testing.T) {
 			if e = d.SetSync([]byte("second"), []byte("two")); e != nil {
 				t.Fatal(e)
 			}
+			if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+				if e = d.Close(); e != nil {
+					t.Fatal(e)
+				}
+				return
+			}
 			prior := d.State().CommitSeq
 			injected := errors.New("joint cut")
 			testHookPrimaryJointSwapV6 = func(p string) error {
@@ -676,6 +682,12 @@ func TestPrimaryJointVacuumV6NamespaceObserverUncertainty(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+				if e = d.Close(); e != nil {
+					t.Fatal(e)
+				}
+				return
+			}
 			cut := errors.New("joint namespace observer uncertainty")
 			injected := false
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -775,6 +787,15 @@ func TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair(t *te
 	defer held.Close()
 	if e = d.SetSync([]byte("second"), []byte("second")); e != nil {
 		t.Fatal(e)
+	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		if e = held.Close(); e != nil {
+			t.Fatal(e)
+		}
+		if e = d.Close(); e != nil {
+			t.Fatal(e)
+		}
+		return
 	}
 	prior, old := d.State().CommitSeq, d.idx.Load()
 	cut := errors.New("old runtime retirement error")

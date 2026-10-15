@@ -103,18 +103,22 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	s.tree.Reset(nil, nil, 0)
 	s.treePager = nil
 	s.treeRoot = 0
-	clear(s.rootTrees)
-	s.rootTrees = nil
-	// Overflow may have moved the active cache away from its first inline
-	// entry. Only a populated entry carries an alias that still needs scrubbing.
-	if s.rootTreeFirst[0].root != 0 {
-		s.rootTreeFirst[0] = snapshotRootTree{}
+	if !oneShot {
+		clear(s.rootTrees)
+		s.rootTrees = nil
+		// Overflow may have moved the active cache away from its first inline
+		// entry. Only a populated entry carries an alias that still needs scrubbing.
+		if s.rootTreeFirst[0].root != 0 {
+			s.rootTreeFirst[0] = snapshotRootTree{}
+		}
+		// The private one-shot pool never exposes an alternate-root reader,
+		// historical rebind, or iterator. Its entries keep these fields empty.
+		s.primaryRebindRoot = primaryStateRootV5{}
+		s.primaryRebindErr = nil
 	}
 	s.db = nil
 	s.idx = nil
 	s.state = nil
-	s.primaryRebindRoot = primaryStateRootV5{}
-	s.primaryRebindErr = nil
 	s.vlogManager = nil
 	s.vlogPinned = false
 	s.leafGenerationIDs = nil
@@ -128,8 +132,8 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	s.registryID = 0
 	if !oneShot {
 		s.iteratorMu.Lock()
+		clear(s.iterators)
 	}
-	clear(s.iterators)
 	s.readState.Store(snapshotReadClosedBit)
 	s.closed.Store(true)
 	s.finalized.Store(false)

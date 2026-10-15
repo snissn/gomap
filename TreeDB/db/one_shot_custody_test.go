@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -36,8 +37,27 @@ func TestOneShotReadCustodyMatchesCapturedResources(t *testing.T) {
 	if r.snapshot.registryID == 0 || !r.snapshot.indexWrapperBorrowed {
 		t.Fatal("private read lost original generation pin")
 	}
+	// This private guard never enters alternate-root, historical-rebind, or
+	// iterator APIs. Only its main Tree/reader acquires live aliases.
+	checkUnused := func() {
+		t.Helper()
+		snap := &r.snapshot
+		if len(snap.rootTrees) != 0 || snap.rootTreeFirst[0].root != 0 || !reflect.ValueOf(snap.rootTreeFirst[0].tree).IsZero() || snap.primaryRebindRoot != (primaryStateRootV5{}) || snap.primaryRebindErr != nil || len(snap.iterators) != 0 {
+			t.Fatal("private one-shot used exported root/iterator state")
+		}
+	}
+	checkUnused()
+	got, _, err = r.snapshot.tree.GetVersionedAppend([]byte("inline"), nil)
+	if err != nil || !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("private main Tree read: %q %v", got, err)
+	}
+	checkUnused()
 	if err = r.close(); err != nil {
 		t.Fatal(err)
+	}
+	checkUnused()
+	if r.snapshot.treePager != nil || r.snapshot.treeRoot != 0 || r.snapshot.reader.vlogs != nil || r.snapshot.state != nil || r.snapshot.idx != nil {
+		t.Fatal("private pool retained main Tree/reader/owner aliases")
 	}
 	s := d.AcquireSnapshot()
 	if s == nil || s.vlogManager == nil || !s.vlogWrapperBorrowed {

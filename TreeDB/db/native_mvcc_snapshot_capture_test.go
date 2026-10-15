@@ -12,6 +12,7 @@ func TestNativeMVCCSnapshotActualCaptureAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer d.Close()
 	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,13 @@ func TestNativeMVCCSnapshotActualCaptureAndCancellation(t *testing.T) {
 	}
 	w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
 	s, ready, err := d.BeginNativeMVCCSnapshotV6(admit, &w)
+	if !d.idx.Load().pager.SupportsBoundedPhysicalClose() {
+		if s != nil || ready || !errors.Is(err, ErrNativeMVCCSnapshotWork) || called || lease != nil || d.snapshotAcquireEpoch.Load() != beforeEpoch {
+			t.Fatalf("unsupported capture changed custody/admission/epoch: %v", err)
+		}
+		budget.Close()
+		return
+	}
 	if s == nil || !ready || err != nil || lease == nil {
 		t.Fatal("actual native Snapshot capture", err)
 	}

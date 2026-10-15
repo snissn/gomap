@@ -1,5 +1,7 @@
 package db
 
+import "github.com/snissn/gomap/TreeDB/internal/valuelog"
+
 // acquireStateValueLogSetLocked borrows the exact Set selected under db.mu and
 // rootReuseMu. It must run before either capture fence is released. The caller
 // keeps this borrow through the final map/tree/zipper use and joins its release.
@@ -18,6 +20,13 @@ func (db *DB) releaseStateValueLogSet(state *DBState) error {
 
 func (db *DB) valueLogStateCaptured(stage string, state *DBState) {
 	if hook := db.testValueLogStateCapturedHook; hook != nil {
-		hook(stage, state)
+		// Only the selected operands cross the test seam. The immutable published
+		// state itself stays within the analyzed production capture lifetime.
+		var set *valuelog.Set
+		var root uint64
+		if state != nil {
+			set, root = state.ValueLogSet, state.RootPageID
+		}
+		hook(stage, set, root)
 	}
 }

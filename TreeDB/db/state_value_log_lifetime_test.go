@@ -70,7 +70,7 @@ func TestCurrentStateValueLogConsumersRetainExactSet(t *testing.T) {
 			}
 			var consumed *valuelog.Set
 			observed := false
-			d.testValueLogStateCapturedHook = func(at string, state *DBState) {
+			d.testValueLogStateCapturedHook = func(at string, set *valuelog.Set, root uint64) {
 				if at != stage {
 					return
 				}
@@ -78,7 +78,7 @@ func TestCurrentStateValueLogConsumersRetainExactSet(t *testing.T) {
 					t.Fatal("unexpected repeated capture")
 				}
 				observed = true
-				consumed = state.ValueLogSet
+				consumed = set
 				if consumed != selected || consumed.RefCount.Load() != 2 {
 					t.Fatalf("capture did not pin selected Set before unlock: refs=%d", consumed.RefCount.Load())
 				}
@@ -88,9 +88,8 @@ func TestCurrentStateValueLogConsumersRetainExactSet(t *testing.T) {
 				if consumed.RefCount.Load() != 1 || len(consumed.Files) == 0 {
 					t.Fatal("refresh consumed a live reader's exact Set")
 				}
-				tr := state.RootPageID
 				count := 0
-				if err := leafrefscan.WalkRoots(context.Background(), []uint64{tr}, outer.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error { count++; _, err := consumed.Read(ptr.ValuePtr()); return err }); err != nil || count == 0 {
+				if err := leafrefscan.WalkRoots(context.Background(), []uint64{root}, outer.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error { count++; _, err := consumed.Read(ptr.ValuePtr()); return err }); err != nil || count == 0 {
 					t.Fatalf("held outer leaves unreadable: count=%d err=%v", count, err)
 				}
 			}

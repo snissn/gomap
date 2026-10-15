@@ -27,6 +27,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -522,12 +523,45 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		t.Fatalf("close db: %v", err)
 	}
 
-	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	images := func() map[string][]byte {
+		result := make(map[string][]byte)
+		if e := filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, e error) error {
+			if e != nil {
+				return e
+			}
+			if entry.IsDir() || entry.Name() == "LOCK" {
+				return nil
+			}
+			image, e := os.ReadFile(path)
+			if e != nil {
+				return e
+			}
+			result[path] = image
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		return result
 	}
-	if rewriteStats.RecordsCopied == 0 {
-		t.Fatalf("expected offline rewrite to copy collection leaf records, stats=%+v", rewriteStats)
+	var before map[string][]byte
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before = images()
+	}
+	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
+	if before != nil {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("unsupported offline rewrite: %v", err)
+		}
+		if !reflect.DeepEqual(before, images()) {
+			t.Fatal("unsupported offline rewrite changed persistent inputs")
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("ValueLogRewriteOffline: %v", err)
+		}
+		if rewriteStats.RecordsCopied == 0 {
+			t.Fatalf("expected offline rewrite to copy collection leaf records, stats=%+v", rewriteStats)
+		}
 	}
 
 	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
