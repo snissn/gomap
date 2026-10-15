@@ -1,0 +1,126 @@
+{
+  "scope": "Source-only closeout; no production/API changes, new runtime, Git or GitHub mutation. Diagnostic controls are not native product activation.",
+  "diagnostic_head": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "native_checkpoint": "64cee8410991f0712896e52162a594683ec35b18",
+  "disposition": "STOP_DIAGNOSTIC_HARNESS; reuse existing authority-fenced visibility/physical-completion split before further runtime",
+  "outcomes": {
+    "v1": "Harness omitted physicalOnly admission receipt through BuildGroup, then reacquired its own held Authority Cut. Not ordinary production deadlock; no history result.",
+    "v2": "Public DB.Get missing-key oracle incorrectly expected tree.ErrKeyNotFound; actual contract is nil value, nil error. Failed fixture preserved; no scaling result.",
+    "v3": "Corrected serial semantic guard PASS, including exact physical DATA absence, wrong winner/stale request refusal, actual mixed logical admission, old reader and reopen. First continuing-write baseline33 deadlocked; no history cell completed.",
+    "v3_cycle": "Prune holds Authority Cut and waits original WaitThrough(seq5); successor writer holds durablePublishMu/db.mu and waits Authority.Begin; publisher needs durablePublishMu to commit seq5. Cut.Commit occurs only after lower finalizer returns in harness. This violates the already-required visibility-release boundary."
+  },
+  "current_contract_citations": [
+    {
+      "file": "TreeDB/internal/mvccadmission/admission.go",
+      "lines": "152-156,185-205",
+      "meaning": "Begin locks SAME authority; Commit performs only sticky terminal-authority update and unlocks; Abort unlocks without accepted invalidation. Neither owns physical resources.",
+      "sha256": "14a91279780df01c1cff031e92f33d5dae7d0bb866ee461a60825a906e289a67"
+    },
+    {
+      "file": "TreeDB/internal/mvccadmission/request.go",
+      "lines": "14-18,48-69,72-96",
+      "meaning": "Immutable Request owns no snapshot/publisher/history. Validate grants no Cut. ObservePrune under SAME Cut checks exact owner/foreign epoch, physical version-key shape and nonzero timestamp <= floor; selector separately proves anchor/tombstone/current revision.",
+      "sha256": "8d9160b3764c5ca17eda2046e58f18dcbb11a5a3623884b31b65e8c02493f57c"
+    },
+    {
+      "file": "TreeDB/db/db.go",
+      "lines": "4003-4012",
+      "meaning": "Expected base commit sequence is rechecked in serialized finalization before acceptance; mismatch is preaccept ErrDurableRootCandidateStale.",
+      "sha256": "bd79f7ec64300025af7d9ff440f9d35c17da04f64a308e2c632cb8a2a3c19f80"
+    },
+    {
+      "file": "TreeDB/db/root_publication_activation.go",
+      "lines": "516-565,567-600",
+      "meaning": "Validate candidate/sequence/incarnation and visible-install failure before allocator activation. Allocator activation is PONR; ordinary admission aborts on its failure. Nonfallible meta/state/SnapshotView install follows, then Cut.Commit before db.mu unlock.",
+      "sha256": "4690b89aaf9185f914ee9b6450c4817336306a096a9a361ed1f082df1a3ac90f"
+    },
+    {
+      "file": "TreeDB/db/root_publication_activation.go",
+      "lines": "1266-1304",
+      "meaning": "Accepted postwork and build-lock release precede admission/durability waits. Accepted failures preserve accepted outcome; original synchronous WaitThrough remains the physical completion gate.",
+      "sha256": "4690b89aaf9185f914ee9b6450c4817336306a096a9a361ed1f082df1a3ac90f"
+    },
+    {
+      "file": "TreeDB/db/native_current_cow_diagnostic_test.go",
+      "lines": "82-97,126-145,155-206",
+      "meaning": "Tagged harness rechecks selected+anchor exact fields at captured current root and uses expectedBaseSeq plus original lower finalizer, but wrongly retains SAME Cut until the lower finalizer/Finish wait returns.",
+      "sha256": "1ba5fe9d67eac25b7b3d267a53255bfe6117057e384c78493098845874118537"
+    },
+    {
+      "file": "TreeDB/db/root_publication_activation.go",
+      "lines": "1063-1082",
+      "meaning": "Current PRIMARY must be copied or rebuilt from complete new DATA with constructor output; a DATA edit beneath retained overlays is not a no-resurrection proof.",
+      "sha256": "4690b89aaf9185f914ee9b6450c4817336306a096a9a361ed1f082df1a3ac90f"
+    },
+    {
+      "file": "TreeDB/zipper/primary_directory.go",
+      "lines": "239-300,732-739",
+      "meaning": "Existing materialization applies live directory entries through SAME DATA core; BuildPrimaryRoot wraps complete already-materialized DATA with empty directory.",
+      "sha256": "8d00d59f43b5465c944bc1b363dad833400aad7393374429c390c7186b72fae6"
+    }
+  ],
+  "checkpoint_reuse_citations": [
+    {
+      "file": "TreeDB/db/root_publication_activation.go",
+      "lines": "1873-1888,1891-1986",
+      "meaning": "Original successful fence calls commitPublishedSeal (PRIMARY delegates commitPrimarySealV5). Exact attempt/prefix checks precede final fallible allocator-prefix transfer, durable slot install and original retired-resource cleanup. Reuse this original transaction/publisher; do not clone it.",
+      "sha256": "e0d7d3940538173b53e6047140a667724bac60d2a730e75d7ab85b7e71031682"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "lines": "131-202",
+      "meaning": "ReleaseNativePublicationTurnV6 requires exact successful fence and original transaction Consume; advances SAME frontier/lineage once, releases turn without Finish, pin refund or dispatch join. Physical completion may not reapply an older frontier over successor.",
+      "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "lines": "205-238,309-339",
+      "meaning": "CompleteNativePublicationV6 settles physical join with retained original failure custody. ConsumeNativePublicationResourcesV6 consumes exact protected shared edges only after successful fence and before Consume/turn release; whole operation must be preadmitted, unexpected post-fence refusal follows ambiguity/custody.",
+      "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "lines": "60-77",
+      "meaning": "Existing coordinator completion advances exact frontier/lineage and releases publishing state. Reuse existing split; its existence does not prove Q32 fit.",
+      "sha256": "ee18f78bc1870e1b44ec42729f9470f9e5109c3a41f98bb7a094516a63b1eece"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "lines": "335-375",
+      "meaning": "Checkpoint validates fresh physical certificate/selected record and SAME Request under Cut before SealPrimaryCurrentAbsenceV6; that local cut aborts on return. It alone is not an end-to-end current-COW publication handoff.",
+      "sha256": "d9ac6d7823d89dabdd27a11647e0193c51bcfd08e3af39dbd83143b8aa1caee8"
+    }
+  ],
+  "smallest_coherent_next_inquiry": [
+    "Keep exact selection/anchor proof and SAME Request. Bind validation to current captured root and expectedBaseSeq under existing serialization; any changed basis must be revalidated rather than silently replayed.",
+    "Carry the legitimate physical-only prune receipt and SAME exclusive Cut custody through the existing conditional-mutation/transaction/visible-install seam. Release/commit admission at actual nonfallible visible install, before build-lock release and waits. Abort only preaccept; no new boolean authorization, second publisher or dropping Cut.",
+    "Use existing native fence/Consume/ReleaseNativePublicationTurnV6 lineage handoff for the later durable authority turn; retain SAME physical receipt/member custody through original Finish and CompleteNativePublicationV6. Do not equate admission Cut release, durable turn release and Pruned ACK.",
+    "Retain ordinary mixed/logical admission and original synchronous physical Finish/Close. Current PRIMARY base+delta must remain coherent with DATA; existing full materialization is valid serially but not yet bounded.",
+    "Account all validation, handoff, materialization, allocator, resource projection, abort and actual Finish work under original total accounting. No timing/geometry/history bound follows from this diagnostic."
+  ],
+  "proposed_focused_controls": [
+    {
+      "control": "Actual foreground writer cycle plus paused Finish",
+      "red": "V3 preserved cycle above; original serial checks alone cannot reveal it.",
+      "green": "Same Request exact deletion reaches authority-fenced visibility, releases legitimate exclusive turn/Cut there, newer future/equal-ts writer completes while original Finish is paused, original receipt remains live and Pruned ACK waits actual Finish. Verify DATA absence, anchor/future preservation, old reader and reopen."
+    },
+    {
+      "control": "Exact basis and logical authority refusal",
+      "red": "Wrong revision/flags/value pointer or key, stale foreign Request, or changed expectedBaseSeq is refused before root/allocator publication.",
+      "green": "Exact fresh basis proceeds; real mixed/logical Batch path still runs ordinary admission and invalidates prior Request where required. No physical-only flag bypass for mixed input."
+    },
+    {
+      "control": "Boundary error custody",
+      "red": "Existing visible-install/allocator pre-PONR failure aborts original Cut once, with no publication; accepted postactivation/fence/Finish errors cannot be treated as retryable preaccept.",
+      "green": "Existing accepted-error and ambiguity paths retain same transaction/resource receipt, never replay old lineage over successor, settle physical join once and expose actual physical outcome before ACK."
+    }
+  ],
+  "graph_disposition": {
+    "new_contract_requirement": false,
+    "existing_contract": "Parent live-read confirms #4878 lines40/44 already require release at successful authority-fenced visibility, retain SAME physical receipt until Finish/ACK, and paused-Finish plus newer durable write control.",
+    "needed_revision": "Clarify experimental selection/next implementation gate to integrate existing visibility/fence/Consume handoff before another continuing-write diagnostic; record v1/v3 as harness mismatches and v2 as fixture oracle error, not production regressions or history-scaling evidence.",
+    "unchanged": "Original Q32/total work/byte/resource bounds and ACK gates remain RED/open. No arbitrary publication quota, quiet window waiver, native activation, C1/C3 backend certificate, or general production/history-bound claim."
+  },
+  "lifetime_arena": "Reuse existing batch/zipper arena and original allocator. Exclusive Cut is control custody, not an arena-owned resource. Published/pinned COW roots, retained transaction and Finish receipt must survive their real consumers; no pool/reset before terminal ownership completion.",
+  "cleanup": "Unused exact binaries/build/DB scratch removed only after no /proc consumers; runtime-release-inventory.json and runtime-release-receipt.json preserve identities. Sources/raw logs/stacks and failed freezes retained; shared caches untouched; no binaries in Git."
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 2531,
+    "sha256": "49a2e7d2337e6aadb8edcf6bdecb5ea22c9ba75e65f4d7791349aee6f0f2c2e5"
+  },
+  {
+    "path": "design-contract-note.json",
+    "bytes": 11199,
+    "sha256": "de8915d94b5435f149fc60a4aa519840cae5b5a22ce777343951e4773ed5e521"
+  },
+  {
+    "path": "design-contract-note.md",
+    "bytes": 1026,
+    "sha256": "67f6d7b198a451b8d6d5b9d9bf4e2771f72e4395ab20c794c8fa5a4266799606"
+  },
+  {
+    "path": "diagnostic-v1-v3.tar.gz",
+    "bytes": 1016036,
+    "sha256": "add1dfd2095db904300973de0d00e0f7b2256ccc8805d379b60abd5d3d23c3df"
+  }
+]
