@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|scripts/mvcc_primary_cost_gate\.py$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard|primary_cost_gate)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
       - name: Resolve pull request and relevant paths
         id: scope
@@ -116,6 +116,7 @@ jobs:
           python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
           python3 .github/scripts/test_mvcc_raw_path_equivalence.py
           python3 .github/scripts/test_mvcc_benchmark_pairing.py
+          python3 .github/scripts/test_mvcc_primary_cost_gate.py
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
           python3 .github/scripts/test_treedb_ci_contract.py
@@ -134,6 +135,8 @@ jobs:
             scripts/mvcc_adapter_overhead_gate.sh \
             scripts/mvcc_closeout_matrix.sh \
             scripts/mvcc_candidate_checkout_guard.sh \
+            scripts/mvcc_primary_cost_gate.py \
+            .github/scripts/test_mvcc_primary_cost_gate.py \
             .github/scripts/summarize_mvcc_closeout.py \
             .github/scripts/test_summarize_mvcc_closeout.py \
             .github/scripts/test_mvcc_candidate_checkout_guard.py \
@@ -169,6 +172,18 @@ jobs:
           fi
           ./scripts/mvcc_raw_path_gate.sh
 
+      - name: Compare public PRIMARY replacement cost
+        if: steps.paths.outputs.run == 'true'
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 scripts/mvcc_primary_cost_gate.py \
+            --root "$GITHUB_WORKSPACE" \
+            --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
+            --output "$RUNNER_TEMP/mvcc-raw-path-gate/primary"
+
       - name: Add benchmark summary
         if: always() && steps.paths.outputs.run == 'true'
         run: |
@@ -179,6 +194,9 @@ jobs:
               echo "The exact base/head fixture is observation-only under the \`performance-observation-only\` label. The linked ticket and PR must document the replacement matched evidence and accepted performance class."
               echo
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/primary/summary.md" ]]; then
+            cat "$RUNNER_TEMP/mvcc-raw-path-gate/primary/summary.md" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
             cat "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
