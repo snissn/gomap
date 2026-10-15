@@ -222,11 +222,19 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	if e = runtime.idx.primary.MetadataOwner().AddPending(sealMetadata); e != nil {
 		return e
 	}
-	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion}}
-	seal.metadata = runtime.idx.primary.MetadataOwner()
-	seal.disposalFailure.payload = seal
+	seal := newPrimaryCapsuleSealDescriptorV6(rootPublicationSealV1{metadata: runtime.idx.primary.MetadataOwner(), metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion})
 	runtime.seals = append(runtime.seals, seal)
 	runtime.activeSeal = seal
 	transferred = true
 	return nil
+}
+
+// Both ordinary and retained preparation allocate these SAME two descriptors.
+// This constructor installs no runtime slot, activates no member and acquires
+// no resource edge. Its caller has admitted both headers and the prefix before
+// transferring the exact original operands into their canonical seal.
+func newPrimaryCapsuleSealDescriptorV6(value rootPublicationSealV1, primary primaryPublicationSealV5) *rootPublicationSealV1 {
+	value.primary = &primary
+	value.disposalFailure.payload = &value
+	return &value
 }

@@ -23,6 +23,12 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealCommitStorageV6(seal 
 	if runtime.activeSeal != seal || runtime.poison != nil || seal.released {
 		return false, rootpublication.ErrDurableRootOwnership
 	}
+	return preparePrimarySealCommitStorageLockedV6(seal, runtime.idx.primary, len(runtime.seals), w)
+}
+
+// Caller holds runtime.mu. Private preparation reserves for its future SAME
+// seal as well; later activation/fence validates that exact capacity again.
+func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena *primaryarena.Arena, sealCount int, w *iterator.OrdinalScanWork) (bool, error) {
 	if seal.commitRuntime == nil {
 		bytes := uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))
 		if !w.Reserve(1, bytes) {
@@ -33,10 +39,10 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealCommitStorageV6(seal 
 			return false, err
 		}
 		seal.commitRuntime = &primaryDurableRuntimeV5{}
-		bindReservedPrimaryRuntimeV5(seal.commitRuntime, runtime.idx.primary)
+		bindReservedPrimaryRuntimeV5(seal.commitRuntime, arena)
 	}
 	if seal.commitRetired == nil {
-		count := len(runtime.seals)
+		count := sealCount
 		if !w.Reserve(1, uint64(count)*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {
 			return false, nil
 		}
@@ -49,7 +55,7 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealCommitStorageV6(seal 
 	}
 	// A later seal may join while this producer yields. Refuse before the
 	// durable fence rather than reallocating or hiding a variable scan there.
-	if cap(seal.commitRetired) < len(runtime.seals) {
+	if cap(seal.commitRetired) < sealCount {
 		return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
 	}
 	seal.commitStorageReady = true

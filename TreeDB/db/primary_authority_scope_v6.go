@@ -48,10 +48,19 @@ func (s *nativeAuthorityScopeV6) begin(runtime *rootPublicationRuntimeV1, seal *
 		return false, nil
 	}
 	member := runtime.visibleMember(seal.latestSequence)
+	// Canonical capsules embed their parent by value and zero ParentCommitSeq.
+	// Bind authority to the complete captured original slot and generation ref.
+	if seal.target > 1 || seal.primary == nil || seal.primary.promotion == nil {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	baseSlot := uint64(1) - seal.target
 	if runtime.activeSeal != seal || runtime.poison != nil || member == nil || member.transaction == nil ||
 		!member.transaction.RequiresNativeCallbackWorkV6() || seal.primary == nil ||
 		member.primary != seal.primary.prepared || member.primaryRecordTransferred ||
-		db.durableRoot.primary == nil || db.durableRoot.record.CommitSeq != seal.record.ParentCommitSeq ||
+		db.durableRoot.primary == nil || db.durableRoot.slot != baseSlot ||
+		db.durableRoot.meta != seal.base.slotMeta[baseSlot] || db.durableRoot.record != seal.base.slotRecord[baseSlot] ||
+		db.durableRoot.primary.records[baseSlot] != seal.primary.promotion.Parent ||
+		seal.primary.promotion.View.Parent().Record != db.durableRoot.record ||
 		!seal.commitStorageReady || seal.commitRuntime == nil || cap(seal.commitRetired) < len(runtime.seals) ||
 		len(runtime.debt) < len(seal.prefix) {
 		return false, rootpublication.ErrDurableRootOwnership

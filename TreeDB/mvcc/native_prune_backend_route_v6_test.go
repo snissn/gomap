@@ -164,7 +164,7 @@ func testNativeMVCCRealBackendRouteCustodyV6(t *testing.T, mode string) {
 			t.Fatalf("actual member/candidate not reached: stage=%d bound=%v candidate=%v", stage, bound, candidate)
 		}
 		sealStage, promoted := c.preparation.MaintenanceNativeSealScalarsForTest()
-		if sealStage != 11 || !promoted {
+		if sealStage != 13 || !promoted {
 			t.Fatalf("actual private promotion not reached: stage=%d promoted=%v", sealStage, promoted)
 		}
 		if count, same := c.preparation.MaintenanceNativeIndexCaptureScalarsForTest(); count != 2 || !same {

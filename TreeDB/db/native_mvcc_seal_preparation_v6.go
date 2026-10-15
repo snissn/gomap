@@ -3,6 +3,7 @@ package db
 import (
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -28,6 +29,7 @@ type nativeMVCCSealPreparationV6 struct {
 	parentImage               [rootpublication.PrimaryCapsuleSizeV6]byte
 	manifestImage, scratch    [page.PageSize]byte
 	indexCaptures             [2]nativeStablePagerCaptureV6
+	seal                      *rootPublicationSealV1
 	phase                     uint8
 	promoted                  bool
 }
@@ -48,7 +50,7 @@ func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeIndexCaptureScalarsForTest(
 	sameGeneration = true
 	for i := range c.sealPreparation.indexCaptures {
 		s := &c.sealPreparation.indexCaptures[i]
-		if s.phase == 8 && s.token != nil {
+		if s.phase == 8 && (s.token != nil || c.sealPreparation.seal != nil && (i == 0 && c.sealPreparation.seal.token != nil || i == 1 && c.sealPreparation.seal.primary != nil && c.sealPreparation.seal.primary.token != nil)) {
 			count++
 			sameGeneration = sameGeneration && s.snapshot != nil && s.snapshot.idx == c.db.rootPublication.idx && s.snapshot.stableIndexCaptureTransferred
 		}
@@ -208,6 +210,20 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 			}
 			s.phase++
 		case 11:
+			ready, err := c.prepareNativePrivateSealDescriptorV6(w)
+			if !ready || err != nil {
+				return false, err
+			}
+			s.phase = 12
+		case 12:
+			runtime.mu.Lock()
+			ready, err := preparePrimarySealCommitStorageLockedV6(s.seal, runtime.idx.primary, len(runtime.seals)+1, w)
+			runtime.mu.Unlock()
+			if !ready || err != nil {
+				return false, err
+			}
+			s.phase = 13
+		case 13:
 			return true, nil
 		default:
 			return false, ErrNativeMVCCSnapshotWork
@@ -224,6 +240,14 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 		}
 		*s = nativeMVCCSealPreparationV6{}
 		return true, nil
+	}
+	if s.seal != nil {
+		completion, ready, err := continueRootPublicationSealReleaseV6(s.seal, w, releasePrimaryResourceSetWithWorkV6)
+		if !ready || err != nil {
+			return false, err
+		}
+		s.seal = nil
+		completion.complete()
 	}
 	for i := range s.indexCaptures {
 		if ready, err := s.indexCaptures[i].closeStep(w); !ready || err != nil {
@@ -267,5 +291,67 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 		return false, nil
 	}
 	*s = nativeMVCCSealPreparationV6{}
+	return true, nil
+}
+
+// The retained caller captures immutable operands on its SAME original seal.
+// No activeSeal/debt/coordinator/allocator authority changes here. A newer
+// writer can invalidate this private basis; final handoff must validate again.
+func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iterator.OrdinalScanWork) (bool, error) {
+	s, db, member := &c.sealPreparation, c.db, c.candidatePreparation.member
+	runtime := db.rootPublication
+	db.rootReuseMu.RLock()
+	db.mu.RLock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	defer db.mu.RUnlock()
+	defer db.rootReuseMu.RUnlock()
+	// Admit the fixed basis copy/comparison before reading the current record
+	// or copied capsule view. This is repeated at every retained attempt.
+	if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.parentRecord))+2*uint64(unsafe.Sizeof(s.parentMeta))+128) {
+		return false, nil
+	}
+	base := db.durableRoot
+	if db.closing.Load() || db.idx.Load() != runtime.idx || db.meta.CommitSeq != c.rootPreparation.expectedSequence || base.primary == nil || base.slot != s.parentSlot || base.record != s.parentRecord || base.meta != s.parentMeta || base.primary.records[base.slot] != s.parentRoot || base.primary.capsuleViews[base.slot].Current().Record != s.parentRecord {
+		return false, errDurableRootCandidateStale
+	}
+	count := len(runtime.debt) + 1
+	bytes := 2*uint64(unsafe.Sizeof(rootPublicationSealV1{})) + 2*uint64(unsafe.Sizeof(primaryPublicationSealV5{})) + 3*uint64(count)*uint64(unsafe.Sizeof((*freelist.PreparedCOWCandidateV1)(nil)))
+	if !w.Reserve(3+uint64(count), bytes) {
+		if 3+uint64(count) > w.RecordLimit || bytes > w.ByteLimit {
+			return false, &iterator.OrdinalUnitTooLarge{Records: 3 + uint64(count), Bytes: bytes}
+		}
+		return false, nil
+	}
+	promotion := c.transaction.PrimaryPromotionV6()
+	// The SAME capsule encoder replaces the logical directory page with its
+	// fixed slot directory and embeds the parent by value. Compare that exact
+	// canonical record, not its unencoded logical constructor input.
+	expectedRecord := s.record
+	expectedRecord.UserRootPageID = rootpublication.PrimaryCapsulePageV6(s.target) + 1
+	expectedRecord.ParentRecordPageID, expectedRecord.ParentCommitSeq = 0, 0
+	expectedRecord.ParentRecordDigest = [32]byte{}
+	if promotion == nil || promotion.Root == (primaryarena.Ref{}) || promotion.Parent != s.parentRoot || promotion.View.Slot() != s.target || promotion.View.Current().Record != expectedRecord || s.indexCaptures[0].token == nil || s.indexCaptures[1].token == nil {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	var digest [32]byte
+	copy(digest[:], promotion.Image[48:80])
+	meta, err := page.NewDurableMetaV1(s.record.CommitSeq, s.record.DurableSeq, rootpublication.PrimaryCapsulePageV6(s.target), digest)
+	if err != nil {
+		return false, err
+	}
+	charge := primarySealMetadataV6(count)
+	owner := runtime.idx.primary.MetadataOwner()
+	if err := owner.AddPending(charge); err != nil {
+		return false, err
+	}
+	prefix := make([]*freelist.PreparedCOWCandidateV1, count)
+	copy(prefix, runtime.debt)
+	prefix[count-1] = member.prepared
+	s.seal = newPrimaryCapsuleSealDescriptorV6(rootPublicationSealV1{metadata: owner, metadataCharge: charge, latestSequence: member.sequence, groupLength: 1, idx: runtime.idx, next: member.next, resources: s.resources, manifest: s.manifest, prefix: prefix, token: s.indexCaptures[0].token, record: promotion.View.Current().Record, meta: meta, target: s.target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primaryPublicationSealV5{prepared: member.primary, projection: promotion.View.Current().Primary, manifestBanks: s.banks, token: s.indexCaptures[1].token, proofResources: s.proofResources, promotion: promotion})
+	// The actual callbacks still point into these original containing frames.
+	// Transfer only the original disposing-parent aliases, never the controls.
+	s.resources, s.manifest, s.banks, s.proofResources = nil, nil, nil, nil
+	s.indexCaptures[0].token, s.indexCaptures[1].token = nil, nil
 	return true, nil
 }
