@@ -115,6 +115,8 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			var cursor *PruneCursor
 			var ack, writes, prepared, cut, visited uint64
 			var pruneErr error
+			var installedID, adoptionInputID, publishedID uint64
+			var committedAfterInstall, resumedSameID bool
 			var firstACKComplete, firstACKIntegrity bool
 			var elapsed time.Duration
 			var allocBytes, allocCount uint64
@@ -125,6 +127,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				phase := uint8(0)
 				if cursor != nil {
 					phase = cursor.phase
+				}
+				// Observe the retained ID at call entry, before publication consumes
+				// the producer. Final output must bind this exact page below.
+				var inputID uint64
+				if cursor != nil && cursor.preparation != nil {
+					inputID = cursor.preparation.MaterializedInstalledPageForTest()
 				}
 				var before, after runtime.MemStats
 				runtime.ReadMemStats(&before)
@@ -142,10 +150,22 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				if x.Cursor != nil {
 					cursor = x.Cursor
 				}
+				if cursor != nil && cursor.preparation != nil {
+					id := cursor.preparation.MaterializedInstalledPageForTest()
+					if committedAfterInstall && id != 0 && id == installedID {
+						resumedSameID = true
+					}
+					if id != 0 && installedID == 0 {
+						installedID = id
+					}
+				}
 				visited += x.Visited
 				ack += x.Pruned
 				if x.Pruned != 0 {
 					firstACKComplete, firstACKIntegrity = x.Complete, cursor.integrityDone
+					if committedAfterInstall && inputID == installedID {
+						adoptionInputID = inputID
+					}
 				}
 				if cursor != nil && cursor.preparation != nil {
 					_, p, c, _ := cursor.preparation.MaintenanceCurrentDeleteScalarsForTest()
@@ -167,6 +187,9 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 						t.Fatal(e)
 					}
 					writes++
+					if installedID != 0 {
+						committedAfterInstall = true
+					}
 				}
 				if ack != 0 {
 					break
@@ -226,7 +249,10 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			}
 			sharedChildren := 0
 			if multileaf {
-				afterChildren := nativeDiagnosticDATAChildren(t, d)
+				afterChildren := nativeDiagnosticDATAChildren(t, d, &publishedID)
+				if adoptionInputID != 0 && publishedID == adoptionInputID {
+					resumedSameID = true
+				}
 				for ref := range afterChildren {
 					if beforeChildren[ref] {
 						sharedChildren++
@@ -272,6 +298,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			if multileaf && sharedChildren == 0 {
 				t.Fatal("incremental publication replaced every unrelated backend ChildRef")
 			}
+			if multileaf {
+				t.Logf("RETAINED_OUTPUT_ACTIVATION installed_page=%d commit_after_install=%t same_id_resumed=%t published_DATA_page=%d ACK=%d", installedID, committedAfterInstall, resumedSameID, publishedID, ack)
+				if installedID == 0 || !committedAfterInstall || !resumedSameID {
+					t.Error("retained original output page did not survive CommitAt and resume before adoption")
+				}
+			}
 			if pruneErr != nil || ack != 1 || prepared == 0 || writes == 0 {
 				t.Fatalf("positive composite publication: error=%v ACK=%d writes=%d prepared=%d cut=%d", pruneErr, ack, writes, prepared, cut)
 			}
@@ -281,7 +313,7 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 
 // Scoped scalar copies only: the certificate/image never outlive its original
 // backend Snapshot. The child references are observations, not retained owners.
-func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]bool {
+func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB, rootOut ...*uint64) map[page.ChildRef]bool {
 	t.Helper()
 	snapshot := d.NativeMembershipSnapshotForTest()
 	if snapshot == nil {
@@ -299,6 +331,9 @@ func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]
 	base, _ := cert.Directory().Base()
 	if base.Ref.Kind != page.ChildRefPage {
 		t.Fatal("DATA page", base.Ref)
+	}
+	if len(rootOut) != 0 {
+		*rootOut[0] = base.Ref.Page
 	}
 	image, e := snapshot.Pager().Get(base.Ref.Page)
 	if e != nil {

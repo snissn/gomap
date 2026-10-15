@@ -1,7 +1,6 @@
 package freelist
 
 import (
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -39,12 +38,49 @@ func TestAppendWorkRechecksCapacityAfterReusedAllocation(t *testing.T) {
 	if err != nil || reused != 2 || a.cow.txn.highWater != beforeWater || p.PageCount() != beforeCount {
 		t.Fatal("reused allocation", reused, err)
 	}
-	_, ready, err = s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
-	if ready || !errors.Is(err, ErrAppendCapacityContinuation) || s.growth != nil || a.cow.txn.highWater != beforeWater || p.PageCount() != beforeCount || len(a.cow.txn.allocated) != 1 {
-		t.Fatal("resumed allocation escaped capacity admission", ready, err)
+	id, ready, err := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+	if err != nil || !ready || id != beforeWater || len(a.cow.txn.allocated) != 2 || a.cow.txn.allocated[0].id != reused {
+		t.Fatal("resumed allocation did not grow same live backing", id, ready, err)
 	}
-	ready, err = s.Cancel(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+	ready, err = s.Cancel(nil)
 	if !ready || err != nil {
-		t.Fatal("pre-storage cancellation", ready, err)
+		t.Fatal("checked diagnostic cancellation", ready, err)
 	}
+}
+
+func TestAppendWorkAdmitsEmptyLiveBackingBeforeInstall(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err = p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	a := New(p, 0)
+	if err = a.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	var s AppendWork
+	before := p.PageCount()
+	_, ready, err := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20})
+	if ready || err != nil || len(a.cow.txn.allocated) != 0 || cap(a.cow.txn.allocated) != 0 || p.PageCount() != before {
+		t.Fatal("unadmitted backing effect", ready, err)
+	}
+	for i := 0; i < 32; i++ {
+		id, done, e := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if done {
+			if id != before || len(a.cow.txn.allocated) != 1 {
+				t.Fatal("wrong live install")
+			}
+			if ok, e := s.Cancel(nil); !ok || e != nil {
+				t.Fatal(ok, e)
+			}
+			return
+		}
+	}
+	t.Fatal("empty backing never installed")
 }

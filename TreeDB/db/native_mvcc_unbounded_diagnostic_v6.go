@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -86,9 +87,43 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
 	var oldPointerRefs zipper.PointerRefCounts
 	var oldEntriesRemoved uint64
-	base, sequence, retired, metrics, err := z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
-	if err != nil {
-		return false, err
+	var base node.PrimaryOperand
+	var sequence uint64
+	var retired []uint64
+	var metrics adaptive.Metrics
+	if c.output != nil {
+		var refs *zipper.PointerRefCounts
+		var ready bool
+		base, refs, oldEntriesRemoved, ready = c.output.Result()
+		if !ready {
+			return false, ErrNativeMVCCSnapshotWork
+		}
+		oldPointerRefs = *refs
+		sequence = c.outputSequence
+		for i := 0; i < c.outputInput.RetiredCount; i++ {
+			retired = append(retired, c.outputInput.Retired[i])
+		}
+		// SAME original tracker takes physical custody BEFORE producer aliases clear.
+		c.output.VisitPages(func(allocated, old uint64) {
+			if allocated != 0 {
+				group.tracker.pages = append(group.tracker.pages, allocated)
+			}
+			if old != 0 {
+				retired = append(retired, old)
+			}
+		})
+		if !primaryarena.IsPage(group.currentRoot) {
+			retired = append(retired, group.currentRoot)
+		}
+		owner, charge := c.output.Complete()
+		c.output = nil
+		refs = nil
+		owner.RemovePending(charge)
+	} else {
+		base, sequence, retired, metrics, err = z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
+		if err != nil {
+			return false, err
+		}
 	}
 	entries, ranges := delta.ApplyPlan()
 	refs, err := c.db.buildValueLogRefDelta(group.idx.pager, group.currentRoot, group.baseSeq, entries, ranges, &oldPointerRefs, oldEntriesRemoved, true)

@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 	"unsafe"
 )
 
@@ -178,16 +179,23 @@ type NativeMVCCSelectionSourceV6 interface {
 // its unsealed constructor does not select a current root, mutate the floor,
 // install output, or report a delete ACK.
 type NativeMVCCCurrentDeleteV6 struct {
-	db          *DB
-	snapshot    *Snapshot
-	selection   tree.NativeMVCCSelectionV6
-	source      NativeMVCCSelectionSourceV6
-	record      node.LeafEntry
-	records     []node.LeafEntry
-	request     mvccadmission.Request
-	transaction *rootpublication.DurableRootTransaction
-	release     rootpublication.PrimaryConstructionReleaseWork
-	phase       uint8
+	db                  *DB
+	snapshot            *Snapshot
+	selection           tree.NativeMVCCSelectionV6
+	source              NativeMVCCSelectionSourceV6
+	record              node.LeafEntry
+	records             []node.LeafEntry
+	request             mvccadmission.Request
+	transaction         *rootpublication.DurableRootTransaction
+	output              *zipper.MaterializedWriteWork
+	outputSequence      uint64
+	outputInput         zipper.MaterializedInputV6
+	outputInputReady    bool
+	outputAdoptionReady bool
+	outputScope         NativeMVCCPrivateOutputScopeV6
+	outputReader        *NativeMVCCFrameReaderV6
+	release             rootpublication.PrimaryConstructionReleaseWork
+	phase               uint8
 }
 
 func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
@@ -373,7 +381,36 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	if c.phase == 6 {
+		c.outputReader = nil
 		return true, nil
+	}
+	if c.outputReader != nil {
+		ready, err := c.outputReader.CancelProjectionFrame(w)
+		if !ready || err != nil {
+			return false, err
+		}
+		c.outputReader = nil
+	}
+	if c.output != nil {
+		// Explicit synchronous diagnostic teardown only. The bounded installed-page
+		// cancellation continuation remains a reported refusal, never hidden here.
+		ready, err := c.output.Cancel(nil)
+		if !ready || err != nil {
+			return false, err
+		}
+		owner, charge := c.output.Complete()
+		c.output = nil
+		owner.RemovePending(charge)
+	}
+	if c.outputScope != nil {
+		lease, err := c.outputScope.ClosePrivateNativeOutputV6()
+		if err != nil {
+			return false, err
+		}
+		c.outputScope = nil
+		if lease != nil {
+			lease.Close()
+		}
 	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
 		return false, nil

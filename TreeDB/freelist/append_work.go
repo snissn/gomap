@@ -15,13 +15,13 @@ var ErrAppendRangeContinuation = errors.New("freelist: append reservation gap ne
 // AppendWork is embedded in its producer's admitted containing control. It uses
 // the original allocator transaction and Pager Growth; it issues no second
 // reservation authority. Until installed, ordinary writers can still use the
-// allocator. A changed transaction/count invalidates this private operation.
+// allocator. A changed high-water/count cancels unpublished growth before selecting
+// again from the live allocator; installed IDs never retain a transaction.
 type AppendWork struct {
-	allocator   *Allocator
-	transaction *FreelistTxn
-	growth      *pager.Growth
-	id, count   uint64
-	phase       uint8
+	allocator *Allocator
+	growth    *pager.Growth
+	id, count uint64
+	phase     uint8
 }
 
 func appendReserve(w *iterator.OrdinalScanWork, r, b uint64) (bool, error) {
@@ -64,15 +64,37 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
 	// Recheck on EVERY resumed step under the original lock: a reused-page
 	// allocation can consume backing capacity without moving highWater/count.
 	if len(t.allocated) == cap(t.allocated) {
-		return 0, false, ErrAppendCapacityContinuation
+		capacity := max(4, 2*cap(t.allocated))
+		n := uint64(unsafe.Sizeof(allocatedPage{}))
+		// Charge the actual original backing allocation, overlap and each copied
+		// slot before replacing it. This remains the live transaction's array.
+		if ok, e := appendReserve(w, 1+uint64(len(t.allocated)), uint64(capacity+len(t.allocated))*n); !ok || e != nil {
+			return 0, false, e
+		}
+		grown := make([]allocatedPage, len(t.allocated), capacity)
+		copy(grown, t.allocated)
+		t.allocated = grown
 	}
 	if s.phase == 0 {
 		// No Go append allocation is permitted in the guarded install callback.
 		if t.highWater == math.MaxUint64 || t.highWater < a.pager.PageCount() {
 			return 0, false, ErrGenerationFormat
 		}
-	} else if s.allocator != a || s.transaction != t || s.id != t.highWater || s.count != a.pager.PageCount() {
-		return 0, false, ErrGenerationParent
+	} else if s.allocator != a || s.id != t.highWater || s.count != a.pager.PageCount() {
+		// This private growth owns no transaction. Cancel its unpublished
+		// mapping before selecting from the current live allocator on retry.
+		if s.growth != nil {
+			ready, e := s.growth.Cancel(w)
+			if !ready || e != nil {
+				return 0, false, e
+			}
+			s.growth = nil
+		}
+		s.allocator = nil
+		s.id = 0
+		s.count = 0
+		s.phase = 0
+		return 0, false, nil
 	}
 	ledger := t.ledger
 	ledger.mu.Lock()
@@ -89,7 +111,7 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
 		if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {
 			return 0, false, e
 		}
-		s.allocator, s.transaction, s.id, s.count = a, t, t.highWater, a.pager.PageCount()
+		s.allocator, s.id, s.count = a, t.highWater, a.pager.PageCount()
 		s.phase = 1
 	}
 	if s.growth == nil {

@@ -19,6 +19,7 @@ type cowFlushHandoff struct {
 	cut      *cowReadCut
 	lease    *memtable.COWExternalLease
 	accepted bool
+	native   *nativePrivateOutputV6
 }
 
 func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBackendBasis, error) {
@@ -119,6 +120,9 @@ func (db *DB) completeCOWHandoff() error {
 	h := c.handoff
 	if h == nil {
 		return nil
+	}
+	if !h.accepted {
+		return ErrCOWUnsupported
 	}
 	basis, err := c.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err != nil {
