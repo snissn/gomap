@@ -1,0 +1,302 @@
+[
+  {
+    "label": "before-sprint",
+    "sample": 1,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  473298\t       484.6 ns/op\t     512 B/op\t       1 allocs/op",
+    "ns": 484.6,
+    "bytes": 512.0,
+    "allocs": 1.0,
+    "binary_sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630"
+  },
+  {
+    "label": "recent-main",
+    "sample": 1,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  700620\t       350.7 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 350.7,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8"
+  },
+  {
+    "label": "current",
+    "sample": 1,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  440106\t       469.4 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 469.4,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "6baf22ec91b19ffb944000c53e7646369ce1c752f63ab45265b3a577351db797"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 1,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     64665 ns/op\t  152717 B/op\t     281 allocs/op",
+    "ns": 64665.0,
+    "bytes": 152717.0,
+    "allocs": 281.0,
+    "binary_sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630"
+  },
+  {
+    "label": "recent-main",
+    "sample": 1,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     65127 ns/op\t  152783 B/op\t     281 allocs/op",
+    "ns": 65127.0,
+    "bytes": 152783.0,
+    "allocs": 281.0,
+    "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8"
+  },
+  {
+    "label": "current",
+    "sample": 1,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     66115 ns/op\t  154894 B/op\t     286 allocs/op",
+    "ns": 66115.0,
+    "bytes": 154894.0,
+    "allocs": 286.0,
+    "binary_sha256": "6baf22ec91b19ffb944000c53e7646369ce1c752f63ab45265b3a577351db797"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 1,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1381484\t       156.7 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 156.7,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "0ae681a5f63ec46098cd17aedef2927d6a672d684898a10e9ae4763f800dca92"
+  },
+  {
+    "label": "recent-main",
+    "sample": 1,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1403528\t       171.2 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 171.2,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763"
+  },
+  {
+    "label": "current",
+    "sample": 1,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1380216\t       174.3 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 174.3,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "91711e5ef5567067e8d2f8d4f12ffb6962ccb0c44d6d92398d610cc42f15b16f"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 1,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t 1022380\t       231.7 ns/op\t     113 B/op\t       2 allocs/op",
+    "ns": 231.7,
+    "bytes": 113.0,
+    "allocs": 2.0,
+    "binary_sha256": "8933b3fb3fdfb990901e6d78c91585b3aff85bc9a11e8a43d4ca299dc33b9973"
+  },
+  {
+    "label": "recent-main",
+    "sample": 1,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t 1008633\t       230.0 ns/op\t     113 B/op\t       2 allocs/op",
+    "ns": 230.0,
+    "bytes": 113.0,
+    "allocs": 2.0,
+    "binary_sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4"
+  },
+  {
+    "label": "current",
+    "sample": 1,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t  970195\t       236.8 ns/op\t     113 B/op\t       2 allocs/op",
+    "ns": 236.8,
+    "bytes": 113.0,
+    "allocs": 2.0,
+    "binary_sha256": "ccd661eb464466b7ea737a2ac7031a90f9399a504629fefd6a2a23d72733cce8"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 1,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      50\t   5085644 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      2732 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   5047785 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   5056150 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      7510 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       196.6 iterations/s\t        65.60 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      2732 public.batch.write_sync.phase.command_append.ns/op\t   5063630 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       330.2 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   5056402 public.batch.write_sync.phase.command_sync.ns/op\t      6112 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      4886 public.batch.write_sync.phase.preflight_materialization.ns/op\t      2142 public.batch.write_sync.phase.residual.ns/op\t   5076835 public.batch.write_sync.phase.wall.ns/op\t  18201987 writesync_max_ns\t   4795586 writesync_p50_ns\t   6023037 writesync_p95_ns\t  18201987 writesync_p99_ns\t    4916 B/op\t      18 allocs/op",
+    "ns": 5085644.0,
+    "bytes": 4916.0,
+    "allocs": 18.0,
+    "binary_sha256": "0ae681a5f63ec46098cd17aedef2927d6a672d684898a10e9ae4763f800dca92"
+  },
+  {
+    "label": "recent-main",
+    "sample": 1,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      62\t   3718743 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t       934.4 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   3704590 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   3707702 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      2741 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       268.9 iterations/s\t        55.97 public.batch.write_sync.phase.checkpoint_gate.ns/op\t       934.4 public.batch.write_sync.phase.command_append.ns/op\t   3710793 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t        85.32 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   3707838 public.batch.write_sync.phase.command_sync.ns/op\t      1570 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      1670 public.batch.write_sync.phase.preflight_materialization.ns/op\t       757.0 public.batch.write_sync.phase.residual.ns/op\t   3714846 public.batch.write_sync.phase.wall.ns/op\t   3800206 writesync_max_ns\t   3697546 writesync_p50_ns\t   3797437 writesync_p95_ns\t   3800206 writesync_p99_ns\t    4623 B/op\t      17 allocs/op",
+    "ns": 3718743.0,
+    "bytes": 4623.0,
+    "allocs": 17.0,
+    "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763"
+  },
+  {
+    "label": "current",
+    "sample": 1,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      61\t   3774223 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t       973.8 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   3758487 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   3761738 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      2881 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       265.0 iterations/s\t        63.28 public.batch.write_sync.phase.checkpoint_gate.ns/op\t       973.8 public.batch.write_sync.phase.command_append.ns/op\t   3765101 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t        87.70 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   3761883 public.batch.write_sync.phase.command_sync.ns/op\t      1775 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      2578 public.batch.write_sync.phase.preflight_materialization.ns/op\t       887.6 public.batch.write_sync.phase.residual.ns/op\t   3770404 public.batch.write_sync.phase.wall.ns/op\t   6606193 writesync_max_ns\t   3699426 writesync_p50_ns\t   3803397 writesync_p95_ns\t   6606193 writesync_p99_ns\t    4627 B/op\t      18 allocs/op",
+    "ns": 3774223.0,
+    "bytes": 4627.0,
+    "allocs": 18.0,
+    "binary_sha256": "91711e5ef5567067e8d2f8d4f12ffb6962ccb0c44d6d92398d610cc42f15b16f"
+  },
+  {
+    "label": "current",
+    "sample": 2,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  482512\t       454.7 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 454.7,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "6baf22ec91b19ffb944000c53e7646369ce1c752f63ab45265b3a577351db797"
+  },
+  {
+    "label": "recent-main",
+    "sample": 2,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  681186\t       326.6 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 326.6,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 2,
+    "group": "get_versioned",
+    "raw": "BenchmarkGetVersioned \t  467948\t       449.9 ns/op\t     512 B/op\t       1 allocs/op",
+    "ns": 449.9,
+    "bytes": 512.0,
+    "allocs": 1.0,
+    "binary_sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630"
+  },
+  {
+    "label": "current",
+    "sample": 2,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     56177 ns/op\t  154888 B/op\t     285 allocs/op",
+    "ns": 56177.0,
+    "bytes": 154888.0,
+    "allocs": 285.0,
+    "binary_sha256": "6baf22ec91b19ffb944000c53e7646369ce1c752f63ab45265b3a577351db797"
+  },
+  {
+    "label": "recent-main",
+    "sample": 2,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     52977 ns/op\t  152783 B/op\t     281 allocs/op",
+    "ns": 52977.0,
+    "bytes": 152783.0,
+    "allocs": 281.0,
+    "binary_sha256": "22231a13e2dc4cbc93b6954c5b2fd935bd02568fc81a6663c502d95d7062a6d8"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 2,
+    "group": "batch_write",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     58130 ns/op\t  152717 B/op\t     281 allocs/op",
+    "ns": 58130.0,
+    "bytes": 152717.0,
+    "allocs": 281.0,
+    "binary_sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630"
+  },
+  {
+    "label": "current",
+    "sample": 2,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1304095\t       174.3 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 174.3,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "91711e5ef5567067e8d2f8d4f12ffb6962ccb0c44d6d92398d610cc42f15b16f"
+  },
+  {
+    "label": "recent-main",
+    "sample": 2,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1400899\t       171.1 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 171.1,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 2,
+    "group": "snapshot_seek",
+    "raw": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         \t 1522215\t       157.9 ns/op\t       0 B/op\t       0 allocs/op",
+    "ns": 157.9,
+    "bytes": 0.0,
+    "allocs": 0.0,
+    "binary_sha256": "0ae681a5f63ec46098cd17aedef2927d6a672d684898a10e9ae4763f800dca92"
+  },
+  {
+    "label": "current",
+    "sample": 2,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t 1054261\t       226.3 ns/op\t     113 B/op\t       2 allocs/op",
+    "ns": 226.3,
+    "bytes": 113.0,
+    "allocs": 2.0,
+    "binary_sha256": "ccd661eb464466b7ea737a2ac7031a90f9399a504629fefd6a2a23d72733cce8"
+  },
+  {
+    "label": "recent-main",
+    "sample": 2,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t 1052446\t       225.7 ns/op\t     113 B/op\t       2 allocs/op",
+    "ns": 225.7,
+    "bytes": 113.0,
+    "allocs": 2.0,
+    "binary_sha256": "5f6758c5eae6168cd3089b12a700198e90228e58166792c510b2a9b2e9e19fa4"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 2,
+    "group": "repeated_iterator",
+    "raw": "BenchmarkRepeatedIterator \t 1059483\t       226.8 ns/op\t     112 B/op\t       2 allocs/op",
+    "ns": 226.8,
+    "bytes": 112.0,
+    "allocs": 2.0,
+    "binary_sha256": "8933b3fb3fdfb990901e6d78c91585b3aff85bc9a11e8a43d4ca299dc33b9973"
+  },
+  {
+    "label": "current",
+    "sample": 2,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      61\t   3724300 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t       688.7 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   3713327 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   3715690 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      2083 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       268.5 iterations/s\t        60.16 public.batch.write_sync.phase.checkpoint_gate.ns/op\t       688.7 public.batch.write_sync.phase.command_append.ns/op\t   3718223 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t        70.66 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   3715810 public.batch.write_sync.phase.command_sync.ns/op\t      1381 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      1254 public.batch.write_sync.phase.preflight_materialization.ns/op\t       557.2 public.batch.write_sync.phase.residual.ns/op\t   3721475 public.batch.write_sync.phase.wall.ns/op\t   3800867 writesync_max_ns\t   3698826 writesync_p50_ns\t   3798587 writesync_p95_ns\t   3800867 writesync_p99_ns\t    4627 B/op\t      18 allocs/op",
+    "ns": 3724300.0,
+    "bytes": 4627.0,
+    "allocs": 18.0,
+    "binary_sha256": "91711e5ef5567067e8d2f8d4f12ffb6962ccb0c44d6d92398d610cc42f15b16f"
+  },
+  {
+    "label": "recent-main",
+    "sample": 2,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      61\t   3723998 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      1085 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   3707288 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   3710840 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      3107 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       268.5 iterations/s\t        64.10 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      1085 public.batch.write_sync.phase.command_append.ns/op\t   3714395 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t        91.98 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   3710998 public.batch.write_sync.phase.command_sync.ns/op\t      1832 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      2192 public.batch.write_sync.phase.preflight_materialization.ns/op\t      1065 public.batch.write_sync.phase.residual.ns/op\t   3719548 public.batch.write_sync.phase.wall.ns/op\t   3855507 writesync_max_ns\t   3699396 writesync_p50_ns\t   3799397 writesync_p95_ns\t   3855507 writesync_p99_ns\t    4628 B/op\t      18 allocs/op",
+    "ns": 3723998.0,
+    "bytes": 4628.0,
+    "allocs": 18.0,
+    "binary_sha256": "d2d98999b97d9338b299cec571fe87ad976bcc7ce1b3d7c4bf3552e34c54c763"
+  },
+  {
+    "label": "before-sprint",
+    "sample": 2,
+    "group": "durable_sync",
+    "raw": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         \t      61\t   3747991 ns/op\t         1.000 batch_keys/iteration\t         0 cache.checkpoint.barrier_wait_ns/op\t         0 cache.checkpoint.runs/op\t         0 cache.checkpoint.stage.backend_boundary.total_ns/op\t         0 cache.checkpoint.stage.command_wal_publish.total_ns/op\t         0 cache.checkpoint.stage.cutover.total_ns/op\t         0 cache.checkpoint.stage.flush_all.total_ns/op\t         0 cache.checkpoint.stage.value_log_flush.total_ns/op\t         0 cache.checkpoint.stage.wal_cleanup.total_ns/op\t         0 cache.checkpoint.stage.wal_rotate.total_ns/op\t         0 cache.value_log.file_sync.calls/op\t         0 cache.value_log.file_sync.ns/op\t         0 cache.value_log.file_sync.rotated_segment.calls/op\t         0 cache.value_log.file_sync.rotated_segment.ns/op\t         0 cache.value_log.sync.calls/op\t         0 cache.value_log.sync.external_ref.calls/op\t         0 cache.value_log.sync.external_ref.ns/op\t         0 cache.value_log.sync.external_ref.wait_ns/op\t         0 cache.value_log.sync.materialization.calls/op\t         0 cache.value_log.sync.materialization.ns/op\t         0 cache.value_log.sync.materialization.wait_ns/op\t         0 cache.value_log.sync.ns/op\t         0 cache.value_log.sync.pending_barrier.calls/op\t         0 cache.value_log.sync.pending_barrier.ns/op\t         0 cache.value_log.sync.pending_barrier.wait_ns/op\t         0 cache.value_log.sync.wait_ns/op\t         0 cache.vlog_io.bytes/op\t         1.000 command_wal.append.count/op\t      1299 command_wal.append.ns/op\t         0 command_wal.directory_sync.calls/op\t         0 command_wal.directory_sync.ns/op\t         1.000 command_wal.file_sync.calls/op\t   3729501 command_wal.file_sync.ns/op\t         0 command_wal.flush.count/op\t         0 command_wal.flush.ns/op\t         1.000 command_wal.sync.count/op\t   3733693 command_wal.sync.ns/op\t       134.8 command_wal.write.bytes/op\t      3694 command_wal.write.ns/op\t         1.000 command_wal.write.syscalls/op\t       266.8 iterations/s\t        62.30 public.batch.write_sync.phase.checkpoint_gate.ns/op\t      1299 public.batch.write_sync.phase.command_append.ns/op\t   3737729 public.batch.write_sync.phase.command_callback.ns/op\t         0 public.batch.write_sync.phase.command_empty_barrier.ns/op\t       136.6 public.batch.write_sync.phase.command_external_ref_ordering.ns/op\t   3733849 public.batch.write_sync.phase.command_sync.ns/op\t      2047 public.batch.write_sync.phase.memtable_publication_reset.ns/op\t      2408 public.batch.write_sync.phase.preflight_materialization.ns/op\t      1121 public.batch.write_sync.phase.residual.ns/op\t   3743368 public.batch.write_sync.phase.wall.ns/op\t   4087620 writesync_max_ns\t   3702736 writesync_p50_ns\t   3806797 writesync_p95_ns\t   4087620 writesync_p99_ns\t    4626 B/op\t      18 allocs/op",
+    "ns": 3747991.0,
+    "bytes": 4626.0,
+    "allocs": 18.0,
+    "binary_sha256": "0ae681a5f63ec46098cd17aedef2927d6a672d684898a10e9ae4763f800dca92"
+  }
+]

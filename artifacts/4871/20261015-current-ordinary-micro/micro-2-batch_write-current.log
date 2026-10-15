@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkConditionalTxnBaselineBatchWrite
+BenchmarkConditionalTxnBaselineBatchWrite 	     100	     56177 ns/op	  154888 B/op	     285 allocs/op
+PASS

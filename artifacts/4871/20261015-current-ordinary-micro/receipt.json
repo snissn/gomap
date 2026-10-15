@@ -1,0 +1,117 @@
+{
+  "at_utc": "2026-10-15T01:12:33.024941+00:00",
+  "candidate": "a934ea4c7a90b95bc15d9feb6ee9a3edde6502eb",
+  "baseline": "28aea01e19f1d62743dec5625ec3d22c1acb6703",
+  "control": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "host": "192.168.0.111",
+  "compiler": "go1.26.3-from-185-20261014",
+  "build_flags": [
+    "-trimpath",
+    "-buildvcs=false"
+  ],
+  "current_compiled_input_rows": 2452,
+  "current_compiled_inputs_sha256": "06ea690e8d01ccfd2a08f3c3f91bdaf323a84ca2ca856d28faa269765d8572b2",
+  "current_source_unchanged": true,
+  "current_head_index_status_preserved": true,
+  "invocations": 30,
+  "measured_wall_seconds": 19.68823080835864,
+  "retained_baseline_control_binding": "Exact same hashes as retained854ce8c artifact; no rebuild; current clean a934ea4 rebuilt actual packages.",
+  "qualification": "Bounded two-balanced-round raw micro diagnostic only. No M0/Dgraph/native/whole-production acceptance. All noisy/failing rows retained.",
+  "summary": {
+    "get_versioned": {
+      "before-sprint": {
+        "ns": 467.25,
+        "bytes": 512.0,
+        "allocs": 1.0
+      },
+      "recent-main": {
+        "ns": 338.65,
+        "bytes": 0.0,
+        "allocs": 0.0
+      },
+      "current": {
+        "ns": 462.04999999999995,
+        "bytes": 0.0,
+        "allocs": 0.0
+      },
+      "current_vs_before-sprint_percent": -1.11289459604067,
+      "current_vs_recent-main_percent": 36.43880112210247
+    },
+    "batch_write": {
+      "before-sprint": {
+        "ns": 61397.5,
+        "bytes": 152717.0,
+        "allocs": 281.0
+      },
+      "recent-main": {
+        "ns": 59052.0,
+        "bytes": 152783.0,
+        "allocs": 281.0
+      },
+      "current": {
+        "ns": 61146.0,
+        "bytes": 154891.0,
+        "allocs": 285.5
+      },
+      "current_vs_before-sprint_percent": -0.40962579909605834,
+      "current_vs_recent-main_percent": 3.5460272302377582
+    },
+    "snapshot_seek": {
+      "before-sprint": {
+        "ns": 157.3,
+        "bytes": 0.0,
+        "allocs": 0.0
+      },
+      "recent-main": {
+        "ns": 171.14999999999998,
+        "bytes": 0.0,
+        "allocs": 0.0
+      },
+      "current": {
+        "ns": 174.3,
+        "bytes": 0.0,
+        "allocs": 0.0
+      },
+      "current_vs_before-sprint_percent": 10.807374443738071,
+      "current_vs_recent-main_percent": 1.8404907975460238
+    },
+    "repeated_iterator": {
+      "before-sprint": {
+        "ns": 229.25,
+        "bytes": 112.5,
+        "allocs": 2.0
+      },
+      "recent-main": {
+        "ns": 227.85,
+        "bytes": 113.0,
+        "allocs": 2.0
+      },
+      "current": {
+        "ns": 231.55,
+        "bytes": 113.0,
+        "allocs": 2.0
+      },
+      "current_vs_before-sprint_percent": 1.0032715376226964,
+      "current_vs_recent-main_percent": 1.623875356594251
+    },
+    "durable_sync": {
+      "before-sprint": {
+        "ns": 4416817.5,
+        "bytes": 4771.0,
+        "allocs": 18.0
+      },
+      "recent-main": {
+        "ns": 3721370.5,
+        "bytes": 4625.5,
+        "allocs": 17.5
+      },
+      "current": {
+        "ns": 3749261.5,
+        "bytes": 4627.0,
+        "allocs": 18.0
+      },
+      "current_vs_before-sprint_percent": -15.11395931572903,
+      "current_vs_recent-main_percent": 0.7494819448909951
+    }
+  }
+}
