@@ -1,0 +1,72 @@
+{
+  "head": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "run_id": 38690664159,
+  "job_id": 116275557822,
+  "log_sha256": "464b03e312e13bcae6ae5d37e541051321c13bfb403e53563e4e19763f80c6ad",
+  "result": "RED: obsolete fixture expected live older-slot parent to be reclaimable at captured cutoff",
+  "events": [
+    {
+      "Time": "2026-10-15T06:12:28.593861763Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest",
+      "Output": "    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=5 parentCommit=26 oldest=26 classifiedUnused=false free=false\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.593895705Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest",
+      "Output": "    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.593901633Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest",
+      "Output": "    physical_snapshot_cut_v1_test.go:88: fixture did not exercise reusable older-slot parent\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.595652678Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest",
+      "Elapsed": 0.06
+    },
+    {
+      "Time": "2026-10-15T06:12:28.649286054Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory",
+      "Output": "    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=25 parentCommit=26 oldest=26 classifiedUnused=false free=false\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.649313195Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory",
+      "Output": "    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.649321638Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory",
+      "Output": "    physical_snapshot_cut_v1_test.go:88: fixture did not exercise reusable older-slot parent\n"
+    },
+    {
+      "Time": "2026-10-15T06:12:28.650973042Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory",
+      "Elapsed": 0.06
+    },
+    {
+      "Time": "2026-10-15T06:12:28.650987134Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose",
+      "Elapsed": 0.11
+    }
+  ]
+}

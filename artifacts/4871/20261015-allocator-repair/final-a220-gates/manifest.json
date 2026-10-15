@@ -1,0 +1,327 @@
+[
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/README.md",
+    "bytes": 639,
+    "sha256": "45f5655858a81e1ae00795a1048b0c556925a09837ecbd2f5b28d917943921eb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/ci-publication-classification.json",
+    "bytes": 187,
+    "sha256": "578a9353a437eac3ebeb9053efbb3089647861950e4f0ed452eeec3a5c1af71c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/codex-a220-clean.json",
+    "bytes": 1415,
+    "sha256": "288756bdf03e4e51db55a3ca8e8d89e8483229b6fd0e72475dd656fcc8291b70"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/final-a220-source.json",
+    "bytes": 6811,
+    "sha256": "699fa6588297dc0ef769bb5b28b57aaa36727078fac872da6adf4a48edb559af"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702-attempt1-classification.json",
+    "bytes": 1629,
+    "sha256": "687ac2e97f33a6c488e9689c134934a967144443cc2312e4ea9e42b340e8e65c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/commands.txt",
+    "bytes": 383,
+    "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/fixture.json",
+    "bytes": 1213,
+    "sha256": "4ae937f2c7b14fb62db8e779e7d560e1f518b0b88c3b97e3dc11caaa1ad9c6c2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/legacy-benchstat-input.txt",
+    "bytes": 11130,
+    "sha256": "6a165fbe555bdfe73c9efbcc2d3722eab8033a89e2c7f2ca183e0d6c76bd817c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-1.txt",
+    "bytes": 1113,
+    "sha256": "f5fac6c78ed395336bb8ee4c0a85611c7be7bb5d039aa3b252f60ac7c93a585c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-10.txt",
+    "bytes": 1113,
+    "sha256": "f8f90a9c95519a3d7b50ca25b1c846d90d570c6b63af3e0da6bcbd5833814088"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-2.txt",
+    "bytes": 1113,
+    "sha256": "fff78ab5c921199f21574c06ad3fc4063d744cf4c6377e18066dea3f73854a95"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-3.txt",
+    "bytes": 1113,
+    "sha256": "a71e93694bed381f6f9225ca24743ff491155d3c15a88729f1a3c68ea4950d6c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-4.txt",
+    "bytes": 1113,
+    "sha256": "08a54a094fc8b09c17fb8ca07f260ac81ec6382fd84ac422454d1fb35bde8086"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-5.txt",
+    "bytes": 1113,
+    "sha256": "17d46a05fd5cfde5085de2398daa57888d1bc05178420c8724b70941a1f63ad6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-6.txt",
+    "bytes": 1113,
+    "sha256": "d4f228ddec15bb4b31fa930cae7012e753d528268f017057a0b729724009099d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-7.txt",
+    "bytes": 1113,
+    "sha256": "d8fdaa224be37b683d28890d3f987224f15aea58c205a1e1410807b3b0fc407b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-8.txt",
+    "bytes": 1113,
+    "sha256": "32e456c16be37729116c2600120a41a97b3d9728efb47e09d74e9022316d9189"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/legacy-9.txt",
+    "bytes": 1113,
+    "sha256": "dac5c8c4e4803e51ebb7eb8e37df5a8ab6fd66d87d3c654497752dba960acff3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-1.txt",
+    "bytes": 666,
+    "sha256": "bfba4fda437c6c6ca66e20da3797eb38b20607de3c10ed8f8743e6a4da63637c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-10.txt",
+    "bytes": 665,
+    "sha256": "f0fa911960582026a7b8568ee8aaa296c20c27cf05a2c30a2771fbb90f10acdf"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-2.txt",
+    "bytes": 666,
+    "sha256": "5c18035b171b9f2a75eb9a799873ebb2b1ea3c1572f1ac91a0cd436131408ddf"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-3.txt",
+    "bytes": 666,
+    "sha256": "29e60b7b422fc6dc105eca6cbbd2031a6f84900b44c1aa62291a9dc3b213bc55"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-4.txt",
+    "bytes": 661,
+    "sha256": "44ba0e293510d150fe9a8b66636e58e930eb43d9627ab05ce873a87e15922fb9"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-5.txt",
+    "bytes": 666,
+    "sha256": "dbfde80b53a042578d9c4dea5a4f7a2fb72b94678c1ad35f1067ac8b4eb1bbc1"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-6.txt",
+    "bytes": 661,
+    "sha256": "c2819a9528701489c8770069818375a5ad317d81f38ad864ee471cb12781ead4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-7.txt",
+    "bytes": 666,
+    "sha256": "04be93796615555f9145f6a37ba15a7bcb8af5314d80d58e74f6aa8b4749b453"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-8.txt",
+    "bytes": 666,
+    "sha256": "c8e2c276edeec4fe3ec4743cf1a7d70ef0b20ec57b3b523561fb08fac3884d87"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/raw/public-9.txt",
+    "bytes": 665,
+    "sha256": "a676104ac1d7ff65ebc546b7693029810193814ba548100ed09b720ef911e0fa"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/results.json",
+    "bytes": 16700,
+    "sha256": "631c210d22d5ee5bed68e4855db9f5a899781dd58f7d7b2e83772f2c7144e4f8"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-7702/summary.md",
+    "bytes": 2023,
+    "sha256": "d04e656dde6c8b124190b2d50b54daaa627d2b875bb495d38987ae6066b811d2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/commands.txt",
+    "bytes": 383,
+    "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/fixture.json",
+    "bytes": 1213,
+    "sha256": "b52bf5e51e8a26512386a90c96f4e53560b3c8974e9aac6b7f13458fa6e9f5bc"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/legacy-benchstat-input.txt",
+    "bytes": 11110,
+    "sha256": "15dcc3a6df099b5944e764cc6301a97b64d2ac0f99f413dfdfa10d9b779cf51d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-1.txt",
+    "bytes": 1111,
+    "sha256": "9de7b62678665a42c6dd65a4ffb831ce66a2efce5feab84e052785ecc240ea17"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-10.txt",
+    "bytes": 1111,
+    "sha256": "0ef7740d124fca466265a9ceaf70fe4edc975966e5ee070ec02c90b7bd8eaa6d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-2.txt",
+    "bytes": 1111,
+    "sha256": "2dd83e5402546b0f58da7b919fa6645c6369dded7fe4313ee14bdc666ee42255"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-3.txt",
+    "bytes": 1111,
+    "sha256": "ca886a137b69b72bf2d82b4b0e90a183df4d6a83e9c64b2a83f3196cc5596358"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-4.txt",
+    "bytes": 1111,
+    "sha256": "0920ede3c2c7edefdb924bcbb9bad088ed2791f38be77665baaa36cb2c76b5c2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-5.txt",
+    "bytes": 1111,
+    "sha256": "2fbb11f4f25a07bf512a4c3beb8a6337704de8ee341c7211afd74f2b080b5d5a"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-6.txt",
+    "bytes": 1111,
+    "sha256": "1eeb79520eb094d2661f68e1a68f5d44fab69d08987764c8e22b43ed01e76cd9"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-7.txt",
+    "bytes": 1111,
+    "sha256": "a059d63526a306834093e12e73c4c54aa6d9ab0b2b55131b4a816ac4498a9122"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-8.txt",
+    "bytes": 1111,
+    "sha256": "f0d1b6c75254bc6255b745d7c0d24a53ea5c2fcfeb15407c616602037a8ab94e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/legacy-9.txt",
+    "bytes": 1111,
+    "sha256": "ec7a05d32b6d5cf96255c46715b55954f3f52111961044515c970552654266d5"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-1.txt",
+    "bytes": 663,
+    "sha256": "c0c2914f6a642c3a5012d82c2e5b5adecf8f8420a421865f58aff1a8df1f076d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-10.txt",
+    "bytes": 665,
+    "sha256": "63b7facb3857b9dc1076fe991b641a8c784dee21e2df8cff830fe4d0e5dc1d39"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-2.txt",
+    "bytes": 663,
+    "sha256": "22261c43c43acad768ab49d2fa1ea5b1831e6a86085839c99f1d23f6080a5cd1"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-3.txt",
+    "bytes": 659,
+    "sha256": "dc424c92428c7e630efdf76af477179474625ceac538641422d19473e77f5efb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-4.txt",
+    "bytes": 665,
+    "sha256": "1223d8fdf1b358cb444020795b87c79fd5d8d7546828df2f4ab9a545aa550f64"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-5.txt",
+    "bytes": 665,
+    "sha256": "5df9d2498447bcf69826de4ecaec1296d02ffcb5c2cc1e70628bf4924de53189"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-6.txt",
+    "bytes": 665,
+    "sha256": "8f14aaf004f6ec89689fb3a53840c80b4e792bc5e55d6d7fa9655c0348509de6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-7.txt",
+    "bytes": 659,
+    "sha256": "0e948a8b0a9699a594fef4060f4c88f61f76906b090261b66be09d8e50be49b6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-8.txt",
+    "bytes": 664,
+    "sha256": "bf2276417dc2a49e8f910cf1673dea61cdb6b59f94e87801f1d2e08ac84e8cd3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/raw/public-9.txt",
+    "bytes": 664,
+    "sha256": "821537fe4520ee0b66c2f6242de40d801a8b6c07597f4cc38fe8da23f3061083"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/results.json",
+    "bytes": 16687,
+    "sha256": "7af3ebc0c9a752adf689ffd5711c0466e339367ad7e243fb63a090548dff8b08"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/m0-a220/summary.md",
+    "bytes": 2023,
+    "sha256": "72cb9a0ed012fb46340b7562a80b384410d9fcdbf94da84a2b86ebac215cb9b2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/publication-supplement-allowlist.json",
+    "bytes": 10414,
+    "sha256": "bc014a84ccfc5acd27ca0cbee259f3ae04c0ffc7e5c47aeb1617bd7386774840"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-checks.json",
+    "bytes": 1685,
+    "sha256": "d478d2804a61088821601e0e9b996d6bbe74442139b0a0e79094ebc7593da94c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-gofmt.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-normal.log",
+    "bytes": 46,
+    "sha256": "134c9cb166b701a197b4adb18b59cc5ca75fd77480984f558bdd377f8c9942ef"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-race.log",
+    "bytes": 46,
+    "sha256": "512ab058db0e217dcf5e7317e7efb91cc6ecd7cff927e1f53fb4627c905a55cb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-red.json",
+    "bytes": 3274,
+    "sha256": "1194afca4a5a371b7874bf8da92a859d6dd33ab08850a7c7fb951bfcaed6fa5b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-review-accept.json",
+    "bytes": 731,
+    "sha256": "22c66f094f5f4287b6808086a33f5dd71cdda00cc454c5de47d008e5e06dc973"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-runtime-equivalence.json",
+    "bytes": 222562,
+    "sha256": "bc8bb39f75f8c18f1bba7c156d9b175a0264206167166299680b538a3360aa06"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/snapshot-fixture-source-ready.json",
+    "bytes": 304,
+    "sha256": "9c3a3cfef39ebc7ac96ae3cc7e47fcc23bd625f3ce08fa327c524d96874bab33"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/final-a220-gates/threads-a220.json",
+    "bytes": 148,
+    "sha256": "6ddd9416fb17ac7d041aa9db50f48699c7881a7655a670605dac876a49f3a985"
+  }
+]

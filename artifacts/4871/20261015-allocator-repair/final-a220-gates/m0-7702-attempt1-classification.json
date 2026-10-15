@@ -1,0 +1,66 @@
+{
+  "head": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "run_id": 38690664195,
+  "attempt": 1,
+  "artifact_id": 11951323393,
+  "result": "CV-only stability failure; unqualified pending one unchanged-head retry",
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": false,
+    "public_status_explicit": true
+  },
+  "legacy_stability": {
+    "vacuum-total-ns/op": {
+      "cv": 0.04330371228981102,
+      "mean": 24057201382.4,
+      "median": 23611184394.5,
+      "samples": [
+        26882586028.0,
+        23582614313.0,
+        24620527971.0,
+        23607570931.0,
+        23770805370.0,
+        23609809145.0,
+        23612559644.0,
+        23581617194.0,
+        23599775996.0,
+        23704147232.0
+      ]
+    },
+    "max-writer-pause-ns": {
+      "cv": 0.044487846727714206,
+      "mean": 81202587.9,
+      "median": 79939587.0,
+      "samples": [
+        78803824.0,
+        79714815.0,
+        80262353.0,
+        79810587.0,
+        79308396.0,
+        79791881.0,
+        80068587.0,
+        80579729.0,
+        91072915.0,
+        82612792.0
+      ]
+    },
+    "foreground-p99-ns/op": {
+      "cv": 0.4938712965500504,
+      "mean": 13003869.7,
+      "median": 10098533.0,
+      "samples": [
+        28735661.0,
+        10113284.0,
+        20503227.0,
+        10204115.0,
+        10078961.0,
+        10119472.0,
+        10083608.0,
+        10061270.0,
+        10083782.0,
+        10055317.0
+      ]
+    }
+  },
+  "retry_authorization": "Parent authorized one failed-job retry; no threshold/source changes; if repeated failure inspect matched baseline before further runs."
+}

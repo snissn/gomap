@@ -1,0 +1,42 @@
+{
+  "action": "stop requesting Codex reviews for this head",
+  "clean": true,
+  "exact_head_artifact_count": 1,
+  "finding_head_count": 0,
+  "head": "a22078f59bfe9023787d5147c51c989a4010644d",
+  "latest_artifact": {
+    "kind": "clean_comment",
+    "state": "",
+    "summary": "Codex Review: Didn't find any major issues. Can't wait for the next one!",
+    "timestamp": "2026-10-15T06:23:39Z",
+    "url": "https://github.com/snissn/gomap/pull/5135#issuecomment-6185901780"
+  },
+  "latest_clean_artifact": {
+    "kind": "clean_comment",
+    "state": "",
+    "summary": "Codex Review: Didn't find any major issues. Can't wait for the next one!",
+    "timestamp": "2026-10-15T06:23:39Z",
+    "url": "https://github.com/snissn/gomap/pull/5135#issuecomment-6185901780"
+  },
+  "latest_request": {
+    "timestamp": "2026-10-15T06:20:48Z",
+    "url": "https://github.com/snissn/gomap/pull/5135#issuecomment-6185863508"
+  },
+  "request_count_for_head": 1,
+  "review_churn_exhausted": false,
+  "review_churn_limits": {
+    "max_finding_heads": 0,
+    "max_total_requests": 0,
+    "warn_finding_heads": 3,
+    "warn_total_requests": 6
+  },
+  "review_churn_override_applied": false,
+  "review_churn_reasons": [],
+  "review_churn_warning": false,
+  "review_churn_warning_reasons": [],
+  "should_request": false,
+  "state": "clean",
+  "total_codex_thread_count": 0,
+  "total_request_count": 2,
+  "unresolved_codex_threads": []
+}

@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x-2         	       1	  82654198 ns/op	         0 foreground-exposure-misses/op	        36.00 foreground-overlap-samples/op	   2469668 foreground-p95-ns	   3455077 foreground-p99-ns	        80.00 foreground-points/op	        80.00 foreground-ranges/op	       160.0 foreground-samples/op	         1.000 vacuum-concurrent-retries/op	         0 vacuum-unexpected-errors/op	         0 vacuum-unsupported/op	 6554832 B/op	   22081 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.103s
