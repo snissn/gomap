@@ -331,6 +331,11 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 			s.phase = 12
 		case 12:
 			runtime.mu.Lock()
+			capacityReady, capacityErr := growPrimaryRuntimeSliceWithWorkV6(runtime, &runtime.seals, len(runtime.seals)+1, w)
+			if !capacityReady || capacityErr != nil {
+				runtime.mu.Unlock()
+				return false, capacityErr
+			}
 			ready, err := preparePrimarySealCommitStorageLockedV6(s.seal, runtime.idx.primary, len(runtime.seals)+1, w)
 			runtime.mu.Unlock()
 			if !ready || err != nil {

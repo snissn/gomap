@@ -1071,7 +1071,27 @@ func (p *Pager) SyncIndexDataWithStableFileAtPath(file *os.File, path string) er
 	return err
 }
 
+// SyncIndexDataWithStableFileAtPathWithWorkV6 is the finite entry for the
+// original captured pager operation. Path remains a borrowed diagnostic name;
+// only the SAME retained file is durability authority.
+func (p *Pager) SyncIndexDataWithStableFileAtPathWithWorkV6(file *os.File, path string, w *iterator.OrdinalScanWork) (bool, error) {
+	if p == nil || w == nil {
+		return false, ErrPageOutOfBounds
+	}
+	return p.syncIndexDataWithStableFileAtPath(file, path, w, 0, 0)
+}
+
 func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
+	// Fixed post-sync Stat/count update and after-observation control are
+	// admitted before dirty detachment/I/O. The existing dirty snapshot plan
+	// separately covers its actual snapshot/backing and file sync work. This
+	// is operand/work traffic, not exact transitive os/runtime heap admission.
+	if w != nil {
+		postBytes := uint64(unsafe.Sizeof(*p)) + uint64(unsafe.Sizeof(file)) + uint64(unsafe.Sizeof(os.FileInfo(nil))) + 32
+		if ok, err := pagerReserve(w, 3, postBytes); !ok || err != nil {
+			return false, err
+		}
+	}
 	if file == nil {
 		return false, errors.New("pager: stable index file unavailable")
 	}

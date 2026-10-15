@@ -606,10 +606,45 @@ func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 // same growth and pager guards. It only admits an already represented count;
 // every backing-expansion route continues through Growth.
 func (p *Pager) installCountWithinCapacity(target uint64) (bool, error) {
+	return p.installCountWithinCapacityWithWorkV6(target, nil)
+}
+
+// GrowWithinCapacityWithWorkV6 performs the original logical count install,
+// with its original alloc->grow->pager exclusion and without constructing a
+// Growth. A false result leaves the count unchanged: either work was refused
+// or actual backing needs Growth. It never schedules new background growth.
+// The native caller must retain original allocator authority for target; this
+// operation grants no reservation or page ownership of its own.
+func (p *Pager) GrowWithinCapacityWithWorkV6(target uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	if p == nil || w == nil {
+		return false, ErrGrowthStale
+	}
+	if ok, err := pagerReserve(w, 1, uint64(unsafe.Sizeof(*p))+16); !ok || err != nil {
+		return false, err
+	}
+	p.allocMu.Lock()
+	defer p.allocMu.Unlock()
+	if p.readOnly {
+		return false, ErrReadOnly
+	}
+	if target <= p.numPages.Load() {
+		return true, nil
+	}
+	return p.installCountWithinCapacityWithWorkV6(target, w)
+}
+
+func (p *Pager) installCountWithinCapacityWithWorkV6(target uint64, w *iterator.OrdinalScanWork) (bool, error) {
 	p.growMu.Lock()
 	defer p.growMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// The pager, verified/prefetch headers and dirty directory are fixed
+	// operands. No backing traversal, allocation, mapping or file extension is
+	// reachable here. Admit their inspection and the final atomic count store
+	// before reading any containing header or publishing the count.
+	if ok, err := pagerReserve(w, 5, uint64(unsafe.Sizeof(*p))+uint64(unsafe.Sizeof(verifiedBitset{}))+uint64(unsafe.Sizeof(prefetchBitset{}))+uint64(unsafe.Sizeof(dirtyChunkBits{}))+32); !ok || err != nil {
+		return false, err
+	}
 	if p.readOnly {
 		return false, ErrReadOnly
 	}
@@ -619,6 +654,13 @@ func (p *Pager) installCountWithinCapacity(target uint64) (bool, error) {
 	local := p.localPageCount(target)
 	if local > math.MaxInt64/page.PageSize {
 		return false, fmt.Errorf("pager: growth size overflow")
+	}
+	// The native capacity-only entry must not silently remove the ordinary
+	// pre-grow policy. Where allocLocked would schedule background growth, the
+	// native caller needs that separate finite operation instead. Ordinary
+	// nil-work allocation retains its original policy below this helper.
+	if w != nil && p.growWake != nil && p.chunkSize >= minAsyncPregrowChunkSize && int64(len(p.chunks))*p.chunkSize-int64(local)*page.PageSize < p.chunkSize/2 {
+		return false, nil
 	}
 	if int64(local)*page.PageSize > int64(len(p.chunks))*p.chunkSize {
 		return false, nil

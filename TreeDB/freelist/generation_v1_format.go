@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"unsafe"
 )
 
 const (
@@ -62,6 +64,22 @@ func WriteCandidatePageToPagerV1(dst *pager.Pager, pageID uint64, view Candidate
 		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
 	}
 	return dst.Write(pageID, view.data)
+}
+
+// WriteCandidatePageToPagerWithWorkV6 uses the SAME opaque image and pager
+// destination. The view is only borrowed for this call; no output vector or
+// callback environment is created. The pager admits the actual copy separately.
+func WriteCandidatePageToPagerWithWorkV6(dst *pager.Pager, pageID uint64, view CandidatePageViewV1, w *iterator.OrdinalScanWork) (bool, error) {
+	if dst == nil || w == nil {
+		return false, ErrGenerationFormat
+	}
+	if ok, err := appendReserve(w, 1, uint64(unsafe.Sizeof(view))+uint64(unsafe.Sizeof(dst))+8); !ok || err != nil {
+		return false, err
+	}
+	if len(view.data) != page.PageSize {
+		return false, ErrGenerationFormat
+	}
+	return dst.WriteWithWork(pageID, view.data, w)
 }
 
 // CandidatePageWriterV1 receives an opaque read-only page view. It may retain

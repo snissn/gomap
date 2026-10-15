@@ -85,6 +85,11 @@ type rootPublicationVisibleMemberV1 struct {
 	retiredRecord                 primaryarena.Ref
 	retiredRecordQueue            primaryarena.ReleaseQueue
 	retiredRecordQueueInitialized bool
+	// Original finalizeCommitPost.oldState edges, moved without Acquire.
+	retiredPostRoot        primaryarena.Ref
+	retiredPostSet         *valuelog.Set
+	retiredPostManager     *valuelog.Manager
+	retiredPostTransferred bool
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -1791,10 +1796,45 @@ func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, 
 		}
 	}
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		work:             w,
 		installAuthority: installAuthority,
 		resources:        seal.resources,
-		materialize:      func() error { return runtime.materializeSeal(seal) },
+		materialize: func() error {
+			if w != nil {
+				ready, err := runtime.materializePrimarySealWithWorkV6(seal, w)
+				if !ready && err == nil {
+					err = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+				}
+				return err
+			}
+			return runtime.materializeSeal(seal)
+		},
 		syncIndex: func() error {
+			if w != nil {
+				if !w.Reserve(1, uint64(unsafe.Sizeof(*seal))+uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) {
+					return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+				}
+				if seal.primary == nil {
+					return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+				}
+				if ready, e := seal.primary.token.SyncThroughWithWorkV6(w); !ready || e != nil {
+					if e == nil {
+						e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+					}
+					return e
+				}
+				if ready, e := seal.primary.token.StabilizeNamespaceWithWorkV6(w); !ready || e != nil {
+					if e == nil {
+						e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+					}
+					return e
+				}
+				ready, e := seal.token.SyncThroughWithWorkV6(w)
+				if !ready && e == nil {
+					e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+				}
+				return e
+			}
 			if seal.primary != nil {
 				if e := seal.primary.token.SyncThrough(); e != nil {
 					return e

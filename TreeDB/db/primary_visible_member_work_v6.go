@@ -52,6 +52,9 @@ func (runtime *rootPublicationRuntimeV1) activateNativeVisibleMemberV6(
 		input.PreparedCOW != cow || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
 		return false, rootpublication.ErrDurableRootOwnership
 	}
+	if ready, err := member.install.validateNativePostActivationV6(w); !ready || err != nil {
+		return false, err
+	}
 	runtime.mu.Lock()
 	if member.retiredVisibleResources != nil ||
 		len(runtime.visibleMembers) == cap(runtime.visibleMembers) ||

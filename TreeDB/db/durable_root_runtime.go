@@ -21,6 +21,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -2027,7 +2028,8 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
-	installAuthority func() (bool, error) // Selected complete capsule authority replaces DATA META.
+	work             *iterator.OrdinalScanWork // nil on every ordinary storage transaction
+	installAuthority func() (bool, error)      // Selected complete capsule authority replaces DATA META.
 	resources        *rootpublication.StableResourceSet
 	materialize      func() error
 	syncIndex        func() error
@@ -2056,14 +2058,50 @@ const (
 // metaMutated becomes true immediately before the one meta write, allowing a
 // live caller to distinguish retryable pre-meta failures from ambiguous ones.
 func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) (metaMutated bool, err error) {
+	if tx.work != nil {
+		if !tx.work.Reserve(1, uint64(unsafe.Sizeof(tx))) {
+			return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+		}
+		// The finite selected capsule path has real typed materialize/index and
+		// authority operations. Observer-enabled dependency enumeration and the
+		// alternate legacy META path need their own finite engines.
+		if durabilitycut.Enabled() || tx.installAuthority == nil {
+			return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+		}
+	}
 	if tx.syncIndex == nil || (tx.installAuthority == nil && (tx.sink == nil || tx.target > 1 || tx.syncMeta == nil)) {
 		return false, errors.New("invalid durable-root storage transaction")
 	}
 	if tx.resources != nil {
-		if err := tx.resources.FlushThrough(); err != nil {
+		var flushErr error
+		if tx.work != nil {
+			ready, e := tx.resources.FlushThroughWithWorkV6(tx.work)
+			flushErr = e
+			if !ready && flushErr == nil {
+				flushErr = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			}
+		} else {
+			flushErr = tx.resources.FlushThrough()
+		}
+		if err := flushErr; err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
-		phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
+		var phase stableResourceDependencySyncPhaseV1
+		var err error
+		if tx.work != nil {
+			// Observer disabled was validated above. The original observation
+			// helper returns immediately; the actual Set sync is still executed.
+			if !tx.work.Reserve(1, uint64(unsafe.Sizeof(tx.resources))+uint64(unsafe.Sizeof(tx.dir))) {
+				return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			}
+			ready, e := tx.resources.SyncThroughWithWorkV6(tx.work)
+			err, phase = e, stableResourceDependencySyncV1
+			if !ready && err == nil {
+				err = rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			}
+		} else {
+			phase, err = syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
+		}
 		if err != nil {
 			switch phase {
 			case stableResourceDependencyObserveV1:

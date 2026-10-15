@@ -27,13 +27,25 @@ type NativePublicationOwnerV6 interface {
 // completion callback or resource owner. All fields are protected by c.mu.
 // A released turn and a completed physical receipt are different states.
 type NativePublicationV6 struct {
-	coordinator                   *Coordinator
-	owner                         NativePublicationOwnerV6
-	next                          *NativePublicationV6
-	candidate                     *PreparedRootCandidate
-	attempt                       PublishAttempt
-	firstError                    error
-	refusedCompletion             retainedalloc.Lease
+	coordinator       *Coordinator
+	owner             NativePublicationOwnerV6
+	next              *NativePublicationV6
+	candidate         *PreparedRootCandidate
+	attempt           PublishAttempt
+	firstError        error
+	refusedCompletion retainedalloc.Lease
+	// The single-member native handoff borrows this admitted backing. It is
+	// detached from Coordinator.pending at the real fence, but its candidate
+	// alias remains live until all physical consumers finish. Ordinary enqueue
+	// continues to own its original independently grown pending backing.
+	pending [1]pendingEntry
+	// SAME original handoff controls, born in this admitted frame. No native
+	// exported/nested builder handle or separately allocated receipt escapes.
+	builderLease                  builderLease
+	builderHandle                 builderHandle
+	builderToken                  BuilderToken
+	handoff                       BuilderHandoffReceipt
+	builderReady, handoffReady    bool
 	bound, turn, fenced, complete bool
 }
 
@@ -62,6 +74,10 @@ func (c *Coordinator) BindNativePublicationV6(r *NativePublicationV6, owner Nati
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))+64) {
 		return false, nil
 	}
+	notify, ready, err := admitNativeNotifyV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if r.bound {
@@ -80,7 +96,7 @@ func (c *Coordinator) BindNativePublicationV6(r *NativePublicationV6, owner Nati
 	c.nativePublicationsV6 = r
 	c.activeDispatch++
 	c.nativeDispatchV6++
-	c.notifyLocked()
+	notify.commit(c)
 	return true, nil
 }
 
@@ -115,16 +131,24 @@ func (c *Coordinator) BeginNativePublicationTurnV6(r *NativePublicationV6, candi
 	if len(c.pending) != 1 || c.pending[0].candidate != candidate {
 		return false, ErrPublisherProtocol
 	}
+	notify, ready, err := admitNativeNotifyV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	clock, ready, err := c.admitNativeClockLockedV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
 	c.nextAttemptID++
 	r.candidate = candidate
-	r.attempt = PublishAttempt{id: c.nextAttemptID, candidate: candidate, groupSize: 1, started: c.clock.Now()}
+	r.attempt = PublishAttempt{id: c.nextAttemptID, candidate: candidate, groupSize: 1, started: clock.now(c)}
 	r.turn = true
 	c.activeAttempt = r.attempt
 	c.publishing = true
 	c.publishNow = false
 	c.wakeReason = WakeNone
 	c.publishCalls++
-	c.notifyLocked()
+	notify.commit(c)
 	return true, nil
 }
 
@@ -151,7 +175,34 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 	if c.activeAttempt.id != r.attempt.id || c.activeAttempt.candidate != r.candidate || len(c.pending) == 0 || c.pending[0].candidate != r.candidate {
 		return false, ErrPublisherProtocol
 	}
+	// The narrow diagnostic admits the actual singleton/zero-waiter original
+	// completion branch. A returned cursor never holds this turn. Unknown
+	// waiter/group geometry refuses before any completion mutation.
+	if !w.Reserve(2, uint64(unsafe.Sizeof(c.pending))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(durableRootGroupExtension{}))) {
+		return false, nil
+	}
+	group := r.candidate.durableRootGroup()
+	if len(c.pending) != 1 || len(c.waiters) != 0 || len(group.members) != 1 {
+		return false, ErrNativeMVCCRootWorkRequiredV6
+	}
+	notify, ready, err := admitNativeNotifyV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	wake, ready, err := admitNativeWakeV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	stop, ready, err := c.admitNativeTimerStopLockedV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
 	if result.Outcome != PublishSucceeded {
+		// First-error receipt, optional joinError + two-error backing, empty
+		// waiter disposal, and poison/request fields are fixed original work.
+		if !w.Reserve(4, 2*uint64(unsafe.Sizeof(result.Err))+uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(c.poison))+uint64(unsafe.Sizeof(c.publishNow))+uint64(unsafe.Sizeof(c.wakeReason))) {
+			return false, nil
+		}
 		cause := result.Err
 		if cause == nil {
 			cause = ErrPublisherProtocol
@@ -164,9 +215,9 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 		if result.Outcome == PublishAmbiguous {
 			c.poison = errors.Join(ErrRecoveryRequired, cause)
 			c.failWaitersLocked(c.poison)
-			c.clearPublishRequestLocked()
+			c.clearPublishRequestLockedWithNativeV6(&stop)
 		}
-		c.notifyLocked()
+		notify.commit(c)
 		return false, cause
 	}
 	candidate := r.candidate
@@ -181,9 +232,23 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 	if result.Err != nil || seq != candidate.frontier.commitSeq || oldest < c.oldestRecoverable || oldest > seq {
 		return false, ErrPublisherProtocol
 	}
+	clock, ready, err := c.admitNativeClockLockedV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	// Singleton transaction inspection is admitted before dereferencing it.
+	if !w.Reserve(1, uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(DurableRootCallbackInput{}))) {
+		return false, nil
+	}
+	// Canonical completion: pending detach/bytes; two attempt clears; fenced
+	// flag; durable+oldest; epoch; lineage; service+EWMA; retry; publishing;
+	// empty waiter header; request flags and empty-pending branch.
+	if !w.Reserve(14, uint64(unsafe.Sizeof(primaryPublicationCompletionV6{}))+4*uint64(unsafe.Sizeof(Frontier{}))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+2*uint64(unsafe.Sizeof(c.pending))+2*uint64(unsafe.Sizeof(c.waiters))+12*uint64(unsafe.Sizeof(uint64(0)))) {
+		return false, nil
+	}
 	var lineage DurableRootLineageID
 	var sequence uint64
-	for _, transaction := range candidate.durableRootGroup().members {
+	for _, transaction := range group.members {
 		transaction.mu.Lock()
 		consumed := transaction.phase == durableRootFinishing || transaction.phase == durableRootConsumed
 		lineage, sequence = transaction.input.Lineage, transaction.input.Sequence
@@ -192,13 +257,13 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 			return false, ErrDurableRootOwnership
 		}
 	}
-	done := primaryPublicationCompletionV6{frontier: candidate.frontier, lineage: lineage, sequence: sequence, oldest: oldest, groupSize: 1, service: c.clock.Now().Sub(r.attempt.started), success: true}
+	done := primaryPublicationCompletionV6{frontier: candidate.frontier, lineage: lineage, sequence: sequence, oldest: oldest, groupSize: 1, service: clock.now(c).Sub(r.attempt.started), success: true}
 	c.removeCompletedPendingPrefixV6(1, c.pending[0].bytes)
 	c.activeAttempt = PublishAttempt{}
 	r.attempt = PublishAttempt{}
 	r.fenced = true
-	c.completePublicationLockedV6(done)
-	c.signal()
+	c.completePublicationLockedWithNativeV6(done, &stop, &notify)
+	wake.commit(c)
 	return true, nil
 }
 
@@ -207,22 +272,92 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 // the original DB error graph; an error alone is not lifetime custody. A failed
 // late Finish does not poison a later genuine ordinary durable publication.
 func (c *Coordinator) CompleteNativePublicationV6(r *NativePublicationV6, physicalErr error, retained bool) error {
-	if c == nil || r == nil {
-		return ErrPublisherProtocol
+	_, err := c.completeNativePublicationWithWorkV6(r, physicalErr, retained, nil)
+	return err
+}
+
+// CompleteNativePublicationWithWorkV6 prices original list traversal, inline
+// alias detachment, counters and notify/wake before terminal frame refund.
+// False retains the same receipt/frame; it never authorizes an ordinary retry.
+func (c *Coordinator) CompleteNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil {
+		return false, ErrNativeMVCCRootWorkRequiredV6
 	}
+	return c.completeNativePublicationWithWorkV6(r, physicalErr, retained, w)
+}
+
+func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if c == nil || r == nil {
+		return false, ErrPublisherProtocol
+	}
+	var notify nativeNotifyPermitV6
+	var wake nativeWakePermitV6
+	if w != nil {
+		if !w.Reserve(3, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(builderHandle{}))+uint64(unsafe.Sizeof(builderLease{}))+uint64(unsafe.Sizeof(BuilderHandoffReceipt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {
+			return false, nil
+		}
+		var ready bool
+		var err error
+		notify, ready, err = admitNativeNotifyV6(w)
+		if !ready || err != nil {
+			return false, err
+		}
+		wake, ready, err = admitNativeWakeV6(w)
+		if !ready || err != nil {
+			return false, err
+		}
+		// At most one original protocol-error Join escapes this invocation.
+		// Its public []error representation plus two interfaces is admitted;
+		// no physical backing or new owner is hidden in that diagnostic value.
+		if !w.Reserve(1, uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))) {
+			return false, nil
+		}
+	}
+	// Inline original builder controls retain their normal lock discipline.
+	// Never inspect or scrub these fields under coordinator.mu alone.
+	r.builderHandle.mu.Lock()
+	defer r.builderHandle.mu.Unlock()
+	r.builderLease.mu.Lock()
+	defer r.builderLease.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if r.coordinator != c || !r.bound {
-		return ErrPublisherProtocol
+		return false, ErrPublisherProtocol
 	}
 	if r.complete {
-		return r.firstError
+		return true, r.firstError
 	}
 	if physicalErr != nil && !retained {
-		return errors.Join(physicalErr, ErrPublisherProtocol)
+		return false, errors.Join(physicalErr, ErrPublisherProtocol)
+	}
+	// An error-graph claim alone cannot refund storage still borrowed by the
+	// coordinator. In particular an unfenced/ambiguous handoff retains this
+	// SAME receipt until the original pending/error disposition detaches it.
+	// Join keeps any returned lease in refusedCompletion on this refusal.
+	if len(c.pending) != 0 && &c.pending[0] == &r.pending[0] {
+		return false, errors.Join(physicalErr, ErrPublisherProtocol)
+	}
+	if r.builderReady && (!r.builderHandle.released || !r.builderLease.released) {
+		return false, errors.Join(physicalErr, ErrBuilderLease)
 	}
 	if r.turn && !r.fenced && physicalErr == nil {
-		return ErrPublisherProtocol
+		return false, ErrPublisherProtocol
+	}
+	link := &c.nativePublicationsV6
+	for {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(link))+uint64(unsafe.Sizeof(r.next))) {
+			return false, nil
+		}
+		if *link == nil || *link == r {
+			break
+		}
+		link = &(*link).next
+	}
+	if *link != r || c.activeDispatch == 0 || c.nativeDispatchV6 == 0 {
+		return false, ErrPublisherProtocol
+	}
+	if w != nil && !w.Reserve(6, 2*uint64(unsafe.Sizeof(*r))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {
+		return false, nil
 	}
 	if r.firstError == nil {
 		r.firstError = physicalErr
@@ -231,26 +366,32 @@ func (c *Coordinator) CompleteNativePublicationV6(r *NativePublicationV6, physic
 	// transfer; ambiguity poison/frontier semantics remain unchanged.
 	if r.turn && !r.fenced {
 		if c.activeAttempt.id != r.attempt.id {
-			return ErrPublisherProtocol
+			return false, ErrPublisherProtocol
 		}
 		c.activeAttempt = PublishAttempt{}
 		c.publishing = false
 	}
-	link := &c.nativePublicationsV6
-	for *link != nil && *link != r {
-		link = &(*link).next
-	}
-	if *link != r || c.activeDispatch == 0 || c.nativeDispatchV6 == 0 {
-		return ErrPublisherProtocol
-	}
 	*link = r.next
 	r.next, r.owner, r.candidate, r.attempt = nil, nil, nil, PublishAttempt{}
+	r.pending[0] = pendingEntry{}
+	// These controls were never independently exported. All original consumers
+	// have ended before this final completion; clear their backreferences while
+	// the containing frame is still owned. Do not copy/reset live mutex values.
+	r.builderToken.handle = nil
+	r.builderHandle.lease = nil
+	r.builderLease.coordinator = nil
+	r.handoff = BuilderHandoffReceipt{}
 	r.complete = true
 	c.activeDispatch--
 	c.nativeDispatchV6--
-	c.notifyLocked()
-	c.signal()
-	return r.firstError
+	if w != nil {
+		notify.commit(c)
+		wake.commit(c)
+	} else {
+		c.notifyLocked()
+		c.signal()
+	}
+	return true, r.firstError
 }
 
 // JoinNativePublicationsV6 is explicit Close/Stop joining of the original
@@ -346,6 +487,9 @@ func (c *Coordinator) ConsumeNativePublicationResourcesV6(r *NativePublicationV6
 func (c *Coordinator) ConsumeNativePublicationTransactionV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {
 	if c == nil || r == nil || w == nil {
 		return false, ErrPublisherProtocol
+	}
+	if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
+		return false, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

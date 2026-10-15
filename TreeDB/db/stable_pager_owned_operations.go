@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -82,6 +83,21 @@ func (operations *stablePagerOwnedOperations) FlushThrough(*os.File, rootpublica
 }
 func (operations *stablePagerOwnedOperations) SyncThrough(file *os.File, _ rootpublication.DurableFrontier) error {
 	return operations.pager.SyncIndexDataWithStableFileAtPath(file, operations.syncPath)
+}
+
+// Same admitted callback backing and exact retained file/path as SyncThrough.
+// No callback clone, pathname reopen or replacement physical owner is created.
+func (operations *stablePagerOwnedOperations) SyncThroughWithWorkV6(file *os.File, _ rootpublication.DurableFrontier, w *iterator.OrdinalScanWork) (bool, error) {
+	if operations == nil || w == nil {
+		return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+	}
+	if !w.Reserve(1, uint64(unsafe.Sizeof(*operations))+uint64(unsafe.Sizeof(file))) {
+		return false, nil
+	}
+	if operations.refs.Load() <= 0 || operations.pager == nil || operations.disposalConsumed.Load() {
+		return false, rootpublication.ErrResourceOwnership
+	}
+	return operations.pager.SyncIndexDataWithStableFileAtPathWithWorkV6(file, operations.syncPath, w)
 }
 func (operations *stablePagerOwnedOperations) Release() (consumed bool, err error) {
 	// The retained producer owns the last action. Ordinary constructor unwind

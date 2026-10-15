@@ -588,6 +588,14 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			if !ready || err != nil {
 				return err
 			}
+			// The SAME admitted cursor is the original coordinator's physical
+			// join owner. This private binding creates no publication turn or
+			// visibility; the still-missing composite final preflight refuses
+			// below before builder acquisition or any authority effect.
+			ready, err = c.preparation.BindNativeMVCCPublicationV6(c, w)
+			if !ready || err != nil {
+				return err
+			}
 			return rootpublication.ErrNativeMVCCRootWorkRequiredV6
 		case 22:
 			stats.Pruned += uint64(len(c.batchEntries))
@@ -681,6 +689,23 @@ func (c *PruneCursor) Close() error {
 	}
 	return err
 }
+
+// CloseNativePublicationV6 is the original cursor's coordinator join. It uses
+// the SAME physical close and returns the original containing lease only after
+// all embedded receipts/callbacks have detached. The coordinator clears its
+// owner alias before consuming that lease; this method never closes it itself.
+func (c *PruneCursor) CloseNativePublicationV6() (retainedalloc.Lease, error) {
+	if c == nil {
+		return nil, nil
+	}
+	c.mu.Lock()
+	lease, err := c.closeLockedV6()
+	c.currentWork = nil
+	c.mu.Unlock()
+	return lease, err
+}
+
+var _ rootpublication.NativePublicationOwnerV6 = (*PruneCursor)(nil)
 
 func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
 	if c.closed {

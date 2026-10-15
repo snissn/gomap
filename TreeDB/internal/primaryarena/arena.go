@@ -140,6 +140,28 @@ func (a *Arena) valid(r Ref) *bank {
 	}
 	return b
 }
+
+// Finite retirement shares the original address lookup. Ordinary callers keep
+// the existing direct fast path; immutable-root bucket reads consume work on
+// the same caller before inspecting a link.
+func (a *Arena) slotWithWorkV6(id uint64, w *iterator.OrdinalScanWork) (*bank, bool) {
+	if w == nil {
+		return a.slot(id), true
+	}
+	if local := Local(id); IsPage(id) && local >= pager.PrimaryReadRootLocalBaseV6 {
+		owner, ready := a.pager.PrimaryReadRootOwnerWithWorkV6(local, w)
+		b, _ := owner.(*bank)
+		return b, ready
+	}
+	return a.slot(id), true
+}
+func (a *Arena) validWithWorkV6(r Ref, w *iterator.OrdinalScanWork) (*bank, bool) {
+	b, ready := a.slotWithWorkV6(r.PageID, w)
+	if !ready || b == nil || b.incarnation != r.Incarnation || b.refs == 0 {
+		return nil, ready
+	}
+	return b, true
+}
 func Open(path string) (*Arena, error) { return open(path, false, false) }
 
 // OpenReadOnly admits an existing header without growing or modifying the file.
@@ -642,7 +664,10 @@ func (a *Arena) DropToReleaseQueue(r Ref, queue *ReleaseQueue, w *iterator.Ordin
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b := a.valid(r)
+	b, ready := a.validWithWorkV6(r, w)
+	if !ready {
+		return false, nil
+	}
 	if b == nil || queue == nil || queue.owner != a {
 		return false, ErrStale
 	}
@@ -723,14 +748,18 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 		end := min(int(g.releaseCell)+releaseCells, groupSize)
 		for int(g.releaseCell) < end {
 			r := g.components[g.releaseCell]
-			g.releaseCell++
 			if r == (Ref{}) {
+				g.releaseCell++
 				continue
 			}
-			child := a.valid(r)
+			child, ready := a.validWithWorkV6(r, w)
+			if !ready {
+				return false, false, nil
+			}
 			if child == nil {
 				return false, false, ErrStale
 			}
+			g.releaseCell++
 			child.refs--
 			a.counters.EdgeReads++
 			a.counters.EdgeWrites++
@@ -754,7 +783,10 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 	if local == 0 {
 		return true, false, nil
 	}
-	b := a.slot(Namespace + local)
+	b, ready := a.slotWithWorkV6(Namespace+local, w)
+	if !ready {
+		return false, false, nil
+	}
 	if b == nil || b.refs != 0 {
 		return false, false, ErrStale
 	}
@@ -775,11 +807,18 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 	}
 	if int(b.releaseEdge) < len(b.edges) {
 		end := min(int(b.releaseEdge)+releaseCells, len(b.edges))
-		for _, r := range b.edges[b.releaseEdge:end] {
-			child := a.valid(r)
+		for int(b.releaseEdge) < end {
+			r := b.edges[b.releaseEdge]
+			child, ready := a.validWithWorkV6(r, w)
+			if !ready {
+				a.enqueueOn(queue, local, b)
+				return false, false, nil
+			}
 			if child == nil {
+				a.enqueueOn(queue, local, b)
 				return false, false, ErrStale
 			}
+			b.releaseEdge++
 			child.refs--
 			a.counters.EdgeReads++
 			a.counters.EdgeWrites++
@@ -787,7 +826,6 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 				a.enqueueOn(queue, Local(r.PageID), child)
 			}
 		}
-		b.releaseEdge = uint32(end)
 		a.enqueueOn(queue, local, b)
 		a.counters.Bytes += bytes
 		return true, true, nil

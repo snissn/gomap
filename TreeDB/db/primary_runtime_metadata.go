@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -15,11 +16,22 @@ import (
 // remains live. The caller holds runtime.mu; copied immutable elements retain
 // their own owners. Releasing the old array precedes its refund.
 func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int) error {
+	_, err := growPrimaryRuntimeSliceWithWorkV6(runtime, values, need, nil)
+	return err
+}
+
+// The finite form uses this SAME runtime backing/owner. It prices capacity,
+// replacement, copying and clearing before allocating; no publication operand
+// or new retained owner is introduced. Ordinary nil-work behavior is unchanged.
+func growPrimaryRuntimeSliceWithWorkV6[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int, w *iterator.OrdinalScanWork) (bool, error) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(*values))+uint64(unsafe.Sizeof(need))) {
+		return false, nil
+	}
 	if need < 0 {
-		return retainedalloc.ErrCapacity
+		return false, retainedalloc.ErrCapacity
 	}
 	if cap(*values) >= need {
-		return nil
+		return true, nil
 	}
 	capacity := need
 	if cap(*values) <= math.MaxInt/2 {
@@ -33,13 +45,29 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 	}
 	size := uint64(unsafe.Sizeof(*new(T)))
 	if size != 0 && uint64(capacity) > math.MaxUint64/size {
-		return retainedalloc.ErrCapacity
+		return false, retainedalloc.ErrCapacity
+	}
+	if w != nil {
+		// All operands are nonnegative ints, but the byte sum can still
+		// overflow even when the replacement allocation itself fits.
+		length, oldCapacity := uint64(len(*values)), uint64(cap(*values))
+		if length > (math.MaxUint64-uint64(capacity)-oldCapacity)/2 {
+			return false, retainedalloc.ErrCapacity
+		}
+		units := uint64(capacity) + 2*length + oldCapacity
+		headers := 2 * uint64(unsafe.Sizeof(*values))
+		if size != 0 && units > (math.MaxUint64-headers)/size {
+			return false, retainedalloc.ErrCapacity
+		}
+		if !w.Reserve(1+length+oldCapacity, size*units+headers) {
+			return false, nil
+		}
 	}
 	nextCharge := retainedalloc.AllocationCharge(uint64(capacity) * size)
 	oldCharge := retainedalloc.AllocationCharge(uint64(cap(*values)) * size)
 	if runtime.metadata != nil {
 		if err := runtime.metadata.AddPending(nextCharge); err != nil {
-			return err
+			return false, err
 		}
 	}
 	old := *values
@@ -52,7 +80,7 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 		runtime.metadata.RemovePending(oldCharge)
 		runtime.metadataCharge += nextCharge - oldCharge
 	}
-	return nil
+	return true, nil
 }
 func (runtime *rootPublicationRuntimeV1) reserveVisibleCapacity(withDebt bool) error {
 	if runtime.visibleHead != 0 && len(runtime.visibleMembers) == cap(runtime.visibleMembers) {

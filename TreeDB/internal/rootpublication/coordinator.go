@@ -227,6 +227,69 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	return c.enqueueLockedWithWorkV6(candidate, supersede, nil)
 }
 func (c *Coordinator) enqueueLockedWithWorkV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork) (enqueueDecision, error) {
+	return c.enqueueLockedWithNativeReceiptV6(candidate, supersede, w, nil)
+}
+
+// The optional original receipt supplies already admitted one-entry backing;
+// it changes neither activation nor publication authority. Its caller admits
+// the full handoff before entering this nonyielding operation. No ordinary
+// caller attaches this backing.
+func (c *Coordinator) enqueueLockedWithNativeReceiptV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork, receipt *NativePublicationV6) (enqueueDecision, error) {
+	var nativeTimer nativeTimerInstallPermitV6
+	if receipt != nil {
+		if w == nil {
+			return enqueueDecision{}, ErrPublisherProtocol
+		}
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*receipt))+uint64(unsafe.Sizeof(c.pending))) {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		if supersede || len(c.pending) != 0 || receipt.coordinator != c || !receipt.bound || receipt.complete || receipt.turn || receipt.pending[0].candidate != nil {
+			return enqueueDecision{}, ErrPublisherProtocol
+		}
+		// This finite diagnostic supports the original single-member, empty
+		// dependency geometry. Read the actual headers before inspecting shape;
+		// never count an unadmitted variable traversal and reserve afterwards.
+		if !w.Reserve(4, uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(PreparedRootCandidate{}))+uint64(unsafe.Sizeof(durableRootGroupExtension{}))+uint64(unsafe.Sizeof(DurableRootTransaction{}))) {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		if candidate == nil || len(candidate.durableRootGroup().members) != 1 || candidate.resourceSet() == nil || len(c.resourceActivePins) != 0 || len(c.resourcePinHighWater) != 0 || len(c.waiters) != 0 || c.activeBuilders != 1 || c.activeDispatch != 1 || c.nativeDispatchV6 != 1 || c.nativePublicationsV6 != receipt || receipt.next != nil || c.preparing || c.publishing {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		if ready, err := candidate.resourceSet().emptyOperationWithWorkV6(w); !ready || err != nil {
+			if err == nil {
+				err = ErrNativeMVCCRootWorkRequiredV6
+			}
+			return enqueueDecision{}, err
+		}
+		// The original preflight, physical-member lineage/sequence validation,
+		// Owner/Len, physical-count and forward/rollback transfers all inspect
+		// fixed single-member operands. The empty-set proof above rules out
+		// token/kind/index traversal in these SAME original operations below.
+		controlBytes := 4*uint64(unsafe.Sizeof(PreparedRootCandidate{})) + 5*uint64(unsafe.Sizeof(DurableRootTransaction{})) + 5*uint64(unsafe.Sizeof(StableResourceSet{})) + 3*uint64(unsafe.Sizeof(resourceKindBacking{})) + 2*uint64(unsafe.Sizeof(durableRootGroupExtension{})) + 2*uint64(unsafe.Sizeof(ResourceOwnerState(0))) + uint64(unsafe.Sizeof([1]*StableResourceSet{}))
+		if !w.Reserve(11, controlBytes) {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		// Preadmit the exact in-memory tail BEFORE any ownership transfer or
+		// activation: OwnedBytes, sole entry install, pending-byte update,
+		// empty pin visitor, empty high-water visitor, visible/epoch install,
+		// and soft/hard threshold observations. Inline backing cannot grow.
+		postBytes := 2*uint64(unsafe.Sizeof(PreparedRootCandidate{})) + uint64(unsafe.Sizeof(pendingEntry{})) + uint64(unsafe.Sizeof(StableResourceSet{})) + uint64(unsafe.Sizeof(resourceKindBacking{})) + uint64(unsafe.Sizeof(c.visible)) + 2*uint64(unsafe.Sizeof(c.pending)) + 2*uint64(unsafe.Sizeof(c.resourceActivePins)) + 2*uint64(unsafe.Sizeof(c.resourcePinHighWater)) + 8*uint64(unsafe.Sizeof(uint64(0)))
+		if !w.Reserve(8, postBytes) {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		if candidate.OwnedBytes() >= SoftPendingBytes {
+			return enqueueDecision{}, ErrNativeMVCCRootWorkRequiredV6
+		}
+		var ready bool
+		var err error
+		nativeTimer, ready, err = c.admitNativeTimerInstallLockedV6(w)
+		if !ready || err != nil {
+			if err == nil {
+				err = ErrNativeMVCCRootWorkRequiredV6
+			}
+			return enqueueDecision{}, err
+		}
+	}
 	if err := c.terminalErrorLocked(); err != nil {
 		return enqueueDecision{}, err
 	}
@@ -245,7 +308,15 @@ func (c *Coordinator) enqueueLockedWithWorkV6(candidate *PreparedRootCandidate, 
 		return enqueueDecision{}, err
 	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
-		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
+		// Native single-member validation uses invocation-local scratch; no
+		// separately retained vector or copied physical authority is created.
+		var singleton [1]*StableResourceSet
+		var sets []*StableResourceSet
+		if receipt != nil {
+			sets = singleton[:0]
+		} else {
+			sets = make([]*StableResourceSet, 0, len(c.pending)+1)
+		}
 		var unionCount int
 		var err error
 		var previous *DurableRootTransaction
@@ -316,6 +387,9 @@ func (c *Coordinator) enqueueLockedWithWorkV6(candidate *PreparedRootCandidate, 
 	// in-memory state and must commit the accepted debt.
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
+	if receipt != nil {
+		c.pending = receipt.pending[:0]
+	}
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
@@ -325,8 +399,12 @@ func (c *Coordinator) enqueueLockedWithWorkV6(candidate *PreparedRootCandidate, 
 	c.visible = candidate.frontier
 	c.reachabilityEpoch++
 	if wasEmpty {
-		c.firstPendingAt = c.clock.Now()
-		c.installTimerLocked()
+		if receipt != nil {
+			nativeTimer.commit(c)
+		} else {
+			c.firstPendingAt = c.clock.Now()
+			c.installTimerLocked()
+		}
 	}
 	hard := c.pendingBytes > HardPendingBytes || uint64(len(c.pending)) > HardPendingCommits
 	if c.pendingBytes >= SoftPendingBytes {
@@ -1068,16 +1146,26 @@ func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
 }
 
 func (c *Coordinator) clearPublishRequestLocked() {
+	c.clearPublishRequestLockedWithNativeV6(nil)
+}
+
+func (c *Coordinator) clearPublishRequestLockedWithNativeV6(stop *nativeTimerStopPermitV6) {
 	c.publishNow = false
 	c.wakeReason = WakeNone
-	if c.timer != nil {
+	if stop != nil {
+		stop.commit(c)
+	} else if c.timer != nil {
 		c.timer.Stop()
 		c.timer = nil
 	}
 }
 
 func (c *Coordinator) recomputePublishRequestLocked(resetWindow bool) {
-	c.clearPublishRequestLocked()
+	c.recomputePublishRequestLockedWithNativeV6(resetWindow, nil)
+}
+
+func (c *Coordinator) recomputePublishRequestLockedWithNativeV6(resetWindow bool, stop *nativeTimerStopPermitV6) {
+	c.clearPublishRequestLockedWithNativeV6(stop)
 	if len(c.pending) == 0 {
 		return
 	}

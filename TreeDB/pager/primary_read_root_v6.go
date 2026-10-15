@@ -103,6 +103,35 @@ func (p *Pager) PrimaryReadRootOwnerV6(local uint64) any {
 	}
 	return nil
 }
+
+// PrimaryReadRootOwnerWithWorkV6 uses the SAME address table and returns the
+// existing owner borrow. Each original bucket link is admitted before it is
+// inspected; there is no count-first traversal or copied lookup directory.
+func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool) {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(primaryReadRootTableV6{}))) {
+		return nil, false
+	}
+	t := &p.immutableReadRoots
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.heads) == 0 {
+		return nil, true
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+			return nil, false
+		}
+		e := *link
+		if e == nil {
+			return nil, true
+		}
+		if e.id == local {
+			return e.owner, true
+		}
+		link = &e.next
+	}
+}
 func (p *Pager) primaryReadRootImageV6(local uint64) ([]byte, bool) {
 	t := &p.immutableReadRoots
 	t.mu.RLock()
@@ -139,9 +168,19 @@ func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWor
 	t := &p.immutableReadRoots
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.heads) == 0 {
+		return false, errors.New("pager: absent read address retirement")
+	}
 	link := &t.heads[local%uint64(len(t.heads))]
-	for *link != nil && (*link).id != local {
-		link = &(*link).next
+	for {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+			return false, nil
+		}
+		e := *link
+		if e == nil || e.id == local {
+			break
+		}
+		link = &e.next
 	}
 	if *link == nil {
 		return false, errors.New("pager: absent read address retirement")
