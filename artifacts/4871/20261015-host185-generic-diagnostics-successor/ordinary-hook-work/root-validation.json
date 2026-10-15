@@ -1,0 +1,58 @@
+[
+  {
+    "name": "union-repair-full-normal-04",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 352,
+    "sub_pass_total": 243,
+    "raw_sha256": "76aa21ae4b75cad56ba00351835fbe3f530c1d5e4b27558a2c0185b54425890a"
+  },
+  {
+    "name": "coherent-final-normal-02",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 45,
+    "sub_pass_total": 75,
+    "raw_sha256": "a54384d59cec2140011241eaf1d177faa06f1604adbc162de96d1e1859257b84"
+  },
+  {
+    "name": "coherent-final-race-02",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 117,
+    "sub_pass_total": 189,
+    "raw_sha256": "b7282d28dbf8d61b080cbf57a4308802c5d39136af7b7d370ddacbca34999543"
+  },
+  {
+    "name": "generic-final-race-04",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 27,
+    "sub_pass_total": 0,
+    "raw_sha256": "cd8de7a11a57f5aa18397d0cb7e69ea57df310d37eb7f71db94547d98378719b"
+  },
+  {
+    "name": "windows-final-build-01",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 0,
+    "sub_pass_total": 0,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "reset-current-build-01",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 0,
+    "sub_pass_total": 0,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "reset-prior-build-01",
+    "all_source_equal": true,
+    "source_files": 10246,
+    "top_pass": 0,
+    "sub_pass_total": 0,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

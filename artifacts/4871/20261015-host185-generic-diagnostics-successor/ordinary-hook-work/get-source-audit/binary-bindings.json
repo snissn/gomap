@@ -1,0 +1,14 @@
+{
+  "a8": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/candidate-db.test",
+    "sha256": "5e182ceb21aa29ad3a271b380ab3afce4a93db1a09d0cc6f6b4c3b50e60e50f7"
+  },
+  "616": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-rawpath-hosted/measured-binaries/candidate-db.test",
+    "sha256": "596355fc27f19ff2bd2c036edcb30a758434cb9a7b0d0fae0ade053bcf59316e"
+  },
+  "base": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-rawpath-hosted/measured-binaries/baseline-db.test",
+    "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe"
+  }
+}

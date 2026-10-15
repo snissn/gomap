@@ -1,0 +1,171 @@
+[
+  {
+    "job": "TreeDB required gate",
+    "failures": [],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/TreeDB_required_gate.log",
+    "category": "aggregate",
+    "disposition": "Pending fresh exact-head constituent checks; no waiver."
+  },
+  {
+    "job": "macos-latest-3",
+    "failures": [
+      "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/macos-latest-3.log",
+    "category": "typed publication source guard",
+    "disposition": "Hook narrowed to original Set and captured RootPageID; published DBState pointer no longer escapes dynamic hook. Guard and negative fixtures unchanged."
+  },
+  {
+    "job": "windows-core-6",
+    "failures": [
+      "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-6.log",
+    "category": "typed publication source guard",
+    "disposition": "Hook narrowed to original Set and captured RootPageID; published DBState pointer no longer escapes dynamic hook. Guard and negative fixtures unchanged."
+  },
+  {
+    "job": "windows-core-2",
+    "failures": [
+      "TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-2.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  },
+  {
+    "job": "windows-core-8",
+    "failures": [
+      "TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair",
+      "TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock",
+      "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/semantic-refusal",
+      "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/late-parent-refusal",
+      "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+      "TestValueLogRefCountOwnerSurvivesPrimaryVacuum"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-8.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  },
+  {
+    "job": "windows-core-3",
+    "failures": [
+      "TestPrimaryJointNamespaceRebindKeepsOriginalParents/physical-parent-refusal",
+      "TestPrimaryJointNamespaceRebindKeepsOriginalParents"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-3.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  },
+  {
+    "job": "windows-core-1",
+    "failures": [
+      "TestNativeMVCCSnapshotActualCaptureAndCancellation",
+      "TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-1.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  },
+  {
+    "job": "ubuntu-latest-2",
+    "failures": [
+      "TestPrimaryFinishAccountingBeforeAckAndStop/stop",
+      "TestPrimaryFinishAccountingBeforeAckAndStop"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/ubuntu-latest-2.log",
+    "category": "finish fixture contention",
+    "disposition": "Predicate-specific count100 reproduction isolated coordinator mutex contention; same-refund paused separate goroutine now observes actual lock/state under original bound. Original owner/phase/ACK/transaction-lock oracles retained."
+  },
+  {
+    "job": "ubuntu-latest-3",
+    "failures": [
+      "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/ubuntu-latest-3.log",
+    "category": "typed publication source guard",
+    "disposition": "Hook narrowed to original Set and captured RootPageID; published DBState pointer no longer escapes dynamic hook. Guard and negative fixtures unchanged."
+  },
+  {
+    "job": "mvcc raw-path gate (linux)",
+    "failures": [
+      "|"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/mvcc_raw-path_gate_linux.log",
+    "category": "performance",
+    "disposition": "616 GetVersioned +13.5938% remains RED. Private-only unused reset suppression has structural controls, no timing claim. Original unchanged matched hosted gate required."
+  },
+  {
+    "job": "race-check (linux)-3",
+    "failures": [
+      "TestStableResourceSetConcurrentReadsAndRelease"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/race-check_linux_-3.log",
+    "category": "generic diagnostic lifetime",
+    "disposition": "Immutable generic descriptor/counter/registry operands remove reads of teardown-mutable namespace/identityPin. Mixed identity dedup, live counts, concurrent release and selected scrub controls retained. Raw logical public/extension Union now refuses selected flag, admitted kind backing, and admitted representative/pin entries before copying; mixed selected/generic comparisons retain existing namespace lock/released semantics. Generic post-release Union remains supported.",
+    "callsite_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/union-callers.json"
+  },
+  {
+    "job": "windows-core-5",
+    "failures": [
+      "TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-5.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  },
+  {
+    "job": "race-check (linux)-2",
+    "failures": [
+      "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/race-check_linux_-2.log",
+    "category": "typed publication source guard",
+    "disposition": "Hook narrowed to original Set and captured RootPageID; published DBState pointer no longer escapes dynamic hook. Guard and negative fixtures unchanged."
+  },
+  {
+    "job": "windows-core-7",
+    "failures": [
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-commit",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-rename",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-rename",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-rename",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-rename",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-decision-delete",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-decision-delete",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-deletion-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-deletion-barrier",
+      "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody",
+      "TestPrimaryJointVacuumV6NamespaceObserverUncertainty/create",
+      "TestPrimaryJointVacuumV6NamespaceObserverUncertainty/data",
+      "TestPrimaryJointVacuumV6NamespaceObserverUncertainty/primary",
+      "TestPrimaryJointVacuumV6NamespaceObserverUncertainty/unlink",
+      "TestPrimaryJointVacuumV6NamespaceObserverUncertainty",
+      "TestPrimaryOfflinePairV6RetainsUncertainDecision/after-commit",
+      "TestPrimaryOfflinePairV6RetainsUncertainDecision/after-data-rename",
+      "TestPrimaryOfflinePairV6RetainsUncertainDecision/after-primary-rename",
+      "TestPrimaryOfflinePairV6RetainsUncertainDecision/before-decision-delete",
+      "TestPrimaryOfflinePairV6RetainsUncertainDecision",
+      "TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor"
+    ],
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/windows-core-7.log",
+    "category": "platform fixture and failed cleanup custody",
+    "disposition": "Actual typed unsupported refusal with seeded pair/custody/persistent bytes before fault installation; supported original fault path retained. Deliberate physical cleanup failures retain sticky receipt/no-refund/LOCK oracle before explicit fixture process-shutdown handle close.",
+    "local_runtime": "Supported Linux focused controls pass; Windows execution pending exact-head hosted CI.",
+    "helper_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json"
+  }
+]

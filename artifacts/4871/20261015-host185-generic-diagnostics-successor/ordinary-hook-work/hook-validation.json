@@ -1,0 +1,22 @@
+[
+  {
+    "batch": "hook-normal-01",
+    "exit": 0,
+    "elapsed": 48.7986234142445,
+    "before_equals_after": true,
+    "head": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+    "top_level_pass": 25,
+    "subtest_pass": 44,
+    "race_reports": 0
+  },
+  {
+    "batch": "hook-race-01",
+    "exit": 0,
+    "elapsed": 66.12593515403569,
+    "before_equals_after": true,
+    "head": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+    "top_level_pass": 34,
+    "subtest_pass": 36,
+    "race_reports": 0
+  }
+]

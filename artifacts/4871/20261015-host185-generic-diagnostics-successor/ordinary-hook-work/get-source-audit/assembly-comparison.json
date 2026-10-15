@@ -1,0 +1,22 @@
+{
+  "get": {
+    "a8_instructions": 210,
+    "616_instructions": 210,
+    "equal": true
+  },
+  "capture": {
+    "a8_instructions": 755,
+    "616_instructions": 755,
+    "equal": false
+  },
+  "pool": {
+    "a8_instructions": 180,
+    "616_instructions": 180,
+    "equal": true
+  },
+  "close": {
+    "a8_instructions": 1220,
+    "616_instructions": 1220,
+    "equal": true
+  }
+}

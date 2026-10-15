@@ -1,0 +1,32 @@
+[
+  {
+    "caller": "UnionStableResourceSets / StableResourceSet.union / types.unionResourceExtensions",
+    "route": "Raw logical escape",
+    "disposition": "Selected flag, admitted kind backing, or admitted representative/pin entry refuses under source.mu before copy. Scrubbed empty-kind token fails closed. Generic released parity preserved."
+  },
+  {
+    "caller": "validatedStableResourceUnionCount / Coordinator admission",
+    "route": "Synchronous count",
+    "disposition": "Coordinator.mu holds candidate ownership; no view escapes. Original mode unchanged."
+  },
+  {
+    "caller": "physicalDurabilityUnion / physicalDurabilityCount",
+    "route": "Scoped publication",
+    "disposition": "Exact validated durable-root member leases retain original resources through callback/outcome. Existing physical mode unchanged."
+  },
+  {
+    "caller": "ClonePhysicalReachabilityUnion",
+    "route": "Maintenance owned clone",
+    "disposition": "Existing helper clones/pins actual resources and retains contributing directories before returning independent physical-only closure. Inputs remain caller-owned during capture."
+  },
+  {
+    "caller": "StableResourceTelemetryStats",
+    "route": "Admitted detached observation",
+    "disposition": "Selected owner branch imports and merges using existing owner, AcquireStats and actual diagnostic/view Close. Generic fallback Union remains only generic."
+  },
+  {
+    "caller": "CommandWALDependencyDebt.resourceViewThrough / syncCommandWALDependenciesThrough",
+    "route": "Generic command dependencies",
+    "disposition": "Only production dependencyResources assignment is captureCommandWALExternalDependencies -> Manager.CaptureStableExternalRIDFence generic builder+registration without MetadataOwner. Sync consumes before serialized append advances/releases debt. Selected debt telemetry uses admitted Stats path."
+  }
+]

@@ -1,0 +1,84 @@
+{
+  "staged_tree": "1d449d3f13181f59b19505ae8be20b30c85d958a",
+  "parent": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "source_files": 10246,
+  "product_changes": [
+    ".github/workflows/treedb-tests.yml",
+    "TreeDB/collections/api_test.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+    "TreeDB/db/one_shot_custody_test.go",
+    "TreeDB/db/pools.go",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "TreeDB/db/primary_offline_pair_v6_test.go",
+    "TreeDB/db/stable_pager_owned_operations_test.go",
+    "TreeDB/db/state_value_log_lifetime.go",
+    "TreeDB/db/state_value_log_lifetime_test.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/db/vlog_ref_incarnation_test.go",
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+    "TreeDB/internal/rootpublication/primary_finish_containing_test.go",
+    "TreeDB/internal/rootpublication/resource_contract_test.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go",
+    "TreeDB/internal/rootpublication/resource_set.go",
+    "TreeDB/internal/rootpublication/resource_token.go"
+  ],
+  "freeze_sha256": "6509308c2591f1dd2374904a9081eb2c7031c846c34879f98ad30717ff0885aa",
+  "source_diff_from_freeze": [
+    ".github/ci/ci_impact.json"
+  ],
+  "metadata_checks": [
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.6028168117627501
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.30927800480276346
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 12.019542237743735
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_ci_impact.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 3.6314480802975595
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_ci_contract.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.036820628214627504
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_windows_core_headroom.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.24051024997606874
+    }
+  ],
+  "at_utc": "2026-10-15T19:16:36.109409+00:00"
+}

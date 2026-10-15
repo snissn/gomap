@@ -1,0 +1,110 @@
+[
+  {
+    "exit": 0,
+    "elapsed": 18.044752002693713,
+    "name": "union-repair-full-normal-04",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/union-repair-full-normal-04/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/union-repair-full-normal-04/raw.txt",
+    "top_pass": 352,
+    "top_skip": 0,
+    "sub_pass": 243,
+    "fail_events": [],
+    "packages": [
+      "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t12.021s"
+    ]
+  },
+  {
+    "exit": 0,
+    "elapsed": 118.7661154307425,
+    "name": "coherent-final-normal-02",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-normal-02/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-normal-02/raw.txt",
+    "top_pass": 45,
+    "top_skip": 0,
+    "sub_pass": 75,
+    "fail_events": [],
+    "packages": [
+      "ok  \tgithub.com/snissn/gomap/TreeDB/db\t20.671s",
+      "ok  \tgithub.com/snissn/gomap/TreeDB/collections\t1.011s"
+    ]
+  },
+  {
+    "exit": 0,
+    "elapsed": 89.06540310569108,
+    "name": "coherent-final-race-02",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-race-02/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-race-02/raw.txt",
+    "top_pass": 117,
+    "top_skip": 0,
+    "sub_pass": 189,
+    "fail_events": [],
+    "packages": [
+      "ok  \tgithub.com/snissn/gomap/TreeDB/db\t17.552s",
+      "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.779s"
+    ]
+  },
+  {
+    "exit": 0,
+    "elapsed": 1.866947100032121,
+    "name": "generic-final-race-04",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/generic-final-race-04/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/generic-final-race-04/raw.txt",
+    "top_pass": 27,
+    "top_skip": 0,
+    "sub_pass": 0,
+    "fail_events": [],
+    "packages": [
+      "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.464s"
+    ]
+  },
+  {
+    "exit": 0,
+    "elapsed": 102.48738644784316,
+    "name": "windows-final-build-01",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/windows-final-build-01/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/windows-final-build-01/raw.txt",
+    "top_pass": 0,
+    "top_skip": 0,
+    "sub_pass": 0,
+    "fail_events": [],
+    "packages": []
+  },
+  {
+    "exit": 0,
+    "elapsed": 1.4660665481351316,
+    "name": "reset-current-build-01",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/reset-current-build-01/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/reset-current-build-01/raw.txt",
+    "top_pass": 0,
+    "top_skip": 0,
+    "sub_pass": 0,
+    "fail_events": [],
+    "packages": []
+  },
+  {
+    "exit": 0,
+    "elapsed": 38.72876885905862,
+    "name": "reset-prior-build-01",
+    "source_unchanged": true,
+    "source_matches_final": true,
+    "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/reset-prior-build-01/command.json",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/reset-prior-build-01/raw.txt",
+    "top_pass": 0,
+    "top_skip": 0,
+    "sub_pass": 0,
+    "fail_events": [],
+    "packages": []
+  }
+]

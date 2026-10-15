@@ -1,0 +1,24 @@
+{
+  "head": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "source_count": 10246,
+  "changed_count": 20,
+  "freeze_sha256": "6509308c2591f1dd2374904a9081eb2c7031c846c34879f98ad30717ff0885aa",
+  "changed_sha256": "d7569271428085f0643debcf26974f84b51f6b7e083cad52a9963f9df791ad0f",
+  "artifact_sha256": {
+    "windows-final/rootpublication.test.exe": "faf9f4d6cb62b51f5b75eeeb8fe8cff8faa018c8b4b143e0de5a20e893887f4c",
+    "windows-final/db.test.exe": "4bbf441bfd34653027320d4af1822292ca02182502616baed39081ac11bcd660",
+    "windows-final/collections.test.exe": "4a709dc9abc9a685635e05149112665ec4b50d9ab3c1c3b63eb3818f46a057c2",
+    "get-source-audit/reset-current.test": "2eb578fb87bd29d1f403bf40291b8cc15ac65895ee0978025dff7424fb6e9ef5",
+    "get-source-audit/reset-prior.test": "d9907f8a291aac43350b893ec77cbdf75f9961aed78666514fd874479c2cdc77"
+  },
+  "root_owned_changed_paths": [
+    ".github/workflows/treedb-tests.yml"
+  ],
+  "writer_lease": "released after explicit handoff",
+  "nonclaims": [
+    "No successor hosted CI or platform runtime qualification",
+    "No successor performance gate PASS",
+    "No ordinary/native/graph acceptance",
+    "No Git mutations performed"
+  ]
+}

@@ -1,0 +1,232 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "reviewed_at_utc": "2026-10-15T19:23:02.124629+00:00",
+  "repository": "snissn/gomap",
+  "pr": 5127,
+  "base_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "parent_reviewed_sha": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "head_sha_or_manifest": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "head_tree": "1d449d3f13181f59b19505ae8be20b30c85d958a",
+  "disposition": "ACCEPT",
+  "acceptance_scope": "Exact source and unchanged previously reviewed bounded PRIMARY harness; no hosted correctness/performance, native qualification, mergeability or merge authorization claim.",
+  "candidate_edits_by_reviewer": false,
+  "candidate_edits": false,
+  "construction_role": false,
+  "reviewer_runtime_campaigns": [],
+  "unavailability_evidence": {
+    "reason": "Hosted manual review cannot pin the required exact gpt-6.1-sol model; not requested. This is the actual separately routed read-only reviewer. No quota failure, bot response or hosted review is claimed.",
+    "head": "30ee954b974077b8968cdfb836e03058d9934ed1",
+    "response_url": null
+  },
+  "blocking_source_findings": [],
+  "findings_and_dispositions": [
+    {
+      "id": "R1",
+      "status": "FIXED_SOURCE_REVIEWED_IN_PRIOR_ACCEPT_UNCHANGED_BY_SUCCESSOR"
+    },
+    {
+      "id": "R2",
+      "status": "FIXED_SOURCE_REVIEWED_IN_PRIOR_ACCEPT_UNCHANGED_BY_SUCCESSOR"
+    },
+    {
+      "id": "R3",
+      "status": "FIXED_SOURCE_REVIEWED_IN_PRIOR_ACCEPT_UNCHANGED_BY_SUCCESSOR"
+    },
+    {
+      "id": "R4",
+      "status": "FIXED_SOURCE_REVIEWED_IN_PRIOR_ACCEPT_UNCHANGED_BY_SUCCESSOR"
+    },
+    {
+      "id": "R5",
+      "status": "FIXED_SOURCE_REVIEWED_IN_PRIOR_ACCEPT_UNCHANGED_BY_SUCCESSOR"
+    }
+  ],
+  "reviewed_successor_paths": [
+    ".github/ci/ci_impact.json",
+    ".github/workflows/treedb-tests.yml",
+    "TreeDB/collections/api_test.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+    "TreeDB/db/one_shot_custody_test.go",
+    "TreeDB/db/pools.go",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "TreeDB/db/primary_offline_pair_v6_test.go",
+    "TreeDB/db/stable_pager_owned_operations_test.go",
+    "TreeDB/db/state_value_log_lifetime.go",
+    "TreeDB/db/state_value_log_lifetime_test.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/db/vlog_ref_incarnation_test.go",
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+    "TreeDB/internal/rootpublication/primary_finish_containing_test.go",
+    "TreeDB/internal/rootpublication/resource_contract_test.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go",
+    "TreeDB/internal/rootpublication/resource_set.go",
+    "TreeDB/internal/rootpublication/resource_token.go"
+  ],
+  "successor_path_count": 21,
+  "successor_diff": {
+    "files": 21,
+    "insertions": 718,
+    "deletions": 94
+  },
+  "whole_foundation_diff": {
+    "files": 536,
+    "insertions": 86972,
+    "deletions": 5274,
+    "coverage_limit": "Continues prior whole-foundation contract review, with renewed review of every successor path and adjacent callers; does not claim every base-to-head line read."
+  },
+  "coverage": [
+    "All changed production and test/documentation/workflow paths",
+    "Immutable generic namespace descriptors, text cloning, registry identity, shared atomic sync metrics and mixed identity dedup",
+    "Original selected namespace lock/released check and terminal counter alias scrub",
+    "Raw logical and extension Union refusal before entry copying for selected flag/backing/representatives/pins/scrubbed empty tokens",
+    "Synchronous counts, actual generic CWAL producer/debt caller closure, candidate-scoped physical unions and admitted telemetry",
+    "Only four production private one-shot callers; main Tree/reader/state/pager/original completion retained; alternate-root/rebind/iterator fields never used",
+    "Captured hook operands rather than DBState pointer; actual Set/Refresh lifetime oracle intact",
+    "Same paused containing refund/coordinator mutex acquisition, unchanged timeout and ACK/Stop/wait assertions",
+    "All changed platform helper callers, actual typed unsupported no-effects before fault installation, supported original paths and post-oracle fixture process shutdown",
+    "Unchanged PRIMARY harness/controls/Go fixture bytes; workflow independently runs PRIMARY after successful self-checks despite raw threshold failure; unchanged threshold commands",
+    "Applicable root/TreeDB AGENTS, contribution policy, task-local mergeable fallback and Go performance guidance"
+  ],
+  "identity_checks": {
+    "start_head_and_tree_exact": true,
+    "start_clean": true,
+    "end_head_and_tree_exact": true,
+    "end_clean": true,
+    "manifest_paths_hashed": 10246,
+    "manifest_mismatches": [],
+    "freeze_to_candidate_delta": [
+      ".github/ci/ci_impact.json"
+    ]
+  },
+  "retained_validation_inspected": [
+    {
+      "name": "union-repair-full-normal-04",
+      "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/union-repair-full-normal-04/command.json",
+      "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/union-repair-full-normal-04/raw.txt",
+      "raw_sha256": "76aa21ae4b75cad56ba00351835fbe3f530c1d5e4b27558a2c0185b54425890a",
+      "top_pass": 352,
+      "sub_pass_total": 243,
+      "failure_events": [],
+      "executed_by_reviewer": false
+    },
+    {
+      "name": "coherent-final-normal-02",
+      "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-normal-02/command.json",
+      "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-normal-02/raw.txt",
+      "raw_sha256": "a54384d59cec2140011241eaf1d177faa06f1604adbc162de96d1e1859257b84",
+      "top_pass": 45,
+      "sub_pass_total": 75,
+      "failure_events": [],
+      "executed_by_reviewer": false
+    },
+    {
+      "name": "coherent-final-race-02",
+      "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-race-02/command.json",
+      "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/coherent-final-race-02/raw.txt",
+      "raw_sha256": "b7282d28dbf8d61b080cbf57a4308802c5d39136af7b7d370ddacbca34999543",
+      "top_pass": 117,
+      "sub_pass_total": 189,
+      "failure_events": [],
+      "executed_by_reviewer": false
+    },
+    {
+      "name": "generic-final-race-04",
+      "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/generic-final-race-04/command.json",
+      "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/generic-final-race-04/raw.txt",
+      "raw_sha256": "cd8de7a11a57f5aa18397d0cb7e69ea57df310d37eb7f71db94547d98378719b",
+      "top_pass": 27,
+      "sub_pass_total": 0,
+      "failure_events": [],
+      "executed_by_reviewer": false
+    },
+    {
+      "name": "windows-final-build-01",
+      "command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/windows-final-build-01/command.json",
+      "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/logs/windows-final-build-01/raw.txt",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "top_pass": 0,
+      "sub_pass_total": 0,
+      "failure_events": [],
+      "executed_by_reviewer": false
+    }
+  ],
+  "metadata_validation": [
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.6028168117627501
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.30927800480276346
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 12.019542237743735
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_ci_impact.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 3.6314480802975595
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_ci_contract.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.036820628214627504
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_windows_core_headroom.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.24051024997606874
+    }
+  ],
+  "evidence_files_inspected": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/HANDOFF.md",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/root-candidate.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/freeze-final.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/root-validation.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/validation-final.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/failure-dispositions.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/union-callers.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/platform-helper-consumers.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-static-comparison.json",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/root-metadata/results.json"
+  ],
+  "performance_limitations": [
+    "Predecessor616 GetVersioned +13.5938% remains RED; no waiver or attribution from reset/static inspection.",
+    "No reviewer timing, tests or builds; existing worker logs were inspected.",
+    "New exact-head original-five raw and PRIMARY gates and applicable M0/hosted correctness/race/platform results are required.",
+    "Windows compilation is not Windows runtime proof.",
+    "No qualifying host185 local timing; predecessor passes and old failures are not new-head qualification."
+  ],
+  "mergeable": false,
+  "merge_authorized": false,
+  "native_qualification": false,
+  "lease_released_on_completion": true
+}

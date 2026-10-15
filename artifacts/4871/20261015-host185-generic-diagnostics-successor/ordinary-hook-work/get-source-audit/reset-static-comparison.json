@@ -1,0 +1,40 @@
+{
+  "purpose": "Compile/static comparison only; no executable or timing samples run",
+  "source": "same exact successor product/tests; only prior HEAD pools.go supplied to prior ELF by Go overlay",
+  "overlay": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/prior-pools-overlay.json",
+  "overlay_sha256": "1f575a632111f28d0a69d6a94d18da1d145dfa5f70c5c533df069a6f9d2ccdee",
+  "prior_pools_sha256": "774511230091b1e39dbcf7c4122f3f26a2fa3e40d431768159034aa790879f2b",
+  "current_pools_sha256": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+  "records": {
+    "prior": {
+      "elf": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-prior.test",
+      "elf_sha256": "d9907f8a291aac43350b893ec77cbdf75f9961aed78666514fd874479c2cdc77",
+      "objdump": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-prior-objdump.txt",
+      "objdump_sha256": "de69966a12c2d3e6d7c752a2b5e7278ed9d1ddb0b292c7461a931b84c5a3b4f8",
+      "static_instructions": 180,
+      "main_Tree_Reset_call_sites": 1,
+      "mapclear_call_sites": 1
+    },
+    "current": {
+      "elf": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-current.test",
+      "elf_sha256": "2eb578fb87bd29d1f403bf40291b8cc15ac65895ee0978025dff7424fb6e9ef5",
+      "objdump": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-current-objdump.txt",
+      "objdump_sha256": "047cee5656006c22e4225ff38e57c6b3c61f605d0255d224e75e49db43cddc01",
+      "static_instructions": 191,
+      "main_Tree_Reset_call_sites": 1,
+      "mapclear_call_sites": 1
+    }
+  },
+  "private_oneShot_findings": [
+    "current oneShot JNE at0xbfb102 jumps to0xbfb22a around alternate-root/rebind reset block; prior traverses empty-cache test/header clear/inline-root test and rebind/error zeroing",
+    "prior oneShot JNE at0xbfb32c targets0xbfb35b, which leads unconditionally to runtime.mapclear at0xbfb369; current oneShot JNE at0xbfb35b targets0xbfb3a9 after mapclear at0xbfb398",
+    "main Tree.Reset remains one call site in both",
+    "full method static instruction count grows180to191; this is not dynamic path count or performance attribution"
+  ],
+  "nonclaims": [
+    "No75ns attribution",
+    "No predicted raw gate pass",
+    "No layout patch",
+    "No timing qualification"
+  ]
+}

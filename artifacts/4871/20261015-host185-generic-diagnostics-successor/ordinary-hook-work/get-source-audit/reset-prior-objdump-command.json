@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "tool",
+    "objdump",
+    "-s",
+    "SnapshotPool.*putRead$",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-prior.test"
+  ],
+  "env": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOMAXPROCS": "2"
+  },
+  "exit": 0
+}

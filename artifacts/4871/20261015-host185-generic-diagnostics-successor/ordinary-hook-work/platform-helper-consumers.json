@@ -1,0 +1,158 @@
+[
+  {
+    "file": "TreeDB/db/vlog_ref_incarnation_test.go",
+    "test_or_helper": "TestValueLogRefCountOwnerSurvivesPrimaryVacuum",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/vlog_ref_incarnation_test.go",
+    "test_or_helper": "TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6SuccessfulReplacement",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "runPrimaryJointCrashV6",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6OfflineUsesPairAuthority",
+    "platform_control": "primaryOfflinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6NamespaceObserverUncertainty",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "test_or_helper": "TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/vacuum_original_completion_test.go",
+    "test_or_helper": "TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/vacuum_original_completion_test.go",
+    "test_or_helper": "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_joint_completed_v6_test.go",
+    "test_or_helper": "prepareAdvancedCompletedJointDecisionV6",
+    "platform_control": "primaryOfflinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflineVlogV6CacheInvalidationRecovery",
+    "platform_control": "primaryOfflinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflineVlogV6IndependentFallback",
+    "platform_control": "primaryOfflinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflinePairV6RetainsUncertainDecision",
+    "platform_control": "primaryOfflinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/primary_offline_pair_v6_test.go",
+    "test_or_helper": "TestPrimaryOfflinePairChildProducerAdmission",
+    "platform_control": "primaryOfflineScopePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/durable_root_bench_test.go",
+    "test_or_helper": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  },
+  {
+    "file": "TreeDB/db/durable_root_bench_test.go",
+    "test_or_helper": "TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests",
+    "platform_control": "primaryOnlinePlatformRefusal",
+    "disposition": "Calls actual unavailable operation before installing faults; verifies typed refusal and unchanged selected state/pair/custody or persistent bytes. Supported platforms retain original continuation."
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "exit": 0,
+  "elapsed": 60.462744154036045,
+  "source_unchanged": true,
+  "top_pass": 45,
+  "sub_pass": 77,
+  "package_results": [
+    "ok  \tgithub.com/snissn/gomap/TreeDB/db\t20.277s",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/collections\t1.029s",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.076s"
+  ]
+}

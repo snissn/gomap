@@ -1,0 +1,32 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-current.test",
+    "bytes": 61418356,
+    "sha256": "2eb578fb87bd29d1f403bf40291b8cc15ac65895ee0978025dff7424fb6e9ef5",
+    "reason": "binary retained locally; hash/provenance retained in Git"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-prior.test",
+    "bytes": 61417828,
+    "sha256": "d9907f8a291aac43350b893ec77cbdf75f9961aed78666514fd874479c2cdc77",
+    "reason": "binary retained locally; hash/provenance retained in Git"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/windows-final/collections.test.exe",
+    "bytes": 92583424,
+    "sha256": "4a709dc9abc9a685635e05149112665ec4b50d9ab3c1c3b63eb3818f46a057c2",
+    "reason": "binary retained locally; hash/provenance retained in Git"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/windows-final/db.test.exe",
+    "bytes": 61073408,
+    "sha256": "4bbf441bfd34653027320d4af1822292ca02182502616baed39081ac11bcd660",
+    "reason": "binary retained locally; hash/provenance retained in Git"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/windows-final/rootpublication.test.exe",
+    "bytes": 14208000,
+    "sha256": "faf9f4d6cb62b51f5b75eeeb8fe8cff8faa018c8b4b143e0de5a20e893887f4c",
+    "reason": "binary retained locally; hash/provenance retained in Git"
+  }
+]
