@@ -1,0 +1,116 @@
+{
+  "GetVersioned": {
+    "baseline": {
+      "samples": [
+        {
+          "n": 1888298,
+          "ns": 317.5,
+          "B": 0,
+          "objects": 0
+        },
+        {
+          "n": 1874080,
+          "ns": 317.8,
+          "B": 0,
+          "objects": 0
+        },
+        {
+          "n": 1887058,
+          "ns": 317.7,
+          "B": 0,
+          "objects": 0
+        }
+      ],
+      "medians": {
+        "ns": 317.7,
+        "B": 0,
+        "objects": 0
+      }
+    },
+    "candidate": {
+      "samples": [
+        {
+          "n": 1798736,
+          "ns": 332.8,
+          "B": 0,
+          "objects": 0
+        },
+        {
+          "n": 1801050,
+          "ns": 331.5,
+          "B": 0,
+          "objects": 0
+        },
+        {
+          "n": 1759989,
+          "ns": 333.8,
+          "B": 0,
+          "objects": 0
+        }
+      ],
+      "medians": {
+        "ns": 332.8,
+        "B": 0,
+        "objects": 0
+      }
+    },
+    "latency_delta_pct": 4.752911551778416
+  },
+  "ConditionalTxnBaselineBatchWrite": {
+    "baseline": {
+      "samples": [
+        {
+          "n": 1000,
+          "ns": 21523.0,
+          "B": 31944,
+          "objects": 127
+        },
+        {
+          "n": 1000,
+          "ns": 21431.0,
+          "B": 31943,
+          "objects": 127
+        },
+        {
+          "n": 1000,
+          "ns": 21413.0,
+          "B": 31944,
+          "objects": 127
+        }
+      ],
+      "medians": {
+        "ns": 21431.0,
+        "B": 31944,
+        "objects": 127
+      }
+    },
+    "candidate": {
+      "samples": [
+        {
+          "n": 1000,
+          "ns": 22164.0,
+          "B": 34003,
+          "objects": 129
+        },
+        {
+          "n": 1000,
+          "ns": 22063.0,
+          "B": 34003,
+          "objects": 129
+        },
+        {
+          "n": 1000,
+          "ns": 21902.0,
+          "B": 34002,
+          "objects": 129
+        }
+      ],
+      "medians": {
+        "ns": 22063.0,
+        "B": 34003,
+        "objects": 129
+      }
+    },
+    "latency_delta_pct": 2.9489991134338034
+  }
+}

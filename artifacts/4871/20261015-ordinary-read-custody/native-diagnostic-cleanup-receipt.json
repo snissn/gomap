@@ -1,0 +1,108 @@
+{
+  "at": "2026-10-15T13:09:53.312346+00:00",
+  "target": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-current-cow-diagnostic-20261015",
+  "release_inventory_sha256": "620f830512f21e34a1290220e2b7d267de73a7c4a93b566a1888f022e11cc624",
+  "all11189_release_entries_matched": true,
+  "head": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "durable_ref": "0cb1ff6d0e10811c3f6315a105e048a6c4ff5ede\trefs/heads/codex/4878-current-cow-diagnostic-closeout-20261015",
+  "tracked_source_parent_verified": true,
+  "archive_sha256": "add1dfd2095db904300973de0d00e0f7b2256ccc8805d379b60abd5d3d23c3df",
+  "untracked_archived_members": {
+    "TreeDB/db/native_current_cow_diagnostic_test.go": [
+      "native-current-cow-diagnostic-v3-20261015/native_current_cow_diagnostic_test.go"
+    ],
+    "TreeDB/zipper/native_current_cow_diagnostic.go": [
+      "native-current-cow-diagnostic-20261015/native_current_cow_diagnostic.go",
+      "native-current-cow-diagnostic-v2-20261015/native_current_cow_diagnostic.go",
+      "native-current-cow-diagnostic-v3-20261015/native_current_cow_diagnostic.go"
+    ]
+  },
+  "untracked_removed_exact": [
+    "TreeDB/db/native_current_cow_diagnostic_test.go",
+    "TreeDB/zipper/native_current_cow_diagnostic.go"
+  ],
+  "consumer_scan": {
+    "own_user_processes": 118,
+    "target_matches": [],
+    "unreadable_exclusions": [
+      {
+        "pid": 2148,
+        "cmdline": "/usr/lib/systemd/systemd --user --deserialize=65 ",
+        "interfaces": [
+          "cwd",
+          "exe",
+          "fd",
+          "maps"
+        ],
+        "excluded_reason": "known Sep3 unrelated service"
+      },
+      {
+        "pid": 2175,
+        "cmdline": "(sd-pam) ",
+        "interfaces": [
+          "cwd",
+          "exe",
+          "fd",
+          "maps"
+        ],
+        "excluded_reason": "known Sep3 unrelated service"
+      },
+      {
+        "pid": 2448,
+        "cmdline": "/usr/bin/ssh-agent -D ",
+        "interfaces": [
+          "cwd",
+          "exe",
+          "fd",
+          "maps"
+        ],
+        "excluded_reason": "known Sep3 unrelated service"
+      },
+      {
+        "pid": 1852650,
+        "cmdline": "sshd-session: mikers@notty               ",
+        "interfaces": [
+          "cwd",
+          "exe",
+          "fd",
+          "maps"
+        ],
+        "excluded_reason": "current scanner SSH ancestor"
+      }
+    ],
+    "rationale": "Exact producer/consumer release plus zero readable target references. Only known unrelated long-running services and scanner SSH ancestor lacked mapping permissions; no uncertain relevant consumer."
+  },
+  "command": [
+    "git",
+    "-C",
+    "/home/mikers/dev/snissn/gomap",
+    "worktree",
+    "remove",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-current-cow-diagnostic-20261015"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "root_absent": true,
+  "worktree_unregistered": true,
+  "logical_bytes_estimate": 907606816,
+  "filesystem_free_before": 263655288832,
+  "filesystem_free_after": 264591310848,
+  "observed_free_delta_bytes": 936022016,
+  "protected_roots": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-final-main-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-b3c7-perf-baseline-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence",
+    "/home/mikers/dev/snissn/gomap/.git"
+  ],
+  "protected_snapshot_unchanged": true,
+  "protected_snapshot_receipt": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-current-cow-diagnostic-publication-20261015/cleanup-protected-before.json",
+  "branches_common_git_and_other_worktrees_preserved": true,
+  "retained": [
+    "all evidence/raw/profiles/archive/publication receipts",
+    "all branches/common Git and shared caches",
+    "ordinary/baseline/old-native worktrees"
+  ],
+  "not_repeated": "Six previously removed runtime targets were not deleted or revisited."
+}

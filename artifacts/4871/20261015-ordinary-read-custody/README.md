@@ -1,0 +1,13 @@
+# Ordinary read-custody performance repair: bounded evidence
+
+Artifact-only recovery packet for #5111 / PR #5127 at parent b3c7ff702538e552e685ded554a79eb256a3380c. The archive contains exact round1 and round2 source overlays, patches, source censuses, commands, raw outcomes and separate allocation profiles. Product HEAD is unchanged; these overlays are not merged or fully qualified.
+
+Round2 uses the retained exact main 5bca87ffe6e1bfba2d693264d2dc82936adc234f baseline, pinned Go 1.26.3, CPU 0 and GOMAXPROCS=1 on 192.168.0.111. The three short uninstrumented A/B pairs alternate AB/BA/AB. GetVersioned uses 500ms; ConditionalTxnBaselineBatchWrite uses exactly 1000 iterations. All 12 planned samples completed. Raw manifests bind both ELF identities and source before and after the run; ELFs are deliberately excluded from this artifact.
+
+Round2 medians: Get 317.7 -> 332.8 ns/op (+4.7529%), 0 B/op and 0 allocs/op; batch 21431 -> 22063 ns/op (+2.9490%), 31944 -> 34003 B/op (+2059), 127 -> 129 allocs/op (+2). Timing direction is within the short 5% guard, but allocation gates remain RED. These short diagnostics are not final statistical qualification or a native/Dgraph speedup claim.
+
+The repair preserves exported Snapshot manager custody while the private serial one-shot read removes redundant iterator locking. DATA-only publication avoids PRIMARY-only escaping output storage; PRIMARY uses one containing output holder. Diagnostic resource borrows close immediately after copying numeric descriptors. Independent physical terminal receipts and AbortComplete ownership remain intact. Round2 focused normal controls (17) and concurrent Close/borrow race controls (3) passed. The archive preserves earlier failed test/race observations and their causal fixes, rather than replacing the record with only successful runs.
+
+The next performance decision concerns larger retained containing objects, including value-log Set and resource-set/publication state. Arena/reuse changes require actual last-consumer and concurrency compatibility; independent terminal receipts cannot be pooled before their completion. Full remaining correctness, retention, recovery, platform, CI, independent review and final public workload gates remain open. The changed PRIMARY branch requires its own affected-path guard in the next viable comparison.
+
+The included native diagnostic cleanup receipt records the exact released worktree removal without force, 907606816 logical bytes and 936022016 observed free-space increase. Root independently verified absence and worktree unregistration. All native diagnostic source/raw evidence is separately durable at 0cb1ff6d0e10811c3f6315a105e048a6c4ff5ede. No active source, branch, shared cache or retained evidence was deleted.

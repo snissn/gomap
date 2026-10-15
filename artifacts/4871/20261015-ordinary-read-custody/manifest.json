@@ -1,0 +1,27 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 2765,
+    "sha256": "d21b3f03d4fd0a1815d7ba9a458c19be694f07a04afdb6777fdb61e339d16b4a"
+  },
+  {
+    "path": "native-diagnostic-cleanup-receipt.json",
+    "bytes": 4018,
+    "sha256": "f50b5ab14929046167f87da2d5d4cef289fae7fbfbf34cb4bbd47cbb4a4b4f13"
+  },
+  {
+    "path": "read-custody-rounds1-2.tar.gz",
+    "bytes": 4520664,
+    "sha256": "3a92446018fcada392082432cd92e33e864bf3dc512fe86e061359c42625e565"
+  },
+  {
+    "path": "round2-source-manifest.json",
+    "bytes": 1305,
+    "sha256": "a2a595f8bd977ae9ac8cf2d32de5370e21f5f7cdb9ed638bc8499cbd685ea1ff"
+  },
+  {
+    "path": "round2-summary.json",
+    "bytes": 2063,
+    "sha256": "af3b63e7ddc031dd9f4d22f145114282667876ef70708b4e3c48f90744486edb"
+  }
+]
