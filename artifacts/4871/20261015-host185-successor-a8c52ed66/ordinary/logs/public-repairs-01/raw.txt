@@ -1,0 +1,245 @@
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:375: unused leaf physically reclaimed: polls=2 elapsed=10.269978ms
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:375: unused leaf physically reclaimed: polls=2 elapsed=10.251282ms
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:375: unused leaf physically reclaimed: polls=1 elapsed=44.733µs
+--- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (7.62s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable (6.07s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (0.86s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.69s)
+=== RUN   TestIndexVacuumM4MatrixHarnessContract
+--- PASS: TestIndexVacuumM4MatrixHarnessContract (0.00s)
+=== RUN   TestIndexVacuumM4CompactStoragePersistentLogVerdictsFollowReopen
+--- PASS: TestIndexVacuumM4CompactStoragePersistentLogVerdictsFollowReopen (0.00s)
+=== RUN   TestIndexVacuumM4ExpectedLaneError
+=== RUN   TestIndexVacuumM4ExpectedLaneError/linux_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/darwin_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/freebsd_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/netbsd_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/openbsd_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/windows_outer_full_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/windows_outer_full_owner
+=== RUN   TestIndexVacuumM4ExpectedLaneError/bsd_outer_full_owner
+=== RUN   TestIndexVacuumM4ExpectedLaneError/linux_outer_exhaustive_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/bsd_outer_exhaustive_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/outer_exhaustive_owner
+=== RUN   TestIndexVacuumM4ExpectedLaneError/outer_backend
+=== RUN   TestIndexVacuumM4ExpectedLaneError/inline_full
+=== RUN   TestIndexVacuumM4ExpectedLaneError/windows_offline_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/linux_offline_namespace
+=== RUN   TestIndexVacuumM4ExpectedLaneError/untyped
+--- PASS: TestIndexVacuumM4ExpectedLaneError (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/linux_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/darwin_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/freebsd_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/netbsd_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/openbsd_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/windows_outer_full_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/windows_outer_full_owner (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/bsd_outer_full_owner (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/linux_outer_exhaustive_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/bsd_outer_exhaustive_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/outer_exhaustive_owner (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/outer_backend (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/inline_full (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/windows_offline_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/linux_offline_namespace (0.00s)
+    --- PASS: TestIndexVacuumM4ExpectedLaneError/untyped (0.00s)
+=== RUN   TestIndexVacuumM4PlatformSupportsLane
+=== RUN   TestIndexVacuumM4PlatformSupportsLane/linux_online
+=== RUN   TestIndexVacuumM4PlatformSupportsLane/windows_online
+=== RUN   TestIndexVacuumM4PlatformSupportsLane/windows_offline
+=== RUN   TestIndexVacuumM4PlatformSupportsLane/linux_offline
+--- PASS: TestIndexVacuumM4PlatformSupportsLane (0.00s)
+    --- PASS: TestIndexVacuumM4PlatformSupportsLane/linux_online (0.00s)
+    --- PASS: TestIndexVacuumM4PlatformSupportsLane/windows_online (0.00s)
+    --- PASS: TestIndexVacuumM4PlatformSupportsLane/windows_offline (0.00s)
+    --- PASS: TestIndexVacuumM4PlatformSupportsLane/linux_offline (0.00s)
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted/supported_lane
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted/expected_typed_boundary
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted/platform_error
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted/platform_status
+=== RUN   TestIndexVacuumM4UnsupportedLaneResultAccepted/unexpected_result
+--- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted (0.00s)
+    --- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted/supported_lane (0.00s)
+    --- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted/expected_typed_boundary (0.00s)
+    --- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted/platform_error (0.00s)
+    --- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted/platform_status (0.00s)
+    --- PASS: TestIndexVacuumM4UnsupportedLaneResultAccepted/unexpected_result (0.00s)
+=== RUN   TestIndexVacuumM4CertificationMatrix
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/backend-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/public-noncached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/public-cached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/compact-storage-full
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/compact-storage-exhaustive
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/close-opt-in-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/background-user
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/backend-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/public-noncached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/public-cached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/compact-storage-full
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/compact-storage-exhaustive
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/close-opt-in-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/background-user
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=84->107 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=107->127 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=127->144 reclaimable=0->21 ratio_ppm=0->145833
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-exhaustive
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user
+=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/backend-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/public-noncached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->354 reclaimable=0->149 ratio_ppm=0->420903
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/public-cached-vacuum-online
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/compact-storage-full
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/compact-storage-exhaustive
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/close-opt-in-vacuum
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/background-user
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=1 commit=5->6 generation=2->7 pages=204->257 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=2 commit=6->7 generation=7->8 pages=257->307 reclaimable=0->0 ratio_ppm=0->0
+    index_vacuum_m4_matrix_test.go:256: fixture DATA rebuild=3 commit=7->8 generation=8->9 pages=307->359 reclaimable=0->0 ratio_ppm=0->0
+--- PASS: TestIndexVacuumM4CertificationMatrix (9.49s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/backend-vacuum-online (0.20s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/public-noncached-vacuum-online (0.21s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/public-cached-vacuum-online (0.18s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/compact-storage-full (0.19s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/compact-storage-exhaustive (0.25s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum (0.20s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/close-opt-in-vacuum (0.18s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/background-user (0.18s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist (0.19s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/backend-vacuum-online (0.24s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/public-noncached-vacuum-online (0.24s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/public-cached-vacuum-online (0.22s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/compact-storage-full (0.29s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/compact-storage-exhaustive (0.34s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum (0.31s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/close-opt-in-vacuum (0.28s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/background-user (0.30s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist (0.29s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online (0.32s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online (0.36s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online (0.34s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full (0.60s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-exhaustive (0.25s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum (0.30s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum (0.28s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user (0.29s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist (0.28s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/backend-vacuum-online (0.20s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/public-noncached-vacuum-online (0.21s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/public-cached-vacuum-online (0.21s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/compact-storage-full (0.21s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/compact-storage-exhaustive (0.28s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum (0.22s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/close-opt-in-vacuum (0.21s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/background-user (0.20s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist (0.22s)
+    --- PASS: TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots (0.21s)
+=== RUN   TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup
+--- PASS: TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup (0.19s)
+=== RUN   TestOpen_PersistedProfileCannotChangeContracts
+--- PASS: TestOpen_PersistedProfileCannotChangeContracts (0.34s)
+=== RUN   TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites
+--- PASS: TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites (0.07s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	17.729s

@@ -1,0 +1,38 @@
+=== RUN   TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper
+--- PASS: TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper (0.06s)
+=== RUN   TestOneShotReadAllocationBudget
+=== RUN   TestOneShotReadAllocationBudget/Get
+    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetAppend
+    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetVersioned
+    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetVersionedAppend
+    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0
+--- PASS: TestOneShotReadAllocationBudget (0.05s)
+    --- PASS: TestOneShotReadAllocationBudget/Get (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetAppend (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetVersioned (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetVersionedAppend (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.142s
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata
+--- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634 (0.21s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.251s

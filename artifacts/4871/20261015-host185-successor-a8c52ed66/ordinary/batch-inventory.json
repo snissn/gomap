@@ -1,0 +1,627 @@
+[
+  {
+    "batch": "empty-sidecar-controls-01",
+    "exit": 0,
+    "elapsed": 93.07456938782707,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "./TreeDB/collections",
+        "-run",
+        "TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper|TestOneShotReadAllocationBudget|TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "lifetime-repairs-01",
+    "exit": 0,
+    "elapsed": 78.64679208490998,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/db/db.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "./TreeDB/tree",
+        "./TreeDB/pager",
+        "-run",
+        "TestPrimaryDataCertificateV6|TestPrimaryJointRecoveryMarkerV6|TestPrimaryClosedIteratorDetachesOriginalRootV6|TestOneShot|TestSnapshotTreeAtRoot|TestSnapshotInlineRootCache|TestSnapshotClosedSurface|TestPrimaryMetadataCapture|TestPrimarySnapshotPhysicalOwner|TestPrimaryOneShotFailedCleanup|TestNativeMVCCSnapshot|TestInlineCommitSkipsValueLogRefresh|TestDurableRootPublicationAcceptedWaitFailureRunsPostWork|Test.*Work|Test.*Immutable|Test.*Overlay|Test.*Primary|TestTreePageLimitResetClearsSelectedExtent",
+        "-count=1",
+        "-timeout=120s"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "pager-tree-full-01",
+    "exit": 0,
+    "elapsed": 0.4644601787440479,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/pager",
+        "./TreeDB/tree",
+        "-count=1",
+        "-timeout=120s"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "platform-repairs-01",
+    "exit": 1,
+    "elapsed": 0.9151689051650465,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/db/db.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_joint_completed_v6_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/power_loss_oracle_test.go",
+      "TreeDB/tree/tree.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "TestNativeMVCCSnapshot|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision|TestPrimaryJointVacuumV6CommandFrontierAndRevisions|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointCompletedV6RejectsPhysicalChange|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot|TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup|TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "platform-repairs-02",
+    "exit": 0,
+    "elapsed": 46.6925209579058,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/db/db.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/power_loss_oracle_test.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "TestNativeMVCCSnapshot|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision|TestPrimaryJointVacuumV6CommandFrontierAndRevisions|TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit|TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody|TestPrimaryOfflinePairChildProducerAdmission|TestPrimaryJointCompletedV6RejectsPhysicalChange|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot|TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup|TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "public-repairs-01",
+    "exit": 0,
+    "elapsed": 49.85020843613893,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/db/db.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB",
+        "-run",
+        "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup|TestOpen_PersistedProfileCannotChangeContracts|TestCOWPublicEmptyCheckpointLeafRegistrationProgress|TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites|TestIndexVacuumM4",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "race-repairs-01",
+    "exit": 0,
+    "elapsed": 79.9500807323493,
+    "before_after_equal": true,
+    "files": 10238,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/cow_public_review_regression_test.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+      "TreeDB/db/durable_root_bench_test.go",
+      "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+      "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_capsule_v6_test.go",
+      "TreeDB/db/primary_joint_completed_v6_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/db/primary_offline_pair_v6_test.go",
+      "TreeDB/db/primary_platform_refusal_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/nativewire/fixed_peer_failure_diagnostics_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_initialization_v1_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "TreeDB/offline_maintenance_template_lookup_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/power_loss_oracle_test.go",
+      "TreeDB/profiles_test.go",
+      "TreeDB/tree/tree.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-race",
+        "-p=1",
+        "./TreeDB",
+        "-run",
+        "TestNegativeLookupQualificationFixture|TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "race-repairs-02",
+    "exit": 0,
+    "elapsed": 85.05798126524314,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-race",
+        "-p=1",
+        "./TreeDB",
+        "-run",
+        "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot|TestPowerLossOracleCounterexampleNewMetaMissingClosure|TestNegativeLookupQualificationFixture",
+        "-count=2",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "review-repairs-01",
+    "exit": 1,
+    "elapsed": 49.64629906276241,
+    "before_after_equal": true,
+    "files": 10238,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/cow_public_review_regression_test.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+      "TreeDB/db/durable_root_bench_test.go",
+      "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+      "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/original_startup_generation_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_capsule_v6_test.go",
+      "TreeDB/db/primary_joint_completed_v6_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/db/primary_offline_pair_v6_test.go",
+      "TreeDB/db/primary_platform_refusal_test.go",
+      "TreeDB/db/primary_review_repairs_test.go",
+      "TreeDB/db/root_publication_activation.go",
+      "TreeDB/db/vacuum_original_completion_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/nativewire/fixed_peer_failure_diagnostics_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_initialization_v1_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "TreeDB/offline_maintenance_template_lookup_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/power_loss_oracle_test.go",
+      "TreeDB/profiles_test.go",
+      "TreeDB/tree/tree.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "TestPrimary(DataCertificateV6|JointRecoveryMarkerV6|SharedTransactionV6ReusesExact)|TestInlineCommitSkipsValueLogRefresh|TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "review-repairs-02",
+    "exit": 1,
+    "elapsed": 39.83124327287078,
+    "before_after_equal": true,
+    "files": 10238,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/cow_public_review_regression_test.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+      "TreeDB/db/durable_root_bench_test.go",
+      "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+      "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/original_startup_generation_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_capsule_v6_test.go",
+      "TreeDB/db/primary_joint_completed_v6_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/db/primary_offline_pair_v6_test.go",
+      "TreeDB/db/primary_platform_refusal_test.go",
+      "TreeDB/db/primary_review_repairs_test.go",
+      "TreeDB/db/root_publication_activation.go",
+      "TreeDB/db/vacuum_original_completion_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/nativewire/fixed_peer_failure_diagnostics_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_initialization_v1_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "TreeDB/offline_maintenance_template_lookup_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/power_loss_oracle_test.go",
+      "TreeDB/profiles_test.go",
+      "TreeDB/tree/tree.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "TestPrimary(DataCertificateV6|ClosedIteratorDetaches|JointRecoveryMarkerV6|SharedTransactionV6ReusesExact)|TestInlineCommitSkipsValueLogRefresh|TestDurableRootPublicationAcceptedWaitFailureRunsPostWork|TestOneShot",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "review-repairs-03",
+    "exit": 0,
+    "elapsed": 41.33762029418722,
+    "before_after_equal": true,
+    "files": 10238,
+    "exact_final_manifest": false,
+    "later_source_paths": [
+      "TreeDB/cow_public_review_regression_test.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+      "TreeDB/db/durable_root_bench_test.go",
+      "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+      "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/original_startup_generation_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_capsule_v6_test.go",
+      "TreeDB/db/primary_joint_completed_v6_test.go",
+      "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "TreeDB/db/primary_offline_pair_v6_test.go",
+      "TreeDB/db/primary_platform_refusal_test.go",
+      "TreeDB/db/root_publication_activation.go",
+      "TreeDB/db/vacuum_original_completion_test.go",
+      "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "TreeDB/index_vacuum_m4_matrix_test.go",
+      "TreeDB/nativewire/fixed_peer_failure_diagnostics_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_initialization_v1_test.go",
+      "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "TreeDB/offline_maintenance_template_lookup_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/power_loss_oracle_test.go",
+      "TreeDB/profiles_test.go",
+      "TreeDB/tree/tree.go"
+    ],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "TestPrimary(DataCertificateV6|ClosedIteratorDetaches|JointRecoveryMarkerV6|SharedTransactionV6ReusesExact)|TestInlineCommitSkipsValueLogRefresh|TestDurableRootPublicationAcceptedWaitFailureRunsPostWork|TestOneShot",
+        "-count=1",
+        "-timeout=120s",
+        "-v"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "1"
+      }
+    }
+  },
+  {
+    "batch": "windows-db-01",
+    "exit": 0,
+    "elapsed": 72.73677182663232,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "./TreeDB/db",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-db.test.exe"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "0",
+        "GOOS": "windows",
+        "GOARCH": "amd64"
+      }
+    }
+  },
+  {
+    "batch": "windows-nativewire-01",
+    "exit": 0,
+    "elapsed": 18.746380525641143,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "./TreeDB/nativewire",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-nativewire.test.exe"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "0",
+        "GOOS": "windows",
+        "GOARCH": "amd64"
+      }
+    }
+  },
+  {
+    "batch": "windows-public-01",
+    "exit": 0,
+    "elapsed": 32.318188664037734,
+    "before_after_equal": true,
+    "files": 10240,
+    "exact_final_manifest": true,
+    "later_source_paths": [],
+    "command": {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "./TreeDB",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-public.test.exe"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "env": {
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "local",
+        "GOMAXPROCS": "2",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/tmp",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "CGO_ENABLED": "0",
+        "GOOS": "windows",
+        "GOARCH": "amd64"
+      }
+    }
+  }
+]

@@ -1,0 +1,191 @@
+[
+  {
+    "job": "mvcc raw-path gate (linux)",
+    "failures": [],
+    "race_panic": 0,
+    "successor_disposition": "Read-path causal simplifications integrated with focused custody/routing controls. Hosted Get/seek performance and zero-allocation gate require exact successor rerun; local quietness refused and zero uninstrumented samples."
+  },
+  {
+    "job": "ubuntu-latest-3",
+    "failures": [
+      "TestInlineCommitSkipsValueLogRefresh",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "github.com/snissn/gomap/TreeDB/db"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "macos-latest-3",
+    "failures": [
+      "TestInlineCommitSkipsValueLogRefresh",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "github.com/snissn/gomap/TreeDB/db"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-nativewire",
+    "failures": [
+      "TestFixedPeerColocatedAuditCurrentAuthorityV1",
+      "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "github.com/snissn/gomap/TreeDB/nativewire"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Diagnostic-only: retain failure-only per-node status/error and configured deadlines; root cause remains unresolved pending successor hosted evidence."
+  },
+  {
+    "job": "windows-core-1",
+    "failures": [
+      "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+      "TestOpen_PersistedProfileCannotChangeContracts",
+      "github.com/snissn/gomap/TreeDB"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-2",
+    "failures": [
+      "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation",
+      "TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules",
+      "TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency",
+      "TestPrimaryJointCompletedV6RejectsPhysicalChange",
+      "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "github.com/snissn/gomap/TreeDB/db"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-3",
+    "failures": [
+      "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock",
+      "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock",
+      "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+      "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+      "TestPrimaryJointVacuumV6SuccessfulReplacement",
+      "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+      "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "TestPrimaryOfflinePairChildProducerAdmission/physical-completion",
+      "TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal",
+      "TestPrimaryOfflinePairChildProducerAdmission",
+      "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "github.com/snissn/gomap/TreeDB/db"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-7",
+    "failures": [
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "github.com/snissn/gomap/TreeDB"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-8",
+    "failures": [
+      "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "github.com/snissn/gomap/TreeDB"
+    ],
+    "race_panic": 0,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "race-check (linux)-2",
+    "failures": [
+      "TestNegativeLookupQualificationFixture",
+      "github.com/snissn/gomap/TreeDB"
+    ],
+    "race_panic": 94,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "race-check (linux)-3",
+    "failures": [
+      "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "github.com/snissn/gomap/TreeDB"
+    ],
+    "race_panic": 658,
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "macos-latest-2",
+    "failures": [
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "TestCOWPublicEmptyCheckpointLeafRegistrationProgress"
+    ],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/macos-latest-2.log",
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-4",
+    "failures": [
+      "TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum",
+      "TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum",
+      "TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum",
+      "TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum",
+      "TestIndexVacuumM4CertificationMatrix"
+    ],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-4.log",
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-5",
+    "failures": [
+      "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest",
+      "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory",
+      "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot"
+    ],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-5.log",
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "windows-core-6",
+    "failures": [
+      "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2",
+      "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8",
+      "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16",
+      "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup"
+    ],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-6.log",
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "race-check (linux)-1",
+    "failures": [
+      "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot"
+    ],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/race-check_linux_-1.log",
+    "successor_disposition": "Source/fixture repair and supported-platform focused controls implemented; platform/race hosted successor rerun still required. See failure-disposition.md for exact cause and preserved oracle."
+  },
+  {
+    "job": "TreeDB required gate",
+    "failures": [],
+    "race_reports": 0,
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/TreeDB_required_gate.log",
+    "successor_disposition": "Aggregate only; blocked by hosted failing shards/raw-path gate, refresh successor."
+  }
+]

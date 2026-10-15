@@ -1,0 +1,48 @@
+=== RUN   TestNegativeLookupQualificationFixture
+2026/10/15 07:03:49 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=3999 ratio=0.031
+2026/10/15 07:03:49 treedb: value-log dict published class=single_value dict_id=18112090073266034019 k=16 payload_ratio=0.024 total_ratio=0.028
+    negative_lookup_test.go:154: payload=compressible256 enabled=false
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc000356960 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc000356960 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc000356960 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+2026/10/15 07:03:52 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=4039 ratio=0.031
+2026/10/15 07:03:52 treedb: value-log dict published class=single_value dict_id=1070561664641535066 k=16 payload_ratio=0.024 total_ratio=0.028
+    negative_lookup_test.go:154: payload=compressible256 enabled=true
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0001a92c0 seq=3 userRoot=18 systemRoot=3 filter=0xc004076200 activeBytes=10240
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0001a92c0 seq=4 userRoot=8 systemRoot=3 filter=0xc004076200 activeBytes=10240
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0001a92c0 seq=5 userRoot=8 systemRoot=3 filter=0xc004076200 activeBytes=10240
+    negative_lookup_test.go:154: payload=random4096 enabled=false
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0031d5a40 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0031d5a40 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0031d5a40 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0
+    negative_lookup_test.go:154: payload=random4096 enabled=true
+    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0000bc000 seq=3 userRoot=18 systemRoot=3 filter=0xc0003070c0 activeBytes=10240
+    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0000bc000 seq=4 userRoot=8 systemRoot=3 filter=0xc0003070c0 activeBytes=10240
+    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0000bc000 seq=5 userRoot=8 systemRoot=3 filter=0xc0003070c0 activeBytes=10240
+--- PASS: TestNegativeLookupQualificationFixture (13.46s)
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/full-writeback
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/synced-only
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/target-meta-only/index%2Ftarget-meta-generation-2
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body
+=== NAME  TestPowerLossOracleCounterexampleNewMetaMissingClosure
+    power_loss_oracle_test.go:854: adversarial crash images: cut=cut/checkpoint-generation-2/after-meta-write/000 count=10 runtime=544.650089ms peak_temp_storage_bytes=1245044 family_coverage=map[data-without-namespace:1 full-writeback:1 namespace-without-data:1 one-missing-dependency:4 synced-only:1 target-meta-only:1 torn-format:1]
+--- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure (1.19s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-001 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/full-writeback (0.06s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-001 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2-001 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/synced-only (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/target-meta-only/index%2Ftarget-meta-generation-2 (0.05s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body (0.05s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	15.708s

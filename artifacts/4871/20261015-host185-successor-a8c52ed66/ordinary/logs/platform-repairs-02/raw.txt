@@ -1,0 +1,55 @@
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory
+--- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot (0.36s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest (0.18s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory (0.18s)
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2
+    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:1632 drained-cohort-files:2 drained-gc-deleted-files:0 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:211328 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:20971 scope-after-reader-governor-bytes:179488 scope-complete-governor-bytes:162592]
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8
+    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:6528 drained-cohort-files:8 drained-gc-deleted-files:0 held-cohort-bytes:6528 held-cohort-files:8 held-gc-deleted-files:0 held-governor-bytes:305424 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:33702 scope-after-reader-governor-bytes:222064 scope-complete-governor-bytes:162592]
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16
+    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:13056 drained-cohort-files:16 drained-gc-deleted-files:0 held-cohort-bytes:13056 held-cohort-files:16 held-gc-deleted-files:0 held-governor-bytes:432336 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:34259 scope-after-reader-governor-bytes:278832 scope-complete-governor-bytes:162592]
+--- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.69s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2 (0.16s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8 (0.22s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16 (0.31s)
+=== RUN   TestNativeMVCCSnapshotActualCaptureAndCancellation
+--- PASS: TestNativeMVCCSnapshotActualCaptureAndCancellation (0.05s)
+=== RUN   TestNativeMVCCSnapshotPinsOwnedEmptySet
+--- PASS: TestNativeMVCCSnapshotPinsOwnedEmptySet (0.03s)
+=== RUN   TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6
+--- PASS: TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6 (0.07s)
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation
+    primary_joint_completed_v6_test.go:287: physical-change refusal: collectionwal: recovery required: committed pair identity missing: index.db
+        collectionwal: recovery required
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules
+    primary_joint_completed_v6_test.go:287: physical-change refusal: treedb: no recoverable durable meta: slot 0: primary capsule V6: invalid complete authority; slot 1: primary capsule V6: invalid complete authority
+        collectionwal: recovery required
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency
+    primary_joint_completed_v6_test.go:287: physical-change refusal: treedb: no recoverable durable meta: slot 0: no such file or directory; slot 1: no such file or directory
+        collectionwal: recovery required
+--- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange (0.65s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation (0.21s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules (0.21s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency (0.23s)
+=== RUN   TestPrimaryJointVacuumV6SuccessfulReplacement
+--- PASS: TestPrimaryJointVacuumV6SuccessfulReplacement (0.12s)
+=== RUN   TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision
+--- PASS: TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision (0.16s)
+=== RUN   TestPrimaryJointVacuumV6CommandFrontierAndRevisions
+--- PASS: TestPrimaryJointVacuumV6CommandFrontierAndRevisions (0.20s)
+=== RUN   TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit
+--- PASS: TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit (0.10s)
+=== RUN   TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody
+--- PASS: TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody (0.09s)
+=== RUN   TestPrimaryOfflinePairChildProducerAdmission
+=== RUN   TestPrimaryOfflinePairChildProducerAdmission/physical-completion
+=== RUN   TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal
+--- PASS: TestPrimaryOfflinePairChildProducerAdmission (0.08s)
+    --- PASS: TestPrimaryOfflinePairChildProducerAdmission/physical-completion (0.04s)
+    --- PASS: TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	2.674s

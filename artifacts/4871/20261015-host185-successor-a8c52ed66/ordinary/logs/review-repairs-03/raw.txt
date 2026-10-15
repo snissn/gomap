@@ -1,0 +1,68 @@
+=== RUN   TestInlineCommitSkipsValueLogRefresh
+--- PASS: TestInlineCommitSkipsValueLogRefresh (0.08s)
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2
+--- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork (0.17s)
+    --- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1 (0.08s)
+    --- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2 (0.09s)
+=== RUN   TestOneShotReadCustodyMatchesCapturedResources
+--- PASS: TestOneShotReadCustodyMatchesCapturedResources (0.06s)
+=== RUN   TestOneShotLiveValueLogReadSurvivesConcurrentDBClose
+--- PASS: TestOneShotLiveValueLogReadSurvivesConcurrentDBClose (0.07s)
+=== RUN   TestOneShotReadAllocationBudget
+=== RUN   TestOneShotReadAllocationBudget/Get
+    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetAppend
+    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetVersioned
+    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0
+=== RUN   TestOneShotReadAllocationBudget/GetVersionedAppend
+    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0
+--- PASS: TestOneShotReadAllocationBudget (0.06s)
+    --- PASS: TestOneShotReadAllocationBudget/Get (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetAppend (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetVersioned (0.00s)
+    --- PASS: TestOneShotReadAllocationBudget/GetVersionedAppend (0.00s)
+=== RUN   TestOneShotReadOwnedMissingEmptyAndNilKey
+--- PASS: TestOneShotReadOwnedMissingEmptyAndNilKey (0.09s)
+=== RUN   TestOneShotReadCapturePublicationAndRelease
+--- PASS: TestOneShotReadCapturePublicationAndRelease (0.00s)
+=== RUN   TestOneShotReadRejectedCaptureReleasesValueLogPin
+--- PASS: TestOneShotReadRejectedCaptureReleasesValueLogPin (0.00s)
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/prepare
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/activate
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/prepare
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/activate
+--- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache (0.20s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/prepare (0.04s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/activate (0.04s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/prepare (0.06s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/activate (0.06s)
+=== RUN   TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal
+--- PASS: TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal (0.06s)
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4096
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4140
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4141
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4142
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/8192
+--- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4096 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4140 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4141 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4142 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/8192 (0.00s)
+=== RUN   TestPrimaryJointRecoveryMarkerV6AdmissionRefusesBeforeProof
+--- PASS: TestPrimaryJointRecoveryMarkerV6AdmissionRefusesBeforeProof (0.00s)
+=== RUN   TestPrimaryClosedIteratorDetachesOriginalRootV6
+=== RUN   TestPrimaryClosedIteratorDetachesOriginalRootV6/owned=false
+=== RUN   TestPrimaryClosedIteratorDetachesOriginalRootV6/owned=true
+--- PASS: TestPrimaryClosedIteratorDetachesOriginalRootV6 (0.22s)
+    --- PASS: TestPrimaryClosedIteratorDetachesOriginalRootV6/owned=false (0.11s)
+    --- PASS: TestPrimaryClosedIteratorDetachesOriginalRootV6/owned=true (0.11s)
+=== RUN   TestPrimarySharedTransactionV6ReusesExactDataCertificate
+--- PASS: TestPrimarySharedTransactionV6ReusesExactDataCertificate (0.09s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.146s

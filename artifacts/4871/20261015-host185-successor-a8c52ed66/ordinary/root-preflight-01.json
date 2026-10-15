@@ -1,0 +1,11 @@
+{
+  "frozen_head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "files": 10240,
+  "mismatches": [],
+  "changed_files": 34,
+  "gofmt_exit": 0,
+  "gofmt_stdout": "",
+  "gofmt_stderr": "",
+  "diff_check_exit": 0,
+  "diff_check_output": ""
+}

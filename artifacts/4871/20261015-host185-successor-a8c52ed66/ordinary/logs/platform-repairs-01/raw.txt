@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/primary_joint_completed_v6_test.go:224:8: undefined: rootpublication
+TreeDB/db/primary_joint_completed_v6_test.go:228:22: undefined: rootpublication
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

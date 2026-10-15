@@ -1,0 +1,11 @@
+=== RUN   TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6
+    native_prune_backend_route_v6_test.go:75: call=0 phase=0 work=32/744376 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:75: call=4 phase=3 work=32/671768 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:75: call=7 phase=6 work=32/21263 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:75: call=13 phase=16 work=24/44823 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:81: first actual route refusal: calls=103 phase=16 error=native prune phase 16: native MVCC transaction requires its original work-bearing caller
+    native_prune_backend_route_v6_test.go:86: refused before real selected+anchor producer: phase=16
+--- FAIL: TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6 (0.15s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/mvcc	0.152s
+FAIL

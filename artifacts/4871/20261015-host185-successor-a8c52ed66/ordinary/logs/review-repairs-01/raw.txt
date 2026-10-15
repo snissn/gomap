@@ -1,0 +1,41 @@
+=== RUN   TestInlineCommitSkipsValueLogRefresh
+--- PASS: TestInlineCommitSkipsValueLogRefresh (0.08s)
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1
+=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2
+--- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork (0.17s)
+    --- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1 (0.09s)
+    --- PASS: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2 (0.08s)
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/prepare
+    primary_review_repairs_test.go:96: aborted private root survived its original disposal
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/activate
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/prepare
+    primary_review_repairs_test.go:96: aborted private root survived its original disposal
+=== RUN   TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/activate
+--- FAIL: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache (0.21s)
+    --- FAIL: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/prepare (0.04s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=false/activate (0.06s)
+    --- FAIL: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/prepare (0.06s)
+    --- PASS: TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache/seeded=true/activate (0.06s)
+=== RUN   TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal
+--- PASS: TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal (0.06s)
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4096
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4140
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4141
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4142
+=== RUN   TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/8192
+--- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4096 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4140 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4141 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/4142 (0.00s)
+    --- PASS: TestPrimaryJointRecoveryMarkerV6FixedAdmittedScratch/8192 (0.00s)
+=== RUN   TestPrimaryJointRecoveryMarkerV6AdmissionRefusesBeforeProof
+--- PASS: TestPrimaryJointRecoveryMarkerV6AdmissionRefusesBeforeProof (0.00s)
+=== RUN   TestPrimarySharedTransactionV6ReusesExactDataCertificate
+--- PASS: TestPrimarySharedTransactionV6ReusesExactDataCertificate (0.10s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.655s
+FAIL

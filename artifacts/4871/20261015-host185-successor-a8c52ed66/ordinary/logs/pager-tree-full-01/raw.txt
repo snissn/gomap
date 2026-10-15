@@ -1,0 +1,2 @@
+ok  	github.com/snissn/gomap/TreeDB/pager	0.113s
+ok  	github.com/snissn/gomap/TreeDB/tree	0.035s

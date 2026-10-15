@@ -1,0 +1,111 @@
+{
+  "utc": "2026-10-15T17:24:26.133287+00:00",
+  "worktree": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/source-freeze-01.json",
+  "source_matches_freeze": true,
+  "files": 10240,
+  "changed_paths": 34,
+  "git_diff_check": 0,
+  "windows_crosscompile": {
+    "db": {
+      "exit": 0,
+      "elapsed": 72.73677182663232,
+      "binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-db.test.exe",
+      "sha256": "ff908e3dca7d5162ab90db3b0c5e587b1b51f215214fc2ba958779009138ce40"
+    },
+    "public": {
+      "exit": 0,
+      "elapsed": 32.318188664037734,
+      "binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-public.test.exe",
+      "sha256": "43737c25a278f5d53b2a6f739b477ec50e14cfc242ff3090793b58d82d9f0731"
+    },
+    "nativewire": {
+      "exit": 0,
+      "elapsed": 18.746380525641143,
+      "binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair-work/windows-nativewire.test.exe",
+      "sha256": "e92fbaf4709b53d1dd45f354a17c88e9cb623ff264097ad17eebe9ada9a0bc55"
+    }
+  },
+  "batch_results": {
+    "empty-sidecar-controls-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    },
+    "lifetime-repairs-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "pager-tree-full-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    },
+    "platform-repairs-01": {
+      "exit": 1,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "platform-repairs-02": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "public-repairs-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "race-repairs-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "race-repairs-02": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    },
+    "review-repairs-01": {
+      "exit": 1,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "review-repairs-02": {
+      "exit": 1,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "review-repairs-03": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": false
+    },
+    "windows-db-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    },
+    "windows-nativewire-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    },
+    "windows-public-01": {
+      "exit": 0,
+      "source_before_after_equal": true,
+      "exact_final_manifest": true
+    }
+  },
+  "active_own_processes": [],
+  "source_writer_lease": "released to root",
+  "runtime_lease": "released to root",
+  "unresolved": [
+    "Windows nativewire two failures have diagnostics only; hosted root cause unresolved",
+    "Successor exact-head hosted platform/race/performance and independent review pending",
+    "No qualifying local timing; f041 hosted Get/seek remain RED until successor gate"
+  ],
+  "acceptance_claims": []
+}
