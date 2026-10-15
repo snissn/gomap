@@ -1,0 +1,1124 @@
+[
+  {
+    "path": "TreeDB/production_authority_matrix_test.go",
+    "line": 473,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func captureProductionVectorGraphAuthority(t productionAuthorityContext) (*rootpublication.StableResourceSet, error) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn nil, err\n\t}"
+  },
+  {
+    "path": "TreeDB/env_index_overrides_test.go",
+    "line": 118,
+    "text": "if err := db.SaveFormatConfig(maindbDir, cfg); err != nil {",
+    "context": "\t\tIndexInternalBaseDelta:     false,\n\t\tIndexAdaptiveLeafEncoding:  false,\n\t}\n\tif err := db.SaveFormatConfig(maindbDir, cfg); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/offline_maintenance_format_config_test.go",
+    "line": 56,
+    "text": "if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(mainDir, 0o755); err != nil {\n\t\tt.Fatalf(\"mkdir maindb: %v\", err)\n\t}\n\tif err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/documentservice/typed_native_upsert_test.go",
+    "line": 18,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\nfunc TestServiceTypedNativeConcurrentInsertsShareAdmission(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/documentservice/typed_native_upsert_test.go",
+    "line": 137,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\nfunc TestServiceTypedNativeCancelledPreQueueUpdateDoesNotFallback(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write_path_test.go",
+    "line": 453,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestColumnStoreSupportMatrixRejectsNonJSONMutationsBeforeExecutionM12C(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write_path_test.go",
+    "line": 670,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestColumnStoreSupportMatrixRejectsNonJSONInsertBeforeCommandAppendM12B(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write_path_test.go",
+    "line": 1316,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestColumnStoreBenchmarkRelaxedAllowsDurableCommandWALWritesM10C(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write_path_test.go",
+    "line": 2186,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func prepareColumnStoreCommandWALDirWithProfileM10C(t testing.TB, profileSupport ColumnStoreProfileSupport) (string, uint64) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_query_test.go",
+    "line": 2794,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnPhysicalPredicateFixture1869(tb testing.TB, events []columnPhysicalPredicateEvent1869) (*Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_query_test.go",
+    "line": 4968,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnPhysicalQueryFixtureM13B(tb testing.TB, events []columnPhysicalQueryEventM13B) (*Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_query_test.go",
+    "line": 5024,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"rows=%d want at least two rows\", rows)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_latest_visible_1953_test.go",
+    "line": 666,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openTypedColumnLatestVisibleFixture1953(tb testing.TB, sortKey []ColumnSortKey, batches [][]columnPhysicalJSONBenchParityEventP0) (string, *backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_query_1890_bench_test.go",
+    "line": 214,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err != nil {\n\t\treturn nil, \"\", err\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn nil, dir, err\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_source_import_v2_test.go",
+    "line": 539,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "func openSourceImportDirectoryCollectionV2(t testing.TB) (string, *backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 376,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnInt64ScanReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 408,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnInt64ScanMultipartLatestVisibleUpdatesDeletes(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 790,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 1032,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnInt64PreparedStatsRoundTripReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 1469,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnInt64AggregateReopenDurable(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_int64_scan_test.go",
+    "line": 3678,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openTypedColumnInt64ScanDB(tb testing.TB) *backenddb.DB {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 32,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tb.Fatal(err)\n\t}\n\tb.Cleanup(func() { _ = os.RemoveAll(dir) })\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 297,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestScanDocumentsFuncMonotonicReconstructionShuffledGenerationsFallBackP3887(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 361,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func TestScanDocumentsFuncMonotonicReconstructionSelectiveTypedColumnP3887(t *testing.T) {\n\tconst rows = columnReconstructionMonotonicBatchSize + 3\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 435,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 479,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestScanDocumentsFuncGenericLocatorReconstructionBoundsMultiAssetBatchesP3890(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 545,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestScanDocumentsFuncMonotonicReconstructionUnsupportedSelectedTypedFallsBackP3887(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_reconstruction_monotonic_test.go",
+    "line": 589,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestScanDocumentsFuncMonotonicReconstructionBoundsRetainedSemanticCacheP3887(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_usearch_bench_test.go",
+    "line": 684,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openVectorUSearchProductionTreeDBCollection(tb testing.TB, docs, dims int, params vectorUSearchProductionCompareParams) (*backenddb.DB, *Collection, VectorIndexDefinition, VectorIndexStatus) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write_bench_test.go",
+    "line": 325,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int, uint64) {\n\tb.Helper()\n\tdir := b.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatalf(\"SaveFormatConfig setup: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_ingestion_test.go",
+    "line": 112,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := setup.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_rebuild_test.go",
+    "line": 1076,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestColumnGraphRebuildVectorIndexAllocatesPartIDsAcrossGraphIndexesV2A(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_rebuild_test.go",
+    "line": 2166,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnGraphRebuildTestCollectionV2A(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 22,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationCheckpointReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 118,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnNativeScalarFixedWidthPublicationCheckpointReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 194,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 241,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnFixedAndPackedCodePublicationCheckpointReopen1931(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 313,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 360,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnAdjacencyPublicationRejectsWrongDocumentLength(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 377,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationCommandWALReopenWithoutCheckpoint(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 504,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 551,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationCommandWALReplayWithoutCheckpoint(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 608,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationMissingNullTypeMismatchAtomic(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 688,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 745,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationMultiGenerationDictionaryRecode(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 807,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationBatchUpdateRowIndexMapping(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 874,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationDeleteDoesNotRequireTypedPart(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 1128,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnReconstructionHybridOwners(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 1147,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnReconstructionNullableScalarHybridOwnersCheckpointReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 1218,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 1506,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 1978,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationExistingTypedRowCompatibility(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 2010,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 2065,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPublicationAdjacencyMissingDegreeFailsClosed(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 2089,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func typedColumnReconstructionCacheFixture1781(t testing.TB, rows int) (*Collection, *backenddb.Snapshot, []columnPhysicalVisibleRow, ColumnStoreConfig, uint64) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_publication_test.go",
+    "line": 2356,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func setupSingleTypedColumnPart1755(t testing.TB) (*backenddb.DB, *Collection, ColumnAssetRef) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/text_v2_hardening_test.go",
+    "line": 102,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTextV2HardeningCommandWALDefaultCreateReplay2734(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_quantized_asset_test.go",
+    "line": 1912,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tdims = len(rows[0].vector)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/r1_mutation_5059_test.go",
+    "line": 79,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "func r1MutationOpen5059(t testing.TB, indexed bool) (string, *backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_store_compaction_test.go",
+    "line": 591,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnStoreCompactionFixture1953(tb testing.TB, cfg *ColumnStoreConfig, batches [][]columnPhysicalJSONBenchParityEventP0) (string, *backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_store_compaction_test.go",
+    "line": 821,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestColumnStoreCompactRequiresColumnStore1953(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_chunking_test.go",
+    "line": 65,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openChunkingColumnTestCollection(t *testing.T) (string, *backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_chunking_test.go",
+    "line": 1788,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t\tb.Run(fmt.Sprintf(\"%s/%d\", layout, unrelated), func(b *testing.B) {\n\t\t\t\tdir := b.TempDir()\n\t\t\t\tif columnStore {\n\t\t\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\t\t\tb.Fatal(err)\n\t\t\t\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_q2_1950_test.go",
+    "line": 947,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openTypedColumnSortKeyFixtureBatches1950(tb testing.TB, sortKey []ColumnSortKey, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_jsonbench_parity_test.go",
+    "line": 220,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnPhysicalJSONBenchParityFixtureP0(tb testing.TB, events []columnPhysicalJSONBenchParityEventP0) (*Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/conditional_delete_test.go",
+    "line": 51,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestDeleteDocumentIfReceivesReconstructedColumnDocument(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_quantized_bench_test.go",
+    "line": 2497,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"invalid benchmark shape rows=%d dims=%d\", shape.rows, shape.dims)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_quantized_bench_test.go",
+    "line": 2537,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"invalid benchmark shape rows=%d dims=%d\", shape.rows, shape.dims)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_quantized_bench_test.go",
+    "line": 2591,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"invalid benchmark shape rows=%d dims=%d\", shape.rows, shape.dims)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_asset_test.go",
+    "line": 3669,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {\n\tdir := b.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_typed_column_sortkey_1948_test.go",
+    "line": 87,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnPartSortKeyBoolPersistsAscendingReopen1948(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_typed_column_sortkey_1948_test.go",
+    "line": 582,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openTypedColumnSortKeyFixture1948(tb testing.TB, sortKey []ColumnSortKey, events []columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_retained_payload_policy_1876_test.go",
+    "line": 284,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"invalid fixture shape: %+v\", shape)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_scale_diagnostic_test.go",
+    "line": 91,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\t\tif err := os.Mkdir(dir, 0700); err != nil {\n\t\t\tt.Fatalf(\"build requires a new DB directory; refusing to reuse existing evidence: %v\", err)\n\t\t}\n\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_offsets_list_test.go",
+    "line": 13,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_offsets_list_test.go",
+    "line": 87,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnUint32ListReopen1985(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_offsets_list_test.go",
+    "line": 195,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func newTypedColumnAdjacencyOffsetsListTestCollection(t *testing.T) (*backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_typed_column_one_shot_cache_3088_test.go",
+    "line": 669,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\ttb.Helper()\n\ttb.Setenv(typedColumnBenchmarkRowsPerGranuleEnv, strconv.Itoa(rowsPerGranule))\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/scalar_primitive_test.go",
+    "line": 196,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestPrimitiveScalarTypedColumnPartCheckpointReopen1929(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_persist_test.go",
+    "line": 271,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"close setup db: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"enable command WAL: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_string_scan_test.go",
+    "line": 237,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnStringScanReopen1785(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_document_fetch_preset_1903_test.go",
+    "line": 144,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestProjectionOrientedVectorDocumentFetchPresetCustomVectorField1903(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_batch_test.go",
+    "line": 34,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\nfunc TestTypedMinimaCatalogPostSyncAmbiguity(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_batch_test.go",
+    "line": 369,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "func openTypedMinimaCollectionMeta(t testing.TB, meta CollectionMeta) (string, *backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/validated_float32_projection_test.go",
+    "line": 321,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\n\tt.Run(\"non column collection\", func(t *testing.T) {\n\t\tdir := t.TempDir()\n\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/validated_float32_projection_test.go",
+    "line": 601,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openValidatedFloat32ProjectionCollectionWithPolicyAndBufferLimit(t testing.TB, dims int, retainedPayload ColumnRetainedPayloadPolicy, bufferedMaxDocuments int, withTextIndex bool) (string, *backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_retained_vlog_placement_test.go",
+    "line": 1530,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {\n\tt.Helper()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_source_import_scaling_v2_test.go",
+    "line": 23,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: features, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\tif directory {\n\t\tfeatures = append(features, \"dependency_directory_v2\")\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: features, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tb.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_fold_whole_generation_gc_test.go",
+    "line": 19,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{",
+    "context": "\trequireTypedGraphPublicServingTest(t)\n\tctx := context.Background()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{\n\t\tRequiredFeatures:           []string{backenddb.RequiredFeatureCommandWALV1},\n\t\tDurabilityProfile:          backenddb.ProfileCommandWALDurable,"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_search_test.go",
+    "line": 2198,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tdims = len(rows[0].vector)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_search_test.go",
+    "line": 3921,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t{id: \"doc-b\", vector: []float32{0, 1, 0}},\n\t}\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_search_test.go",
+    "line": 7220,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnGraphQuantizedBenchmarkCollection1926(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_hnsw_search_pack_test.go",
+    "line": 2540,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnHNSWSearchPackRebuildBenchCollection2313(tb testing.TB, docs, dims int, params columnHNSWSearchPackRebuildBenchParams2313) (*backenddb.DB, *Collection, VectorIndexDefinition) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_asset_gc_test.go",
+    "line": 1215,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tconst refs = 10_000\n\tconst refBytes = 64\n\tdir := b.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_asset_gc_test.go",
+    "line": 1361,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func prepareColumnAssetGCBenchmarkCollectionM15B(b *testing.B) (*backenddb.DB, *Collection) {\n\tb.Helper()\n\tdir := b.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go",
+    "line": 1473,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\ttb.Fatalf(\"invalid benchmark shape rows=%d dims=%d\", shape.rows, shape.dims)\n\t}\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_retained_payload_audit_test.go",
+    "line": 1307,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestAuditCollectionRetainedPayloadDeclaredPathsAbsentValueReadErrorFailsClosed2384(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_retained_payload_audit_test.go",
+    "line": 1447,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openRetainedPayloadAuditCollection2382(t *testing.T, cfg *ColumnStoreConfig, docs [][]byte) (*Collection, func()) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/index_insert_search_bench_test.go",
+    "line": 348,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t}\n\tvar db *backenddb.DB\n\tif commandWAL {\n\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_aggregate_metadata_predicate_1951_test.go",
+    "line": 540,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openPredicateAggregateMetadataFixtureWithConfig1951(tb testing.TB, cfg *ColumnStoreConfig, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_bench_test.go",
+    "line": 177,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tif err := setup.Close(); err != nil {\n\t\t\tb.Fatalf(\"close setup DB: %v\", err)\n\t\t}\n\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\tb.Fatalf(\"save command WAL format: %v\", err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_typed_column_test.go",
+    "line": 825,
+    "text": "if err := backenddb.SaveFormatConfig(dir, format); err != nil {",
+    "context": "\tif len(openOptions) == 1 {\n\t\tformat.DurabilityProfile = openOptions[0].ResolvedProfile\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, format); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/hybrid_search_executor_test.go",
+    "line": 804,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openHybridSearchExecutorFixture2505(tb testing.TB, rows []hybridSearchExecutorFixtureRow2505) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 606,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 1002,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 2551,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3320,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3391,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := seed.Close(); err != nil {\n\t\tt.Fatalf(\"Close seed DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3475,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3553,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3641,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t} {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3672,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3696,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{",
+    "context": "\nfunc TestCollectionCommandWALCreateCollectionReplayWithValueLogOuterLeaves(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{\n\t\tRequiredFeatures:           []string{backenddb.RequiredFeatureCommandWALV1},\n\t\tIndexOuterLeavesInValueLog: true,"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 3827,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 4015,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 4150,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/command_wal_test.go",
+    "line": 4190,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := d.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup DB: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/prepared_insert_test.go",
+    "line": 1104,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\tfor _, mode := range []string{\"ack\", \"wal_before_append\", \"wal_after_lsn_assignment\", \"wal_after_sync\", \"asset_before_sync\", \"before_applied_lsn_candidate\", \"after_applied_lsn_candidate\", \"before_seal_write\", \"before_meta_write\"} {\n\t\tt.Run(mode, func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_typed_column_1947_test.go",
+    "line": 662,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnPhysicalJSONBenchTypedColumnPartBatches1947(tb testing.TB, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func(), []ColumnAssetRef) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_typed_column_1947_test.go",
+    "line": 735,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openColumnPhysicalJSONBenchNullableFullDataFixture2165(tb testing.TB, docs []string) (*backenddb.DB, *Collection, func()) {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/hybrid_search_closeout_bench_test.go",
+    "line": 228,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func openHybridCloseoutFixture2506(tb testing.TB, docs, dims, m int) hybridCloseoutFixture2506 {\n\ttb.Helper()\n\tdir := tb.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\ttb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 591,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionReadViewFetchDocumentsByRowRefRequiresTypedStorage(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 817,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCollectionReadViewFetchFormatBSONNoProjection1875(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 1484,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func newDocumentProjectionTestCollection1875(t testing.TB) (*backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 1514,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func newDocumentProjectionPlainJSONCollection1875(t testing.TB) (*backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 1539,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func newDocumentProjectionVectorTestCollectionWithDims1875(t testing.TB, embeddingOwner TypedStorageFieldOwner, dims int) (*backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer_test.go",
+    "line": 1585,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func newDocumentMaterializerTestCollection(t testing.TB) (*backenddb.DB, *Collection) {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/source_atomic_column_test.go",
+    "line": 119,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := setup.Close(); err != nil {\n\t\tt.Fatalf(\"Close setup: %v\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/collections/typed_column_string_predicate_validation_test.go",
+    "line": 272,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestTypedColumnStringPredicateDurableReopenHelper(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/vector_prepare_replay_ownership_test.go",
+    "line": 11,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, DurabilityProfile: ProfileCommandWALDurable}); err != nil {",
+    "context": "func vectorPrepareReplayOwnershipDBV1(t *testing.T) *DB {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, DurabilityProfile: ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/dependency_directory_feature_v2_test.go",
+    "line": 15,
+    "text": "if err := SaveFormatConfig(dir, cfg); err != nil {",
+    "context": "\tfor _, ignore := range []bool{false, true} {\n\t\tdir := t.TempDir()\n\t\tcfg := FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}\n\t\tif err := SaveFormatConfig(dir, cfg); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/db/dependency_directory_feature_v2_test.go",
+    "line": 62,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {",
+    "context": "\t\t\t\tt.Fatal(err)\n\t\t\t}\n\t\t}\n\t\tif err := SaveFormatConfig(dir, FormatConfig{}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {\n\t\t\tt.Fatalf(\"feature removal: %v\", err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/db/dependency_directory_feature_v2_test.go",
+    "line": 92,
+    "text": "if err := SaveFormatConfig(dir, cfg); !errors.Is(err, ErrLegacyFormatRebuildRequired) {",
+    "context": "\t\tt.Fatal(err)\n\t}\n\tcfg := FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}\n\tif err := SaveFormatConfig(dir, cfg); !errors.Is(err, ErrLegacyFormatRebuildRequired) {\n\t\tt.Fatalf(\"V1 activation: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/dependency_directory_feature_v2_test.go",
+    "line": 168,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); !errors.Is(err, ErrCommandWALDirtyActivation) {",
+    "context": "\tif err := os.WriteFile(walPath, before, 0600); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); !errors.Is(err, ErrCommandWALDirtyActivation) {\n\t\tt.Fatalf(\"dirty activation: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 31,
+    "text": "if err := SaveFormatConfig(dir, cfg); err != nil {",
+    "context": "\t})\n\tcfg.Version = 0 // SaveFormatConfig should default this.\n\n\tif err := SaveFormatConfig(dir, cfg); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 132,
+    "text": "if err := SaveFormatConfig(dir, cfg); err != nil {",
+    "context": "func TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile(t *testing.T) {\n\tdir := t.TempDir()\n\tcfg := formatConfigFromOptions(Options{ResolvedProfile: ProfileNoWALFast})\n\tif err := SaveFormatConfig(dir, cfg); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 198,
+    "text": "if err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {",
+    "context": "\nfunc TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig initial: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 201,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true, RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); err != nil {",
+    "context": "\tif err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig initial: %v\", err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true, RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig preserving profile: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 211,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{DurabilityProfile: ProfileNoWALFast}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {",
+    "context": "\tif !ok || loaded.DurabilityProfile != ProfileCommandWALRelaxed || loaded.Version != formatConfigDurabilityProfileVersion {\n\t\tt.Fatalf(\"profile binding lost after resave: ok=%t cfg=%+v\", ok, loaded)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{DurabilityProfile: ProfileNoWALFast}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {\n\t\tt.Fatalf(\"profile replacement error=%v, want ErrLegacyFormatRebuildRequired\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config_test.go",
+    "line": 240,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{}); err != nil {",
+    "context": "\nfunc TestValidateDurabilityProfileGate_RejectsLegacyManifestForPublicProfile(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "line": 58,
+    "text": "if err = SaveFormatConfig(dir, FormatConfig{}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {",
+    "context": "\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}\n\t\t\t}\n\t\t\tif err = SaveFormatConfig(dir, FormatConfig{}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {\n\t\t\t\tt.Fatalf(\"removed marker: %v\", err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "line": 80,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {",
+    "context": "\t\t\t\tt.Fatalf(\"old index accepted or decoded: %v\", err)\n\t\t\t}\n\t\t}\n\t\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {\n\t\t\tt.Fatalf(\"retroactive marker: %v\", err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_raw_test.go",
+    "line": 465,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{",
+    "context": "\nfunc TestCommandWALDurablePrefixGroupPrevalidatesEveryParticipant(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{\n\t\tRequiredFeatures:  []string{RequiredFeatureCommandWALV1},\n\t\tDurabilityProfile: ProfileCommandWALDurable,"
+  },
+  {
+    "path": "TreeDB/db/vector_prepare_ownership_external_test.go",
+    "line": 22,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "func vectorPrepareOwnershipDBV1(t *testing.T) *backenddb.DB {\n\tt.Helper()\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/durable_root_side_store_recovery_supported_test.go",
+    "line": 138,
+    "text": "if err := SaveFormatConfig(mainDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {",
+    "context": "\t\t\t\t}\n\t\t\t}\n\t\t\tif test.directory {\n\t\t\t\tif err := SaveFormatConfig(mainDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {\n\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}"
+  },
+  {
+    "path": "TreeDB/db/durable_root_snapshot_rebind_test.go",
+    "line": 35,
+    "text": "if err := SaveFormatConfig(source, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {",
+    "context": "\t\tif err := os.MkdirAll(source, 0o755); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}\n\t\tif err := SaveFormatConfig(source, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/db/physical_snapshot_cut_v1_test.go",
+    "line": 35,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {",
+    "context": "\t\tt.Run(map[bool]string{false: \"manifest\", true: \"directory\"}[directory], func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif directory {\n\t\t\t\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {\n\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}"
+  },
+  {
+    "path": "TreeDB/db/durable_root_open_test.go",
+    "line": 1053,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {",
+    "context": "\tt.Helper()\n\tdir := t.TempDir()\n\tif directory {\n\t\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureDependencyDirectoryV2}}); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}"
+  },
+  {
+    "path": "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "line": 230,
+    "text": "if err := SaveFormatConfig(dirRoot, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true}); err != nil {",
+    "context": "func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {\n\trequireLeafGenerationPackPromotionSupport(t)\n\tdirRoot := t.TempDir()\n\tif err := SaveFormatConfig(dirRoot, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/format_config.go",
+    "line": 522,
+    "text": "if err == nil { return SaveFormatConfig(opts.Dir, cfg) }",
+    "context": "// but never bypass a required-feature or durability contract.\nfunc saveFreshFreelistFormatConfig(opts Options) error {\n cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)\n if err == nil { return SaveFormatConfig(opts.Dir, cfg) }\n if !opts.IgnoreFormatConfig { return err }\n if gateErr := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); gateErr != nil { return gateErr }"
+  },
+  {
+    "path": "TreeDB/db/format_config.go",
+    "line": 555,
+    "text": "return SaveFormatConfig(opts.Dir, cfg)",
+    "context": "\t\t// in openWithLock before the journal is opened.\n\t\treturn writeFormatConfig(opts.Dir, cfg)\n\t}\n\treturn SaveFormatConfig(opts.Dir, cfg)\n}\n"
+  },
+  {
+    "path": "TreeDB/db/command_wal_recovery_test.go",
+    "line": 887,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{",
+    "context": "\tfor _, tc := range tests {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := SaveFormatConfig(dir, FormatConfig{\n\t\t\t\tRequiredFeatures:  []string{RequiredFeatureCommandWALV1},\n\t\t\t\tDurabilityProfile: tc.profile,"
+  },
+  {
+    "path": "TreeDB/db/command_wal_recovery_test.go",
+    "line": 2939,
+    "text": "if err := SaveFormatConfig(dir, cfg); err != nil {",
+    "context": "\tcfg, _, err := LoadFormatConfig(dir)\n\tif err != nil { t.Fatalf(\"LoadFormatConfig: %v\", err) }\n\tcfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)\n\tif err := SaveFormatConfig(dir, cfg); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 82,
+    "text": "err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}})",
+    "context": "\tif err := os.WriteFile(filepath.Join(walDir, \"commit-l0-000001.log\"), []byte(\"dirty commit wal\"), 0o600); err != nil {\n\t\tt.Fatalf(\"write commit wal: %v\", err)\n\t}\n\terr := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}})\n\tif !errors.Is(err, ErrCommandWALDirtyActivation) {\n\t\tt.Fatalf(\"SaveFormatConfig error=%v, want clean legacy WAL failure\", err)"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 93,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestSaveFormatConfigCommandWALResaveExistingFeatureAllowsCommandSegments(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig initial: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 97,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tt.Fatalf(\"SaveFormatConfig initial: %v\", err)\n\t}\n\twriteCommandWALSegmentFrames(t, dir, 1, 1)\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig resave existing command WAL feature: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 107,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(dir, 0o755); err != nil {\n\t\tt.Fatalf(\"MkdirAll: %v\", err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 123,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(dir, 0o755); err != nil {\n\t\tt.Fatalf(\"MkdirAll: %v\", err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 165,
+    "text": "if err := SaveFormatConfig(persistedDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(persistedDir, 0o755); err != nil {\n\t\tt.Fatalf(\"MkdirAll persistedDir: %v\", err)\n\t}\n\tif err := SaveFormatConfig(persistedDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig persistedDir: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 242,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(dir, 0o755); err != nil {\n\t\tt.Fatalf(\"MkdirAll: %v\", err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 269,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestCommandWALRequiredFeatureRejectsOfflineValueLogRewrite(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 285,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{\"future_feature\"}}); err != nil {",
+    "context": "\tif err := os.MkdirAll(dir, 0o755); err != nil {\n\t\tt.Fatalf(\"MkdirAll: %v\", err)\n\t}\n\tif err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{\"future_feature\"}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/db/command_wal_feature_gate_test.go",
+    "line": 296,
+    "text": "if err := SaveFormatConfig(dir, FormatConfig{Version: formatConfigVersion, RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestSaveFormatConfigNormalizesRequiredFeaturesToVersion3(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := SaveFormatConfig(dir, FormatConfig{Version: formatConfigVersion, RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "TreeDB/nativewire/vector_partition_source_preparation_v2_test.go",
+    "line": 26,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\tfor _, remoteOwner := range []bool{false, true} {\n\t\tt.Run(fmt.Sprintf(\"remote=%t\", remoteOwner), func(t *testing.T) {\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/nativewire/vector_partition_source_preparation_v2_test.go",
+    "line": 270,
+    "text": "if err := backenddb.SaveFormatConfig(replicaDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\t\t\t// A second replica imports another revision first, so its physical\n\t\t\t// directory generation differs while the selected source is identical.\n\t\t\treplicaDir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(replicaDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2, backenddb.RequiredFeatureDependencyDirectoryV2}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}"
+  },
+  {
+    "path": "TreeDB/nativewire/vector_partition_live_production_v1_test.go",
+    "line": 713,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tt.Skip(\"vector partition namespace persistence unsupported on this platform\")\n\t}\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/nativewire/vector_partition_fixed_peer_mutation_v1_test.go",
+    "line": 795,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\tt.Skip(\"vector partition namespace persistence unsupported on this platform\")\n\t}\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/nativewire/vector_partition_live_lifecycle_v1_test.go",
+    "line": 395,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\nfunc TestVectorPartitionLiveLifecycleDocumentSchemaV1(t *testing.T) {\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/internal/raftfsm/colocated_vector_mutation_recovery_v1_test.go",
+    "line": 248,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\t\tt.Skip(\"vector partition namespace persistence unsupported on this platform\")\n\t}\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/internal/raftapply/split_vector_insert_recovery_v1_test.go",
+    "line": 245,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {",
+    "context": "\t\tt.Skip(\"vector partition namespace persistence unsupported on this platform\")\n\t}\n\tdir := t.TempDir()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}, DurabilityProfile: backenddb.ProfileCommandWALDurable}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "TreeDB/cmd/treedb_rag_benchmark/runner.go",
+    "line": 165,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\n\t// ---- setup (excluded from query timing) ----\n\tsetupStart := ragClock()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn nil, fmt.Errorf(\"save format config: %w\", err)\n\t}"
+  },
+  {
+    "path": "experiments/colgranule/jsonbench_treedb_columnstore_bench_test.go",
+    "line": 255,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tb.Helper()\n\tdir := b.TempDir()\n\tstart := time.Now()\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tb.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_search_demo/main.go",
+    "line": 1009,
+    "text": "if err := backenddb.SaveFormatConfig(mainDir, demoCommandWALFormatConfig(demoBackendOptions(cfg, dir))); err != nil {",
+    "context": "\t\tif err := os.MkdirAll(mainDir, 0o755); err != nil {\n\t\t\treturn result{}, err\n\t\t}\n\t\tif err := backenddb.SaveFormatConfig(mainDir, demoCommandWALFormatConfig(demoBackendOptions(cfg, dir))); err != nil {\n\t\t\treturn result{}, fmt.Errorf(\"enable command WAL format for column_graph: %w\", err)\n\t\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/m3_partition_index.go",
+    "line": 437,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t\tresultErr = errors.Join(resultErr, os.RemoveAll(dir))\n\t\t}()\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn m3PartitionIndexRow{}, err\n\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/m8_production_assets.go",
+    "line": 62,
+    "text": "if err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t\t_ = h.Close()\n\t\t}\n\t}()\n\tif err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn nil, err\n\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/main.go",
+    "line": 3755,
+    "text": "if err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{",
+    "context": "\t\t\t_ = h.Close()\n\t\t}\n\t}()\n\tif err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{\n\t\tRequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},\n\t}); err != nil {"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/main.go",
+    "line": 3972,
+    "text": "if err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{",
+    "context": "\t\t\t_ = h.Close()\n\t\t}\n\t}()\n\tif err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{\n\t\tRequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},\n\t}); err != nil {"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/source_insert_test.go",
+    "line": 29,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t\t\tvectors[i] = vector\n\t\t\t}\n\t\t\tdir := t.TempDir()\n\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\tt.Fatal(err)\n\t\t\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/source_insert_test.go",
+    "line": 135,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\t\t\tfor i := 0; i < b.N; i++ {\n\t\t\t\tb.StopTimer()\n\t\t\t\tdir := b.TempDir()\n\t\t\t\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\t\t\tb.Fatal(err)\n\t\t\t\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_partition_bench/m8_qualification_campaign_test.go",
+    "line": 2329,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\tt.Fatal(err)\n\t}"
+  },
+  {
+    "path": "cmd/treedb_column_graph_demo/main.go",
+    "line": 110,
+    "text": "if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{",
+    "context": "\t\tcfg.TopK = len(rows)\n\t}\n\n\tif err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{\n\t\tRequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},\n\t}); err != nil {"
+  },
+  {
+    "path": "cmd/unified_bench/adapter_treedb_command_wal_test.go",
+    "line": 290,
+    "text": "if err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: true}); err != nil {",
+    "context": "\tresetTreeDBIndexFlagsForTest()\n\n\tdir := t.TempDir()\n\tif err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: true}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "cmd/unified_bench/adapter_treedb_command_wal_test.go",
+    "line": 322,
+    "text": "if err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: false}); err != nil {",
+    "context": "\t*treedbIndexOuterLeavesInVlog = true\n\n\tdir := t.TempDir()\n\tif err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: false}); err != nil {\n\t\tt.Fatalf(\"SaveFormatConfig: %v\", err)\n\t}"
+  },
+  {
+    "path": "cmd/unified_bench/suite_collection_storage.go",
+    "line": 960,
+    "text": "if err := backenddb.SaveFormatConfig(dataDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tif err != nil {\n\t\treturn nil, nil, fmt.Errorf(\"collection_storage: create temp dir: %w\", err)\n\t}\n\tif err := backenddb.SaveFormatConfig(dataDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t_ = os.RemoveAll(dataDir)\n\t\treturn nil, nil, fmt.Errorf(\"collection_storage: save format config: %w\", err)"
+  },
+  {
+    "path": "cmd/treedb_vector_demo/main.go",
+    "line": 295,
+    "text": "if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\tsetupStart := time.Now()\n\trows := generateRows(cfg.Rows, cfg.Dims, cfg.Seed)\n\tqueries := generateQueries(rows, cfg.Queries, cfg.Seed+7919)\n\tif err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn result{}, err\n\t}"
+  },
+  {
+    "path": "cmd/treedb_text_hybrid_scale/main.go",
+    "line": 940,
+    "text": "if err := backenddb.SaveFormatConfig(cfg.dbDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "func loadPrimaryFixtureWithVectorRebuild(cfg config, rebuildVector bool) (scaleFixture, loadReport, error) {\n\tstart := time.Now()\n\tif cfg.includeVector {\n\t\tif err := backenddb.SaveFormatConfig(cfg.dbDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\t\treturn scaleFixture{}, loadReport{}, fmt.Errorf(\"enable command WAL for vector fixture: %w\", err)\n\t\t}"
+  },
+  {
+    "path": "cmd/treedb_vector_highqps_demo/main.go",
+    "line": 236,
+    "text": "if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {",
+    "context": "\trows := generateRows(cfg.Docs, cfg.Dims, cfg.Seed)\n\tqueryCount := maxInt(cfg.Queries, cfg.WarmupQueries)\n\tqueries := generateQueries(rows, queryCount, cfg.Seed+7919)\n\tif err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {\n\t\treturn result{}, fmt.Errorf(\"save format config: %w\", err)\n\t}"
+  }
+]

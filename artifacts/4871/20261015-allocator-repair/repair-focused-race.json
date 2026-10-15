@@ -1,0 +1,26 @@
+{
+  "head": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-race",
+    "./TreeDB/db",
+    "-run",
+    "TestDurableRootMetadataReuseRetainsBothSlotParents5135|TestDurableRootSlotRetirementsUseSuccessorCommit5135|TestValidateFormatRequiredFeatureGate|TestPhysicalSnapshotCutV1ReadOnlyOwnership|TestSaveFormatConfig",
+    "-count=1",
+    "-timeout=60s"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2"
+  },
+  "exit": 0,
+  "wall_s": 30.775951861869544,
+  "log_sha256": "e205603650079cb232970cd78bbbe705c9ceb0678a812cd2fcc8e4fd26ba47c6",
+  "source_manifest_sha256": "3c49f32b20f286a88105899e84ff353c14498512b88615a04d58ffdc65501aad",
+  "clean_before_after": true,
+  "status": "RUNTIME_RELEASED"
+}

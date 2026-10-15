@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/db",
+    "-run",
+    "^TestDurableRootMetadataReuseRetainsBothSlotParents5135$",
+    "-count=1",
+    "-timeout=30s"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2"
+  },
+  "head": "8edabf94adc7b711786451b8c4c958a746254554",
+  "status": " M TreeDB/db/durable_root_metadata_reuse_test.go\n",
+  "test_sha256": "57339e0db87bf62ac95cfd1cdce7ff9576fb4343072f17e81b711d1a46a7d0cc",
+  "exit": 1,
+  "elapsed": 18.381538152694702,
+  "stdout": "--- FAIL: TestDurableRootMetadataReuseRetainsBothSlotParents5135 (0.01s)\n    durable_root_metadata_reuse_test.go:336: slot0 commit65: parent record: durable root record V1 format invalid\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t0.015s\nFAIL\n",
+  "stderr": ""
+}

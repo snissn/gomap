@@ -1,0 +1,38 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-post-zipper-5130-20261015/public-combined-final/candidate-db.test",
+    "-test.run=^TestDurableRootMetadataReuseProcessCut4627$",
+    "-test.count=1",
+    "-test.timeout=30s"
+  ],
+  "env": {
+    "TREEDB_METADATA_REUSE_CUT4627": "before-seal",
+    "TREEDB_METADATA_REUSE_DIR4627": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/before-seal-crash",
+    "GOMAXPROCS": "1"
+  },
+  "binary_sha256": "582e647fcc8f998399f26f1730feb934d3b5bcecbfb16897f443b01d91644811",
+  "head": "8edabf94adc7b711786451b8c4c958a746254554",
+  "status": "",
+  "exit": 73,
+  "elapsed": 0.3896524906158447,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "LOCK": {
+      "size": 12,
+      "sha256": "415818544740206269909d3730b54273f9fc0df69c764860077d052741c72574"
+    },
+    "format.json": {
+      "size": 393,
+      "sha256": "a2c9fd0477efe29637ea8d12e6c6394b3416c4074eec3f43c365740531387441"
+    },
+    "vlog_ref_counts.meta": {
+      "size": 28,
+      "sha256": "8ff9b16af236dc41757add24dd148f245f9831cb5947189648d6707611aed989"
+    },
+    "index.db": {
+      "size": 262144,
+      "sha256": "053e19a1f659efe38bae4ebf323cf3b329688a6248604e338a47cf50d8cc60b2"
+    }
+  }
+}

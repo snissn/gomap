@@ -1,0 +1,50 @@
+[
+  {
+    "pair": 1,
+    "kind": "baseline",
+    "n": 1000,
+    "ns_per_op": 45212.0,
+    "bytes_per_op": 141463,
+    "allocs_per_op": 269
+  },
+  {
+    "pair": 1,
+    "kind": "candidate",
+    "n": 1000,
+    "ns_per_op": 21356.0,
+    "bytes_per_op": 31944,
+    "allocs_per_op": 127
+  },
+  {
+    "pair": 2,
+    "kind": "candidate",
+    "n": 1000,
+    "ns_per_op": 21145.0,
+    "bytes_per_op": 31943,
+    "allocs_per_op": 127
+  },
+  {
+    "pair": 2,
+    "kind": "baseline",
+    "n": 1000,
+    "ns_per_op": 46472.0,
+    "bytes_per_op": 141463,
+    "allocs_per_op": 269
+  },
+  {
+    "pair": 3,
+    "kind": "baseline",
+    "n": 1000,
+    "ns_per_op": 44192.0,
+    "bytes_per_op": 141462,
+    "allocs_per_op": 269
+  },
+  {
+    "pair": 3,
+    "kind": "candidate",
+    "n": 1000,
+    "ns_per_op": 21388.0,
+    "bytes_per_op": 31944,
+    "allocs_per_op": 127
+  }
+]

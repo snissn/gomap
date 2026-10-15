@@ -1,0 +1,209 @@
+{
+  "root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015",
+  "candidate_head": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "purpose": "Selected durable repair evidence publication; raw ELF files, overlay input copies and full crash database remain on runner.",
+  "files": [
+    {
+      "path": "allocator-go-paths.json",
+      "bytes": 761,
+      "sha256": "f3a765534a1c1b712e0b33fafbb7ce3a62da9a6734b1da137f930d68c701e5c6"
+    },
+    {
+      "path": "before-seal-pages.json",
+      "bytes": 1829,
+      "sha256": "4dc5161975fe6860fc76535a041bd62e351c6138048002ebce78de971ee3b0df"
+    },
+    {
+      "path": "before-seal-receipt.json",
+      "bytes": 1291,
+      "sha256": "4cecda3b089e611a3526764b7caf6054d6bfc2f024dd939673a31ca15acad65c"
+    },
+    {
+      "path": "failed-tests-inventory.json",
+      "bytes": 536546,
+      "sha256": "4a0407eeaff317881d21dcb67abac5d4de4e90bb160685151fc5285ff7b0d0d3"
+    },
+    {
+      "path": "public-repaired-7702/baseline-effective-all-go-module-inputs.json",
+      "bytes": 552199,
+      "sha256": "d97af1179c3fd05a8bdf2df4a162610805ce286a77a82db61faad2c1e2922071"
+    },
+    {
+      "path": "public-repaired-7702/baseline-input-manifest.json",
+      "bytes": 6774,
+      "sha256": "30ce31bcfd63c5028e23aafc3243b27c2b70bc42c6c409f2b357be5d92adaaa8"
+    },
+    {
+      "path": "public-repaired-7702/baseline-overlay.json",
+      "bytes": 5074,
+      "sha256": "2afbb2342d56da7929deb121fb65fe16b9e10efbb49209b55693b270db221c2b"
+    },
+    {
+      "path": "public-repaired-7702/binaries.json",
+      "bytes": 553,
+      "sha256": "6843d5869d79828616589023ecee3a5cd37eca2b15af9a220b8112cfd6e1f0f0"
+    },
+    {
+      "path": "public-repaired-7702/build-baseline.raw",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "public-repaired-7702/build-candidate.raw",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "public-repaired-7702/commands.json",
+      "bytes": 7267,
+      "sha256": "f5a06d648efc33cb3134d4a12045ee97caf27794be6a60124cd8e5d01b9e4e59"
+    },
+    {
+      "path": "public-repaired-7702/pair1-baseline.raw",
+      "bytes": 225,
+      "sha256": "86b2200b0ff62ed0f4a1d77ebc728a44a0b7b7cda55ee350d237a2d181f31544"
+    },
+    {
+      "path": "public-repaired-7702/pair1-candidate.raw",
+      "bytes": 225,
+      "sha256": "5bd9ef582ac1fba9bc1b6d9924005981c280b9329fb849a9389be0c577ea44d4"
+    },
+    {
+      "path": "public-repaired-7702/pair2-baseline.raw",
+      "bytes": 225,
+      "sha256": "b19c456c97e1638bd235aeba1486194dd86873a9162e05ae25600adb5155a67e"
+    },
+    {
+      "path": "public-repaired-7702/pair2-candidate.raw",
+      "bytes": 225,
+      "sha256": "8a1c00e92c8fb1bc076a67f5ea70e7a5492f8d09379f14dc7c3c410d1cd3a76b"
+    },
+    {
+      "path": "public-repaired-7702/pair3-baseline.raw",
+      "bytes": 225,
+      "sha256": "0fc6952286712ef61c89381511e605e8bd6af9307d04ef5fcc678705ed37c126"
+    },
+    {
+      "path": "public-repaired-7702/pair3-candidate.raw",
+      "bytes": 225,
+      "sha256": "a1099eca9efa4d396cb721298c5e7601f22f8acf89eeaf9e597e5728cf7823c4"
+    },
+    {
+      "path": "public-repaired-7702/qualification-inputs.json",
+      "bytes": 2759,
+      "sha256": "48054617a88a2cdf9e612fe30c8b03bb95b11644b46fd4277966797c639df6a2"
+    },
+    {
+      "path": "public-repaired-7702/receipt.json",
+      "bytes": 166,
+      "sha256": "557232a7940630507b64e57bdadf0fc6c81d585a3979ebfcb11c6f84b164ca4e"
+    },
+    {
+      "path": "public-repaired-7702/rows.json",
+      "bytes": 855,
+      "sha256": "62687d9abe08c2fec7b110b7900422f8987f010a183714a5bc44c1d15def7ade"
+    },
+    {
+      "path": "public-repaired-7702/source-after.json",
+      "bytes": 552206,
+      "sha256": "89ed964dd620bcd277d23af66251ad897288ef2752211788292dde574cdb96c0"
+    },
+    {
+      "path": "public-repaired-7702/source-before.json",
+      "bytes": 552206,
+      "sha256": "89ed964dd620bcd277d23af66251ad897288ef2752211788292dde574cdb96c0"
+    },
+    {
+      "path": "public-repaired-7702/source-vs-final-main.patch",
+      "bytes": 107164,
+      "sha256": "387401a36e1405d50203a05822d4c61e51cd9277818effb8b44f29a759f7ffc2"
+    },
+    {
+      "path": "public-repaired-7702/summary.json",
+      "bytes": 2092,
+      "sha256": "2fd04351aecef1adc5e732c5cd7df5a8a691d697694b0efc665bca5de78983fd"
+    },
+    {
+      "path": "public-repaired-7702/toolchain.json",
+      "bytes": 240,
+      "sha256": "c71d4b1c6c232c24c267bd341ad5b452db54a5a5bd006d625fc750d8d85a0232"
+    },
+    {
+      "path": "repair-column-demo.log",
+      "bytes": 65,
+      "sha256": "29753a8bf299b3769f09b6ff40e5b102fca789818ac627508b057e784371e10f"
+    },
+    {
+      "path": "repair-focused-collections.log",
+      "bytes": 55,
+      "sha256": "9b048ddc6cf8c75aef950ded9e64cfa82ee6aa9ac028b110ef0f566e8e3d745d"
+    },
+    {
+      "path": "repair-focused-db.log",
+      "bytes": 46,
+      "sha256": "746c4ae08ba618d97459b76c9c16f973e2ba2f07122150885b88b34cf249d977"
+    },
+    {
+      "path": "repair-focused-green.json",
+      "bytes": 3945,
+      "sha256": "39d7c9d73ce5d037f2e088d517a29450abdbfd4660ff3819054d37edfcb99ddc"
+    },
+    {
+      "path": "repair-focused-ingestion.log",
+      "bytes": 55,
+      "sha256": "6344cd348d47690ba15c9c5deca6efca29f1041393d1d5e728040797742b5a53"
+    },
+    {
+      "path": "repair-focused-race.json",
+      "bytes": 987,
+      "sha256": "aa451c0ef9e4199dfee5a92e1bbe03d164743e3cc9c385cab4561f14dac257d7"
+    },
+    {
+      "path": "repair-focused-race.log",
+      "bytes": 46,
+      "sha256": "e205603650079cb232970cd78bbbe705c9ceb0678a812cd2fcc8e4fd26ba47c6"
+    },
+    {
+      "path": "repair-full-inputs.json",
+      "bytes": 1932307,
+      "sha256": "6cecac52eeeeda0e99704bc76ebabaf10f8ed905319dfaab12f12d040a47f7e3"
+    },
+    {
+      "path": "repair-gofmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "repair-policy-audit.json",
+      "bytes": 11684,
+      "sha256": "48e11cec8edd0200a8edcba10550730be0853443d6669853dba9f4be094acfad"
+    },
+    {
+      "path": "repair-review-accept.json",
+      "bytes": 1279,
+      "sha256": "5ea6923977227ba9abd303e5bc5720ceb92edf3c9897fcbb8b419886264081fb"
+    },
+    {
+      "path": "repair-source-frozen.json",
+      "bytes": 3531,
+      "sha256": "3c49f32b20f286a88105899e84ff353c14498512b88615a04d58ffdc65501aad"
+    },
+    {
+      "path": "retirement-red.json",
+      "bytes": 1012,
+      "sha256": "02d874d1ccfe71f26956d5f722548609183ab6cc0a915cae8d1e1e2d759ecfd2"
+    },
+    {
+      "path": "run-repaired-public.py",
+      "bytes": 8532,
+      "sha256": "3398d3c8c33ddbf71f5d76d04edb56f0cd252348acaaaeb2a9435f6ea925cdbe"
+    },
+    {
+      "path": "save-format-callers.json",
+      "bytes": 107306,
+      "sha256": "064edc81d26e27427f7f2d61729d3ad76147296d27d1ec6811f015c7906d2bb1"
+    }
+  ],
+  "total_bytes": 4402182,
+  "pending_additions": []
+}

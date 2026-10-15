@@ -1,0 +1,79 @@
+{
+  "status": "REPAIRED_ALLOCATOR_PUBLIC_EARLY_CHECK",
+  "baseline_final_main": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "candidate_head": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "rows": [
+    {
+      "pair": 1,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 45212.0,
+      "bytes_per_op": 141463,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 1,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 21356.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    },
+    {
+      "pair": 2,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 21145.0,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "pair": 2,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 46472.0,
+      "bytes_per_op": 141463,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 3,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 44192.0,
+      "bytes_per_op": 141462,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 3,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 21388.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 45212.0,
+      "bytes_per_op": 141463,
+      "allocs_per_op": 269
+    },
+    "candidate": {
+      "ns_per_op": 21356.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    }
+  },
+  "percent_change": {
+    "ns_per_op": -52.76475272051668,
+    "bytes_per_op": -77.41883036553727,
+    "allocs_per_op": -52.788104089219324
+  },
+  "limitations": [
+    "Three short fixed1000x paired fresh-process CPU0/GOMAXPROCS1 runs; latency directional.",
+    "Baseline retains merged zipper and identical durable-root lifetime repair, restoring original allocator-owned Go inputs plus feature-test baseline compatibility; exact overlay manifest retained.",
+    "Same unmodified main10000key/Checkpoint8 public Batch.Write fixture.",
+    "No wholeDB/race repetition or allocation profile/flat-encoding-union recapture.",
+    "No additive effect is assumed from prior pure-main measurements."
+  ]
+}

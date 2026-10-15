@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/public-repaired-7702/baseline-db.test",
+    "bytes": 55414108,
+    "sha256": "bf4a7084c35951d75de60c5b2fe6e6c0a5142f1f2ab11528996f52aaeee63d11"
+  },
+  "candidate": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/public-repaired-7702/candidate-db.test",
+    "bytes": 55448118,
+    "sha256": "ceef51c3a531a808a54e137a9e28e1f3ad757937cfc604dfda57cffe8a1c551b"
+  }
+}

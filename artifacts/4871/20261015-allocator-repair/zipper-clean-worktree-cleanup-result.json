@@ -1,0 +1,4740 @@
+{
+  "absent": true,
+  "allowlist": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015"
+  ],
+  "branch_retained": true,
+  "commands": [
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+        "rev-parse",
+        "HEAD"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "eda3ff1155af36ef773f23d9fd8e796a13ccf582\n"
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+        "ls-files",
+        "--others",
+        "--exclude-standard"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "worktree /home/mikers/dev/snissn/gomap\nHEAD bd2515332ef9b82d70d6612c3f0e6a2e38af3cd9\nbranch refs/heads/main\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015\nHEAD 7a6fd35f56dc6ddb70ae76e91c36656e7055a8df\nbranch refs/heads/codex/4871-allocation-integration-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015\nHEAD 8edabf94adc7b711786451b8c4c958a746254554\nbranch refs/heads/codex/5130-allocator-main-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-private-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-topology-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-zipper-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015\nHEAD eda3ff1155af36ef773f23d9fd8e796a13ccf582\nbranch refs/heads/codex/5133-zipper-scratch-reuse\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal\nHEAD d7c27d7829e51ad06822340fcc55f03c3831f027\nbranch refs/heads/codex/4878-native-traversal-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/5111-structural-repair-20261013\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/5111-empty-checkpoint-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/4876-pointer-tail-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/4876-captured-successor-probe-20261014\n\nworktree /home/mikers/dev/snissn/gomap-worktrees/issue-4767-python\nHEAD c1ec9927eaa99f3740ecfb2f3dab0cd23caf5d2a\nbranch refs/heads/codex/issue-4767-python-client\n\nworktree /home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal\nHEAD ab632702d025dd704f6c392fa2fe14cef85190d8\nbranch refs/heads/codex/issue-4769-metadata-wal\n\nworktree /home/mikers/gomap-q4-prospective\nHEAD 666bf6e25abb0608bfafc02c0e7bfb2be8dd5aa1\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-23e5\nHEAD b2f7322cb35dca23c659dffb34669c6cdbda00d0\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-9b22\nHEAD eee5be35647ba3b4436631da760749489b494233\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-d81d\nHEAD 7ba518549b94c504fe8b36a5b379532be2426722\ndetached\n\nworktree /home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline\nHEAD 6d96a7905b818b722827f3cf5cbf4d7c24c77df2\ndetached\n\nworktree /home/mikers/gomap-r1-5057\nHEAD 0216e2e9ee701dee0eda96c569dc0c8facb37ca9\nbranch refs/heads/codex/5057-row-contract\n\nworktree /home/mikers/gomap-r1-5058\nHEAD 610cada456d5d6f4e3094cf4e977b06beee7df02\nbranch refs/heads/codex/5058-row-reads-candidate-111\n\nworktree /home/mikers/gomap-r1-5059\nHEAD 2e390d1d6725e366826b7bde75a8ce0813d00871\nbranch refs/heads/codex/5059-row-mutations-candidate-111\n\nworktree /home/mikers/gomap-r1-5060\nHEAD f95ea1aac407537342214805930c8907775b777f\ndetached\n\nworktree /home/mikers/gomap-r1-5061\nHEAD 8af28d69042e09033111d70457f7f69bbcf24918\nbranch refs/heads/codex/5061-row-example-111\n\nworktree /home/mikers/gomap-r1-5065-final-00d2c370\nHEAD 698bf31743ced346318737ce41f2d0feadd07277\ndetached\n\nworktree /home/mikers/gomap-r1-baseline-attribution\nHEAD 0216e2e9ee701dee0eda96c569dc0c8facb37ca9\ndetached\n\nworktree /home/mikers/gomap-r1-growth-probe\nHEAD 1e7882bb0376172066109a4fea51d4447290a798\nbranch refs/heads/codex/r1-growth-probe\n\nworktree /home/mikers/gomap-r1-lifecycle-size-diagnostic\nHEAD b53e3ae98924085c3d3331dae0d821dd101bf07f\ndetached\n\nworktree /home/mikers/gomap-r1-m0-matched-candidate-3182\nHEAD 3182e15dfe1aa11120db9d309ad0d590283398d6\ndetached\n\nworktree /home/mikers/gomap-r1-m0-matched-control-3182\nHEAD f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c\ndetached\n\nworktree /home/mikers/gomap-r1-retained-c-2572\nHEAD 90fa3dc6819dfcd6823bf68d3287252b87c1b8d0\ndetached\n\nworktree /home/mikers/gomap-r1-retained-final-f796\nHEAD f79616f2aeb99b43af81877f26d646cca51177b9\ndetached\n\nworktree /tmp/gomap-codex-4723\nHEAD a50d46a0d0b72517a33e54be82d20dafb756a3d4\nbranch refs/heads/codex/4723-one-plane-contract-diagnostic\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-4730\nHEAD 3932bfad2360a6acf6c907567f1092ac03999b60\nbranch refs/heads/codex/4730-leaf-sequence-authority\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-native-v11-repair\nHEAD 7a2a13f246fa0d66fcf64b52b53b4e4d54422d21\nbranch refs/heads/codex/4714-native-python-v11\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q2-repair\nHEAD b278420afaebb1c6f5e4accfaba68d74aabce87b\nbranch refs/heads/codex/4685-q2-format-repair\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q3\nHEAD bbc18b8e1628d5c9730a0c29f2fedce6d9733a5f\nbranch refs/heads/codex/4686-public-quantized-rerank\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4\nHEAD dd56dde7ddd18e69e2964d587d4f68167161dd4a\nbranch refs/heads/codex/4687-minima-sq8-harness\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-baseline-contract\nHEAD 353932393d41a0b34fc764190662a627d147fabf\nbranch refs/heads/codex/4687-q5-baseline-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-fp32-readiness\nHEAD 120bb29d5a8e33d98464e6dfd5b3c2c971d81d33\nbranch refs/heads/codex/4687-fp32-readiness-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-hardening\nHEAD 27dd111bc2230b55197f664e03cd9000e7ba1aa3\nbranch refs/heads/codex/4687-q5-freeze-hardening\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-legacy-work\nHEAD 168552e2464e2178e3281cf13d18352fe6678393\nbranch refs/heads/codex/4687-legacy-work-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-rss-contract\nHEAD cbc61bfd2a18db621ebc0f2d4ade003d0c0e1338\nbranch refs/heads/codex/4687-rss-contract-type\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q5\nHEAD a18a62fdf7f451be712bcd3c1999b006280e0160\nbranch refs/heads/codex/4688-minima-sq8-evidence\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q5-preflight-repair\nHEAD d41e25a5e0089960f4c91ffbcd9ded865d5961ca\nbranch refs/heads/codex/4687-q5-cross-base-preflight\nprunable gitdir file points to non-existent location\n\n"
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "ls-remote",
+        "origin",
+        "refs/heads/main",
+        "refs/heads/codex/5133-zipper-scratch-reuse"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "9029eb4e06fb99913c08dd2b3d7424f310445469\trefs/heads/main\n"
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "worktree",
+        "remove",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "worktree /home/mikers/dev/snissn/gomap\nHEAD bd2515332ef9b82d70d6612c3f0e6a2e38af3cd9\nbranch refs/heads/main\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015\nHEAD 7a6fd35f56dc6ddb70ae76e91c36656e7055a8df\nbranch refs/heads/codex/4871-allocation-integration-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015\nHEAD 8edabf94adc7b711786451b8c4c958a746254554\nbranch refs/heads/codex/5130-allocator-main-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-private-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-topology-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/4871-allocation-zipper-20261015\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal\nHEAD d7c27d7829e51ad06822340fcc55f03c3831f027\nbranch refs/heads/codex/4878-native-traversal-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111\nHEAD 177fb0c8db1d19c79d3d975126b4b0b64019568e\nbranch refs/heads/codex/5111-structural-repair-20261013\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/5111-empty-checkpoint-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/4876-pointer-tail-20261014\n\nworktree /home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe\nHEAD a99d3c8474b8898b98624c47758653e7c8cb9b7f\nbranch refs/heads/codex/4876-captured-successor-probe-20261014\n\nworktree /home/mikers/dev/snissn/gomap-worktrees/issue-4767-python\nHEAD c1ec9927eaa99f3740ecfb2f3dab0cd23caf5d2a\nbranch refs/heads/codex/issue-4767-python-client\n\nworktree /home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal\nHEAD ab632702d025dd704f6c392fa2fe14cef85190d8\nbranch refs/heads/codex/issue-4769-metadata-wal\n\nworktree /home/mikers/gomap-q4-prospective\nHEAD 666bf6e25abb0608bfafc02c0e7bfb2be8dd5aa1\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-23e5\nHEAD b2f7322cb35dca23c659dffb34669c6cdbda00d0\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-9b22\nHEAD eee5be35647ba3b4436631da760749489b494233\ndetached\n\nworktree /home/mikers/gomap-q4-prospective-d81d\nHEAD 7ba518549b94c504fe8b36a5b379532be2426722\ndetached\n\nworktree /home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline\nHEAD 6d96a7905b818b722827f3cf5cbf4d7c24c77df2\ndetached\n\nworktree /home/mikers/gomap-r1-5057\nHEAD 0216e2e9ee701dee0eda96c569dc0c8facb37ca9\nbranch refs/heads/codex/5057-row-contract\n\nworktree /home/mikers/gomap-r1-5058\nHEAD 610cada456d5d6f4e3094cf4e977b06beee7df02\nbranch refs/heads/codex/5058-row-reads-candidate-111\n\nworktree /home/mikers/gomap-r1-5059\nHEAD 2e390d1d6725e366826b7bde75a8ce0813d00871\nbranch refs/heads/codex/5059-row-mutations-candidate-111\n\nworktree /home/mikers/gomap-r1-5060\nHEAD f95ea1aac407537342214805930c8907775b777f\ndetached\n\nworktree /home/mikers/gomap-r1-5061\nHEAD 8af28d69042e09033111d70457f7f69bbcf24918\nbranch refs/heads/codex/5061-row-example-111\n\nworktree /home/mikers/gomap-r1-5065-final-00d2c370\nHEAD 698bf31743ced346318737ce41f2d0feadd07277\ndetached\n\nworktree /home/mikers/gomap-r1-baseline-attribution\nHEAD 0216e2e9ee701dee0eda96c569dc0c8facb37ca9\ndetached\n\nworktree /home/mikers/gomap-r1-growth-probe\nHEAD 1e7882bb0376172066109a4fea51d4447290a798\nbranch refs/heads/codex/r1-growth-probe\n\nworktree /home/mikers/gomap-r1-lifecycle-size-diagnostic\nHEAD b53e3ae98924085c3d3331dae0d821dd101bf07f\ndetached\n\nworktree /home/mikers/gomap-r1-m0-matched-candidate-3182\nHEAD 3182e15dfe1aa11120db9d309ad0d590283398d6\ndetached\n\nworktree /home/mikers/gomap-r1-m0-matched-control-3182\nHEAD f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c\ndetached\n\nworktree /home/mikers/gomap-r1-retained-c-2572\nHEAD 90fa3dc6819dfcd6823bf68d3287252b87c1b8d0\ndetached\n\nworktree /home/mikers/gomap-r1-retained-final-f796\nHEAD f79616f2aeb99b43af81877f26d646cca51177b9\ndetached\n\nworktree /tmp/gomap-codex-4723\nHEAD a50d46a0d0b72517a33e54be82d20dafb756a3d4\nbranch refs/heads/codex/4723-one-plane-contract-diagnostic\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-4730\nHEAD 3932bfad2360a6acf6c907567f1092ac03999b60\nbranch refs/heads/codex/4730-leaf-sequence-authority\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-native-v11-repair\nHEAD 7a2a13f246fa0d66fcf64b52b53b4e4d54422d21\nbranch refs/heads/codex/4714-native-python-v11\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q2-repair\nHEAD b278420afaebb1c6f5e4accfaba68d74aabce87b\nbranch refs/heads/codex/4685-q2-format-repair\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q3\nHEAD bbc18b8e1628d5c9730a0c29f2fedce6d9733a5f\nbranch refs/heads/codex/4686-public-quantized-rerank\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4\nHEAD dd56dde7ddd18e69e2964d587d4f68167161dd4a\nbranch refs/heads/codex/4687-minima-sq8-harness\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-baseline-contract\nHEAD 353932393d41a0b34fc764190662a627d147fabf\nbranch refs/heads/codex/4687-q5-baseline-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-fp32-readiness\nHEAD 120bb29d5a8e33d98464e6dfd5b3c2c971d81d33\nbranch refs/heads/codex/4687-fp32-readiness-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-hardening\nHEAD 27dd111bc2230b55197f664e03cd9000e7ba1aa3\nbranch refs/heads/codex/4687-q5-freeze-hardening\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-legacy-work\nHEAD 168552e2464e2178e3281cf13d18352fe6678393\nbranch refs/heads/codex/4687-legacy-work-contract\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q4-rss-contract\nHEAD cbc61bfd2a18db621ebc0f2d4ade003d0c0e1338\nbranch refs/heads/codex/4687-rss-contract-type\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q5\nHEAD a18a62fdf7f451be712bcd3c1999b006280e0160\nbranch refs/heads/codex/4688-minima-sq8-evidence\nprunable gitdir file points to non-existent location\n\nworktree /tmp/gomap-codex-q5-preflight-repair\nHEAD d41e25a5e0089960f4c91ffbcd9ded865d5961ca\nbranch refs/heads/codex/4687-q5-cross-base-preflight\nprunable gitdir file points to non-existent location\n\n"
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "rev-parse",
+        "refs/heads/codex/5133-zipper-scratch-reuse"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "eda3ff1155af36ef773f23d9fd8e796a13ccf582\n"
+    }
+  ],
+  "consumers": {
+    "matches": [],
+    "unreadable_daemons": [
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd --system --deserialize=93 splash",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd",
+        "pid": 1,
+        "ppid": 0,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kthreadd",
+        "pid": 2,
+        "ppid": 0,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "pool_workqueue_release",
+        "pid": 3,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-rcu_gp",
+        "pid": 4,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-sync_wq",
+        "pid": 5,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-kvfree_rcu_reclaim",
+        "pid": 6,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-slub_flushwq",
+        "pid": 7,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-netns",
+        "pid": 8,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/0:0H-kblockd",
+        "pid": 10,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-mm_percpu_wq",
+        "pid": 13,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/0",
+        "pid": 14,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "rcu_preempt",
+        "pid": 15,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "rcu_exp_par_gp_kthread_worker/0",
+        "pid": 16,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "rcu_exp_gp_kthread_worker",
+        "pid": 17,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/0",
+        "pid": 18,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kprobe-optimizer",
+        "pid": 19,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/0",
+        "pid": 20,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/0",
+        "pid": 21,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/1",
+        "pid": 22,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/1",
+        "pid": 23,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/1",
+        "pid": 24,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/1",
+        "pid": 25,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/1:0H-kblockd",
+        "pid": 27,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/2",
+        "pid": 28,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/2",
+        "pid": 29,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/2",
+        "pid": 30,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/2",
+        "pid": 31,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/2:0H-kblockd",
+        "pid": 33,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/3",
+        "pid": 34,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/3",
+        "pid": 35,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/3",
+        "pid": 36,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/3",
+        "pid": 37,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/3:0H-kblockd",
+        "pid": 39,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/4",
+        "pid": 40,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/4",
+        "pid": 41,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/4",
+        "pid": 42,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/4",
+        "pid": 43,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/4:0H-kblockd",
+        "pid": 45,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/5",
+        "pid": 46,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/5",
+        "pid": 47,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/5",
+        "pid": 48,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/5",
+        "pid": 49,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/5:0H-kblockd",
+        "pid": 51,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/6",
+        "pid": 52,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/6",
+        "pid": 53,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/6",
+        "pid": 54,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/6",
+        "pid": 55,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/6:0H-kblockd",
+        "pid": 57,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/7",
+        "pid": 58,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/7",
+        "pid": 59,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/7",
+        "pid": 60,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/7",
+        "pid": 61,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/7:0H-kblockd",
+        "pid": 63,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/8",
+        "pid": 64,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/8",
+        "pid": 65,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/8",
+        "pid": 66,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/8",
+        "pid": 67,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/8:0H-kblockd",
+        "pid": 69,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/9",
+        "pid": 70,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/9",
+        "pid": 71,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/9",
+        "pid": 72,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/9",
+        "pid": 73,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/9:0H-kblockd",
+        "pid": 75,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/10",
+        "pid": 76,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/10",
+        "pid": 77,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/10",
+        "pid": 78,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/10",
+        "pid": 79,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/10:0H-kblockd",
+        "pid": 81,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/11",
+        "pid": 82,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/11",
+        "pid": 83,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/11",
+        "pid": 84,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/11",
+        "pid": 85,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/11:0H-kblockd",
+        "pid": 87,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/12",
+        "pid": 88,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/12",
+        "pid": 89,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/12",
+        "pid": 90,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/12",
+        "pid": 91,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/12:0H-kblockd",
+        "pid": 93,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/13",
+        "pid": 94,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/13",
+        "pid": 95,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/13",
+        "pid": 96,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/13",
+        "pid": 97,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/13:0H-kblockd",
+        "pid": 99,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/14",
+        "pid": 100,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/14",
+        "pid": 101,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/14",
+        "pid": 102,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/14",
+        "pid": 103,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/14:0H-kblockd",
+        "pid": 105,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "cpuhp/15",
+        "pid": 106,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "idle_inject/15",
+        "pid": 107,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "migration/15",
+        "pid": 108,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksoftirqd/15",
+        "pid": 109,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/15:0H-kblockd",
+        "pid": 111,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kdevtmpfs",
+        "pid": 112,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-inet_frag_wq",
+        "pid": 113,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "rcu_tasks_kthread",
+        "pid": 114,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "rcu_tasks_rude_kthread",
+        "pid": 115,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kauditd",
+        "pid": 116,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "khungtaskd",
+        "pid": 117,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "oom_reaper",
+        "pid": 118,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-writeback",
+        "pid": 121,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kcompactd0",
+        "pid": 122,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ksmd",
+        "pid": 123,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "khugepaged",
+        "pid": 124,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-kblockd",
+        "pid": 125,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-blkcg_punt_bio",
+        "pid": 126,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-kintegrityd",
+        "pid": 127,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/9-acpi",
+        "pid": 128,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-tpm_dev_wq",
+        "pid": 131,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-ata_sff",
+        "pid": 132,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-md_bitmap",
+        "pid": 133,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-md_llbitmap_io",
+        "pid": 134,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-md_llbitmap_unplug",
+        "pid": 135,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-edac-poller",
+        "pid": 136,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-devfreq_wq",
+        "pid": 137,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "watchdogd",
+        "pid": 139,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-quota_events_unbound",
+        "pid": 141,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/26-AMD-Vi",
+        "pid": 142,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kswapd0",
+        "pid": 144,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "ecryptfs-kthread",
+        "pid": 145,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-kthrotld",
+        "pid": 146,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-acpi_thermal_pm",
+        "pid": 148,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-mld",
+        "pid": 149,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-ipv6_addrconf",
+        "pid": 150,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-kstrp",
+        "pid": 151,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-charger_manager",
+        "pid": 175,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/27-ACPI:Event",
+        "pid": 176,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/28-ACPI:Event",
+        "pid": 177,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/29-ACPI:Event",
+        "pid": 178,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_0",
+        "pid": 414,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_0",
+        "pid": 415,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_1",
+        "pid": 416,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_1",
+        "pid": 417,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_2",
+        "pid": 418,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_2",
+        "pid": 419,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_3",
+        "pid": 420,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_3",
+        "pid": 421,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_4",
+        "pid": 422,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_4",
+        "pid": 423,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "scsi_eh_5",
+        "pid": 424,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-scsi_tmf_5",
+        "pid": 425,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-nvme-wq",
+        "pid": 431,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-nvme-reset-wq",
+        "pid": 432,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-nvme-delete-wq",
+        "pid": 433,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-nvme-auth-wq",
+        "pid": 434,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/14:1H-kblockd",
+        "pid": 456,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "jbd2/nvme1n1p2-8",
+        "pid": 459,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-ext4-rsv-conversion",
+        "pid": 460,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/4:1H-kblockd",
+        "pid": 469,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/5:1H-kblockd",
+        "pid": 478,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd-journald",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd-journal",
+        "pid": 518,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/3:1H-kblockd",
+        "pid": 554,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd-resolved",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd-resolve",
+        "pid": 556,
+        "ppid": 1,
+        "uid": 989
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd-oomd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd-oomd",
+        "pid": 559,
+        "ppid": 1,
+        "uid": 986
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/7:1H-kblockd",
+        "pid": 560,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/6:1H-kblockd",
+        "pid": 561,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd-udevd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd-udevd",
+        "pid": 563,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/8:1H-kblockd",
+        "pid": 566,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "psimon",
+        "pid": 569,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/0:1H-kblockd",
+        "pid": 622,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-cfg80211",
+        "pid": 804,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_queue",
+        "pid": 912,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_mem_pool_scrubber_queue",
+        "pid": 913,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_mem_pool_scrubber_queue",
+        "pid": 914,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_mem_pool_scrubber_queue",
+        "pid": 915,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_queue",
+        "pid": 916,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_open_q",
+        "pid": 917,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nvidia-modeset/kthread_q",
+        "pid": 931,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nvidia-modeset/deferred_close_kthread_q",
+        "pid": 932,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/125-nvidia",
+        "pid": 934,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/126-nvidia",
+        "pid": 935,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/127-nvidia",
+        "pid": 936,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/128-nvidia",
+        "pid": 937,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/129-nvidia",
+        "pid": 938,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/130-nvidia",
+        "pid": 939,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/131-nvidia",
+        "pid": 940,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "irq/132-nvidia",
+        "pid": 941,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nvidia",
+        "pid": 942,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nv_queue",
+        "pid": 943,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "napi/phy0-0",
+        "pid": 965,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "napi/phy0-0",
+        "pid": 966,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "napi/phy0-0",
+        "pid": 967,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/15:1H-kblockd",
+        "pid": 987,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/1:1H-kblockd",
+        "pid": 997,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/10:1H-kblockd",
+        "pid": 1005,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-amdgpu-reset-dev",
+        "pid": 1017,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-ttm",
+        "pid": 1038,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-amdgpu_dm_hpd_rx_offload_wq",
+        "pid": 1291,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-amdgpu_dm_hpd_rx_offload_wq",
+        "pid": 1292,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-amdgpu_dm_hpd_rx_offload_wq",
+        "pid": 1293,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-dm_vblank_control_workqueue",
+        "pid": 1294,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "card1-crtc0",
+        "pid": 1295,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "card1-crtc1",
+        "pid": 1296,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "card1-crtc2",
+        "pid": 1297,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "card1-crtc3",
+        "pid": 1298,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-gfx_0.0.0",
+        "pid": 1299,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-gfx_0.1.0",
+        "pid": 1300,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.0.0",
+        "pid": 1301,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.1.0",
+        "pid": 1302,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.2.0",
+        "pid": 1303,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.3.0",
+        "pid": 1304,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.0.1",
+        "pid": 1305,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.1.1",
+        "pid": 1306,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.2.1",
+        "pid": 1307,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-comp_1.3.1",
+        "pid": 1308,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-sdma0",
+        "pid": 1309,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-vcn_dec_0",
+        "pid": 1310,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-vcn_enc_0.0",
+        "pid": 1311,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-vcn_enc_0.1",
+        "pid": 1312,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/R-jpeg_dec",
+        "pid": 1313,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "UVM global queue",
+        "pid": 1541,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "UVM deferred release queue",
+        "pid": 1542,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "UVM Tools Event Queue",
+        "pid": 1543,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "mt76-tx phy0",
+        "pid": 1680,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "avahi-daemon: running [mikers-MS-7E71.local]",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "avahi-daemon",
+        "pid": 1740,
+        "ppid": 1,
+        "uid": 103
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/bluetooth/bluetoothd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "bluetoothd",
+        "pid": 1741,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/bin/sh /usr/lib/systemd/scripts/chronyd-starter.sh -n -F 1",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "chronyd-starter",
+        "pid": 1742,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "@dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "dbus-daemon",
+        "pid": 1744,
+        "ppid": 1,
+        "uid": 995
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/2:1H-kblockd",
+        "pid": 1746,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "networkd-dispat",
+        "pid": 1751,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/polkit-1/polkitd --no-debug --log-level=notice",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "polkitd",
+        "pid": 1758,
+        "ppid": 1,
+        "uid": 979
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/nvidia-persistenced --user nvidia-persistenced --no-persistence-mode --verbose",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "nvidia-persiste",
+        "pid": 1768,
+        "ppid": 1,
+        "uid": 112
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/accounts-daemon",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "accounts-daemon",
+        "pid": 1771,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/cron -f -P",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "cron",
+        "pid": 1774,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/switcheroo-control",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "switcheroo-cont",
+        "pid": 1775,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd-logind",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd-logind",
+        "pid": 1778,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/udisks2/udisksd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "udisksd",
+        "pid": 1780,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "avahi-daemon: chroot helper",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "avahi-daemon",
+        "pid": 1801,
+        "ppid": 1740,
+        "uid": 103
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/chronyd -n -F 1",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "chronyd",
+        "pid": 1838,
+        "ppid": 1742,
+        "uid": 988
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/rsyslogd -n -iNONE",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "rsyslogd",
+        "pid": 1839,
+        "ppid": 1,
+        "uid": 100
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/chronyd -n -F 1",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "chronyd",
+        "pid": 1890,
+        "ppid": 1838,
+        "uid": 988
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/13:1H-kblockd",
+        "pid": 1892,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/11:1H-kblockd",
+        "pid": 1894,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/NetworkManager --no-daemon",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "NetworkManager",
+        "pid": 1901,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/wpa_supplicant -u -s -O DIR=/run/wpa_supplicant GROUP=netdev",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "wpa_supplicant",
+        "pid": 1902,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/ModemManager",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "ModemManager",
+        "pid": 1943,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/12:1H-kblockd",
+        "pid": 1953,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/9:1H-kblockd",
+        "pid": 2073,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "unattended-upgr",
+        "pid": 2104,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/gdm3",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "gdm3",
+        "pid": 2123,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "gdm-session-worker [pam/gdm-autologin]",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "gdm-session-wor",
+        "pid": 2131,
+        "ppid": 2123,
+        "uid": 0
+      },
+      {
+        "classification": "standard system/session daemon",
+        "command": "/usr/lib/systemd/systemd --user --deserialize=65",
+        "denied": [
+          "cwd",
+          "exe",
+          "fdlink",
+          "maps"
+        ],
+        "name": "systemd",
+        "pid": 2148,
+        "ppid": 1,
+        "uid": 1000
+      },
+      {
+        "classification": "standard system/session daemon",
+        "command": "(sd-pam)",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "(sd-pam)",
+        "pid": 2175,
+        "ppid": 2148,
+        "uid": 1000
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/rtkit-daemon",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "rtkit-daemon",
+        "pid": 2226,
+        "ppid": 1,
+        "uid": 978
+      },
+      {
+        "classification": "other UID system process",
+        "command": "fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "fusermount3",
+        "pid": 2415,
+        "ppid": 2335,
+        "uid": 0
+      },
+      {
+        "classification": "standard system/session daemon",
+        "command": "/usr/bin/ssh-agent -D",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "ssh-agent",
+        "pid": 2448,
+        "ppid": 2148,
+        "uid": 1000
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "nvidia-drm/timeline-111",
+        "pid": 2611,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/colord",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "colord",
+        "pid": 2654,
+        "ppid": 1,
+        "uid": 977
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/upowerd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "upowerd",
+        "pid": 2715,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/power-profiles-daemon",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "power-profiles-",
+        "pid": 3396,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "krfcommd",
+        "pid": 3418,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/6:0-events",
+        "pid": 12562,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sshd",
+        "pid": 158697,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/fwupd/fwupd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "fwupd",
+        "pid": 236788,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/1:2-events",
+        "pid": 442220,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/12:0-mm_percpu_wq",
+        "pid": 725816,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/11:1-events",
+        "pid": 739805,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/8:0-mm_percpu_wq",
+        "pid": 916715,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/10:0-mm_percpu_wq",
+        "pid": 976869,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/2:0-events",
+        "pid": 998901,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/13:1-mm_percpu_wq",
+        "pid": 1012189,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/7:0-mm_percpu_wq",
+        "pid": 1025833,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/0:2-events",
+        "pid": 1096330,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u64:2-flush-259:0",
+        "pid": 1102795,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/9:0-events",
+        "pid": 1109101,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/5:0-events",
+        "pid": 1124355,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "psimon",
+        "pid": 1130414,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "psimon",
+        "pid": 1130690,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u64:6-flush-259:0",
+        "pid": 1135960,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/11:2-cgroup_free",
+        "pid": 1159310,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/3:1-events",
+        "pid": 1162844,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/10:1",
+        "pid": 1185735,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sudo su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sudo",
+        "pid": 1195196,
+        "ppid": 1195087,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sudo su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sudo",
+        "pid": 1195263,
+        "ppid": 1195196,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "su",
+        "pid": 1195264,
+        "ppid": 1195263,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/systemd/systemd --user",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "systemd",
+        "pid": 1195268,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "standard system/session daemon",
+        "command": "(sd-pam)",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "(sd-pam)",
+        "pid": 1195270,
+        "ppid": 1195268,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "dbus-daemon",
+        "pid": 1195292,
+        "ppid": 1195268,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "user-session-he",
+        "pid": 1195294,
+        "ppid": 1195268,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "bash",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "bash",
+        "pid": 1195295,
+        "ppid": 1195264,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/xdg-document-portal",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "xdg-document-po",
+        "pid": 1195369,
+        "ppid": 1195268,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/libexec/xdg-permission-store",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "xdg-permission-",
+        "pid": 1195376,
+        "ppid": 1195268,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "fusermount3 --auto-unmount -- /run/user/0/doc",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "fusermount3",
+        "pid": 1195384,
+        "ppid": 1195369,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/9:2",
+        "pid": 1198353,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/containerd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "containerd",
+        "pid": 1199661,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "dockerd",
+        "pid": 1200019,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u64:0-events_unbound",
+        "pid": 1206413,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/15:0-events",
+        "pid": 1212725,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/14:0",
+        "pid": 1213107,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/13:0-cgroup_free",
+        "pid": 1213684,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/4:1-memcg",
+        "pid": 1218217,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/15:1",
+        "pid": 1222096,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/7:2-events",
+        "pid": 1223571,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/8:2",
+        "pid": 1223572,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/5:1-cgroup_free",
+        "pid": 1226598,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/0:1-events",
+        "pid": 1233482,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/12:1-cgroup_free",
+        "pid": 1235819,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/6:1",
+        "pid": 1238648,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/3:2-events",
+        "pid": 1239851,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/2:1-cgroup_free",
+        "pid": 1240280,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u64:3-mt76",
+        "pid": 1240477,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/4:0-mm_percpu_wq",
+        "pid": 1242120,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/1:1-cgroup_release",
+        "pid": 1243608,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/5:2-cgroup_free",
+        "pid": 1245404,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/13:2-cgroup_free",
+        "pid": 1247052,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/3:0-cgroup_free",
+        "pid": 1249363,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u64:1-events_unbound",
+        "pid": 1249636,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sshd-session: mikers [priv]",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sshd-session",
+        "pid": 1252583,
+        "ppid": 158697,
+        "uid": 0
+      },
+      {
+        "classification": "standard system/session daemon",
+        "command": "sshd-session: mikers@notty",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sshd-session",
+        "pid": 1252624,
+        "ppid": 1252583,
+        "uid": 1000
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/2:2",
+        "pid": 1252696,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/snap/snapd/current/usr/lib/snapd/snapd",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "snapd",
+        "pid": 1435980,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u65:2-ttm",
+        "pid": 2516367,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/u65:5-ttm",
+        "pid": 2566163,
+        "ppid": 2,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sudo su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sudo",
+        "pid": 3036614,
+        "ppid": 3036473,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "sudo su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "sudo",
+        "pid": 3036617,
+        "ppid": 3036614,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "su",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "su",
+        "pid": 3036618,
+        "ppid": 3036617,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "bash",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "bash",
+        "pid": 3036620,
+        "ppid": 3036618,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/cupsd -l",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "cupsd",
+        "pid": 3728903,
+        "ppid": 1,
+        "uid": 0
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/sbin/cups-browsed",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "cups-browsed",
+        "pid": 3728904,
+        "ppid": 1,
+        "uid": 110
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/cups/notifier/dbus dbus://",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "dbus",
+        "pid": 3728951,
+        "ppid": 3728903,
+        "uid": 7
+      },
+      {
+        "classification": "other UID system process",
+        "command": "/usr/lib/cups/notifier/dbus dbus://",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds",
+          "maps"
+        ],
+        "name": "dbus",
+        "pid": 3728952,
+        "ppid": 3728903,
+        "uid": 7
+      },
+      {
+        "classification": "other UID system process",
+        "command": "",
+        "denied": [
+          "cwd",
+          "exe",
+          "fds"
+        ],
+        "name": "kworker/14:1-events_freezable",
+        "pid": 4037386,
+        "ppid": 2,
+        "uid": 0
+      }
+    ]
+  },
+  "daemon_exception_authority": "Root explicit instruction: unreadable unrelated system daemons alone not blocker; current proposed PR25 rationale. Exact standard daemon identities and accessible target references checked.",
+  "deleted": true,
+  "filesystem_free_after": 275045601280,
+  "filesystem_free_immediately_before": 274112962560,
+  "finished_utc": "2026-10-15T05:57:22.832626+00:00",
+  "inventory_verified_members": 10886,
+  "logical_bytes": 904837913,
+  "mounts_under_target": [],
+  "observed_filesystem_free_delta": 932638720,
+  "prior_preflight": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/zipper-clean-main-cleanup-result-20261015.json",
+  "prior_preflight_sha256": "171467a0478b13520b68b282bae3af8008a1dd943ae5ba21c0240403e5111fd6",
+  "protected_after": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015": {
+      "device": 66306,
+      "inode": 108275136,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015": {
+      "device": 66306,
+      "inode": 108297284,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015": {
+      "device": 66306,
+      "inode": 107519340,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015": {
+      "device": 66306,
+      "inode": 105555969,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015": {
+      "device": 66306,
+      "inode": 108176450,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence": {
+      "device": 66306,
+      "inode": 104636573,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "device": 66306,
+      "inode": 106209646,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": {
+      "device": 66306,
+      "inode": 104636575,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014": {
+      "device": 66306,
+      "inode": 107356341,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014": {
+      "device": 66306,
+      "inode": 107369107,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe": {
+      "device": 66306,
+      "inode": 105424838,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "device": 66306,
+      "inode": 105555390,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap": {
+      "device": 66306,
+      "inode": 101712073,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4767-python": {
+      "device": 66306,
+      "inode": 11573632,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal": {
+      "device": 66306,
+      "inode": 20842491,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "device": 66306,
+      "inode": 101712074,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective": {
+      "device": 66306,
+      "inode": 18220713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-23e5": {
+      "device": 66306,
+      "inode": 18230593,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-9b22": {
+      "device": 66306,
+      "inode": 18225636,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-d81d": {
+      "device": 66306,
+      "inode": 18235506,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline": {
+      "device": 66306,
+      "inode": 20472713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5057": {
+      "device": 66306,
+      "inode": 3824345,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5058": {
+      "device": 66306,
+      "inode": 3831420,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5059": {
+      "device": 66306,
+      "inode": 3838497,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5060": {
+      "device": 66306,
+      "inode": 3956624,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5061": {
+      "device": 66306,
+      "inode": 3967576,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5065-final-00d2c370": {
+      "device": 66306,
+      "inode": 2269976,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-baseline-attribution": {
+      "device": 66306,
+      "inode": 4199922,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-growth-probe": {
+      "device": 66306,
+      "inode": 4077041,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-lifecycle-size-diagnostic": {
+      "device": 66306,
+      "inode": 4212126,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-candidate-3182": {
+      "device": 66306,
+      "inode": 4868036,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-control-3182": {
+      "device": 66306,
+      "inode": 4757513,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-c-2572": {
+      "device": 66306,
+      "inode": 4472027,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-final-f796": {
+      "device": 66306,
+      "inode": 4464413,
+      "mode": 16893
+    }
+  },
+  "protected_before": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015": {
+      "device": 66306,
+      "inode": 108275136,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015": {
+      "device": 66306,
+      "inode": 108297284,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015": {
+      "device": 66306,
+      "inode": 107519340,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015": {
+      "device": 66306,
+      "inode": 105555969,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015": {
+      "device": 66306,
+      "inode": 108176450,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence": {
+      "device": 66306,
+      "inode": 104636573,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "device": 66306,
+      "inode": 106209646,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": {
+      "device": 66306,
+      "inode": 104636575,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014": {
+      "device": 66306,
+      "inode": 107356341,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014": {
+      "device": 66306,
+      "inode": 107369107,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe": {
+      "device": 66306,
+      "inode": 105424838,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "device": 66306,
+      "inode": 105555390,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap": {
+      "device": 66306,
+      "inode": 101712073,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4767-python": {
+      "device": 66306,
+      "inode": 11573632,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal": {
+      "device": 66306,
+      "inode": 20842491,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "device": 66306,
+      "inode": 101712074,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective": {
+      "device": 66306,
+      "inode": 18220713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-23e5": {
+      "device": 66306,
+      "inode": 18230593,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-9b22": {
+      "device": 66306,
+      "inode": 18225636,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-d81d": {
+      "device": 66306,
+      "inode": 18235506,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline": {
+      "device": 66306,
+      "inode": 20472713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5057": {
+      "device": 66306,
+      "inode": 3824345,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5058": {
+      "device": 66306,
+      "inode": 3831420,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5059": {
+      "device": 66306,
+      "inode": 3838497,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5060": {
+      "device": 66306,
+      "inode": 3956624,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5061": {
+      "device": 66306,
+      "inode": 3967576,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5065-final-00d2c370": {
+      "device": 66306,
+      "inode": 2269976,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-baseline-attribution": {
+      "device": 66306,
+      "inode": 4199922,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-growth-probe": {
+      "device": 66306,
+      "inode": 4077041,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-lifecycle-size-diagnostic": {
+      "device": 66306,
+      "inode": 4212126,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-candidate-3182": {
+      "device": 66306,
+      "inode": 4868036,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-control-3182": {
+      "device": 66306,
+      "inode": 4757513,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-c-2572": {
+      "device": 66306,
+      "inode": 4472027,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-final-f796": {
+      "device": 66306,
+      "inode": 4464413,
+      "mode": 16893
+    }
+  },
+  "release_snapshot_free_before": 274116460544,
+  "result": "removed exact allowlisted released worktree without force; protected identities unchanged",
+  "snapshot": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/zipper-clean-main-cleanup-release-20261015.json",
+  "snapshot_sha256": "dbeb58ca024da468f10e601a4ff95a98dda80bb62b9a7e9658bbb529e0a548a8",
+  "started_utc": "2026-10-15T05:57:20.041263+00:00",
+  "unregistered": true,
+  "verified_remote_recoverability": [
+    {
+      "head": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+      "ref": "refs/heads/main"
+    }
+  ]
+}

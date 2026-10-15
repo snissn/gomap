@@ -1,0 +1,5 @@
+{
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "go_version": "go version go1.26.3 linux/amd64",
+  "repair_manifest_sha256": "3c49f32b20f286a88105899e84ff353c14498512b88615a04d58ffdc65501aad"
+}

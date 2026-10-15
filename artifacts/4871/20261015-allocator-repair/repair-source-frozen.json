@@ -1,0 +1,86 @@
+{
+  "head": "8edabf94adc7b711786451b8c4c958a746254554",
+  "phase": "formatted frozen repair",
+  "files": [
+    {
+      "path": "TreeDB/collections/command_wal_bench_test.go",
+      "sha256": "a599be55b3ccea0f37d25583780f5b9ac09ece5cf61734311d607faa09ea16c4",
+      "git_blob": "50f4f70762a0278c7957ad674cffbb70859ef322"
+    },
+    {
+      "path": "TreeDB/collections/command_wal_test.go",
+      "sha256": "e1a1fdae8996e3329eefa9e5a269c5d9084a5d3748a70214150caff98249c91f",
+      "git_blob": "6dbce3e87426b714d766d91b2fac9f9266a94d57"
+    },
+    {
+      "path": "TreeDB/collections/document_ingestion_test.go",
+      "sha256": "14cb69d4eef57a676397bc7598f967440636f78667dcffe288ea4baee9fb1f84",
+      "git_blob": "0f38bfeba73aa5bbf7e7c63e43eab93bc30d8b58"
+    },
+    {
+      "path": "TreeDB/collections/source_atomic_column_test.go",
+      "sha256": "52d07ec7ffcfdf18d8cecc7c542e24df61bf6b0c1f0fb6da4e99d7e16fba51a1",
+      "git_blob": "b892d32b4f73fedc15724087fcf80fde251af9c4"
+    },
+    {
+      "path": "TreeDB/collections/vector_index_persist_test.go",
+      "sha256": "d2ba92bdb6066633918a926f594cfb1d6ed815cdee26cbe39dff96ae874313f5",
+      "git_blob": "8e901fad96366839d51cb8a54a635387a7cf6ec6"
+    },
+    {
+      "path": "TreeDB/db/command_wal_feature_gate_test.go",
+      "sha256": "be74456a5d3102bee54a83a951ee204b18108ab36a8e67e5e2fd6ad1321b38d9",
+      "git_blob": "499fdd4b462a1c1714f3e1cb625cd6a1218a25da"
+    },
+    {
+      "path": "TreeDB/db/command_wal_recovery_test.go",
+      "sha256": "116df7b48bb6d1bb26ced5370fd1212f3e71fca9f6fb69c6a99ba6f7fce76e83",
+      "git_blob": "81ac0d4a3a1136e85e1dafc4c23fd3cee1e97ff9"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "sha256": "a5651c4c30f23d26fb97ec318c9dea6af27aab5db2c24d4828d496b5412a36d5",
+      "git_blob": "45562cb3177b5a770607a6ea898eb534f6135e4f"
+    },
+    {
+      "path": "TreeDB/db/durable_root_metadata_reuse_test.go",
+      "sha256": "65f4ebba2443c7c8122d7b54be3d37db7e863b42756430ab5f158be376534665",
+      "git_blob": "c3b1b9a694935817f90ceb2af44c39c691195ae8"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "sha256": "ed34ab390e02a008492330adc9bca839e761a901107fce4e98bd8e354fd6a1ff",
+      "git_blob": "92e5632ba0882d1247f5e87628e02acd23ad3bb6"
+    },
+    {
+      "path": "TreeDB/db/format_config.go",
+      "sha256": "0baf066d49355dfae0814288caf38810128c1c8b28c96d8d1990405962cd5777",
+      "git_blob": "06a605bc0149490c0790890bf6e564b53225634e"
+    },
+    {
+      "path": "TreeDB/db/physical_snapshot_cut_v1.go",
+      "sha256": "7dba0cddec299dc0b8f39ebf55ffb70715757c0ff45887619e340af8245785e6",
+      "git_blob": "8ee064d921970bb970a19240b845882cb99609a6"
+    },
+    {
+      "path": "TreeDB/db/physical_snapshot_cut_v1_test.go",
+      "sha256": "325805d212d2b1d21b3be990fed68832b2a58c5d6855f0556f002a449c2eb066",
+      "git_blob": "76de2091a541ee70d8272757a7ba742904789fba"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "sha256": "bcb6eba02cc7783d659d04526baa5f75c02860ff4c12d63ee69ec6dd0b36d707",
+      "git_blob": "28bf00efc3483250142f9e1bea3995a35697d054"
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "sha256": "b9012bd3f84fa56fa3c2a9798970eb0394ae93eecfb3d765c4a199fadfaed58a",
+      "git_blob": "548df031270830d01581190263a1e88b3325eccb"
+    },
+    {
+      "path": "cmd/treedb_column_graph_demo/main.go",
+      "sha256": "176e418116243bfc126641b4270c89a27bfdb12dad1f210dfde09c77ef4187ad",
+      "git_blob": "8158b22f9c02eaacbd5e0e60306a11691775753a"
+    }
+  ]
+}

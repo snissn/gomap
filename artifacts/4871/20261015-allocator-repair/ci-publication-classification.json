@@ -1,0 +1,7 @@
+{
+  "ref": "codex/5130-allocator-repair-evidence-20261015",
+  "open_pr_count": 272,
+  "matching_pr_heads": [],
+  "classification": "Non-PR artifact-only preservation branch, no product/harness changes. Skip CI authorized; live PR5135 gates remain required.",
+  "mapping_sha256": "c3ca10601e842d9dc4ed90dbc22d139f5eae1ac17e7851d650c3596a9d82b63d"
+}

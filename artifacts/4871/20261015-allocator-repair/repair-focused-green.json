@@ -1,0 +1,94 @@
+{
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/gofmt",
+        "-w",
+        "TreeDB/collections/command_wal_bench_test.go",
+        "TreeDB/collections/command_wal_test.go",
+        "TreeDB/collections/document_ingestion_test.go",
+        "TreeDB/collections/source_atomic_column_test.go",
+        "TreeDB/collections/vector_index_persist_test.go",
+        "TreeDB/db/command_wal_feature_gate_test.go",
+        "TreeDB/db/command_wal_recovery_test.go",
+        "TreeDB/db/db.go",
+        "TreeDB/db/durable_root_metadata_reuse_test.go",
+        "TreeDB/db/durable_root_runtime.go",
+        "TreeDB/db/format_config.go",
+        "TreeDB/db/physical_snapshot_cut_v1.go",
+        "TreeDB/db/physical_snapshot_cut_v1_test.go",
+        "TreeDB/db/root_publication_activation.go",
+        "cmd/treedb_column_graph_demo/main.go"
+      ],
+      "exit": 0,
+      "wall_s": 0.0374694699421525,
+      "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-gofmt.log"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "TestDurableRootMetadataReuse|TestDurableRootSlotRetirements|TestValidateFormatRequiredFeatureGate|TestCommandWALRawDeleteRangeReplayFrame|TestPublishOrderedRootDeltaGroupMaintenance|TestPhysicalSnapshotCutV1ReadOnlyOwnership|TestFreelistPatriciaV2|TestSaveFormatConfig",
+        "-count=1",
+        "-timeout=60s"
+      ],
+      "exit": 0,
+      "wall_s": 18.632230429910123,
+      "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-focused-db.log"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/collections",
+        "-run",
+        "TestBSONSetUpdateBatchCommandWALPrepareAndIntent|TestCollectionVectorIndexNativeRootRejectsCommandWALReplayBeyondGraph|TestIngestSourcesAtomicTypedColumnReplacementReopen|TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument",
+        "-count=1",
+        "-timeout=60s"
+      ],
+      "exit": 0,
+      "wall_s": 33.04881063196808,
+      "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-focused-collections.log"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./cmd/treedb_column_graph_demo",
+        "-run",
+        ".",
+        "-count=1",
+        "-timeout=60s"
+      ],
+      "exit": 0,
+      "wall_s": 11.0432452801615,
+      "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-column-demo.log"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/collections",
+        "-run",
+        "^TestIngestSourcesCommandWALPublicationCutsRecoverWholeSource$",
+        "-count=1",
+        "-timeout=30s"
+      ],
+      "exit": 0,
+      "wall_s": 0.8060895288363099,
+      "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-focused-ingestion.log"
+    }
+  ],
+  "wall_s": 62.776678854133934,
+  "source_manifest": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/repair-source-frozen.json",
+  "status": "ALL_FOCUSED_GREEN_RUNTIME_RELEASED"
+}
