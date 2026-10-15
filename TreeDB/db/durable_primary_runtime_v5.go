@@ -46,6 +46,10 @@ type primaryDurableRuntimeV5 struct {
 	metadata                *retainedalloc.Owner
 	metadataCharge          uint64
 	disposalAttempted       bool
+	disposalPhase           uint8
+	disposalIndex           int
+	disposalNative          bool
+	disposalQueue           primaryarena.ReleaseQueue
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
