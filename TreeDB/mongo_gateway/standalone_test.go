@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -639,6 +640,32 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 				t.Fatalf("OpenStandaloneServer: %v", err)
 			}
 
+			// Observe the original cold-write seams without retaining a pending
+			// owner. On failure, report them before canceling active requests.
+			diagnosticStarted := time.Now()
+			var diagnosticMu sync.Mutex
+			var preparedCold, created, waitEntries int
+			var lastPrepared, lastCreated, lastWait, lastBudgetRemaining time.Duration
+			standalone.Server.mongoWriteBeforeFirstCreateHook = func(budget *mongoWriteBudget) {
+				diagnosticMu.Lock()
+				preparedCold++
+				lastPrepared = time.Since(diagnosticStarted)
+				lastBudgetRemaining = time.Until(budget.deadline)
+				diagnosticMu.Unlock()
+			}
+			standalone.Server.firstWriteAfterCreateHook = func(string) {
+				diagnosticMu.Lock()
+				created++
+				lastCreated = time.Since(diagnosticStarted)
+				diagnosticMu.Unlock()
+			}
+			standalone.Server.firstWriteBeforeWaitHook = func(*collectionFirstWritePending) {
+				diagnosticMu.Lock()
+				waitEntries++
+				lastWait = time.Since(diagnosticStarted)
+				diagnosticMu.Unlock()
+			}
+
 			ctx, cancel := context.WithCancel(context.Background())
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -709,10 +736,24 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 			workCh := make(chan int)
 			insertCtx, insertCancel := context.WithCancel(context.Background())
 			var insertWG sync.WaitGroup
+			var insertFailureOnce sync.Once
+			diagnoseInsertFailure := func(i int, elapsed time.Duration, err error) {
+				insertFailureOnce.Do(func() {
+					diagnosticMu.Lock()
+					prepared, completed, waits := preparedCold, created, waitEntries
+					preparedAt, createdAt, waitedAt, remaining := lastPrepared, lastCreated, lastWait, lastBudgetRemaining
+					diagnosticMu.Unlock()
+					stack := make([]byte, 256<<10)
+					n := runtime.Stack(stack, true)
+					t.Logf("insert failure before cancellation: profile=%s index=%d elapsed=%s err=%v command_budget=%s request_limit=%s fixture_elapsed=%s cold_prepared=%d last_prepared=%s budget_remaining_at_prepare=%s cold_created=%d last_created=%s pending_wait_entries=%d last_wait=%s stack_truncated=%t\n%s",
+						profile, i, elapsed, err, mongoWriteCommandMaxDuration, requestTimeout, time.Since(diagnosticStarted), prepared, preparedAt, remaining, completed, createdAt, waits, waitedAt, n == len(stack), stack[:n])
+				})
+			}
 			sendInsertErr := func(i int, elapsed time.Duration, err error) {
 				if err == nil {
 					return
 				}
+				diagnoseInsertFailure(i, elapsed, err)
 				select {
 				case errCh <- insertError{index: i, elapsed: elapsed, err: err}:
 				default:

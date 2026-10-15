@@ -5,18 +5,58 @@ This inventory binds the ordinary route extracted at
 The completion packet supplies the final source identity and command receipts;
 this document is a source/caller inventory, not a performance or review result.
 
+## Current ordinary completion status (2026-10-15)
+
+The source/caller reconciliation at `5699f8e791c753f204cc297416e0b742d415afe3`
+found actual ordinary implementations and regression coverage for all nineteen
+groups below. Shared constructor/startup replay, original writer/Manager cleanup,
+borrowed dictionary/template lifetime, retained Snapshot/iterator aliases and
+terminal original-resource custody are integrated. Focused normal/race controls
+and independent source reviews are retained in the
+[completion packet](https://github.com/snissn/gomap/tree/fd314245c7552cb2be56adfaaa72260764f69cd2/artifacts/4871/20261015-host185-fixture-lifetime-successor)
+and its linked predecessors. This is source and caller closure; final ordinary
+acceptance still requires the remaining evidence and delivery gates.
+
+The complete local M4 matrix has run: 37 cells preserve the original public
+40-percent shrink, eight-fold output, reopen and persistent-value-log checks.
+Actual borrowed-cohort fixtures cover 2, 8 and 16 original value-log files,
+original DATA/PRIMARY physical retention, descriptor-only reads after Snapshot
+finalization, scope-complete ghost charges and zero governed storage only after
+actual DB cleanup. These correctness observations do not establish cohort cost
+acceptance. The
+[source-bound predecessor performance packet](https://github.com/snissn/gomap/tree/cf1435f2c76b2721e53f9880d1e609e1aad868f9/artifacts/4871/20261015-host185-performance-native-geometry)
+retains the raw-path, enabled PRIMARY and M0 results under their measured source
+identity; later test-only source equivalence is not a new binary measurement.
+
+Remaining ordinary gates are matched existing checkpoint/vacuum cost,
+enabled-cohort cost/retention tradeoff disposition, required current-head CI,
+final-base compatibility and final independent review. The reviewed existing
+benchmarks may supply bounded premerge diagnostics under the separately granted
+route in the tool READMEs. Their unmerged additions are not described as landed;
+expensive retained collection still requires the reviewed harness to land.
+Current status and exact receipts belong to the
+[coordinator completion state](https://github.com/snissn/gomap/issues/4871#issuecomment-6157916554).
+
+The dated component and prepared-closure sections below preserve their original
+evidence limits. Their then-open implementation statements are historical, not
+a requirement to repeat completed ordinary construction. Native #4878 producer,
+phased Finish, original Q32/byte/resource limits and once-ACK qualification remain
+separate and open. Ordinary source closure grants none of those native results.
+
+## Source inventory and historical component evidence
+
 The first integrated 87ff generic-lifecycle normal batch is retained under
 `evidence/ordinary-5111/integrated-87ff-qualification-20261014`. It found
 a released empty directory losing its lease-history discriminator, a historical
 mmap fixture bypassing Manager file-alias birth, a construction accessor hiding
 the unresolved root during failed cleanup, and startup command-WAL replay
 entering the DATA-only publisher with selected PRIMARY capsule authority.
-These are acceptance failures, not unsupported-test waivers. The ordinary
-directory and mmap corrections have focused normal/race receipts; shared
-constructor and startup publication corrections must be integrated and tested
-before the full packet qualifies. Every allocation-group row remains open
-until its actual containing, alias, caller and final physical action evidence
-is bound to the mature integrated candidate.
+These were acceptance failures, not unsupported-test waivers. At that checkpoint,
+the ordinary directory and mmap corrections had focused normal/race receipts;
+shared constructor and startup publication corrections still required integration
+and testing. Each allocation-group row required its actual containing, alias,
+caller and final physical action evidence. The current completion status above
+records the later reconciliation without relabeling that historical batch.
 
 A released directory-backed Set retains only its scalar lease-history marker
 after successful cleanup. It cannot be reclassified as legacy flat diagnostic
