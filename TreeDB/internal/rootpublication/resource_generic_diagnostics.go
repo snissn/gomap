@@ -22,26 +22,42 @@ func newGenericResourceDiagnostics(namespace *StableNamespaceToken, registry *Id
 	if namespace == nil && registry == nil {
 		return nil
 	}
-	d := &genericResourceDiagnostics{registry: registry}
-	if namespace != nil {
-		namespace.mu.Lock()
-		defer namespace.mu.Unlock()
-		d.namespace = &StableNamespaceDescriptor{
-			ParentIdentity: namespace.parentIdentity, Operation: namespace.operation,
-			OldName: strings.Clone(namespace.oldName), NewName: strings.Clone(namespace.newName), DiagnosticPath: strings.Clone(namespace.diagnosticPath),
-		}
-		d.namespace.ParentIdentity.Platform = strings.Clone(d.namespace.ParentIdentity.Platform)
-		d.linked, d.hasLinked = namespace.linkedResourceIdentity, namespace.hasLinkedResource
-		d.linked.Platform = strings.Clone(d.linked.Platform)
-		if namespace.diagnosticSyncs.Load() == nil {
-			metrics := &genericNamespaceSyncMetrics{}
-			count, duration := namespace.physicalSyncStats()
-			metrics.count.Store(count)
-			metrics.nanos.Store(uint64(duration))
-			namespace.diagnosticSyncs.Store(metrics)
-		}
-		d.syncs = namespace.diagnosticSyncs.Load()
+	if namespace == nil {
+		return &genericResourceDiagnostics{registry: registry}
 	}
+	namespace.mu.Lock()
+	defer namespace.mu.Unlock()
+	// The descriptor and header have the same immutable lifetime. Registry-only
+	// diagnostics above do not pay for the additional containing storage.
+	owned := &struct {
+		diagnostics genericResourceDiagnostics
+		namespace   StableNamespaceDescriptor
+	}{}
+	d := &owned.diagnostics
+	d.registry, d.namespace = registry, &owned.namespace
+	*d.namespace = StableNamespaceDescriptor{ParentIdentity: namespace.parentIdentity, Operation: namespace.operation}
+	d.linked, d.hasLinked = namespace.linkedResourceIdentity, namespace.hasLinkedResource
+	// Keep all five operands, including empty ones: Join must copy even when
+	// only one field is nonempty. The returned fields own no namespace storage.
+	// A separately retained short field can keep this whole text backing alive.
+	parts := [5]string{namespace.oldName, namespace.newName, namespace.diagnosticPath, namespace.parentIdentity.Platform, namespace.linkedResourceIdentity.Platform}
+	text := strings.Join(parts[:], "")
+	for i, part := range parts {
+		parts[i] = ""
+		if part != "" {
+			parts[i], text = text[:len(part)], text[len(part):]
+		}
+	}
+	d.namespace.OldName, d.namespace.NewName, d.namespace.DiagnosticPath = parts[0], parts[1], parts[2]
+	d.namespace.ParentIdentity.Platform, d.linked.Platform = parts[3], parts[4]
+	if namespace.diagnosticSyncs.Load() == nil {
+		metrics := &genericNamespaceSyncMetrics{}
+		count, duration := namespace.physicalSyncStats()
+		metrics.count.Store(count)
+		metrics.nanos.Store(uint64(duration))
+		namespace.diagnosticSyncs.Store(metrics)
+	}
+	d.syncs = namespace.diagnosticSyncs.Load()
 	return d
 }
 

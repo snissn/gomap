@@ -2,13 +2,65 @@ package rootpublication
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"sync"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
+
+func TestGenericResourceDiagnosticsOwnAllNamespaceText(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields [5]string
+	}{
+		{"all-fields", [5]string{"old-name", "new-name", "dir/new-name", "custom-parent-platform", "custom-linked-platform"}},
+		{"empty", [5]string{}},
+	}
+	for i, name := range [5]string{"old-name", "new-name", "path", "parent-platform", "linked-platform"} {
+		var fields [5]string
+		fields[i] = "only-nonempty-field"
+		cases = append(cases, struct {
+			name   string
+			fields [5]string
+		}{name: "only-" + name, fields: fields})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Model text borrowed from an original owner's mutable backing. The
+			// diagnostic must survive that backing being scrubbed after capture.
+			var storage [5][]byte
+			var borrowed [5]string
+			for i, value := range tc.fields {
+				storage[i] = []byte(value)
+				borrowed[i] = unsafe.String(unsafe.SliceData(storage[i]), len(storage[i]))
+			}
+			namespace := &StableNamespaceToken{
+				oldName: borrowed[0], newName: borrowed[1], diagnosticPath: borrowed[2],
+				parentIdentity: StableIdentity{Platform: borrowed[3]}, linkedResourceIdentity: StableIdentity{Platform: borrowed[4]},
+				operation: NamespaceRename, hasLinkedResource: true,
+			}
+			registry := NewIdentityPinRegistry()
+			defer registry.Close()
+			diagnostics := newGenericResourceDiagnostics(namespace, registry)
+			borrowed = [5]string{}
+			namespace.oldName, namespace.newName, namespace.diagnosticPath = "", "", ""
+			namespace.parentIdentity.Platform, namespace.linkedResourceIdentity.Platform = "", ""
+			for _, backing := range storage {
+				clear(backing)
+			}
+			got := [5]string{diagnostics.namespace.OldName, diagnostics.namespace.NewName, diagnostics.namespace.DiagnosticPath, diagnostics.namespace.ParentIdentity.Platform, diagnostics.linked.Platform}
+			if got != tc.fields {
+				t.Fatalf("diagnostic text changed after source scrub: got %q want %q", got, tc.fields)
+			}
+			if diagnostics.registry != registry || diagnostics.namespace.Operation != NamespaceRename || !diagnostics.hasLinked || diagnostics.syncs != namespace.diagnosticSyncs.Load() {
+				t.Fatal("diagnostic capture changed registry, namespace operation, linked identity or sync counter identity")
+			}
+		})
+	}
+}
 
 func TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease(t *testing.T) {
 	dir := t.TempDir()
@@ -49,7 +101,7 @@ func TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease(t *testing.T
 	defer set.Release()
 	// Capture after stabilization, then exercise the same runtime sync site. The
 	// independent counter identity must report live work, not a frozen total.
-	t.Logf("actual struct sizes: token=%d namespace=%d generic diagnostic=%d descriptor=%d counters=%d; generic namespace capture additionally clones each nonempty text operand; selected backing=nil", unsafe.Sizeof(StableResourceToken{}), unsafe.Sizeof(StableNamespaceToken{}), unsafe.Sizeof(genericResourceDiagnostics{}), unsafe.Sizeof(StableNamespaceDescriptor{}), unsafe.Sizeof(genericNamespaceSyncMetrics{}))
+	t.Logf("actual struct sizes: token=%d namespace=%d generic diagnostic=%d descriptor=%d counters=%d; generic namespace capture coallocates header/descriptor and owns one text backing; selected backing=nil", unsafe.Sizeof(StableResourceToken{}), unsafe.Sizeof(StableNamespaceToken{}), unsafe.Sizeof(genericResourceDiagnostics{}), unsafe.Sizeof(StableNamespaceDescriptor{}), unsafe.Sizeof(genericNamespaceSyncMetrics{}))
 	before := set.Stats(time.Now())[0].NamespaceSyncs
 	if err = ns.syncSharedPersistence(); err != nil {
 		t.Fatal(err)
