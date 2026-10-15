@@ -1,8 +1,0 @@
-{
-  "utc": "2026-10-15T08:20:12Z",
-  "loadavg": "0.15 0.21 0.18 2/1204 1454082\n",
-  "free_bytes": 273115054080,
-  "process_lines": [
-    "1454011 1454010 Ss   34.7       0 python3 /home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/run-public.py --execute"
-  ]
-}

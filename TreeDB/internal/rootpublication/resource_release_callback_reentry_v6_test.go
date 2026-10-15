@@ -22,6 +22,7 @@ func TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6(t *testing.T) {
 			owner.Initialize(0)
 			var selected *StableResourceSet
 			var callbackErr error
+			timedOut := false
 			calls := 0
 			inspected := make(chan error, 1)
 			callback := func() {
@@ -48,6 +49,7 @@ func TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6(t *testing.T) {
 				select {
 				case callbackErr = <-inspected:
 				case <-time.After(time.Second):
+					timedOut = true
 					callbackErr = errors.New("public Set inspection blocked until its release callback returned")
 				}
 			}
@@ -86,7 +88,9 @@ func TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6(t *testing.T) {
 			if callbackErr != nil {
 				// Let the blocked public inspection finish after the old implementation
 				// releases its mutex; RED remains an ordinary assertion, without a leak.
-				<-inspected
+				if timedOut {
+					<-inspected
+				}
 				t.Fatal(callbackErr)
 			}
 			if err = selected.ReleaseWithError(); err != nil {

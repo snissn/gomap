@@ -1,7 +1,0 @@
-{
-  "all_helper_targets_absent_and_unregistered": true,
-  "private_gitdirs_absent": true,
-  "current_registered_sha256": "1ea8d426a5acf94559f8001d71c1def9f6907007639480ad0f308f2708603a31",
-  "at_utc": "2026-10-15T08:12:38.568109+00:00",
-  "cleanup_receipt_sha256": "a639cc4b12c4dcbf7e4e4d2ef3bdc04dbc8a5cead24833d8fdccddd793b70bff"
-}

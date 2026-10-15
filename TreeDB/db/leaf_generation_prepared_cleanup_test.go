@@ -31,6 +31,10 @@ func TestOriginalPreparedPackParentCloseRefusalKeepsCustody(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalParent, originalSet := closure.cleanupDir, closure.resources
+	originalCapacity := closure.cleanupChildCapacity
+	if originalCapacity == 0 {
+		t.Fatal("packed cleanup capacity was not admitted with its original closure")
+	}
 	owner := d.valueLogIdentityPins.MetadataOwner()
 	charged := owner.Bytes()
 	if err := originalParent.Close(); err != nil {
@@ -40,7 +44,7 @@ func TestOriginalPreparedPackParentCloseRefusalKeepsCustody(t *testing.T) {
 	if transferred != nil || !errors.Is(first, os.ErrClosed) {
 		t.Fatalf("ignored original parent Close refusal: Set=%v err=%v", transferred != nil, first)
 	}
-	if closure.cleanupDir != originalParent || closure.resources != originalSet || len(closure.promoted) == 0 || owner.Bytes() != charged {
+	if closure.cleanupDir != originalParent || closure.resources != originalSet || len(closure.promoted) == 0 || owner.Bytes() != charged || closure.cleanupChildCapacity != originalCapacity {
 		t.Fatal("refusal discarded original parent/Set/arrays or refunded metadata")
 	}
 	if !errors.Is(d.backgroundError(), first) || !errors.Is(d.backgroundError(), prior) {
@@ -53,7 +57,7 @@ func TestOriginalPreparedPackParentCloseRefusalKeepsCustody(t *testing.T) {
 		if next, err := closure.TakeStableResources(); next != nil || !errors.Is(err, first) {
 			t.Fatal("duplicate Take replayed or forgot first outcome")
 		}
-		if owner.Bytes() != charged || closure.resources != originalSet || closure.cleanupDir != originalParent {
+		if owner.Bytes() != charged || closure.resources != originalSet || closure.cleanupDir != originalParent || closure.cleanupChildCapacity != originalCapacity {
 			t.Fatal("duplicate disposition refunded failed payload")
 		}
 	}

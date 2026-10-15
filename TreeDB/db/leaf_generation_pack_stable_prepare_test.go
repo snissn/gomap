@@ -185,11 +185,20 @@ func TestPrepareLeafGenerationPackStableClosureCloseAdmission(t *testing.T) {
 			_ = result.closure.Release()
 			t.Fatalf("post-Close packed closure observations=%+v want complete producer evidence", observed)
 		}
+		if result.closure.cleanupChildCapacity == 0 || result.closure.metadataCharge < result.closure.cleanupChildCapacity {
+			t.Fatal("retained packed closure lacks pre-admitted cleanup handle capacity")
+		}
 		if err := result.closure.Release(); err != nil {
-			t.Fatalf("release retained packed closure after DB close: %v", err)
+			t.Fatalf("release retained packed closure after DB close: %v; original causes=%v; resources retained=%t; cleanup child retained=%t; parent close attempted=%t; parent close err=%v", err, result.closure.failure.causes, result.closure.resources != nil, result.closure.cleanupChild != nil, result.closure.parentCloseAttempted, result.closure.parentCloseErr)
 		}
 		if got := registry.Stats(); got != (rootpublication.IdentityPinRegistryStats{}) {
 			t.Fatalf("packed registry after retained closure release=%+v want zero", got)
+		}
+		if result.closure.metadata != nil || result.closure.metadataCharge != 0 || result.closure.cleanupChild != nil {
+			t.Fatal("packed containing completion retained metadata or cleanup handle after release")
+		}
+		if err := result.closure.Release(); err != nil {
+			t.Fatalf("repeated retained packed closure release: %v", err)
 		}
 
 		lateClosure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), leafPages)

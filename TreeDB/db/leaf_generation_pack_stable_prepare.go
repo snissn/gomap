@@ -129,6 +129,7 @@ type LeafGenerationPackStablePreparedClosure struct {
 	failure              originalDBCleanupFailure
 	cleanupChild         *os.File
 	cleanupChildCharge   uint64
+	cleanupChildCapacity uint64
 	parentCloseAttempted bool
 	parentCloseErr       error
 }
@@ -254,6 +255,7 @@ func (closure *LeafGenerationPackStablePreparedClosure) finishCompletionCall() {
 	if closure.done && closure.cleanupErr == nil && closure.activeCompletion == 0 {
 		owner, charge = closure.metadata, closure.metadataCharge
 		closure.metadata, closure.metadataCharge, closure.db = nil, 0, nil
+		closure.cleanupChildCapacity = 0
 	}
 	closure.mu.Unlock()
 	if owner != nil {
@@ -367,16 +369,13 @@ func cleanupLeafGenerationPackStablePreparedSegmentsWithCustody(parent *os.File,
 			if err != nil {
 				return err
 			}
-			if err := custody.metadata.AddPending(childCharge); err != nil {
-				return err
+			// Preparation admitted one serial cleanup handle before shutdown.
+			// A retained closure must not reopen metadata admission after DB.Close.
+			if childCharge > custody.cleanupChildCapacity {
+				return retainedalloc.ErrCapacity
 			}
-			custody.metadataCharge += childCharge
 		}
 		child, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
-		if custody != nil && err != nil {
-			custody.metadata.RemovePending(childCharge)
-			custody.metadataCharge -= childCharge
-		}
 		if custody != nil && child != nil {
 			custody.cleanupChild, custody.cleanupChildCharge = child, childCharge
 		}
@@ -387,8 +386,6 @@ func cleanupLeafGenerationPackStablePreparedSegmentsWithCustody(parent *os.File,
 			err := child.Close()
 			if err == nil && custody != nil {
 				custody.cleanupChild = nil
-				custody.metadata.RemovePending(custody.cleanupChildCharge)
-				custody.metadataCharge -= custody.cleanupChildCharge
 				custody.cleanupChildCharge = 0
 			}
 			return err
@@ -591,10 +588,26 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if chargeErr != nil {
 		return fail(chargeErr)
 	}
+	// Cleanup may run after DB.Close has closed metadata admission. Reserve
+	// the maximum exact child handle once; the original serial cleanup loop
+	// reuses this capacity, retaining it until containing completion.
+	var cleanupChildCapacity uint64
+	for _, segment := range promoted {
+		childCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(authority.destinationParent.Name()) + 1 + len(filepath.Base(segment.path))))
+		if err != nil {
+			return fail(err)
+		}
+		cleanupChildCapacity = max(cleanupChildCapacity, childCharge)
+	}
+	if cleanupChildCapacity > ^uint64(0)-charge {
+		return fail(retainedalloc.ErrCapacity)
+	}
+	charge += cleanupChildCapacity
 	if err := original.metadata.AddPending(charge); err != nil {
 		return fail(err)
 	}
 	original.metadataCharge += charge
+	original.cleanupChildCapacity = cleanupChildCapacity
 	segments := make([]LeafPageLogSegment, len(promoted))
 	ownedPromoted := make([]rewriteCreatedSegment, len(promoted))
 	for i := range promoted {

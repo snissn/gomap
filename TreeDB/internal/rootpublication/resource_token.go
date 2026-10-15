@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"io"
 	"os"
 	"path/filepath"
@@ -1798,9 +1797,10 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 	proof.mu.Unlock()
 	var state namespaceProofReleaseState
 	state.proof = proof
-	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	// Nil policy drains the same original close core without an escaping local
+	// work counter. Only the retained native receipt admits bounded work.
 	for state.proof != nil {
-		ready, err := state.continueWork(false, &w, nil)
+		ready, err := state.continueWork(false, nil, nil)
 		if err != nil {
 			proof.closeMu.Unlock()
 			return err

@@ -42,7 +42,7 @@ func (s *NamespaceProofReleaseWork) Bind(proof *StableNamespaceCreationProof, w 
 	if s.proof != nil || s.phase != 0 {
 		return false, ErrResourceOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*proof))) {
+	if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*proof))) {
 		return false, nil
 	}
 	proof.mu.Lock()
@@ -99,7 +99,7 @@ func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.Ordin
 		return true, nil
 	}
 	if state.phase == 0 {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+64) {
+		if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+64) {
 			return false, nil
 		}
 		proof.released.Store(true)
@@ -108,7 +108,7 @@ func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.Ordin
 	}
 	if state.phase == 1 {
 		if proof.persistence != nil && proof.persistence != proof.parent {
-			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+2*uint64(unsafe.Sizeof(*proof.persistence))+64) {
+			if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+2*uint64(unsafe.Sizeof(*proof.persistence))+64) {
 				return false, nil
 			}
 			err := proof.persistence.Close()
@@ -122,7 +122,7 @@ func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.Ordin
 	}
 	if state.phase == 2 {
 		if proof.parent != nil {
-			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+2*uint64(unsafe.Sizeof(*proof.parent))+64) {
+			if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+2*uint64(unsafe.Sizeof(*proof.parent))+64) {
 				return false, nil
 			}
 			parent := proof.parent
@@ -139,7 +139,7 @@ func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.Ordin
 		state.phase = 3
 	}
 	if proof.cleanupErr != nil {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+64) {
+		if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+64) {
 			return false, nil
 		}
 		if proof.metadata != nil {
@@ -161,7 +161,7 @@ func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.Ordin
 			s.owner, s.charge = proof.metadata, proof.metadataCharge
 		}
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+64) {
+	if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+64) {
 		return false, nil
 	}
 	proof.name = ""
@@ -196,7 +196,7 @@ func (proof *StableNamespaceCreationProof) SupportsNativeReleaseV6(w *iterator.O
 	if w == nil {
 		return false, retainedalloc.ErrWorkRequired
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+64) {
+	if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+64) {
 		return false, nil
 	}
 	proof.mu.Lock()
@@ -205,4 +205,9 @@ func (proof *StableNamespaceCreationProof) SupportsNativeReleaseV6(w *iterator.O
 		return false, ErrResourceOwnership
 	}
 	return true, nil
+}
+
+// The ordinary nil driver executes this same close sequence synchronously.
+func namespaceProofReleaseReserve(w *iterator.OrdinalScanWork, records, bytes uint64) bool {
+	return w == nil || w.Reserve(records, bytes)
 }

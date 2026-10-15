@@ -318,7 +318,9 @@ func TestOwnedSetActualPhysicalCloseFailureRetainsOriginalGraph(t *testing.T) {
 	if set.Owner() != ResourceOwnerReleased || counts[ResourceIndex] != 0 {
 		t.Fatal("Set edge was not consumed exactly once")
 	}
-	if set.kindViews != views || set.metadata == nil || owner.Bytes() == 0 || owner.Bytes() > before || originalPhysical.file == nil || originalPhysical.owner == nil || registry.failedPinned != originalPhysical {
+	// Entered edges have moved into the SAME original intrusive release chain.
+	// Expired public aliases must not keep a second consumable edge.
+	if set.kindViews != nil || set.metadata == nil || !originalReleaseChainContainsV6(&set.metadata.release, views) || !originalReleaseChainContainsV6(&set.metadata.release, originalPhysical) || owner.Bytes() == 0 || owner.Bytes() > before || originalPhysical.file == nil || originalPhysical.owner == nil || registry.failedPinned != originalPhysical {
 		t.Fatal("failure refunded original wrapper/backing or lost physical custody")
 	}
 	remaining := owner.Bytes()
@@ -405,6 +407,7 @@ func TestOwnedDiagnosticActualPhysicalCloseFailureRetainsOriginalPayload(t *test
 	}
 	set := admittedCoalescingFixture(t, &owner, registry, file, "lane", DurableFrontier{Bytes: 7}, nil)
 	token := set.kindViews.get(ResourceIndex).logical.entry.token
+	originalPhysical := token.physicalBacking
 	diagnostic, err := set.AcquirePhysicalDiagnostics()
 	if err != nil {
 		t.Fatal(err)
@@ -415,8 +418,9 @@ func TestOwnedDiagnosticActualPhysicalCloseFailureRetainsOriginalPayload(t *test
 	if err = token.pinned.Close(); err != nil {
 		t.Fatal(err)
 	}
+	originalBacking := diagnostic.borrow.backing
 	first := diagnostic.CloseWithError()
-	if !errors.Is(first, os.ErrClosed) || diagnostic.allocation == nil || diagnostic.allocation.failure.original != diagnostic || len(diagnostic.physical) != 1 || token.physicalBacking == nil {
+	if !errors.Is(first, os.ErrClosed) || diagnostic.allocation == nil || diagnostic.allocation.failure.original != diagnostic || len(diagnostic.physical) != 1 || diagnostic.borrow.backing != nil || !originalReleaseChainContainsV6(&originalBacking.allocation.release, originalPhysical) || originalPhysical.file == nil || originalPhysical.owner == nil || registry.failedPinned != originalPhysical {
 		t.Fatalf("last diagnostic lost exact retained payload: %v", first)
 	}
 	remaining := owner.Bytes()
@@ -604,4 +608,15 @@ func TestOwnedBuilderActualCompletionReentrantAndPending(t *testing.T) {
 	if err = builder.AbandonWithError(); err != nil || owner.Bytes() != 0 || !ops.disposed.Load() || ops.releaseCalls.Load() != 2 {
 		t.Fatalf("actual final completion failed: %v bytes=%d calls=%d", err, owner.Bytes(), ops.releaseCalls.Load())
 	}
+}
+
+// The original admitted frames retain every consumed-but-unfinished edge after
+// a physical error. Inspect that exact chain, rather than expired public views.
+func originalReleaseChainContainsV6(root *resourceReleaseFrameV6, value any) bool {
+	for frame := root.current; frame != nil; frame = frame.parent {
+		if frame.value == value {
+			return true
+		}
+	}
+	return false
 }
