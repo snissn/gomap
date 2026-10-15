@@ -124,12 +124,16 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 				return fail(err)
 			}
 		}
-		ready, err := root.stepMetadata(f, w)
-		if err != nil {
-			return fail(err)
-		}
-		if !ready {
-			return empty, false, nil
+		// A previous call can finish the physical stage but refuse its final
+		// frame-detachment admission. Resume that detachment, not a nil value.
+		if f.value != nil {
+			ready, err := root.stepMetadata(f, w)
+			if err != nil {
+				return fail(err)
+			}
+			if !ready {
+				return empty, false, nil
+			}
 		}
 		// A child was entered, or this frame still has another original stage.
 		if root.current != f || f.value != nil {
@@ -773,8 +777,10 @@ func (root *resourceReleaseFrameV6) tokenMetadata(t *StableResourceToken, w *ite
 	if f != nil {
 		t.releaseWork.metadata.token = t
 		f.parent = root.current
-		if parent, ok := root.current.value.(*StableResourceToken); ok && parent == t {
-			f.deferToParent = true
+		if root.current != nil {
+			if parent, ok := root.current.value.(*StableResourceToken); ok && parent == t {
+				f.deferToParent = true
+			}
 		}
 		root.current = f
 	}

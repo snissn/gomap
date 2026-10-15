@@ -24,7 +24,8 @@ func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState
 	set.mu.Lock()
 	defer set.mu.Unlock()
 	if set.cleanupDone.Load() {
-		return empty, true, set.releaseResult()
+		err := set.releaseResult()
+		return empty, err == nil, err
 	}
 	a := set.metadata
 	if !set.selected || a == nil {

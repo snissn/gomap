@@ -70,14 +70,14 @@ type rootPublicationVisibleMemberV1 struct {
 	install                  *rootPublicationVisibleInstallV1
 	preparedLimits           *PreparedRootPublicationLimits
 
- // Superseded operands transfer here at the actual fenced commit. This SAME
- // visible member's original Finish callback owns their checked completion.
- retiredPrimary *primaryDurableRuntimeV5
- retiredSeals []*rootPublicationSealV1
- retiredSealsOwner *retainedalloc.Owner
- retiredSealsCharge uint64
- retiredSealIndex int
- retirementReleaseSet func(*rootpublication.StableResourceSet, *iterator.OrdinalScanWork) (bool, error)
+	// Superseded operands transfer here at the actual fenced commit. This SAME
+	// visible member's original Finish callback owns their checked completion.
+	retiredPrimary       *primaryDurableRuntimeV5
+	retiredSeals         []*rootPublicationSealV1
+	retiredSealsOwner    *retainedalloc.Owner
+	retiredSealsCharge   uint64
+	retiredSealIndex     int
+	retirementReleaseSet primaryResourceReleaseWithWorkV6
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -1003,14 +1003,15 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil
 		},
 	}
- if transaction != nil && transaction.RequiresNativeCallbackWorkV6() {
-  transactionSpec.RetireWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool,error) {
-   if input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
-    return false, rootpublication.ErrDurableRootOwnership
-   }
-   return member.continueRetirementV6(runtime.idx.primary, work)
-  }
- }
+	if transaction != nil && transaction.RequiresNativeCallbackWorkV6() {
+		member.retirementReleaseSet = releasePrimaryResourceSetWithWorkV6
+		transactionSpec.RetireWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			if input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+				return false, rootpublication.ErrDurableRootOwnership
+			}
+			return member.continueRetirementV6(runtime.idx.primary, work)
+		}
+	}
 	if transaction != nil {
 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 		ready, e := transaction.BindPrimaryVisibilityV6(transactionSpec, resources, work)

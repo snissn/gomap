@@ -31,20 +31,27 @@ func TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6(t *testing.T)
 	}
 	bindReservedPrimaryRuntimeV5(r, a)
 	r.records[0] = ref
-	set, err := rootpublication.NewStableResourceSetBuilder().Freeze()
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(a.MetadataOwner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.slotResources[0] = set
 	before := a.MetadataOwner().Bytes()
 	calls, effects := 0, 0
-	release := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
+	release := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (rootpublication.StableResourceTokenReleaseCompletionV6, bool, error) {
 		calls++
-		if !w.Reserve(1, 8) {
-			return false, nil
+		completion, ready, err := releasePrimaryResourceSetWithWorkV6(s, w)
+		if ready && err == nil {
+			effects++
+			if r.slotResources[0] != s {
+				t.Fatal("resource callback lost original containing alias")
+			}
 		}
-		effects++
-		return true, s.ReleaseWithError()
+		return completion, ready, err
 	}
 	if _, ready, err := continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{}, release); ready || err != nil || r.disposalPhase != 0 || r.records[0] != ref || a.MetadataOwner().Bytes() != before {
 		t.Fatalf("before-effects refusal changed original descriptor: %t %v", ready, err)
@@ -61,9 +68,9 @@ func TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6(t *testing.T)
 	}
 	// Refuse the resource callback once AFTER the private root really finishes.
 	allow := false
-	paused := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
+	paused := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (rootpublication.StableResourceTokenReleaseCompletionV6, bool, error) {
 		if !allow {
-			return false, nil
+			return rootpublication.StableResourceTokenReleaseCompletionV6{}, false, nil
 		}
 		return release(s, w)
 	}
@@ -125,13 +132,13 @@ func TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6(t *testing.T
 	set := originalRecoverySetWithPhysicalCloseFault(t)
 	r.slotResources[0] = set
 	calls := 0
-	release := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
+	release := func(s *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (rootpublication.StableResourceTokenReleaseCompletionV6, bool, error) {
 		if !w.Reserve(1, 8) {
-			return false, nil
+			return rootpublication.StableResourceTokenReleaseCompletionV6{}, false, nil
 		}
 		calls++
 		err := s.ReleaseWithError()
-		return err == nil, err
+		return rootpublication.StableResourceTokenReleaseCompletionV6{}, err == nil, err
 	}
 	_, ready, first := continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{RecordLimit: 100, ByteLimit: 1 << 20}, release)
 	if ready || !errors.Is(first, os.ErrClosed) || r.disposalErr != first || r.slotResources[0] != set || r.metadataCharge != charge || calls != 1 {

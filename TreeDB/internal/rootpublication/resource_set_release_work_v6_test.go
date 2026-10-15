@@ -95,8 +95,23 @@ func TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6(t *testing.
 			if callbacks != priorCallbacks || a.MetadataOwner().Bytes() != beforeReplay {
 				t.Fatal("ordinary result replayed original release or refunded failed debt")
 			}
-			if fail && (visible.releaseResult() == nil || visible.kindViews == nil || visible.kindViews.allocation.cleanupResult() == nil) {
-				t.Fatal("actual ordinary failure did not retain original backing debt")
+			if fail {
+				// The consumed kind edge has moved into this SAME Set's original
+				// intrusive release frames. Its old field is intentionally detached;
+				// the failed original frames and containing charge must remain.
+				if visible.releaseResult() == nil || visible.metadata == nil || visible.metadata.cleanupResult() == nil {
+					t.Fatal("actual ordinary failure did not retain original Set debt")
+				}
+				root := &visible.metadata.release
+				failedKind := false
+				for frame := root.current; frame != nil; frame = frame.parent {
+					if kind, ok := frame.value.(*resourceKindBacking); ok && kind.allocation != nil && kind.allocation.cleanupResult() != nil {
+						failedKind = true
+					}
+				}
+				if root.err == nil || !failedKind {
+					t.Fatal("original transferred kind backing lost its failed release frame")
+				}
 			}
 			visible, source, set = nil, nil, nil // no sibling/Set keeper remains
 			txn.phase = durableRootFinishing

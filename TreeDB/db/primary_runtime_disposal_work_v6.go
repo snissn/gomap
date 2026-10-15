@@ -25,6 +25,15 @@ func (c *primaryRuntimeDisposalCompletionV6) complete() {
 	}
 }
 
+// primaryResourceReleaseWithWorkV6 returns accounting only after physical Set
+// completion. The original containing runtime must detach its Set alias before
+// consuming that value; a callback must never refund the still-referenced Set.
+type primaryResourceReleaseWithWorkV6 func(*rootpublication.StableResourceSet, *iterator.OrdinalScanWork) (rootpublication.StableResourceTokenReleaseCompletionV6, bool, error)
+
+func releasePrimaryResourceSetWithWorkV6(set *rootpublication.StableResourceSet, w *iterator.OrdinalScanWork) (rootpublication.StableResourceTokenReleaseCompletionV6, bool, error) {
+	return set.ReleaseFromWithWorkV6(rootpublication.ResourceOwnerBuilder, w)
+}
+
 // continuePrimaryRuntimeDisposalV6 shares the original descriptor's exact
 // operands with ordinary disposal. Native disposal uses only its own arena
 // queue and an actual work-bearing resource driver; it never falls back to an
@@ -34,7 +43,7 @@ func (c *primaryRuntimeDisposalCompletionV6) complete() {
 // operands stay on this original descriptor as debt; it does not attempt later
 // drops merely to dispose more storage after physical failure.
 func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,
-	release func(*rootpublication.StableResourceSet, *iterator.OrdinalScanWork) (bool, error),
+	release primaryResourceReleaseWithWorkV6,
 ) (primaryRuntimeDisposalCompletionV6, bool, error) {
 	var empty primaryRuntimeDisposalCompletionV6
 	if r == nil {
@@ -211,8 +220,9 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 		}
 		var ready bool
 		var err error
+		var completion rootpublication.StableResourceTokenReleaseCompletionV6
 		if r.disposalNative {
-			ready, err = release(*slot, w)
+			completion, ready, err = release(*slot, w)
 		} else {
 			err = (*slot).ReleaseWithError()
 			ready = err == nil
@@ -224,6 +234,9 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 			return false, rootpublication.ErrResourceOwnership
 		}
 		*slot = nil
+		// The physical callback has returned and this original runtime's Set
+		// alias has ended. Only now may its accounting-only receipt refund.
+		completion.Complete()
 		return true, nil
 	}
 	for r.disposalPhase == 6 && r.disposalIndex < len(r.proofResources)+len(r.slotResources) {
