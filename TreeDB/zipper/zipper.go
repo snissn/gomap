@@ -1362,7 +1362,7 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
-		scratchCache: z.sharedApplyScratchCache(),
+		scratchCache:              z.sharedApplyScratchCache(),
 	}
 }
 
