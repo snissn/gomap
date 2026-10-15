@@ -111,6 +111,9 @@ func (g *FreelistGenerationV1) Validate() error {
 	if g == nil || g.generationID == 0 || g.highWater < 2 || g.root == nil {
 		return ErrGenerationFormat
 	}
+	if err := validateCanonicalStateV2(g.root, true); err != nil {
+		return err
+	}
 	var freeCount, retiredCount uint64
 	err := walkState(g.root, 0, func(c *stateChunk) error {
 		for offset := uint64(0); offset < freelistChunkSize; offset++ {
@@ -168,6 +171,7 @@ func (h RecoveryHorizon) capability() ReuseCapability {
 type FreelistTxnStats struct {
 	COWChunks, COWPages, COWBytes, LogicalDelta               uint64
 	StateMutationPaths, StateMutationItems                    uint64
+	PrivateMutationPaths, PrivateChunkReuses                  uint64
 	AppendAllocations, ReuseAllocations, Reservations         uint64
 	FreeIDs, RetiredIDs, ReuseLag, PageVisits                 uint64
 	GenerationID, ReservationRecords                          uint64
@@ -190,9 +194,12 @@ type FreelistTxn struct {
 	allocated        []allocatedPage
 	abandonedAppends []ReservationExtentV1
 	consumed         bool
-	changedChunks    map[uint64]struct{}
-	replacedMetadata map[uint64]struct{}
-	stats            FreelistTxnStats
+	// Granted only after detaching pre-existing dirty aliases. New dirty
+	// nodes remain exclusively owned until clone or materialization revokes it.
+	privatePreparation bool
+	changedChunks      map[uint64]struct{}
+	replacedMetadata   map[uint64]struct{}
+	stats              FreelistTxnStats
 }
 
 // cloneForAllocatorPrepare creates an isolated staging transaction. Tree nodes
@@ -203,6 +210,9 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	if err := t.valid(); err != nil {
 		return nil, err
 	}
+	// Revoke before publishing a root alias. Both transactions use persistent
+	// edits until a private staging clone explicitly detaches dirty state.
+	t.privatePreparation = false
 	clone := *t
 	clone.allocated = append([]allocatedPage(nil), t.allocated...)
 	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
@@ -217,6 +227,19 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	return &clone, nil
 }
 
+// cloneForPrivateAllocatorPrepare preserves the live transaction for rollback
+// while exclusively owning every dirty node that staging may mutate or seal.
+// The copy replaces the isolation formerly deferred until materialization.
+func (t *FreelistTxn) cloneForPrivateAllocatorPrepare() (*FreelistTxn, error) {
+	clone, err := t.cloneForAllocatorPrepare()
+	if err != nil {
+		return nil, err
+	}
+	clone.root = detachUnmaterialized(clone.root, 0)
+	clone.privatePreparation = true
+	return clone, nil
+}
+
 func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger) (*FreelistTxn, error) {
 	if base == nil || base.root == nil {
 		return nil, ErrGenerationFormat
@@ -228,6 +251,10 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 		ledger = NewReservationLedger()
 	}
 	t := &FreelistTxn{base: base, ledger: ledger, root: base.root, highWater: base.highWater, changedChunks: map[uint64]struct{}{}, replacedMetadata: map[uint64]struct{}{}}
+	// The base can itself be an unmaterialized model. Zero page identities
+	// carry no ownership authority until this explicit detachment boundary.
+	t.root = detachUnmaterialized(t.root, 0)
+	t.privatePreparation = true
 	if base.ref.HeaderPageID != 0 {
 		t.replacedMetadata[base.ref.HeaderPageID] = struct{}{}
 	}
@@ -259,24 +286,38 @@ func (t *FreelistTxn) valid() error {
 }
 
 func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
-	n := t.root
-	for depth := 0; n != nil && depth <= chunkTrieDepth; depth++ {
+	// An empty durable sentinel is replaced outright by the first chunk.
+	if t.root != nil && t.root.freeCount+t.root.retiredCount == 0 {
+		if t.root.pageID != 0 {
+			t.replacedMetadata[t.root.pageID] = struct{}{}
+		}
+		return
+	}
+	for n := t.root; n != nil; {
+		if n.chunk != nil {
+			if n.chunk.chunkNo == chunkNo && n.chunk.pageID != 0 {
+				t.replacedMetadata[n.chunk.pageID] = struct{}{}
+			}
+			return
+		}
+		if chunkPrefixV1(chunkNo, int(n.depth)) != n.prefix {
+			return
+		}
 		if n.pageID != 0 {
 			t.replacedMetadata[n.pageID] = struct{}{}
 		}
-		if depth == chunkTrieDepth {
-			if n.chunk != nil && n.chunk.pageID != 0 {
-				t.replacedMetadata[n.chunk.pageID] = struct{}{}
-			}
-			break
-		}
-		n = n.child[chunkNibble(chunkNo, depth)]
+		n = n.child[chunkNibble(chunkNo, int(n.depth))]
 	}
 }
 
 func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
 	t.markReplacedPath(chunkNo)
-	t.root = mutateChunk(t.root, chunkNo, 0, f)
+	if t.privatePreparation {
+		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
+		t.stats.PrivateMutationPaths++
+	} else {
+		t.root = mutateChunk(t.root, chunkNo, 0, f)
+	}
 	t.changedChunks[chunkNo] = struct{}{}
 	t.stats.StateMutationPaths++
 	t.stats.StateMutationItems += items
@@ -482,7 +523,7 @@ func collectPrunable(n *stateNode, depth int, cap ReuseCapability, out *[]retire
 		return
 	}
 	*visits++
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		for offset, seq := range n.chunk.retired {
 			if seq != 0 && cap.permits(seq) {
 				*out = append(*out, retiredPage{n.chunk.chunkNo<<freelistChunkShift | uint64(offset), seq})
@@ -625,33 +666,26 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 	return nil
 }
 
-func emitStatePages(n *stateNode, depth int, generationID uint64, next *uint64, sink *recordingSink) error {
+func emitStatePages(n *stateNode, _ int, generationID uint64, next *uint64, sink *recordingSink) error {
 	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
 		return nil
 	}
-	if depth == chunkTrieDepth {
-		if n.chunk == nil {
-			return ErrGenerationFormat
-		}
-		if n.chunk.pageID == 0 {
-			n.chunk.pageID = *next
-			*next++
-			b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
-			n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
-			if err := sink.write(n.chunk.pageID, b); err != nil {
-				return err
-			}
-		}
-	} else {
-		for _, child := range n.child {
-			if err := emitStatePages(child, depth+1, generationID, next, sink); err != nil {
-				return err
-			}
+	if n.chunk != nil {
+		n.chunk.pageID = *next
+		*next++
+		b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
+		n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
+		n.pageID, n.checksum = n.chunk.pageID, n.chunk.checksum
+		return sink.write(n.pageID, b)
+	}
+	for _, child := range n.child {
+		if err := emitStatePages(child, 0, generationID, next, sink); err != nil {
+			return err
 		}
 	}
 	n.pageID = *next
 	*next++
-	b, err := encodeIndexPage(n.pageID, generationID, n, depth)
+	b, err := encodeIndexPage(n.pageID, generationID, n, int(n.depth))
 	if err != nil {
 		return err
 	}
@@ -676,19 +710,15 @@ func appendReservationRange(extents []ReservationExtentV1, start, count uint64, 
 	return extents
 }
 
-func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
+func countUnmaterializedStatePages(n *stateNode, _ int) uint64 {
 	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
 		return 0
 	}
-	count := uint64(1) // This index page.
-	if depth == chunkTrieDepth {
-		if n.chunk != nil && n.chunk.pageID == 0 {
-			count++
+	count := uint64(1)
+	if n.chunk == nil {
+		for _, child := range n.child {
+			count += countUnmaterializedStatePages(child, 0)
 		}
-		return count
-	}
-	for _, child := range n.child {
-		count += countUnmaterializedStatePages(child, depth+1)
 	}
 	return count
 }
@@ -715,6 +745,11 @@ func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
 }
 
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
+	// Even a validation error revokes mutable authority. A retry remains safe
+	// through persistent edits and the ordinary materialization detach path.
+	if t != nil {
+		defer func() { t.privatePreparation = false }()
+	}
 	if err := t.valid(); err != nil {
 		return nil, err
 	}
@@ -732,19 +767,25 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
-	if reusedMetadata {
-		// tryReusedMetadata just copied this complete, nonempty path. Isolate
-		// only its dirty siblings before emission assigns page identities.
-		t.root = detachMetadataSiblings(t.root, 0, metadataStart>>freelistChunkShift)
-	} else {
-		t.root = detachUnmaterialized(t.root, 0)
+	if !t.privatePreparation {
+		if reusedMetadata {
+			t.root = detachMetadataSiblings(t.root, 0, metadataStart>>freelistChunkShift)
+		} else {
+			t.root = detachUnmaterialized(t.root, 0)
+		}
 	}
+	// Freeze before the first sink callback; consumed rejects every later edit.
+	t.privatePreparation = false
 	if t.root.pageID != 0 {
 		t.replacedMetadata[t.root.pageID] = struct{}{}
-		// The selected generation's root is exact-generation authority. A
-		// no-COW transaction may share descendants, but must publish a new root.
 		t.root = cloneStateNode(t.root)
+		// A one-chunk root is itself the selected generation's root page.
+		// It needs a fresh chunk identity, not a redundant leaf index wrapper.
+		if t.root.chunk != nil {
+			t.root.chunk = t.root.chunk.clone()
+		}
 	}
+
 	// The target metadata extent includes the COW pages, the reservation chain,
 	// and the generation header. Its count does not change the number of
 	// normalized reservation extents, so compute the chain length first.

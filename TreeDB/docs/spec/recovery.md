@@ -839,3 +839,15 @@ Post-COMMIT errors poison mutation and retain unpublished root/dependency
 custody with the exact generation through teardown. Reopen rolls forward
 the committed pair. Process-exit cutpoint tests do not constitute device or
 power-loss persistence qualification.
+
+
+## Compressed allocator format gate
+
+The active allocator uses physical generation/index/chunk version 2 and the
+required freelist_patricia_v2 store feature. Open checks this marker before
+index recovery or storage cleanup, even for read-only and IgnoreFormatConfig
+opens. Only a new or zero-length index may receive the marker. Both durable-meta
+candidates independently validate version 2; a version-1 allocator cannot become
+a fallback when the newest candidate is corrupt. A valid version-2 older
+candidate remains eligible for normal recovery. Pre-alpha version-1 stores
+require rebuilding, not in-place migration.
