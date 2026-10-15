@@ -4,8 +4,10 @@ package mvcc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -27,7 +29,14 @@ func TestNativePruneCOWIncrementalPublication(t *testing.T) {
 	runNativePruneCOWDiagnostic(t, true)
 }
 
-func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+// A fixed-input absolute cost control, separate from the every-return progress
+// test. Exactly one legal selected-integrity yield admits one ordinary write.
+func TestNativePruneCOWRetainedOutputCost(t *testing.T) {
+	runNativePruneCOWDiagnostic(t, true, true)
+}
+
+func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool, fixedInput ...bool) {
+	fixed := len(fixedInput) != 0 && fixedInput[0]
 	layouts := []bool{false, true}
 	if multileaf {
 		layouts = []bool{true}
@@ -118,7 +127,11 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			var installedID, adoptionInputID, publishedID uint64
 			var committedAfterInstall, resumedSameID bool
 			var firstACKComplete, firstACKIntegrity bool
-			var elapsed time.Duration
+			var elapsed, writeElapsed time.Duration
+			var wholeBefore, wholeAfter runtime.MemStats
+			runtime.ReadMemStats(&wholeBefore)
+			sequenceStarted := time.Now()
+			var sequenceWall time.Duration
 			var allocBytes, allocCount uint64
 			// Entry-phase buckets include all work performed by that public call.
 			// A call may advance through multiple phases; these are not inner-phase timings.
@@ -163,7 +176,7 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				ack += x.Pruned
 				if x.Pruned != 0 {
 					firstACKComplete, firstACKIntegrity = x.Complete, cursor.integrityDone
-					if committedAfterInstall && inputID == installedID {
+					if inputID != 0 && inputID == installedID {
 						adoptionInputID = inputID
 					}
 				}
@@ -182,10 +195,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				}
 				// Every legal nonterminal return must let this same caller complete
 				// an ordinary durable write, including an ACK-bearing return.
-				if !x.Complete {
+				if !x.Complete && (!fixed || (cursor.integrityDone && !cursor.loadingFloor && writes == 0 && ack == 0)) {
+					writeStarted := time.Now()
 					if e = s.CommitAt(100, []Mutation{{Key: future, Value: []byte("future-after")}}, CommitDurable); e != nil {
 						t.Fatal(e)
 					}
+					writeElapsed += time.Since(writeStarted)
 					writes++
 					if installedID != 0 {
 						committedAfterInstall = true
@@ -198,6 +213,8 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 					break
 				}
 			}
+			sequenceWall = time.Since(sequenceStarted)
+			runtime.ReadMemStats(&wholeAfter)
 			// Terminal ACK must release the original prepared/publication authority.
 			// This same caller immediately publishes a later durable version.
 			if ack == 1 {
@@ -212,7 +229,9 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 					t.Error("checked native cursor Close", e)
 				}
 			}
-			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
+			cursorCleanup := time.Since(cleanupStarted)
+			t.Logf("UNBOUNDED_RETAINED_OUTPUT_SEQUENCE fixed_one_write=%t prune_calls_ns=%d first_call_to_ACK_wall_ns=%d intervening_writes=%d write_ns=%d whole_sequence_alloc_bytes=%d whole_sequence_alloc_count=%d allocation_scope=processwide_includes_intervening_writes_and_runtime", fixed, elapsed.Nanoseconds(), sequenceWall.Nanoseconds(), writes, writeElapsed.Nanoseconds(), wholeAfter.TotalAlloc-wholeBefore.TotalAlloc, wholeAfter.Mallocs-wholeBefore.Mallocs)
+			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, cursorCleanup.Nanoseconds())
 			for phase, calls := range phaseCalls {
 				if calls != 0 {
 					t.Logf("NATIVE_PUBLIC_ENTRY_PHASE phase=%d calls=%d ns=%d alloc_bytes=%d alloc_count=%d", phase, calls, phaseNS[phase], phaseBytes[phase], phaseAllocs[phase])
@@ -253,6 +272,7 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				if adoptionInputID != 0 && publishedID == adoptionInputID {
 					resumedSameID = true
 				}
+				nativeDiagnosticPublishedLeafEncoding(t, d, beforeChildren, afterChildren)
 				for ref := range afterChildren {
 					if beforeChildren[ref] {
 						sharedChildren++
@@ -300,9 +320,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			}
 			if multileaf {
 				t.Logf("RETAINED_OUTPUT_ACTIVATION installed_page=%d commit_after_install=%t same_id_resumed=%t published_DATA_page=%d ACK=%d", installedID, committedAfterInstall, resumedSameID, publishedID, ack)
-				if installedID == 0 || !committedAfterInstall || !resumedSameID {
+				if installedID == 0 || !resumedSameID || (!fixed && !committedAfterInstall) {
 					t.Error("retained original output page did not survive CommitAt and resume before adoption")
 				}
+			}
+			if fixed && writes != 1 {
+				t.Errorf("fixed-input cost requires exactly one legal pre-ACK write, got %d", writes)
 			}
 			if pruneErr != nil || ack != 1 || prepared == 0 || writes == 0 {
 				t.Fatalf("positive composite publication: error=%v ACK=%d writes=%d prepared=%d cut=%d", pruneErr, ack, writes, prepared, cut)
@@ -352,4 +375,51 @@ func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB, rootOut ...*uint64
 		refs[ref] = true
 	}
 	return refs
+}
+
+// Read only newly published leaf children under the original backend Snapshot.
+// This asserts the configured on-disk representation rather than builder options
+// or a route counter. These masks are the current pre-alpha node format flags.
+func nativeDiagnosticPublishedLeafEncoding(t *testing.T, d *treedb.DB, before, after map[page.ChildRef]bool) {
+	t.Helper()
+	snapshot := d.NativeMembershipSnapshotForTest()
+	if snapshot == nil {
+		t.Fatal("encoding snapshot")
+	}
+	defer func() {
+		if e := snapshot.Close(); e != nil {
+			t.Error("encoding snapshot Close", e)
+		}
+	}()
+	reader, ok := backenddb.ValueReaderForState(snapshot.State()).(interface {
+		ReadLeafLogPageUnsafeTo(page.LeafLogPtr, []byte) ([]byte, bool, error)
+	})
+	if !ok {
+		t.Fatal("original leaf-log reader unavailable")
+	}
+	checked := 0
+	for ref := range after {
+		if before[ref] {
+			continue
+		}
+		if !ref.IsLeafLog() {
+			t.Fatalf("configured outer leaf placement changed: %+v", ref)
+		}
+		image, _, e := reader.ReadLeafLogPageUnsafeTo(ref.Log, make([]byte, page.PageSize))
+		if e != nil || len(image) != page.PageSize {
+			t.Fatal("published leaf image", e, len(image))
+		}
+		n := node.NewNode(image)
+		flags := binary.LittleEndian.Uint16(image[12:14])
+		const prefix, columnar, prefixV2, packed, columnarOnlyV2, revision = uint16(0x8000), uint16(0x4000), uint16(0x2000), uint16(0x1000), uint16(0x0400), uint16(0x0040)
+		required := prefix | columnar | prefixV2 | packed | revision
+		if n.Type() != page.PageTypeLeaf || flags&required != required || flags&columnarOnlyV2 != 0 {
+			t.Fatalf("published DATA leaf lost combined-columnar-prefix V2/packed/revision encoding: ref=%+v flags=%#x", ref, flags)
+		}
+		checked++
+		t.Logf("PUBLISHED_LEAF_ENCODING ref=%+v flags=%#x entries=%d combined_columnar_prefix_v2=true packed_pointer=true revisions=true", ref, flags, n.Count())
+	}
+	if checked == 0 {
+		t.Fatal("no newly published leaf encoding observed")
+	}
 }
