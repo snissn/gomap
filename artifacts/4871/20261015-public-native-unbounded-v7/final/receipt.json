@@ -1,0 +1,107 @@
+{
+  "at_utc": "2026-10-15T00:38:53.053395+00:00",
+  "claim": "two-cell genuine public CWAL/COW unbounded whole-current reconstruction diagnostic GREEN, including same-caller terminal post-ACK CommitAt101/current/reopen; not bounded/incremental/native viability or qualified benchmark",
+  "head": "5a88c08fe5d8d34fef6cb1dca58fcf9d139c27a4",
+  "owned_count": 13,
+  "source_rows": 4342,
+  "source": {
+    "path": "evidence/native-public-bridge-20261015/unbounded-connected-final-v7/source.json",
+    "bytes": 4791,
+    "sha256": "4948ad8094b59c41f05ce24ba8fd7aa1a9e96ffe3688f4dae8fcf8df02556d06"
+  },
+  "tracked_patch": {
+    "path": "evidence/native-public-bridge-20261015/unbounded-connected-final-v7/tracked.patch",
+    "bytes": 9997,
+    "sha256": "a5857585d117f47efaede0444fb898c286fb47ccd53abae7e044c3807bb4a561"
+  },
+  "runs": [
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v6-final/command.json",
+      "bytes": 558,
+      "sha256": "c7568ad1744ef0af035341103fb59a9234da827eb499b78860ba5ff7f4033d09"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v6-final/exit.json",
+      "bytes": 46,
+      "sha256": "6c7dfa4e368f9f177ad690e31ae98b5af9b19d6e41eb7588dcde8c345810f501"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v6-final/raw.jsonl",
+      "bytes": 4755,
+      "sha256": "ed03c27b0be115b1eb575398b2bddde216fec5ddb7ffb775059b4d95e8be1b58"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v6-final/source-after.json",
+      "bytes": 780862,
+      "sha256": "756df16de392e582f5e6a1bdc9d99db7771371ba4a7e048fdad70c74209c5d71"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v6-final/source-before.json",
+      "bytes": 780862,
+      "sha256": "756df16de392e582f5e6a1bdc9d99db7771371ba4a7e048fdad70c74209c5d71"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v7-postack/command.json",
+      "bytes": 558,
+      "sha256": "c7568ad1744ef0af035341103fb59a9234da827eb499b78860ba5ff7f4033d09"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v7-postack/exit.json",
+      "bytes": 83,
+      "sha256": "024e8843165d1a5576a75c96312e0418d6b6973d18b845bef2288ed8118cc8cd"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v7-postack/raw.jsonl",
+      "bytes": 4758,
+      "sha256": "034a76e8bb671aecd163f74f895170f3d3ee34e97d20895c2d724a7ef2c48cf2"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v7-postack/source-after.json",
+      "bytes": 780862,
+      "sha256": "4986d8b99fd8c614dd13a4c9668343b0cc0e9291f1b4267e7237097fca3a6c49"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v7-postack/source-before.json",
+      "bytes": 780862,
+      "sha256": "4986d8b99fd8c614dd13a4c9668343b0cc0e9291f1b4267e7237097fca3a6c49"
+    }
+  ],
+  "source_before_after_equal": true,
+  "source_unchanged_after_run": true,
+  "foreign2_protected_head_index_preserved": true,
+  "previous_history": {
+    "path": "evidence/native-public-bridge-20261015/unbounded-connected-final-v5/receipt.json",
+    "bytes": 4874,
+    "sha256": "d0af930567e5f53a4273b3f2a6cf7cfa38db6cbcb6731ecf27339439e9b82407"
+  },
+  "parked_wip": {
+    "path": "evidence/native-public-bridge-20261015/unbounded-connected-final-v5/parked-wip/candidate_clone_work_v1.go",
+    "bytes": 4196,
+    "sha256": "bb48428195dd5f5a9c62faef557e176a43a3a835e9f5fdeee8b49dcfa2289951"
+  },
+  "parked_wip_provenance": "compiled but unused in v4/v5; excluded from final v6/v7 and functional source packet",
+  "restored_noop_original": "TreeDB/freelist/generation_v1_txn.go byte-identical HEAD",
+  "inline_sample": {
+    "public_ns": 330892,
+    "alloc_bytes": 1437944,
+    "alloc_count": 461,
+    "cursor_cleanup_ns": 5970
+  },
+  "pointer_sample": {
+    "public_ns": 387403,
+    "alloc_bytes": 1467528,
+    "alloc_count": 779,
+    "cursor_cleanup_ns": 6680
+  },
+  "metrics_scope": "individual functional-probe samples; summed public PruneVersions calls include synchronous whole-tree rebuild/Finish; exclude fixture/intervening and postACK writes; process-wide allocations; no statistical claim",
+  "limits": [
+    "O(current tree) reconstruction",
+    "WorkRecords incomplete; no Q32 or latency ceiling credit",
+    "single obsolete-key diagnostic",
+    "bounded path still refuses honestly",
+    "no full protected matrix/public-native acceptance"
+  ],
+  "next": "test-first multileaf public fixture requires unrelated backend ChildRef persistence; retain meaningful bulk-path RED then SAME materialized-DATA zipper/native txn integration",
+  "source_frozen": true,
+  "no_more_go_producers": true
+}

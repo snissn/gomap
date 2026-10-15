@@ -1,0 +1,6 @@
+{"ImportPath":"github.com/snissn/gomap/TreeDB/db","Action":"build-output","Output":"# github.com/snissn/gomap/TreeDB/db\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/db","Action":"build-output","Output":"TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go:83:27: cannot use c.db.meta.MaxEntryRevision (variable of type uint64) as page.EntryRevision value in assignment\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/db","Action":"build-fail"}
+{"Time":"2026-10-14T14:29:40.44288942-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-14T14:29:40.44291463-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/mvcc [build failed]\n"}
+{"Time":"2026-10-14T14:29:40.44291903-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0,"FailedBuild":"github.com/snissn/gomap/TreeDB/db"}

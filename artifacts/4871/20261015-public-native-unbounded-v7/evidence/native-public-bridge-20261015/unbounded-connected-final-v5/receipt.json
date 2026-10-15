@@ -1,0 +1,108 @@
+{
+  "at_utc": "2026-10-15T00:35:56.596653+00:00",
+  "claim": "two single-cell actual public CWAL/COW unbounded O(current tree) reconstruction diagnostic GREEN; no bounded/Q32/incremental performance claim",
+  "head": "5a88c08fe5d8d34fef6cb1dca58fcf9d139c27a4",
+  "owned_count": 13,
+  "census_count": 4342,
+  "source_sha256": "d7c1585257b7202a8e04e2dce4c07e76286f15931dd6985c79868cad38b0ee26",
+  "census_sha256": "756df16de392e582f5e6a1bdc9d99db7771371ba4a7e048fdad70c74209c5d71",
+  "tracked_patch_sha256": "a5857585d117f47efaede0444fb898c286fb47ccd53abae7e044c3807bb4a561",
+  "runs": [
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v1/command.json",
+      "bytes": 650,
+      "sha256": "f1a393663bf096e94e0e55d2906181d3404798dceacbdf980981a5d8e716d0d5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v1/exit.json",
+      "bytes": 51,
+      "sha256": "336315690ea8fb48f64f963442b00c604d149b1d3b5ed751f6b2954dc2e42f73"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v1/raw.jsonl",
+      "bytes": 912,
+      "sha256": "bdcc8fc0f6d9d15374bfd878b8cbeac9925e1a934ad7d7a525a304ef788403c4"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v2/command.json",
+      "bytes": 650,
+      "sha256": "f1a393663bf096e94e0e55d2906181d3404798dceacbdf980981a5d8e716d0d5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v2/exit.json",
+      "bytes": 51,
+      "sha256": "621a090813b824cf72469bed4d4fc076eb4a6bc09b286b0a2b8853fff07cc0b5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v2/raw.jsonl",
+      "bytes": 3118,
+      "sha256": "3e3dc50a5abab1dcb71083503a3ed30e6ece7ba39bfef3f196200472d11b8187"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v3/command.json",
+      "bytes": 572,
+      "sha256": "9e19058dd6d32ce58ae8afa0fe15f36ca339961e267c6d0a39e507cf35bb0148"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v3/exit.json",
+      "bytes": 46,
+      "sha256": "276ad3b85419e36abd1933ef84af43203709e73f90cf3f42cf13c37ba0a0bf89"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v3/raw.jsonl",
+      "bytes": 82891,
+      "sha256": "e7e57a7ee8308258245deb91a03525bd8883aed2de614d5d724d2a82af19ae80"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v4/command.json",
+      "bytes": 572,
+      "sha256": "9e19058dd6d32ce58ae8afa0fe15f36ca339961e267c6d0a39e507cf35bb0148"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v4/exit.json",
+      "bytes": 46,
+      "sha256": "53e9f1f02c65ef5f4543ccae0ee582b64ad3f6fb94bf0f2037bd1504fa90f5ca"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v4/raw.jsonl",
+      "bytes": 3068,
+      "sha256": "54084c7ffa118174dc96435421b3dd4b7549946c680dffdd2dd40f4c59ec6ba3"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v5-pointer/command.json",
+      "bytes": 571,
+      "sha256": "d428f33fc527e1659b27c9098a8e7128c5336c818bdcf1672eca67e168f802a2"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v5-pointer/exit.json",
+      "bytes": 48,
+      "sha256": "949799b019a4de7ce717a861020f2ea21e4eec04e3c67a4eb7ca267464c619cc"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/unbounded-connected-v5-pointer/raw.jsonl",
+      "bytes": 3069,
+      "sha256": "6130dbedc07102642d22d8ae08db25a696c8becfaa19379cf3ac411a0d496aca"
+    }
+  ],
+  "tested_source_receipt": "evidence/native-public-bridge-20261015/unbounded-connected-freeze-v4/receipt.json",
+  "final_source_vs_tested": "13 functional paths byte-identical; generation_v1_txn.go restored HEAD variable names only; unused draft removed from package to parked-wip. Tested source census preserved separately; no runtime difference asserted for draft.",
+  "parked_wip_sha256": "bb48428195dd5f5a9c62faef557e176a43a3a835e9f5fdeee8b49dcfa2289951",
+  "inline": {
+    "public_ns": 333123,
+    "TotalAlloc_bytes": 1437960,
+    "Mallocs": 461,
+    "cursor_cleanup_ns": 6080,
+    "writes": 13,
+    "ACK": 1
+  },
+  "pointer": {
+    "public_ns": 416143,
+    "TotalAlloc_bytes": 1467600,
+    "Mallocs": 781,
+    "cursor_cleanup_ns": 5840,
+    "writes": 56,
+    "ACK": 1
+  },
+  "limits": "single samples include public calls and synchronous reconstruction/capsule/Consume/Finish, exclude fixture setup/intervening CommitAt; process-wide MemStats may include concurrent allocations; Work counters incomplete; no pre-change native COW prune equivalent",
+  "next": "actual incremental current-composite graft through SAME native lifecycle before scaling/budget matrix"
+}
