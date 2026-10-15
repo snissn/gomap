@@ -1,0 +1,85 @@
+name: "TreeDB: M0 observation diagnostic (manual only)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Start bounded packet
+        run: |
+          mkdir -p "$RUNNER_TEMP/m0-observation/packet"
+          date +%s > "$RUNNER_TEMP/m0-observation/job-started"
+          printf '%s\n' '{"diagnostic_only":true,"product":"2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"}' > "$RUNNER_TEMP/m0-observation/packet/start.json"
+
+      - name: Checkout reviewed harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout fixed pristine product
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49
+          path: product
+          persist-credentials: false
+
+      - name: Verify official complete Go SDK
+        run: |
+          set -euo pipefail
+          task_root="$RUNNER_TEMP/m0-observation"
+          exec > >(tee "$task_root/packet/sdk-bootstrap.txt") 2>&1
+          archive="$task_root/packet/go1.26.9.linux-amd64.tar.gz"
+          curl --fail --location --max-time 90 https://go.dev/dl/go1.26.9.linux-amd64.tar.gz -o "$archive"
+          echo "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$task_root"
+
+      - name: Pure harness validation
+        run: |
+          set -o pipefail
+          M0_TEST_PRODUCT="$GITHUB_WORKSPACE/product" python3 harness/.github/scripts/test_mvcc_m0_observation.py 2>&1 | tee "$RUNNER_TEMP/m0-observation/packet/harness-tests.txt"
+
+      - name: One original full observation schedule
+        run: |
+          python3 harness/.github/scripts/mvcc_m0_observation.py \
+            --product "$GITHUB_WORKSPACE/product" \
+            --output "$RUNNER_TEMP/m0-observation/packet" \
+            --goroot "$RUNNER_TEMP/m0-observation/go" \
+            --job-started "$(cat "$RUNNER_TEMP/m0-observation/job-started")"
+
+      - name: Retain setup and terminal state on every outcome
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'm0-observation' / 'packet'
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'workflow-terminal.json').write_text(json.dumps({
+              'wall_ns': time.time_ns(), 'harness_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'note': 'See step logs for bootstrap failures; missing runner receipts mean no completed diagnostic.'
+          }, indent=2) + '\n')
+          PY
+
+      - name: Upload complete diagnostic packet
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m0-observation-2588c-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/m0-observation/packet
+            !${{ runner.temp }}/m0-observation/packet/cache
+            !${{ runner.temp }}/m0-observation/packet/modcache
+            !${{ runner.temp }}/m0-observation/packet/tmp
+          if-no-files-found: error
+          retention-days: 30
