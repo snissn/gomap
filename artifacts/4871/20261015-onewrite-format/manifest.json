@@ -1,0 +1,157 @@
+[
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/README.md",
+    "bytes": 4806,
+    "sha256": "31119f76efcc8ef9a46b21b39d65a939fd881fbd1e98e5dc7c351e2625a519c7"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/head.txt",
+    "bytes": 41,
+    "sha256": "025c11503bb632835a7d26c006ee0709ae73c73b7689ba28c4074a557a81bba9"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/index-sha256.txt",
+    "bytes": 65,
+    "sha256": "8e2bce3dd45c1d5b1e476f064394912ce4b525b3e5e45f70865edf6d071cb30b"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/next-production-plan.md",
+    "bytes": 4420,
+    "sha256": "5885fd52326e0aeaf071643f2b6d4e0a98ba0bfea6b6adf98a289e4abf253085"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/preimage/test.go",
+    "bytes": 12292,
+    "sha256": "23e90bb9030baad3e5a635ae30244e637665fed71a0519635585f12a44bb683d"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/receipt.json",
+    "bytes": 6310,
+    "sha256": "4e9e2ca81731b2eeb78574b67661336004f9b438e2c8470e7c268a89795bdd46"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/repair.patch",
+    "bytes": 8009,
+    "sha256": "77a81a97c4074a24e940bfeaea977d8cc2308a4020cb24ef796ac6c856c77ccb"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/requested-scope.json",
+    "bytes": 2208,
+    "sha256": "1338fe9c86a649242dbf7bc008a71091cd05f071845e66fe068056a6a42c545b"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-mutant-red-v1/after.json",
+    "bytes": 826099,
+    "sha256": "dfdc0a48b5e965b569b87746101b9d72d8cb4b8ca8fa87760b822eaeaa4b0ba3"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-mutant-red-v1/before.json",
+    "bytes": 826099,
+    "sha256": "dfdc0a48b5e965b569b87746101b9d72d8cb4b8ca8fa87760b822eaeaa4b0ba3"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-mutant-red-v1/command.json",
+    "bytes": 679,
+    "sha256": "56b54d8c88b9a96348ab0f29dd8e7bafda240061838c6a155d86ecc6b98b9e54"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-mutant-red-v1/exit.json",
+    "bytes": 46,
+    "sha256": "ce7b1621546f933573cdae445b60b2f1ece48cd438214ce8fdfb71bf03e15799"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-mutant-red-v1/raw.jsonl",
+    "bytes": 6055,
+    "sha256": "c7157e77f7a9330238ba698e647871d25f41738db0260c48572a3c89d78f1b81"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-oracle-mutant-v2/candidate-materialized_write_work.go",
+    "bytes": 20009,
+    "sha256": "e453856232f70efa9d82ec1519040feca35328e6b02b2464b4f2119556ee897e"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-oracle-mutant-v2/mutant-materialized_write_work.go",
+    "bytes": 20059,
+    "sha256": "0619684753cc9af9a4a2439ccb7c3bcdd4ea76383f12ea0ddd82081087ba2ea1"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-oracle-mutant-v2/mutant.patch",
+    "bytes": 1552,
+    "sha256": "de28cc70a9cc9dbd84d6b447f1469f0ba3e4d92f0737a1a78c44c2be85b9367f"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-oracle-mutant-v2/restore.json",
+    "bytes": 119,
+    "sha256": "288001d46badc083f6953610a0e12be2552c2a6fa08f36841a24bb0c4f76330a"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-format-oracle-mutant-v2/test.go",
+    "bytes": 15733,
+    "sha256": "0cdb23c86b34f1e8591d78a0c8aef8624f1fd6f168968b91e93267488f55b44d"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-final/after.json",
+    "bytes": 826054,
+    "sha256": "d190c29e4cb1ab1db007e82c4f5ecc41f8f433fe15a7796aa751ab395fce7294"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-final/before.json",
+    "bytes": 826054,
+    "sha256": "d190c29e4cb1ab1db007e82c4f5ecc41f8f433fe15a7796aa751ab395fce7294"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-final/command.json",
+    "bytes": 679,
+    "sha256": "1fa79a25b812bca483b538ca2f42465fce9b3240cbe6b758e4d8bb2f79d6ed41"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-final/exit.json",
+    "bytes": 48,
+    "sha256": "cbccb8d542521892fa39f65a770cefba1d437d88e54104decef15de6817d7e9f"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-final/raw.jsonl",
+    "bytes": 7526,
+    "sha256": "03a10c070d3404369e973a27120bb3d574133f20a6a3c94d9ee081005bd2a3e3"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-v1/after.json",
+    "bytes": 826054,
+    "sha256": "d9ef26a76608b88b3ae29b6344b500afed64703ca9fa4417e445258741ab7b10"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-v1/before.json",
+    "bytes": 826054,
+    "sha256": "d9ef26a76608b88b3ae29b6344b500afed64703ca9fa4417e445258741ab7b10"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-v1/command.json",
+    "bytes": 679,
+    "sha256": "c63888a07d007d96ab1c67e8fda037ebd8f8f616490c5c5c6a91dbb3c5f35d1b"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-v1/exit.json",
+    "bytes": 47,
+    "sha256": "8311cc7156ba1cf0e3283df7ea6a6e008f645535d90fe53aa4274cc7585063f9"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/retained-zipper-one-write-cost-v1/raw.jsonl",
+    "bytes": 7525,
+    "sha256": "061c14b57fbc53c83e29100bbe44003eb2f48455a6cf5813723bfb90bb8223ca"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/source/test.go",
+    "bytes": 15733,
+    "sha256": "0cdb23c86b34f1e8591d78a0c8aef8624f1fd6f168968b91e93267488f55b44d"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/freeze/status.txt",
+    "bytes": 182,
+    "sha256": "0eca6bc3217033d1242c5be1f175c7cf74bd374f80f6b47ea1d90fe50e63f85b"
+  },
+  {
+    "path": "artifacts/4871/20261015-onewrite-format/root-source-checkpoint.json",
+    "bytes": 1383,
+    "sha256": "a0dbe2672ff323194cd2675cff3964e519cfb66e3cbf807a268d6cbfcebd8ce9"
+  }
+]

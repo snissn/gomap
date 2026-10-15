@@ -1,0 +1,22 @@
+diff --git a/TreeDB/zipper/materialized_write_work.go b/TreeDB/zipper/materialized_write_work.go
+index 98c96ba14..47b6184f0 100644
+--- a/TreeDB/zipper/materialized_write_work.go
++++ b/TreeDB/zipper/materialized_write_work.go
+@@ -178,7 +178,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 				// Preserve the original configured/adaptive format and enclosing revision
+ 				// decision. Diagnostic codec selection/finalization is unbounded.
+ 				revisions := f.old.LeafEntryRevisionsEnabled() || batchHasEntryRevisions(f.ops)
+-				f.encoder.ResetWithOptions(f.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops, revisions))
++				f.encoder.ResetWithOptions(f.output[:], page.PageTypeLeaf, node.BuilderOptions{EntryRevisions: revisions, PackedValuePtr: s.z.indexPackedValuePtr})
+ 				f.selectLeaf = newLeafMergeCursor(&f.old, f.ops, nil, f.scratch[:])
+ 				f.active = f
+ 				f.phase = 1
+@@ -462,7 +462,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 			if f.event.fromBatch && start > 0 {
+ 				start--
+ 			}
+-			next.encoder.ResetWithOptions(next.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops[start:], f.active.encoder.LeafEntryRevisionsEnabled()))
++			next.encoder.ResetWithOptions(next.output[:], page.PageTypeLeaf, node.BuilderOptions{EntryRevisions: f.active.encoder.LeafEntryRevisionsEnabled(), PackedValuePtr: s.z.indexPackedValuePtr})
+ 			f.active.segmentNext = next
+ 			f.active = next
+ 			f.splitPending = false

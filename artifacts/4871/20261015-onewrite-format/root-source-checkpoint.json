@@ -1,0 +1,30 @@
+{
+  "at_utc": "2026-10-15T02:18:49.800804+00:00",
+  "parent": "03a90b426fa0eeba25b799bbe14ad628ac612061",
+  "packet_receipt_sha256": "4e9e2ca81731b2eeb78574b67661336004f9b438e2c8470e7c268a89795bdd46",
+  "owned_paths": [
+    "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go"
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "source_rows": 4350,
+  "qualification": "Test-only unbounded diagnostic. One-write GREEN, real plain-format mutant ACK then oracle RED, byte-exact restore GREEN. Whole wall includes MemStats observers; processwide allocation includes write/runtime. No production bounded/Q32, comparative speedup, final CI/review/merge credit.",
+  "stage": "source_pushed_verified",
+  "source": "973a2acc18ab68ab7d838deb911548adae3fb3f1",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014"
+}
