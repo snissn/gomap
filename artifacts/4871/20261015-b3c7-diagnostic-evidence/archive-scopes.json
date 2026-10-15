@@ -1,0 +1,49 @@
+{
+  "ordinary": {
+    "members": 265,
+    "logical_bytes": 34273407,
+    "sha256": "ba38be3cf506b08685df50fa698d2331b6d2046a63622e84d656dfc9aa80e993",
+    "bytes": 6872151,
+    "internal_members_verified": true
+  },
+  "excluded": [
+    {
+      "path": "normal-core-repair/public-guard/baseline-primary.test",
+      "bytes": 29098886,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "normal-core-repair/public-guard/baseline.test",
+      "bytes": 61034351,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "normal-core-repair/public-guard/candidate-primary.test",
+      "bytes": 29099022,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "normal-core-repair/public-guard/candidate.test",
+      "bytes": 61034791,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "root-ci-impact-freeze-20261015/final-staged.patch",
+      "bytes": 20417298,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "ci-perf-b3c7-20261015/baseline.test",
+      "bytes": 55609192,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    },
+    {
+      "path": "ci-perf-b3c7-20261015/candidate.test",
+      "bytes": 61203606,
+      "reason": "reproducible binary with separate identity or already durable deletion patch"
+    }
+  ],
+  "hosted_ci_members": 56,
+  "runtime_parent": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "source_scope": "each individual run is bound to its own recorded source/overlay; older local controls are not relabeled as b3 measurements"
+}

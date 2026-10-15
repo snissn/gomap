@@ -1,0 +1,22 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 2863,
+    "sha256": "93467c739d8125d7e68fe5f1e2d06428cb1c7e648b63d19a5b6d57d267046ab3"
+  },
+  {
+    "path": "archive-scopes.json",
+    "bytes": 1847,
+    "sha256": "c8862afd20f474a220c2a0d3e0da911dd37a6086b31546094852a2cca1ff8eeb"
+  },
+  {
+    "path": "hosted-ci-b3c7.tar.gz",
+    "bytes": 5718584,
+    "sha256": "0a6612ecd9ac73e7d8e39f2afb257b560b3626675f91e376e81f54282e15e328"
+  },
+  {
+    "path": "ordinary-local-b3c7.tar.gz",
+    "bytes": 6872151,
+    "sha256": "ba38be3cf506b08685df50fa698d2331b6d2046a63622e84d656dfc9aa80e993"
+  }
+]
