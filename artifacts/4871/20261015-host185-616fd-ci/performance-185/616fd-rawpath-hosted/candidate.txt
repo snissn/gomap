@@ -1,0 +1,240 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3787321	       635.2 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     57691 ns/op	   31502 B/op	     104 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6088954	       394.5 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 7612809	       309.4 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13257	    183532 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1882 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    159954 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    167293 command_wal.sync.ns/op	       137.2 command_wal.write.bytes/op	      6822 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5449 iterations/s	        65.89 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1882 public.batch.write_sync.phase.command_append.ns/op	    172320 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       198.9 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    167470 public.batch.write_sync.phase.command_sync.ns/op	      3183 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2095 public.batch.write_sync.phase.preflight_materialization.ns/op	      1209 public.batch.write_sync.phase.residual.ns/op	    178873 public.batch.write_sync.phase.wall.ns/op	   2944184 writesync_max_ns	    168554 writesync_p50_ns	    226591 writesync_p95_ns	    310918 writesync_p99_ns	    4581 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3778864	       634.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     60376 ns/op	   31502 B/op	     103 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6050923	       393.7 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8133730	       293.4 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13053	    182917 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      2034 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    158416 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    165904 command_wal.sync.ns/op	       137.1 command_wal.write.bytes/op	      6961 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5467 iterations/s	        68.15 public.batch.write_sync.phase.checkpoint_gate.ns/op	      2034 public.batch.write_sync.phase.command_append.ns/op	    171207 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       201.8 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    166082 public.batch.write_sync.phase.command_sync.ns/op	      3264 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2232 public.batch.write_sync.phase.preflight_materialization.ns/op	      1260 public.batch.write_sync.phase.residual.ns/op	    178032 public.batch.write_sync.phase.wall.ns/op	   2959271 writesync_max_ns	    169475 writesync_p50_ns	    224397 writesync_p95_ns	    276976 writesync_p99_ns	    4584 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3699392	       641.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     61654 ns/op	   31501 B/op	     103 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 5898002	       394.0 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8096246	       296.7 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13340	    180659 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1866 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    157248 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    164520 command_wal.sync.ns/op	       137.2 command_wal.write.bytes/op	      6759 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5535 iterations/s	        65.19 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1866 public.batch.write_sync.phase.command_append.ns/op	    169548 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       204.9 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    164693 public.batch.write_sync.phase.command_sync.ns/op	      3143 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2112 public.batch.write_sync.phase.preflight_materialization.ns/op	      1194 public.batch.write_sync.phase.residual.ns/op	    176061 public.batch.write_sync.phase.wall.ns/op	   3093784 writesync_max_ns	    167612 writesync_p50_ns	    219150 writesync_p95_ns	    269596 writesync_p99_ns	    4581 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3744079	       790.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     60014 ns/op	   31501 B/op	     103 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6094579	       393.6 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8242268	       292.9 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13014	    184856 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1892 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    161114 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    168347 command_wal.sync.ns/op	       137.1 command_wal.write.bytes/op	      6739 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5410 iterations/s	        66.84 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1892 public.batch.write_sync.phase.command_append.ns/op	    173402 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       192.8 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    168518 public.batch.write_sync.phase.command_sync.ns/op	      3104 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2311 public.batch.write_sync.phase.preflight_materialization.ns/op	      1211 public.batch.write_sync.phase.residual.ns/op	    180096 public.batch.write_sync.phase.wall.ns/op	   3203528 writesync_max_ns	    169205 writesync_p50_ns	    231147 writesync_p95_ns	    290417 writesync_p99_ns	    4584 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3766738	       631.5 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     60672 ns/op	   31501 B/op	     103 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6109678	       393.7 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8223400	       296.9 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13383	    179332 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1929 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    155144 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    162438 command_wal.sync.ns/op	       137.2 command_wal.write.bytes/op	      6777 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5576 iterations/s	        65.73 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1929 public.batch.write_sync.phase.command_append.ns/op	    167588 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       191.8 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    162616 public.batch.write_sync.phase.command_sync.ns/op	      3255 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2316 public.batch.write_sync.phase.preflight_materialization.ns/op	      1259 public.batch.write_sync.phase.residual.ns/op	    174484 public.batch.write_sync.phase.wall.ns/op	   3020484 writesync_max_ns	    168303 writesync_p50_ns	    214462 writesync_p95_ns	    261613 writesync_p99_ns	    4581 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3789326	       633.7 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     60106 ns/op	   31502 B/op	     104 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6006970	       401.7 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8205724	       293.3 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   13306	    182676 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1892 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    159377 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    166646 command_wal.sync.ns/op	       137.2 command_wal.write.bytes/op	      6754 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5474 iterations/s	        66.10 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1892 public.batch.write_sync.phase.command_append.ns/op	    171650 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       195.8 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    166816 public.batch.write_sync.phase.command_sync.ns/op	      3029 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2105 public.batch.write_sync.phase.preflight_materialization.ns/op	      1191 public.batch.write_sync.phase.residual.ns/op	    178042 public.batch.write_sync.phase.wall.ns/op	   3021155 writesync_max_ns	    168894 writesync_p50_ns	    222985 writesync_p95_ns	    265550 writesync_p99_ns	    4581 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3786470	       635.6 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     59528 ns/op	   31502 B/op	     103 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6064326	       396.1 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8181198	       292.3 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   12613	    184882 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      1962 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    160767 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    168147 command_wal.sync.ns/op	       137.1 command_wal.write.bytes/op	      6863 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5409 iterations/s	        66.31 public.batch.write_sync.phase.checkpoint_gate.ns/op	      1962 public.batch.write_sync.phase.command_append.ns/op	    173358 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       196.9 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    168321 public.batch.write_sync.phase.command_sync.ns/op	      3280 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2079 public.batch.write_sync.phase.preflight_materialization.ns/op	      1263 public.batch.write_sync.phase.residual.ns/op	    180047 public.batch.write_sync.phase.wall.ns/op	   3297552 writesync_max_ns	    169154 writesync_p50_ns	    229516 writesync_p95_ns	    302196 writesync_p99_ns	    4555 B/op	      17 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGetVersioned 	 3768120	       636.2 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkConditionalTxnBaselineBatchWrite 	    1000	     57742 ns/op	   31502 B/op	     104 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 6098942	       393.6 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/caching
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRepeatedIterator 	 8070093	       300.9 ns/op	     112 B/op	       2 allocs/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1         	   12949	    185984 ns/op	         1.000 batch_keys/iteration	         0 cache.checkpoint.barrier_wait_ns/op	         0 cache.checkpoint.runs/op	         0 cache.checkpoint.stage.backend_boundary.total_ns/op	         0 cache.checkpoint.stage.command_wal_publish.total_ns/op	         0 cache.checkpoint.stage.cutover.total_ns/op	         0 cache.checkpoint.stage.flush_all.total_ns/op	         0 cache.checkpoint.stage.value_log_flush.total_ns/op	         0 cache.checkpoint.stage.wal_cleanup.total_ns/op	         0 cache.checkpoint.stage.wal_rotate.total_ns/op	         0 cache.value_log.file_sync.calls/op	         0 cache.value_log.file_sync.ns/op	         0 cache.value_log.file_sync.rotated_segment.calls/op	         0 cache.value_log.file_sync.rotated_segment.ns/op	         0 cache.value_log.sync.calls/op	         0 cache.value_log.sync.external_ref.calls/op	         0 cache.value_log.sync.external_ref.ns/op	         0 cache.value_log.sync.external_ref.wait_ns/op	         0 cache.value_log.sync.materialization.calls/op	         0 cache.value_log.sync.materialization.ns/op	         0 cache.value_log.sync.materialization.wait_ns/op	         0 cache.value_log.sync.ns/op	         0 cache.value_log.sync.pending_barrier.calls/op	         0 cache.value_log.sync.pending_barrier.ns/op	         0 cache.value_log.sync.pending_barrier.wait_ns/op	         0 cache.value_log.sync.wait_ns/op	         0 cache.vlog_io.bytes/op	         1.000 command_wal.append.count/op	      2062 command_wal.append.ns/op	         0 command_wal.directory_sync.calls/op	         0 command_wal.directory_sync.ns/op	         1.000 command_wal.file_sync.calls/op	    161391 command_wal.file_sync.ns/op	         0 command_wal.flush.count/op	         0 command_wal.flush.ns/op	         1.000 command_wal.sync.count/op	    168845 command_wal.sync.ns/op	       137.1 command_wal.write.bytes/op	      6928 command_wal.write.ns/op	         1.000 command_wal.write.syscalls/op	      5377 iterations/s	        67.53 public.batch.write_sync.phase.checkpoint_gate.ns/op	      2062 public.batch.write_sync.phase.command_append.ns/op	    174167 public.batch.write_sync.phase.command_callback.ns/op	         0 public.batch.write_sync.phase.command_empty_barrier.ns/op	       214.0 public.batch.write_sync.phase.command_external_ref_ordering.ns/op	    169016 public.batch.write_sync.phase.command_sync.ns/op	      3279 public.batch.write_sync.phase.memtable_publication_reset.ns/op	      2213 public.batch.write_sync.phase.preflight_materialization.ns/op	      1271 public.batch.write_sync.phase.residual.ns/op	    180997 public.batch.write_sync.phase.wall.ns/op	   3123280 writesync_max_ns	    171348 writesync_p50_ns	    224688 writesync_p95_ns	    271509 writesync_p99_ns	    4569 B/op	      17 allocs/op
+PASS

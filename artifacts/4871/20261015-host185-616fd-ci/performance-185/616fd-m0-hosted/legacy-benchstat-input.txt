@@ -1,0 +1,70 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15975291366 ns/op	   2730505 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  55779947 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   9611148 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  29412992 foreground-p95-ns/op	  40034141 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  65392216 max-writer-pause-ns	       345.0 preclone-pages/op	    938935 preflush-ns/op	         0 reclone-pages/op	    604997 swap-publish-ns/op	    222398 system-reserve-ns/op	  42370608 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    201619 user-tree-ns/op	         0 vacuum-errors/op	15975266630 vacuum-total-ns/op	293993072 B/op	  657212 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.205s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15865996469 ns/op	   2760131 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  55042142 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5777971 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28590606 foreground-p95-ns/op	  38711593 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  60820855 max-writer-pause-ns	       345.0 preclone-pages/op	    924849 preflush-ns/op	         0 reclone-pages/op	    471957 swap-publish-ns/op	    257604 system-reserve-ns/op	  42543375 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    198553 user-tree-ns/op	         0 vacuum-errors/op	15865975790 vacuum-total-ns/op	294081808 B/op	  657241 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.108s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	16082307391 ns/op	   2721528 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  57810926 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5242215 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  27663471 foreground-p95-ns/op	  42272004 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  63053954 max-writer-pause-ns	       345.0 preclone-pages/op	    765238 preflush-ns/op	         0 reclone-pages/op	    578979 swap-publish-ns/op	    253316 system-reserve-ns/op	  42957227 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    243578 user-tree-ns/op	         0 vacuum-errors/op	16082284709 vacuum-total-ns/op	294047752 B/op	  657257 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.357s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15908564041 ns/op	   2753368 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  59145199 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5352001 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28338753 foreground-p95-ns/op	  37707845 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  64498243 max-writer-pause-ns	       345.0 preclone-pages/op	  37156717 preflush-ns/op	         0 reclone-pages/op	    558590 swap-publish-ns/op	    220575 system-reserve-ns/op	  46349747 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    211197 user-tree-ns/op	         0 vacuum-errors/op	15908538694 vacuum-total-ns/op	294280952 B/op	  657296 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.189s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15871730011 ns/op	   2668218 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  56535825 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5353805 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28122584 foreground-p95-ns/op	  40929711 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  61890541 max-writer-pause-ns	       345.0 preclone-pages/op	  40620920 preflush-ns/op	         0 reclone-pages/op	    609506 swap-publish-ns/op	    365948 system-reserve-ns/op	  43845321 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    198192 user-tree-ns/op	         0 vacuum-errors/op	15871702479 vacuum-total-ns/op	294328584 B/op	  657264 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.151s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15868495703 ns/op	   2713063 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  55799921 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5400923 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28315930 foreground-p95-ns/op	  40988571 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  61202057 max-writer-pause-ns	       345.0 preclone-pages/op	    752695 preflush-ns/op	         0 reclone-pages/op	    638701 swap-publish-ns/op	    265279 system-reserve-ns/op	  42966417 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    198323 user-tree-ns/op	         0 vacuum-errors/op	15868467980 vacuum-total-ns/op	294072352 B/op	  657274 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.117s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15872014741 ns/op	   2906454 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  56550729 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5778323 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28905131 foreground-p95-ns/op	  39720730 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  62330373 max-writer-pause-ns	       345.0 preclone-pages/op	   1192091 preflush-ns/op	         0 reclone-pages/op	    567695 swap-publish-ns/op	    223741 system-reserve-ns/op	  43985009 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    207470 user-tree-ns/op	         0 vacuum-errors/op	15871991598 vacuum-total-ns/op	294079792 B/op	  657265 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.154s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15854689038 ns/op	   2701100 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  61252605 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5401304 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28106906 foreground-p95-ns/op	  41154351 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  66654680 max-writer-pause-ns	       345.0 preclone-pages/op	    733129 preflush-ns/op	         0 reclone-pages/op	    544754 swap-publish-ns/op	    197811 system-reserve-ns/op	  48603347 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    199625 user-tree-ns/op	         0 vacuum-errors/op	15854667758 vacuum-total-ns/op	293947976 B/op	  657265 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.082s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15864139408 ns/op	   2716655 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  55832558 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   5323077 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28960454 foreground-p95-ns/op	  39321470 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  61156536 max-writer-pause-ns	       345.0 preclone-pages/op	    854005 preflush-ns/op	         0 reclone-pages/op	    582114 swap-publish-ns/op	    224442 system-reserve-ns/op	  43369699 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    198033 user-tree-ns/op	         0 vacuum-errors/op	15864117377 vacuum-total-ns/op	294210504 B/op	  657270 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.137s
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	15839815599 ns/op	   2753123 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  56521882 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	   6120746 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  28302686 foreground-p95-ns/op	  39282146 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  62643499 max-writer-pause-ns	       345.0 preclone-pages/op	    683575 preflush-ns/op	         0 reclone-pages/op	    574981 swap-publish-ns/op	    268806 system-reserve-ns/op	  43963312 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    207610 user-tree-ns/op	         0 vacuum-errors/op	15839792366 vacuum-total-ns/op	293948176 B/op	  657273 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	16.069s

@@ -1,0 +1,47 @@
+{
+  "scope": "CPU attribution only on busy .185; timing not acceptance; fixed pair/no retries",
+  "environment": {
+    "GOMAXPROCS": "1",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-get-diagnostic/tmp"
+  },
+  "commands": [
+    {
+      "name": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-rawpath-hosted/measured-binaries/baseline-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkGetVersioned$",
+        "-test.benchtime=5s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-get-diagnostic/baseline.cpu.pprof"
+      ],
+      "exit": 0,
+      "elapsed": 6.826391053851694,
+      "binary_sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe"
+    },
+    {
+      "name": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-rawpath-hosted/measured-binaries/candidate-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkGetVersioned$",
+        "-test.benchtime=5s",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-get-diagnostic/candidate.cpu.pprof"
+      ],
+      "exit": 0,
+      "elapsed": 7.533352313097566,
+      "binary_sha256": "596355fc27f19ff2bd2c036edcb30a758434cb9a7b0d0fae0ade053bcf59316e"
+    }
+  ]
+}

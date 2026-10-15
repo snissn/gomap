@@ -1,0 +1,4 @@
+{
+  "TestPrimaryFinishAccountingBeforeAckAndStop": "=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop\n--- FAIL: TestPrimaryFinishAccountingBeforeAckAndStop (0.00s)\n",
+  "TestPrimaryFinishAccountingBeforeAckAndStop/stop": "=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop/stop\n    primary_finish_containing_test.go:211: terminal refund retained an original lock/alias or advanced ACK\n--- FAIL: TestPrimaryFinishAccountingBeforeAckAndStop/stop (0.00s)\n"
+}

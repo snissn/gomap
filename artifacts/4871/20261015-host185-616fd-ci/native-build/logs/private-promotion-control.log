@@ -1,0 +1,30 @@
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/current
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/retired-after-eligibility
+--- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6 (0.10s)
+    --- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/current (0.06s)
+    --- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/retired-after-eligibility (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.121s
+=== RUN   TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6
+    native_prune_backend_route_v6_test.go:77: call=0 phase=0 work=32/808024 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:77: call=1 phase=1 work=32/9608 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:77: call=2 phase=3 work=32/669148 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:77: call=5 phase=6 work=32/16711 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:77: call=10 phase=7 work=32/20148 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:77: call=11 phase=16 work=21/299303 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:77: call=100 phase=24 work=6/42464 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:77: call=103 phase=25 work=19/54752 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:77: call=137 phase=26 work=32/32200 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:83: first actual route refusal: calls=141 phase=26 error=native prune phase 26: native MVCC transaction requires its original work-bearing caller
+--- PASS: TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6 (0.22s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	0.228s
+=== RUN   TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6
+=== RUN   TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder
+=== RUN   TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate
+--- PASS: TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6 (0.00s)
+    --- PASS: TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder (0.00s)
+    --- PASS: TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.009s

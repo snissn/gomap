@@ -1,0 +1,1680 @@
+--- before revision=baseline sample=1 group=get_versioned at 2026-10-15T18:23:35+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       03:54  1.9 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       07:30  0.6 /sbin/init
+   2158    2081       03:55  0.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   2100    2096       07:04  0.5 /tmp/provjobd849937802
+   1421    1062       07:20  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:30  0.1 [kworker/u16:0-events_unbound]
+     47       2       07:30  0.1 [kworker/u16:2-events_power_efficient]
+   1131       1       07:21  0.0 /usr/bin/containerd
+    156       1       07:29  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:30  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:30  0.0 [migration/2]
+     29       2       07:30  0.0 [migration/1]
+     35       2       07:30  0.0 [migration/3]
+     15       2       07:30  0.0 [rcu_sched]
+    179       2       07:29  0.0 [kworker/0:2-events]
+     86       2       07:30  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:30  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:21  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:30  0.0 [kworker/u16:1-events_unbound]
+--- before revision=candidate sample=1 group=get_versioned at 2026-10-15T18:23:38+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       03:57  1.9 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       07:34  0.6 /sbin/init
+   2158    2081       03:58  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   2100    2096       07:07  0.5 /tmp/provjobd849937802
+   1421    1062       07:23  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:34  0.1 [kworker/u16:0-events_power_efficient]
+     47       2       07:33  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:24  0.0 /usr/bin/containerd
+    156       1       07:32  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:33  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:33  0.0 [migration/2]
+     29       2       07:33  0.0 [migration/1]
+     35       2       07:33  0.0 [migration/3]
+     15       2       07:34  0.0 [rcu_sched]
+    179       2       07:32  0.0 [kworker/0:2-events]
+     86       2       07:33  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:33  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:24  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:33  0.0 [kworker/u16:1-events_unbound]
+--- before revision=baseline sample=1 group=batch_write at 2026-10-15T18:23:42+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:00  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       07:37  0.6 /sbin/init
+   2158    2081       04:01  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   2100    2096       07:10  0.5 /tmp/provjobd849937802
+   1421    1062       07:26  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:37  0.1 [kworker/u16:0-events_power_efficient]
+     47       2       07:37  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:27  0.0 /usr/bin/containerd
+    156       1       07:35  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:36  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:37  0.0 [migration/2]
+     29       2       07:37  0.0 [migration/1]
+     35       2       07:37  0.0 [migration/3]
+     15       2       07:37  0.0 [rcu_sched]
+    179       2       07:35  0.0 [kworker/0:2-events]
+     86       2       07:36  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:36  0.0 [kworker/1:2-events]
+   1062       1       07:27  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:37  0.0 [kworker/u16:1-events_unbound]
+--- before revision=candidate sample=1 group=batch_write at 2026-10-15T18:23:42+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:00  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       07:37  0.6 /sbin/init
+   2158    2081       04:02  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   2100    2096       07:11  0.5 /tmp/provjobd849937802
+   1421    1062       07:27  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:37  0.1 [kworker/u16:0-events_power_efficient]
+     47       2       07:37  0.1 [kworker/u16:2-writeback]
+   1131       1       07:27  0.0 /usr/bin/containerd
+    156       1       07:36  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:36  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:37  0.0 [migration/2]
+     29       2       07:37  0.0 [migration/1]
+     35       2       07:37  0.0 [migration/3]
+     15       2       07:37  0.0 [rcu_sched]
+    179       2       07:35  0.0 [kworker/0:2-events]
+     86       2       07:36  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:36  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:27  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:37  0.0 [kworker/u16:1-events_unbound]
+--- before revision=baseline sample=1 group=snapshot_seek at 2026-10-15T18:23:42+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:00  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       07:37  0.6 /sbin/init
+   2158    2081       04:02  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   2100    2096       07:11  0.5 /tmp/provjobd849937802
+   1421    1062       07:27  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:37  0.1 [kworker/u16:0-events_power_efficient]
+     47       2       07:37  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:27  0.0 /usr/bin/containerd
+    156       1       07:36  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:37  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:37  0.0 [migration/2]
+     29       2       07:37  0.0 [migration/1]
+     35       2       07:37  0.0 [migration/3]
+     15       2       07:37  0.0 [rcu_sched]
+    179       2       07:36  0.0 [kworker/0:2-events]
+     86       2       07:37  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:36  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:28  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:37  0.0 [kworker/u16:1-events_unbound]
+--- before revision=candidate sample=1 group=snapshot_seek at 2026-10-15T18:23:45+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:03  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:14  0.8 /tmp/provjobd849937802
+      1       0       07:40  0.6 /sbin/init
+   2158    2081       04:05  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       07:30  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:40  0.1 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       07:40  0.1 [kworker/u16:2-flush-8:0]
+   1131       1       07:30  0.0 /usr/bin/containerd
+    156       1       07:39  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:39  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:40  0.0 [migration/2]
+     29       2       07:40  0.0 [migration/1]
+     35       2       07:40  0.0 [migration/3]
+     15       2       07:40  0.0 [rcu_sched]
+    179       2       07:38  0.0 [kworker/0:2-events]
+     86       2       07:39  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:39  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:31  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:40  0.0 [kworker/u16:1-events_unbound]
+--- before revision=baseline sample=1 group=repeated_iterator at 2026-10-15T18:23:48+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:06  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:17  0.8 /tmp/provjobd849937802
+      1       0       07:43  0.6 /sbin/init
+   2158    2081       04:08  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       07:32  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:43  0.1 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       07:43  0.1 [kworker/u16:2-events_power_efficient]
+   1131       1       07:33  0.0 /usr/bin/containerd
+    156       1       07:41  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:42  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:43  0.0 [migration/2]
+     29       2       07:43  0.0 [migration/1]
+     35       2       07:43  0.0 [migration/3]
+     15       2       07:43  0.0 [rcu_sched]
+    179       2       07:41  0.0 [kworker/0:2-events]
+     86       2       07:42  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:42  0.0 [kworker/1:2-events]
+   1062       1       07:33  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:43  0.0 [kworker/u16:1-events_unbound]
+--- before revision=candidate sample=1 group=repeated_iterator at 2026-10-15T18:23:50+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:09  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:19  0.8 /tmp/provjobd849937802
+      1       0       07:46  0.6 /sbin/init
+   2158    2081       04:10  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       07:35  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:46  0.1 [kworker/u16:0-flush-8:0]
+     47       2       07:45  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:36  0.0 /usr/bin/containerd
+    156       1       07:44  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:45  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:45  0.0 [migration/2]
+     29       2       07:45  0.0 [migration/1]
+     35       2       07:45  0.0 [migration/3]
+     15       2       07:46  0.0 [rcu_sched]
+    179       2       07:44  0.0 [kworker/0:2-events]
+     86       2       07:45  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:45  0.0 [kworker/1:2-events]
+   1062       1       07:36  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:45  0.0 [kworker/u16:1-events_unbound]
+--- before revision=baseline sample=1 group=durable_sync at 2026-10-15T18:23:53+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:11  1.8 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:22  0.8 /tmp/provjobd849937802
+      1       0       07:48  0.6 /sbin/init
+   2158    2081       04:13  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       07:38  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:48  0.1 [kworker/u16:0-kvfree_rcu_reclaim]
+     47       2       07:48  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:39  0.0 /usr/bin/containerd
+    156       1       07:47  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:48  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:48  0.0 [migration/2]
+     29       2       07:48  0.0 [migration/1]
+     35       2       07:48  0.0 [migration/3]
+     15       2       07:48  0.0 [rcu_sched]
+    179       2       07:47  0.0 [kworker/0:2-events]
+     86       2       07:48  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:47  0.0 [kworker/1:2-events]
+   1062       1       07:39  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+     46       2       07:48  0.0 [kworker/u16:1-events_unbound]
+--- before revision=candidate sample=1 group=durable_sync at 2026-10-15T18:23:58+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:16  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:26  0.8 /tmp/provjobd849937802
+      1       0       07:53  0.6 /sbin/init
+   2158    2081       04:17  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       07:42  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:53  0.2 [kworker/u16:0-writeback]
+     47       2       07:53  0.1 [kworker/u16:2-ext4-rsv-conversion]
+    104       2       07:52  0.1 [jbd2/sda1-8]
+   1131       1       07:43  0.0 /usr/bin/containerd
+    156       1       07:51  0.0 /usr/lib/systemd/systemd-journald
+     85       2       07:52  0.0 [kworker/u16:4-events_power_efficient]
+     23       2       07:53  0.0 [migration/2]
+     29       2       07:53  0.0 [migration/1]
+     35       2       07:53  0.0 [migration/3]
+     15       2       07:53  0.0 [rcu_sched]
+    179       2       07:51  0.0 [kworker/0:2-events]
+     86       2       07:52  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:52  0.0 [kworker/1:2-events]
+   1062       1       07:43  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=2 group=get_versioned at 2026-10-15T18:24:02+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:20  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:31  0.8 /tmp/provjobd849937802
+      1       0       07:57  0.6 /sbin/init
+   2158    2081       04:22  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       07:56  0.3 [jbd2/sda1-8]
+   1421    1062       07:47  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       07:57  0.2 [kworker/u16:0-events_unbound]
+     47       2       07:57  0.1 [kworker/u16:2-flush-8:0]
+   1131       1       07:47  0.0 /usr/bin/containerd
+     85       2       07:57  0.0 [kworker/u16:4-ext4-rsv-conversion]
+    156       1       07:56  0.0 /usr/lib/systemd/systemd-journald
+     23       2       07:57  0.0 [migration/2]
+     29       2       07:57  0.0 [migration/1]
+     35       2       07:57  0.0 [migration/3]
+     15       2       07:57  0.0 [rcu_sched]
+    179       2       07:56  0.0 [kworker/0:2-events]
+     86       2       07:57  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:56  0.0 [kworker/1:2-events]
+   1062       1       07:48  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=2 group=get_versioned at 2026-10-15T18:24:05+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:23  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:34  0.8 /tmp/provjobd849937802
+      1       0       08:00  0.6 /sbin/init
+   2158    2081       04:25  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:00  0.3 [jbd2/sda1-8]
+   1421    1062       07:50  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:00  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:00  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:51  0.0 /usr/bin/containerd
+     85       2       08:00  0.0 [kworker/u16:4-kvfree_rcu_reclaim]
+    156       1       07:59  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:00  0.0 [migration/2]
+     29       2       08:00  0.0 [migration/1]
+     35       2       08:00  0.0 [migration/3]
+     15       2       08:00  0.0 [rcu_sched]
+    179       2       07:59  0.0 [kworker/0:2-events]
+     86       2       08:00  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       07:59  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:51  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=2 group=batch_write at 2026-10-15T18:24:08+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:26  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:37  0.8 /tmp/provjobd849937802
+      1       0       08:03  0.6 /sbin/init
+   2158    2081       04:28  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:03  0.3 [jbd2/sda1-8]
+   1421    1062       07:53  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:03  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:03  0.1 [kworker/u16:2-ext4-rsv-conversion]
+   1131       1       07:54  0.0 /usr/bin/containerd
+     85       2       08:03  0.0 [kworker/u16:4-kvfree_rcu_reclaim]
+    156       1       08:02  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:03  0.0 [migration/2]
+     29       2       08:03  0.0 [migration/1]
+     35       2       08:03  0.0 [migration/3]
+     15       2       08:03  0.0 [rcu_sched]
+    179       2       08:02  0.0 [kworker/0:2-events]
+     86       2       08:03  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:02  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:54  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=2 group=batch_write at 2026-10-15T18:24:08+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:27  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:37  0.8 /tmp/provjobd849937802
+      1       0       08:03  0.6 /sbin/init
+   2158    2081       04:28  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:03  0.3 [jbd2/sda1-8]
+   1421    1062       07:53  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:03  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:03  0.1 [kworker/u16:2-events_power_efficient]
+   1131       1       07:54  0.0 /usr/bin/containerd
+     85       2       08:03  0.0 [kworker/u16:4-writeback]
+    156       1       08:02  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:03  0.0 [migration/2]
+     29       2       08:03  0.0 [migration/1]
+     35       2       08:03  0.0 [migration/3]
+     15       2       08:03  0.0 [rcu_sched]
+    179       2       08:02  0.0 [kworker/0:2-events]
+     86       2       08:03  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:03  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       07:54  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=2 group=snapshot_seek at 2026-10-15T18:24:09+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:27  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:37  0.8 /tmp/provjobd849937802
+      1       0       08:04  0.6 /sbin/init
+   2158    2081       04:28  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:03  0.3 [jbd2/sda1-8]
+   1421    1062       07:53  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:04  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:04  0.1 [kworker/u16:2-events_power_efficient]
+   1131       1       07:54  0.0 /usr/bin/containerd
+     85       2       08:03  0.0 [kworker/u16:4-ext4-rsv-conversion]
+    156       1       08:02  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:04  0.0 [migration/2]
+     29       2       08:04  0.0 [migration/1]
+     35       2       08:04  0.0 [migration/3]
+     15       2       08:04  0.0 [rcu_sched]
+    179       2       08:02  0.0 [kworker/0:2-events]
+     86       2       08:03  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:03  0.0 [kworker/1:2-events]
+   1062       1       07:54  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=2 group=snapshot_seek at 2026-10-15T18:24:11+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:30  1.7 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:40  0.8 /tmp/provjobd849937802
+      1       0       08:07  0.6 /sbin/init
+   2158    2081       04:31  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:06  0.3 [jbd2/sda1-8]
+   1421    1062       07:56  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:07  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:06  0.1 [kworker/u16:2-kvfree_rcu_reclaim]
+     85       2       08:06  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       07:57  0.0 /usr/bin/containerd
+    156       1       08:05  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:07  0.0 [migration/2]
+     29       2       08:07  0.0 [migration/1]
+     35       2       08:07  0.0 [migration/3]
+     15       2       08:07  0.0 [rcu_sched]
+    179       2       08:05  0.0 [kworker/0:2-events]
+     86       2       08:06  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:06  0.0 [kworker/1:2-events]
+   1062       1       07:57  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=2 group=repeated_iterator at 2026-10-15T18:24:14+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:33  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:43  0.8 /tmp/provjobd849937802
+      1       0       08:09  0.6 /sbin/init
+   2158    2081       04:34  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:09  0.2 [jbd2/sda1-8]
+   1421    1062       07:59  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:09  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:09  0.1 [kworker/u16:2-events_unbound]
+     85       2       08:09  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:00  0.0 /usr/bin/containerd
+    156       1       08:08  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:09  0.0 [migration/2]
+     29       2       08:09  0.0 [migration/1]
+     35       2       08:09  0.0 [migration/3]
+     15       2       08:09  0.0 [rcu_sched]
+    179       2       08:08  0.0 [kworker/0:2-events]
+     86       2       08:09  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:09  0.0 [kworker/1:2-events]
+   1062       1       08:00  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=2 group=repeated_iterator at 2026-10-15T18:24:17+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:35  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:46  1.0 /tmp/provjobd849937802
+      1       0       08:12  0.6 /sbin/init
+   2158    2081       04:37  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:11  0.2 [jbd2/sda1-8]
+   1421    1062       08:02  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:12  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       08:12  0.1 [kworker/u16:2-ipv6_addrconf]
+     85       2       08:12  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:03  0.0 /usr/bin/containerd
+    156       1       08:11  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:12  0.0 [migration/2]
+     29       2       08:12  0.0 [migration/1]
+     35       2       08:12  0.0 [migration/3]
+     15       2       08:12  0.0 [rcu_sched]
+    179       2       08:11  0.0 [kworker/0:2-events]
+     86       2       08:12  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:11  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:03  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=2 group=durable_sync at 2026-10-15T18:24:20+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:38  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:49  1.0 /tmp/provjobd849937802
+      1       0       08:15  0.6 /sbin/init
+   2158    2081       04:40  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:14  0.2 [jbd2/sda1-8]
+   1421    1062       08:05  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     12       2       08:15  0.1 [kworker/u16:0-events_power_efficient]
+     47       2       08:15  0.1 [kworker/u16:2-ext4-rsv-conversion]
+     85       2       08:14  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:05  0.0 /usr/bin/containerd
+    156       1       08:14  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:15  0.0 [migration/2]
+     29       2       08:15  0.0 [migration/1]
+     35       2       08:15  0.0 [migration/3]
+     15       2       08:15  0.0 [rcu_sched]
+    179       2       08:13  0.0 [kworker/0:2-events]
+     86       2       08:14  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:14  0.0 [kworker/1:2-events]
+   1062       1       08:05  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=2 group=durable_sync at 2026-10-15T18:24:24+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:42  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:53  1.0 /tmp/provjobd849937802
+      1       0       08:19  0.6 /sbin/init
+   2158    2081       04:44  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+    104       2       08:19  0.4 [jbd2/sda1-8]
+   1421    1062       08:09  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:19  0.2 [kworker/u16:2-events_power_efficient]
+     12       2       08:19  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     85       2       08:19  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:10  0.0 /usr/bin/containerd
+    156       1       08:18  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:19  0.0 [migration/2]
+     29       2       08:19  0.0 [migration/1]
+     35       2       08:19  0.0 [migration/3]
+     15       2       08:19  0.0 [rcu_sched]
+    179       2       08:18  0.0 [kworker/0:2-events]
+     86       2       08:19  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:19  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:10  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=3 group=get_versioned at 2026-10-15T18:24:29+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:47  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       07:57  1.0 /tmp/provjobd849937802
+      1       0       08:24  0.6 /sbin/init
+    104       2       08:23  0.5 [jbd2/sda1-8]
+   2158    2081       04:48  0.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:13  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:24  0.2 [kworker/u16:2-ext4-rsv-conversion]
+     12       2       08:24  0.2 [kworker/u16:0-mlx5_fc]
+     85       2       08:23  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:14  0.0 /usr/bin/containerd
+    156       1       08:22  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:24  0.0 [migration/2]
+     29       2       08:24  0.0 [migration/1]
+     35       2       08:24  0.0 [migration/3]
+     15       2       08:24  0.0 [rcu_sched]
+    179       2       08:22  0.0 [kworker/0:2-events]
+     86       2       08:23  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:23  0.0 [kworker/1:2-events]
+   1062       1       08:14  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=3 group=get_versioned at 2026-10-15T18:24:32+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:50  1.6 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:01  1.0 /tmp/provjobd849937802
+      1       0       08:27  0.6 /sbin/init
+    104       2       08:26  0.5 [jbd2/sda1-8]
+   2158    2081       04:52  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:16  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:27  0.2 [kworker/u16:2-ext4-rsv-conversion]
+     12       2       08:27  0.2 [kworker/u16:0-flush-8:0]
+     85       2       08:26  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:17  0.0 /usr/bin/containerd
+    156       1       08:26  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:27  0.0 [migration/2]
+     29       2       08:27  0.0 [migration/1]
+     35       2       08:27  0.0 [migration/3]
+     15       2       08:27  0.0 [rcu_sched]
+    179       2       08:25  0.0 [kworker/0:2-events]
+     86       2       08:26  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:26  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:17  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=3 group=batch_write at 2026-10-15T18:24:35+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:53  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:04  1.0 /tmp/provjobd849937802
+      1       0       08:30  0.6 /sbin/init
+    104       2       08:29  0.5 [jbd2/sda1-8]
+   2158    2081       04:55  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:20  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:30  0.2 [kworker/u16:2-events_power_efficient]
+     12       2       08:30  0.2 [kworker/u16:0-flush-8:0]
+     85       2       08:29  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:20  0.0 /usr/bin/containerd
+    156       1       08:29  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:30  0.0 [migration/2]
+     29       2       08:30  0.0 [migration/1]
+     35       2       08:30  0.0 [migration/3]
+     15       2       08:30  0.0 [rcu_sched]
+    179       2       08:28  0.0 [kworker/0:2-events]
+     86       2       08:29  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:29  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:21  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=3 group=batch_write at 2026-10-15T18:24:35+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:53  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:04  1.0 /tmp/provjobd849937802
+      1       0       08:30  0.6 /sbin/init
+    104       2       08:29  0.5 [jbd2/sda1-8]
+   2158    2081       04:55  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:20  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:30  0.2 [kworker/u16:2-kvfree_rcu_reclaim]
+     12       2       08:30  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     85       2       08:30  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:21  0.0 /usr/bin/containerd
+    156       1       08:29  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:30  0.0 [migration/2]
+     29       2       08:30  0.0 [migration/1]
+     35       2       08:30  0.0 [migration/3]
+     15       2       08:30  0.0 [rcu_sched]
+    179       2       08:29  0.0 [kworker/0:2-events]
+     86       2       08:30  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:29  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:21  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=3 group=snapshot_seek at 2026-10-15T18:24:35+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:53  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:04  1.0 /tmp/provjobd849937802
+      1       0       08:30  0.6 /sbin/init
+    104       2       08:30  0.5 [jbd2/sda1-8]
+   2158    2081       04:55  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:20  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:30  0.2 [kworker/u16:2-ext4-rsv-conversion]
+     12       2       08:30  0.2 [kworker/u16:0-mlx5_fc]
+     85       2       08:30  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:21  0.0 /usr/bin/containerd
+    156       1       08:29  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:30  0.0 [migration/2]
+     29       2       08:30  0.0 [migration/1]
+     35       2       08:30  0.0 [migration/3]
+     15       2       08:30  0.0 [rcu_sched]
+    179       2       08:29  0.0 [kworker/0:2-events]
+     86       2       08:30  0.0 [kworker/u16:5-events_power_efficient]
+    106       2       08:30  0.0 [kworker/1:2-mm_percpu_wq]
+   1062       1       08:21  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=3 group=snapshot_seek at 2026-10-15T18:24:38+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:56  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:07  1.0 /tmp/provjobd849937802
+      1       0       08:33  0.6 /sbin/init
+    104       2       08:32  0.5 [jbd2/sda1-8]
+   2158    2081       04:58  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:23  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:33  0.2 [kworker/u16:2-ext4-rsv-conversion]
+     12       2       08:33  0.2 [kworker/u16:0-mlx5_fc]
+     85       2       08:33  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:24  0.0 /usr/bin/containerd
+    156       1       08:32  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:33  0.0 [migration/2]
+     29       2       08:33  0.0 [migration/1]
+     35       2       08:33  0.0 [migration/3]
+     15       2       08:33  0.0 [rcu_sched]
+    179       2       08:32  0.0 [kworker/0:2-events]
+    106       2       08:32  0.0 [kworker/1:2-events]
+     86       2       08:33  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:24  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=3 group=repeated_iterator at 2026-10-15T18:24:41+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       04:59  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:10  1.0 /tmp/provjobd849937802
+      1       0       08:36  0.6 /sbin/init
+    104       2       08:35  0.5 [jbd2/sda1-8]
+   2158    2081       05:01  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:26  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:36  0.2 [kworker/u16:2-events_power_efficient]
+     12       2       08:36  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     85       2       08:36  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:26  0.0 /usr/bin/containerd
+    156       1       08:35  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:36  0.0 [migration/2]
+     29       2       08:36  0.0 [migration/1]
+     35       2       08:36  0.0 [migration/3]
+     15       2       08:36  0.0 [rcu_sched]
+    179       2       08:35  0.0 [kworker/0:2-events]
+    106       2       08:35  0.0 [kworker/1:2-events]
+     86       2       08:36  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:27  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=3 group=repeated_iterator at 2026-10-15T18:24:44+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:02  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:13  1.0 /tmp/provjobd849937802
+      1       0       08:39  0.6 /sbin/init
+    104       2       08:38  0.5 [jbd2/sda1-8]
+   2158    2081       05:03  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:28  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:39  0.2 [kworker/u16:2-events_power_efficient]
+     12       2       08:39  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     85       2       08:38  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:29  0.0 /usr/bin/containerd
+    156       1       08:37  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:39  0.0 [migration/2]
+     29       2       08:39  0.0 [migration/1]
+     35       2       08:39  0.0 [migration/3]
+     15       2       08:39  0.0 [rcu_sched]
+    179       2       08:37  0.0 [kworker/0:2-events]
+    106       2       08:38  0.0 [kworker/1:2-events]
+     86       2       08:38  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:29  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=3 group=durable_sync at 2026-10-15T18:24:46+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:05  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:15  1.0 /tmp/provjobd849937802
+      1       0       08:41  0.5 /sbin/init
+    104       2       08:41  0.5 [jbd2/sda1-8]
+   2158    2081       05:06  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+   1421    1062       08:31  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:41  0.2 [kworker/u16:2-ext4-rsv-conversion]
+     12       2       08:41  0.2 [kworker/u16:0-events_power_efficient]
+     85       2       08:41  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:32  0.0 /usr/bin/containerd
+    156       1       08:40  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:41  0.0 [migration/2]
+     29       2       08:41  0.0 [migration/1]
+     35       2       08:41  0.0 [migration/3]
+     15       2       08:41  0.0 [rcu_sched]
+    179       2       08:40  0.0 [kworker/0:2-events]
+    106       2       08:41  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       08:41  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:32  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=3 group=durable_sync at 2026-10-15T18:24:51+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:09  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:20  1.0 /tmp/provjobd849937802
+    104       2       08:45  0.6 [jbd2/sda1-8]
+      1       0       08:46  0.5 /sbin/init
+   2158    2081       05:11  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:46  0.2 [kworker/u16:0-events_power_efficient]
+   1421    1062       08:36  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     47       2       08:46  0.2 [kworker/u16:2-events_unbound]
+     85       2       08:45  0.0 [kworker/u16:4-events_unbound]
+   1131       1       08:36  0.0 /usr/bin/containerd
+    156       1       08:45  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:46  0.0 [migration/2]
+     29       2       08:46  0.0 [migration/1]
+     35       2       08:46  0.0 [migration/3]
+     15       2       08:46  0.0 [rcu_sched]
+    179       2       08:44  0.0 [kworker/0:2-events]
+    106       2       08:45  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       08:45  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:36  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=4 group=get_versioned at 2026-10-15T18:24:55+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:13  1.5 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:24  0.9 /tmp/provjobd849937802
+    104       2       08:50  0.7 [jbd2/sda1-8]
+      1       0       08:50  0.5 /sbin/init
+   2158    2081       05:15  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:50  0.2 [kworker/u16:0-events_unbound]
+     47       2       08:50  0.2 [kworker/u16:2-writeback]
+   1421    1062       08:40  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       08:50  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:41  0.0 /usr/bin/containerd
+    156       1       08:49  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:50  0.0 [migration/2]
+     29       2       08:50  0.0 [migration/1]
+     35       2       08:50  0.0 [migration/3]
+     15       2       08:50  0.0 [rcu_sched]
+    179       2       08:49  0.0 [kworker/0:2-events]
+    106       2       08:49  0.0 [kworker/1:2-events]
+     86       2       08:50  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:41  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=4 group=get_versioned at 2026-10-15T18:24:59+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:17  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:28  1.4 /tmp/provjobd849937802
+    104       2       08:53  0.7 [jbd2/sda1-8]
+      1       0       08:54  0.5 /sbin/init
+   2158    2081       05:19  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:54  0.2 [kworker/u16:0-events_unbound]
+     47       2       08:54  0.2 [kworker/u16:2-ext4-rsv-conversion]
+   1421    1062       08:44  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       08:54  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:44  0.0 /usr/bin/containerd
+    156       1       08:53  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:54  0.0 [migration/2]
+     29       2       08:54  0.0 [migration/1]
+     35       2       08:54  0.0 [migration/3]
+     15       2       08:54  0.0 [rcu_sched]
+    179       2       08:53  0.0 [kworker/0:2-events]
+    106       2       08:53  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       08:54  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:45  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=4 group=batch_write at 2026-10-15T18:25:02+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:20  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:31  1.4 /tmp/provjobd849937802
+    104       2       08:56  0.7 [jbd2/sda1-8]
+      1       0       08:57  0.5 /sbin/init
+   2158    2081       05:22  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:57  0.2 [kworker/u16:0-events_unbound]
+     47       2       08:57  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       08:47  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       08:57  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:47  0.0 /usr/bin/containerd
+    156       1       08:56  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:57  0.0 [migration/2]
+     29       2       08:57  0.0 [migration/1]
+     35       2       08:57  0.0 [migration/3]
+     15       2       08:57  0.0 [rcu_sched]
+    179       2       08:56  0.0 [kworker/0:2-events]
+    106       2       08:56  0.0 [kworker/1:2-events]
+     86       2       08:57  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:48  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=4 group=batch_write at 2026-10-15T18:25:02+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:20  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:31  1.4 /tmp/provjobd849937802
+    104       2       08:57  0.7 [jbd2/sda1-8]
+      1       0       08:57  0.5 /sbin/init
+   2158    2081       05:22  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:57  0.2 [kworker/u16:0-events_unbound]
+     47       2       08:57  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       08:47  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       08:57  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:48  0.0 /usr/bin/containerd
+    156       1       08:56  0.0 /usr/lib/systemd/systemd-journald
+     23       2       08:57  0.0 [migration/2]
+     29       2       08:57  0.0 [migration/1]
+     35       2       08:57  0.0 [migration/3]
+     15       2       08:57  0.0 [rcu_sched]
+    179       2       08:56  0.0 [kworker/0:2-events]
+    106       2       08:56  0.0 [kworker/1:2-events]
+     86       2       08:57  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:48  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=4 group=snapshot_seek at 2026-10-15T18:25:02+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:21  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:31  1.4 /tmp/provjobd849937802
+    104       2       08:57  0.7 [jbd2/sda1-8]
+      1       0       08:57  0.5 /sbin/init
+   2158    2081       05:22  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       08:57  0.2 [kworker/u16:0-events_unbound]
+     47       2       08:57  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       08:47  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       08:57  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:48  0.0 /usr/bin/containerd
+    156       1       08:56  0.0 /usr/lib/systemd/systemd-journald
+     15       2       08:57  0.0 [rcu_sched]
+     23       2       08:57  0.0 [migration/2]
+     29       2       08:57  0.0 [migration/1]
+     35       2       08:57  0.0 [migration/3]
+    179       2       08:56  0.0 [kworker/0:2-events]
+    106       2       08:57  0.0 [kworker/1:2-events]
+     86       2       08:57  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:48  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=4 group=snapshot_seek at 2026-10-15T18:25:05+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:23  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:34  1.4 /tmp/provjobd849937802
+    104       2       09:00  0.7 [jbd2/sda1-8]
+      1       0       09:00  0.5 /sbin/init
+   2158    2081       05:25  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:00  0.2 [kworker/u16:0-events_unbound]
+     47       2       09:00  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       08:50  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:00  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:51  0.0 /usr/bin/containerd
+    156       1       08:59  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:00  0.0 [rcu_sched]
+     23       2       09:00  0.0 [migration/2]
+     29       2       09:00  0.0 [migration/1]
+     35       2       09:00  0.0 [migration/3]
+    179       2       08:59  0.0 [kworker/0:2-events]
+    106       2       09:00  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:00  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:51  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=4 group=repeated_iterator at 2026-10-15T18:25:08+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:26  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:37  1.3 /tmp/provjobd849937802
+    104       2       09:02  0.7 [jbd2/sda1-8]
+      1       0       09:03  0.5 /sbin/init
+   2158    2081       05:28  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:03  0.2 [kworker/u16:0-events_unbound]
+     47       2       09:03  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       08:53  0.2 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:03  0.0 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       08:53  0.0 /usr/bin/containerd
+    156       1       09:02  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:03  0.0 [rcu_sched]
+     23       2       09:03  0.0 [migration/2]
+     29       2       09:03  0.0 [migration/1]
+     35       2       09:03  0.0 [migration/3]
+    179       2       09:02  0.0 [kworker/0:2-events]
+    106       2       09:02  0.0 [kworker/1:2-events]
+     86       2       09:03  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:54  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=4 group=repeated_iterator at 2026-10-15T18:25:11+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:29  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:40  1.3 /tmp/provjobd849937802
+    104       2       09:05  0.7 [jbd2/sda1-8]
+      1       0       09:06  0.5 /sbin/init
+   2158    2081       05:31  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:06  0.2 [kworker/u16:0-events_unbound]
+     47       2       09:06  0.2 [kworker/u16:2-ext4-rsv-conversion]
+   1421    1062       08:56  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:05  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:56  0.0 /usr/bin/containerd
+    156       1       09:05  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:06  0.0 [rcu_sched]
+     23       2       09:06  0.0 [migration/2]
+     29       2       09:06  0.0 [migration/1]
+     35       2       09:06  0.0 [migration/3]
+    179       2       09:04  0.0 [kworker/0:2-events]
+    106       2       09:05  0.0 [kworker/1:2-events]
+     86       2       09:05  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:56  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=4 group=durable_sync at 2026-10-15T18:25:14+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:32  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:42  1.3 /tmp/provjobd849937802
+    104       2       09:08  0.7 [jbd2/sda1-8]
+      1       0       09:09  0.5 /sbin/init
+   2158    2081       05:33  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:09  0.2 [kworker/u16:0-events_unbound]
+     47       2       09:09  0.2 [kworker/u16:2-ext4-rsv-conversion]
+   1421    1062       08:58  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:08  0.0 [kworker/u16:4-events_power_efficient]
+   1131       1       08:59  0.0 /usr/bin/containerd
+    156       1       09:07  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:09  0.0 [rcu_sched]
+     23       2       09:09  0.0 [migration/2]
+     29       2       09:09  0.0 [migration/1]
+     35       2       09:09  0.0 [migration/3]
+    179       2       09:07  0.0 [kworker/0:2-events]
+    106       2       09:08  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:08  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       08:59  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=4 group=durable_sync at 2026-10-15T18:25:18+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:36  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:47  1.3 /tmp/provjobd849937802
+    104       2       09:12  0.8 [jbd2/sda1-8]
+      1       0       09:13  0.5 /sbin/init
+   2158    2081       05:38  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:13  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       09:13  0.2 [kworker/u16:2-events_power_efficient]
+   1421    1062       09:03  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:13  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:04  0.0 /usr/bin/containerd
+    156       1       09:12  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:13  0.0 [rcu_sched]
+     23       2       09:13  0.0 [migration/2]
+     29       2       09:13  0.0 [migration/1]
+     35       2       09:13  0.0 [migration/3]
+    179       2       09:12  0.0 [kworker/0:2-events]
+    106       2       09:12  0.0 [kworker/1:2-events]
+     86       2       09:13  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:04  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=5 group=get_versioned at 2026-10-15T18:25:22+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:41  1.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:51  1.3 /tmp/provjobd849937802
+    104       2       09:17  0.9 [jbd2/sda1-8]
+      1       0       09:18  0.5 /sbin/init
+   2158    2081       05:42  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:18  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       09:17  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:07  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:17  0.1 [kworker/u16:4-flush-8:0]
+   1131       1       09:08  0.0 /usr/bin/containerd
+    156       1       09:16  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:18  0.0 [rcu_sched]
+     23       2       09:18  0.0 [migration/2]
+     29       2       09:18  0.0 [migration/1]
+     35       2       09:18  0.0 [migration/3]
+    179       2       09:16  0.0 [kworker/0:2-events]
+    106       2       09:17  0.0 [kworker/1:2-events]
+     86       2       09:17  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:08  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=5 group=get_versioned at 2026-10-15T18:25:26+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:44  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:54  1.3 /tmp/provjobd849937802
+    104       2       09:20  0.9 [jbd2/sda1-8]
+      1       0       09:21  0.5 /sbin/init
+   2158    2081       05:45  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:21  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:21  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:10  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:20  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:11  0.0 /usr/bin/containerd
+    156       1       09:19  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:21  0.0 [rcu_sched]
+     23       2       09:21  0.0 [migration/2]
+     29       2       09:21  0.0 [migration/1]
+     35       2       09:21  0.0 [migration/3]
+    179       2       09:19  0.0 [kworker/0:2-events]
+    106       2       09:20  0.0 [kworker/1:2-events]
+     86       2       09:20  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:11  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=5 group=batch_write at 2026-10-15T18:25:29+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:47  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:58  1.3 /tmp/provjobd849937802
+    104       2       09:23  0.9 [jbd2/sda1-8]
+      1       0       09:24  0.5 /sbin/init
+   2158    2081       05:48  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:24  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:24  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:13  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:23  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:14  0.0 /usr/bin/containerd
+    156       1       09:22  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:24  0.0 [rcu_sched]
+     23       2       09:24  0.0 [migration/2]
+     29       2       09:24  0.0 [migration/1]
+     35       2       09:24  0.0 [migration/3]
+    179       2       09:22  0.0 [kworker/0:2-events]
+    106       2       09:23  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:23  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:14  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=5 group=batch_write at 2026-10-15T18:25:29+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:47  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:58  1.3 /tmp/provjobd849937802
+    104       2       09:23  0.9 [jbd2/sda1-8]
+      1       0       09:24  0.5 /sbin/init
+   2158    2081       05:49  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:24  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:24  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:14  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:23  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:14  0.0 /usr/bin/containerd
+    156       1       09:23  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:24  0.0 [rcu_sched]
+     23       2       09:24  0.0 [migration/2]
+     29       2       09:24  0.0 [migration/1]
+     35       2       09:24  0.0 [migration/3]
+    179       2       09:23  0.0 [kworker/0:2-events]
+    106       2       09:23  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:23  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:15  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=5 group=snapshot_seek at 2026-10-15T18:25:29+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:47  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       08:58  1.3 /tmp/provjobd849937802
+    104       2       09:23  0.9 [jbd2/sda1-8]
+      1       0       09:24  0.5 /sbin/init
+   2158    2081       05:49  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:24  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:24  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:14  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:24  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:15  0.0 /usr/bin/containerd
+    156       1       09:23  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:24  0.0 [rcu_sched]
+     23       2       09:24  0.0 [migration/2]
+     29       2       09:24  0.0 [migration/1]
+     35       2       09:24  0.0 [migration/3]
+    179       2       09:23  0.0 [kworker/0:2-events]
+    106       2       09:23  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:24  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:15  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=5 group=snapshot_seek at 2026-10-15T18:25:32+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:50  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:01  1.3 /tmp/provjobd849937802
+    104       2       09:26  0.9 [jbd2/sda1-8]
+      1       0       09:27  0.5 /sbin/init
+   2158    2081       05:52  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:27  0.2 [kworker/u16:0-writeback]
+     47       2       09:27  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:17  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:27  0.1 [kworker/u16:4-flush-8:0]
+   1131       1       09:17  0.0 /usr/bin/containerd
+    156       1       09:26  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:27  0.0 [rcu_sched]
+     23       2       09:27  0.0 [migration/2]
+     29       2       09:27  0.0 [migration/1]
+     35       2       09:27  0.0 [migration/3]
+    179       2       09:26  0.0 [kworker/0:2-events]
+    106       2       09:26  0.0 [kworker/1:2-events]
+     86       2       09:27  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:18  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=5 group=repeated_iterator at 2026-10-15T18:25:35+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:53  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:04  1.3 /tmp/provjobd849937802
+    104       2       09:29  0.9 [jbd2/sda1-8]
+      1       0       09:30  0.5 /sbin/init
+   2158    2081       05:55  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:30  0.2 [kworker/u16:0-mlx5_fc]
+     47       2       09:30  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:20  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:29  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:20  0.0 /usr/bin/containerd
+    156       1       09:29  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:30  0.0 [rcu_sched]
+     23       2       09:30  0.0 [migration/2]
+     29       2       09:30  0.0 [migration/1]
+     35       2       09:30  0.0 [migration/3]
+    179       2       09:28  0.0 [kworker/0:2-events]
+    106       2       09:29  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:29  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:20  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=5 group=repeated_iterator at 2026-10-15T18:25:38+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:56  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:06  1.3 /tmp/provjobd849937802
+    104       2       09:32  0.9 [jbd2/sda1-8]
+      1       0       09:33  0.5 /sbin/init
+   2158    2081       05:57  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:33  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:33  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:22  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:32  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:23  0.0 /usr/bin/containerd
+    156       1       09:31  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:33  0.0 [rcu_sched]
+     23       2       09:33  0.0 [migration/2]
+     29       2       09:33  0.0 [migration/1]
+     35       2       09:33  0.0 [migration/3]
+    179       2       09:31  0.0 [kworker/0:2-events]
+    106       2       09:32  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:32  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:23  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=5 group=durable_sync at 2026-10-15T18:25:40+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       05:59  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:09  1.3 /tmp/provjobd849937802
+    104       2       09:35  0.9 [jbd2/sda1-8]
+      1       0       09:35  0.5 /sbin/init
+   2158    2081       06:00  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:35  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       09:35  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:25  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:35  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:26  0.0 /usr/bin/containerd
+    156       1       09:34  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:35  0.0 [rcu_sched]
+     23       2       09:35  0.0 [migration/2]
+     29       2       09:35  0.0 [migration/1]
+     35       2       09:35  0.0 [migration/3]
+    179       2       09:34  0.0 [kworker/0:2-events]
+    106       2       09:35  0.0 [kworker/1:2-events]
+     86       2       09:35  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:26  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=5 group=durable_sync at 2026-10-15T18:25:45+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:03  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:14  1.3 /tmp/provjobd849937802
+    104       2       09:39  1.0 [jbd2/sda1-8]
+      1       0       09:40  0.5 /sbin/init
+   2158    2081       06:04  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:40  0.2 [kworker/u16:0-writeback]
+     47       2       09:40  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:29  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:39  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:30  0.0 /usr/bin/containerd
+    156       1       09:38  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:40  0.0 [rcu_sched]
+     23       2       09:40  0.0 [migration/2]
+     29       2       09:40  0.0 [migration/1]
+     35       2       09:40  0.0 [migration/3]
+    179       2       09:38  0.0 [kworker/0:2-events]
+    106       2       09:39  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:39  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:30  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=6 group=get_versioned at 2026-10-15T18:25:49+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:07  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:18  1.3 /tmp/provjobd849937802
+    104       2       09:43  1.1 [jbd2/sda1-8]
+      1       0       09:44  0.5 /sbin/init
+   2158    2081       06:09  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:44  0.2 [kworker/u16:0-writeback]
+     47       2       09:44  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:34  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:44  0.1 [kworker/u16:4-events_unbound]
+   1131       1       09:35  0.0 /usr/bin/containerd
+    156       1       09:43  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:44  0.0 [rcu_sched]
+     23       2       09:44  0.0 [migration/2]
+     29       2       09:44  0.0 [migration/1]
+     35       2       09:44  0.0 [migration/3]
+    179       2       09:43  0.0 [kworker/0:2-events]
+    106       2       09:43  0.0 [kworker/1:2-events]
+     86       2       09:44  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:35  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=6 group=get_versioned at 2026-10-15T18:25:52+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:10  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:21  1.2 /tmp/provjobd849937802
+    104       2       09:47  1.1 [jbd2/sda1-8]
+      1       0       09:47  0.5 /sbin/init
+   2158    2081       06:12  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:47  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:47  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:37  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:47  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:38  0.0 /usr/bin/containerd
+    156       1       09:46  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:47  0.0 [rcu_sched]
+     23       2       09:47  0.0 [migration/2]
+     29       2       09:47  0.0 [migration/1]
+     35       2       09:47  0.0 [migration/3]
+    179       2       09:46  0.0 [kworker/0:2-events]
+    106       2       09:46  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:47  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:38  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=6 group=batch_write at 2026-10-15T18:25:55+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:13  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:24  1.2 /tmp/provjobd849937802
+    104       2       09:50  1.1 [jbd2/sda1-8]
+      1       0       09:50  0.5 /sbin/init
+   2158    2081       06:15  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:50  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:50  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:40  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:50  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:41  0.0 /usr/bin/containerd
+    156       1       09:49  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:50  0.0 [rcu_sched]
+     23       2       09:50  0.0 [migration/2]
+     29       2       09:50  0.0 [migration/1]
+     35       2       09:50  0.0 [migration/3]
+    179       2       09:49  0.0 [kworker/0:2-events]
+    106       2       09:50  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:50  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:41  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=6 group=batch_write at 2026-10-15T18:25:56+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:14  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:24  1.2 /tmp/provjobd849937802
+    104       2       09:50  1.1 [jbd2/sda1-8]
+      1       0       09:51  0.5 /sbin/init
+   2158    2081       06:15  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:51  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       09:50  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:40  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:50  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:41  0.0 /usr/bin/containerd
+    156       1       09:49  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:51  0.0 [rcu_sched]
+     23       2       09:51  0.0 [migration/2]
+     29       2       09:51  0.0 [migration/1]
+     35       2       09:51  0.0 [migration/3]
+    179       2       09:49  0.0 [kworker/0:2-events]
+    106       2       09:50  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:50  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:41  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=6 group=snapshot_seek at 2026-10-15T18:25:56+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2178    2158       06:14  1.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+   2100    2096       09:25  1.2 /tmp/provjobd849937802
+    104       2       09:50  1.1 [jbd2/sda1-8]
+      1       0       09:51  0.5 /sbin/init
+   2158    2081       06:16  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:51  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:51  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:40  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:50  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:41  0.0 /usr/bin/containerd
+    156       1       09:49  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:51  0.0 [rcu_sched]
+     23       2       09:51  0.0 [migration/2]
+     29       2       09:51  0.0 [migration/1]
+     35       2       09:51  0.0 [migration/3]
+    179       2       09:49  0.0 [kworker/0:2-events]
+    106       2       09:50  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:50  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:41  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=6 group=snapshot_seek at 2026-10-15T18:25:59+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:27  1.3 /tmp/provjobd849937802
+   2178    2158       06:17  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+    104       2       09:53  1.1 [jbd2/sda1-8]
+      1       0       09:54  0.5 /sbin/init
+   2158    2081       06:18  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:54  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:54  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:43  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:53  0.1 [kworker/u16:4-events_unbound]
+   1131       1       09:44  0.0 /usr/bin/containerd
+    156       1       09:52  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:54  0.0 [rcu_sched]
+     23       2       09:54  0.0 [migration/2]
+     29       2       09:54  0.0 [migration/1]
+     35       2       09:54  0.0 [migration/3]
+    179       2       09:52  0.0 [kworker/0:2-events]
+    106       2       09:53  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:53  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:44  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=6 group=repeated_iterator at 2026-10-15T18:26:02+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:30  1.5 /tmp/provjobd849937802
+   2178    2158       06:20  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+    104       2       09:56  1.1 [jbd2/sda1-8]
+      1       0       09:57  0.5 /sbin/init
+   2158    2081       06:21  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:57  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       09:57  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:46  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:56  0.1 [kworker/u16:4-mlx5_fc]
+   1131       1       09:47  0.0 /usr/bin/containerd
+    156       1       09:55  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:57  0.0 [rcu_sched]
+     23       2       09:57  0.0 [migration/2]
+     29       2       09:57  0.0 [migration/1]
+     35       2       09:57  0.0 [migration/3]
+    179       2       09:55  0.0 [kworker/0:2-events]
+    106       2       09:56  0.0 [kworker/1:2-mm_percpu_wq]
+     86       2       09:56  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:47  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=6 group=repeated_iterator at 2026-10-15T18:26:04+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:33  1.5 /tmp/provjobd849937802
+   2178    2158       06:23  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+    104       2       09:59  1.1 [jbd2/sda1-8]
+      1       0       09:59  0.5 /sbin/init
+   2158    2081       06:24  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       09:59  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       09:59  0.2 [kworker/u16:2-flush-8:0]
+   1421    1062       09:49  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       09:59  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:50  0.0 /usr/bin/containerd
+    156       1       09:58  0.0 /usr/lib/systemd/systemd-journald
+     15       2       09:59  0.0 [rcu_sched]
+     23       2       09:59  0.0 [migration/2]
+     29       2       09:59  0.0 [migration/1]
+     35       2       09:59  0.0 [migration/3]
+    179       2       09:58  0.0 [kworker/0:2-events]
+    106       2       09:59  0.0 [kworker/1:2-events]
+     86       2       09:59  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:50  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=6 group=durable_sync at 2026-10-15T18:26:07+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:36  1.5 /tmp/provjobd849937802
+   2178    2158       06:25  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+    104       2       10:02  1.1 [jbd2/sda1-8]
+      1       0       10:02  0.5 /sbin/init
+   2158    2081       06:27  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:02  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       10:02  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       09:52  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:02  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       09:53  0.0 /usr/bin/containerd
+    156       1       10:01  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:02  0.0 [rcu_sched]
+     23       2       10:02  0.0 [migration/2]
+     29       2       10:02  0.0 [migration/1]
+     35       2       10:02  0.0 [migration/3]
+    179       2       10:01  0.0 [kworker/0:2-events]
+    106       2       10:01  0.0 [kworker/1:2-events]
+     86       2       10:02  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:53  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=6 group=durable_sync at 2026-10-15T18:26:12+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:40  1.5 /tmp/provjobd849937802
+   2178    2158       06:30  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+    104       2       10:06  1.2 [jbd2/sda1-8]
+      1       0       10:07  0.5 /sbin/init
+   2158    2081       06:31  0.4 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:07  0.2 [kworker/u16:0-events_unbound]
+     47       2       10:07  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       09:56  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:06  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       09:57  0.0 /usr/bin/containerd
+    156       1       10:05  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:07  0.0 [rcu_sched]
+     23       2       10:07  0.0 [migration/2]
+     29       2       10:07  0.0 [migration/1]
+     35       2       10:07  0.0 [migration/3]
+    106       2       10:06  0.0 [kworker/1:2-events]
+    179       2       10:05  0.0 [kworker/0:2-events]
+     86       2       10:06  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       09:57  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=7 group=get_versioned at 2026-10-15T18:26:16+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:45  1.5 /tmp/provjobd849937802
+    104       2       10:10  1.3 [jbd2/sda1-8]
+   2178    2158       06:34  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:11  0.5 /sbin/init
+   2158    2081       06:36  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:11  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:11  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:01  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:11  0.1 [kworker/u16:4-events_unbound]
+   1131       1       10:01  0.0 /usr/bin/containerd
+    156       1       10:10  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:11  0.0 [rcu_sched]
+     23       2       10:11  0.0 [migration/2]
+     29       2       10:11  0.0 [migration/1]
+     35       2       10:11  0.0 [migration/3]
+    106       2       10:10  0.0 [kworker/1:2-events]
+    179       2       10:10  0.0 [kworker/0:2-events]
+     86       2       10:11  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:02  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=7 group=get_versioned at 2026-10-15T18:26:19+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:48  1.5 /tmp/provjobd849937802
+    104       2       10:13  1.3 [jbd2/sda1-8]
+   2178    2158       06:37  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:14  0.5 /sbin/init
+   2158    2081       06:39  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:14  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       10:14  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:04  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:14  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       10:05  0.0 /usr/bin/containerd
+    156       1       10:13  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:14  0.0 [rcu_sched]
+     23       2       10:14  0.0 [migration/2]
+     29       2       10:14  0.0 [migration/1]
+     35       2       10:14  0.0 [migration/3]
+    106       2       10:13  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:13  0.0 [kworker/0:2-events]
+     86       2       10:14  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:05  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=7 group=batch_write at 2026-10-15T18:26:22+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:51  1.5 /tmp/provjobd849937802
+    104       2       10:17  1.3 [jbd2/sda1-8]
+   2178    2158       06:40  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:17  0.5 /sbin/init
+   2158    2081       06:42  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:17  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:17  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:07  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:17  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:08  0.0 /usr/bin/containerd
+    156       1       10:16  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:17  0.0 [rcu_sched]
+     23       2       10:17  0.0 [migration/2]
+     29       2       10:17  0.0 [migration/1]
+     35       2       10:17  0.0 [migration/3]
+    106       2       10:16  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:16  0.0 [kworker/0:2-events]
+     86       2       10:17  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:08  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=7 group=batch_write at 2026-10-15T18:26:22+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:51  1.5 /tmp/provjobd849937802
+    104       2       10:17  1.3 [jbd2/sda1-8]
+   2178    2158       06:41  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:17  0.5 /sbin/init
+   2158    2081       06:42  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:17  0.2 [kworker/u16:0-writeback]
+     47       2       10:17  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:07  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:17  0.1 [kworker/u16:4-kvfree_rcu_reclaim]
+   1131       1       10:08  0.0 /usr/bin/containerd
+    156       1       10:16  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:17  0.0 [rcu_sched]
+     23       2       10:17  0.0 [migration/2]
+     29       2       10:17  0.0 [migration/1]
+     35       2       10:17  0.0 [migration/3]
+    106       2       10:17  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:16  0.0 [kworker/0:2-events]
+     86       2       10:17  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:08  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=7 group=snapshot_seek at 2026-10-15T18:26:23+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:51  1.5 /tmp/provjobd849937802
+    104       2       10:17  1.3 [jbd2/sda1-8]
+   2178    2158       06:41  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:18  0.5 /sbin/init
+   2158    2081       06:42  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:18  0.2 [kworker/u16:0-flush-8:0]
+     47       2       10:18  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:07  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:17  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       10:08  0.0 /usr/bin/containerd
+    156       1       10:16  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:18  0.0 [rcu_sched]
+     23       2       10:18  0.0 [migration/2]
+     29       2       10:18  0.0 [migration/1]
+     35       2       10:18  0.0 [migration/3]
+    106       2       10:17  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:16  0.0 [kworker/0:2-events]
+     86       2       10:17  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:08  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=7 group=snapshot_seek at 2026-10-15T18:26:25+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:54  1.5 /tmp/provjobd849937802
+    104       2       10:20  1.3 [jbd2/sda1-8]
+   2178    2158       06:44  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:20  0.5 /sbin/init
+   2158    2081       06:45  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:20  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:20  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:10  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:20  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:11  0.0 /usr/bin/containerd
+    156       1       10:19  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:20  0.0 [rcu_sched]
+     23       2       10:20  0.0 [migration/2]
+     29       2       10:20  0.0 [migration/1]
+     35       2       10:20  0.0 [migration/3]
+    106       2       10:20  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:19  0.0 [kworker/0:2-events]
+     86       2       10:20  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:11  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=7 group=repeated_iterator at 2026-10-15T18:26:28+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       09:57  1.5 /tmp/provjobd849937802
+    104       2       10:23  1.3 [jbd2/sda1-8]
+   2178    2158       06:46  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:23  0.5 /sbin/init
+   2158    2081       06:48  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:23  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:23  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:13  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:23  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:14  0.0 /usr/bin/containerd
+    156       1       10:22  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:23  0.0 [rcu_sched]
+     23       2       10:23  0.0 [migration/2]
+     29       2       10:23  0.0 [migration/1]
+     35       2       10:23  0.0 [migration/3]
+    106       2       10:23  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:22  0.0 [kworker/0:2-events]
+     86       2       10:23  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:14  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=7 group=repeated_iterator at 2026-10-15T18:26:31+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:00  1.6 /tmp/provjobd849937802
+    104       2       10:26  1.3 [jbd2/sda1-8]
+   2178    2158       06:49  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:26  0.4 /sbin/init
+   2158    2081       06:51  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:26  0.2 [kworker/u16:0-flush-8:0]
+     47       2       10:26  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:16  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:26  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1131       1       10:17  0.0 /usr/bin/containerd
+    156       1       10:25  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:26  0.0 [rcu_sched]
+     23       2       10:26  0.0 [migration/2]
+     29       2       10:26  0.0 [migration/1]
+     35       2       10:26  0.0 [migration/3]
+    106       2       10:26  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:25  0.0 [kworker/0:2-events]
+     86       2       10:26  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:17  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=7 group=durable_sync at 2026-10-15T18:26:34+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:03  1.7 /tmp/provjobd849937802
+    104       2       10:28  1.3 [jbd2/sda1-8]
+   2178    2158       06:52  1.2 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:29  0.4 /sbin/init
+   2158    2081       06:54  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:29  0.2 [kworker/u16:0-flush-8:0]
+     47       2       10:29  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:19  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:29  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:20  0.0 /usr/bin/containerd
+    156       1       10:28  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:29  0.0 [rcu_sched]
+     23       2       10:29  0.0 [migration/2]
+     29       2       10:29  0.0 [migration/1]
+     35       2       10:29  0.0 [migration/3]
+    106       2       10:28  0.0 [kworker/1:2-events]
+    179       2       10:28  0.0 [kworker/0:2-events]
+     86       2       10:29  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:20  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=7 group=durable_sync at 2026-10-15T18:26:39+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:07  1.7 /tmp/provjobd849937802
+    104       2       10:33  1.4 [jbd2/sda1-8]
+   2178    2158       06:57  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:34  0.4 /sbin/init
+   2158    2081       06:58  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:34  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       10:34  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:23  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:33  0.1 [kworker/u16:4-events_unbound]
+   1131       1       10:24  0.0 /usr/bin/containerd
+    156       1       10:32  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:34  0.0 [rcu_sched]
+     23       2       10:34  0.0 [migration/2]
+     29       2       10:34  0.0 [migration/1]
+     35       2       10:34  0.0 [migration/3]
+    106       2       10:33  0.0 [kworker/1:2-events]
+    179       2       10:32  0.0 [kworker/0:2-events]
+     86       2       10:33  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:24  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=8 group=get_versioned at 2026-10-15T18:26:43+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:12  1.7 /tmp/provjobd849937802
+    104       2       10:37  1.5 [jbd2/sda1-8]
+   2178    2158       07:01  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:38  0.4 /sbin/init
+   2158    2081       07:03  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:38  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:38  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:28  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:38  0.1 [kworker/u16:4-events_unbound]
+   1131       1       10:28  0.0 /usr/bin/containerd
+    156       1       10:37  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:38  0.0 [rcu_sched]
+     23       2       10:38  0.0 [migration/2]
+     29       2       10:38  0.0 [migration/1]
+     35       2       10:38  0.0 [migration/3]
+    106       2       10:37  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:37  0.0 [kworker/0:2-events]
+     86       2       10:38  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:29  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=8 group=get_versioned at 2026-10-15T18:26:46+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:15  1.6 /tmp/provjobd849937802
+    104       2       10:40  1.5 [jbd2/sda1-8]
+   2178    2158       07:04  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:41  0.4 /sbin/init
+   2158    2081       07:06  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:41  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:41  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:31  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:41  0.1 [kworker/u16:4-kvfree_rcu_reclaim]
+   1131       1       10:32  0.0 /usr/bin/containerd
+    156       1       10:40  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:41  0.0 [rcu_sched]
+     23       2       10:41  0.0 [migration/2]
+     29       2       10:41  0.0 [migration/1]
+     35       2       10:41  0.0 [migration/3]
+    106       2       10:40  0.0 [kworker/1:2-events]
+    179       2       10:40  0.0 [kworker/0:2-events]
+     86       2       10:41  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:32  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=8 group=batch_write at 2026-10-15T18:26:49+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:18  1.6 /tmp/provjobd849937802
+    104       2       10:44  1.5 [jbd2/sda1-8]
+   2178    2158       07:07  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:44  0.4 /sbin/init
+   2158    2081       07:09  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:44  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:44  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:34  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:44  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:35  0.0 /usr/bin/containerd
+    156       1       10:43  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:44  0.0 [rcu_sched]
+     23       2       10:44  0.0 [migration/2]
+     29       2       10:44  0.0 [migration/1]
+     35       2       10:44  0.0 [migration/3]
+    106       2       10:43  0.0 [kworker/1:2-events]
+    179       2       10:43  0.0 [kworker/0:2-events]
+     86       2       10:44  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:35  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=8 group=batch_write at 2026-10-15T18:26:49+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:18  1.6 /tmp/provjobd849937802
+    104       2       10:44  1.5 [jbd2/sda1-8]
+   2178    2158       07:08  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:44  0.4 /sbin/init
+   2158    2081       07:09  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:44  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:44  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:34  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:44  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:35  0.0 /usr/bin/containerd
+    156       1       10:43  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:44  0.0 [rcu_sched]
+     23       2       10:44  0.0 [migration/2]
+     29       2       10:44  0.0 [migration/1]
+     35       2       10:44  0.0 [migration/3]
+    106       2       10:44  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:43  0.0 [kworker/0:2-events]
+     86       2       10:44  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:35  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=8 group=snapshot_seek at 2026-10-15T18:26:50+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:18  1.6 /tmp/provjobd849937802
+    104       2       10:44  1.5 [jbd2/sda1-8]
+   2178    2158       07:08  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:45  0.4 /sbin/init
+   2158    2081       07:09  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:45  0.2 [kworker/u16:0-writeback]
+     47       2       10:45  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:34  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:44  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:35  0.0 /usr/bin/containerd
+    156       1       10:43  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:45  0.0 [rcu_sched]
+     23       2       10:45  0.0 [migration/2]
+     29       2       10:45  0.0 [migration/1]
+     35       2       10:45  0.0 [migration/3]
+    106       2       10:44  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:43  0.0 [kworker/0:2-events]
+     86       2       10:44  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:35  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=8 group=snapshot_seek at 2026-10-15T18:26:52+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:21  1.6 /tmp/provjobd849937802
+    104       2       10:47  1.5 [jbd2/sda1-8]
+   2178    2158       07:11  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:47  0.4 /sbin/init
+   2158    2081       07:12  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:47  0.2 [kworker/u16:0-events_unbound]
+     47       2       10:47  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:37  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:47  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:38  0.0 /usr/bin/containerd
+    156       1       10:46  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:47  0.0 [rcu_sched]
+     23       2       10:47  0.0 [migration/2]
+     29       2       10:47  0.0 [migration/1]
+     35       2       10:47  0.0 [migration/3]
+    106       2       10:47  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:46  0.0 [kworker/0:2-events]
+     86       2       10:47  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:38  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=8 group=repeated_iterator at 2026-10-15T18:26:55+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:24  1.6 /tmp/provjobd849937802
+    104       2       10:50  1.4 [jbd2/sda1-8]
+   2178    2158       07:13  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:50  0.4 /sbin/init
+   2158    2081       07:15  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:50  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       10:50  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:40  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:50  0.1 [kworker/u16:4-flush-8:0]
+   1131       1       10:41  0.0 /usr/bin/containerd
+    156       1       10:49  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:50  0.0 [rcu_sched]
+     23       2       10:50  0.0 [migration/2]
+     29       2       10:50  0.0 [migration/1]
+     35       2       10:50  0.0 [migration/3]
+    106       2       10:50  0.0 [kworker/1:2-events]
+    179       2       10:49  0.0 [kworker/0:2-events]
+     86       2       10:50  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:41  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=8 group=repeated_iterator at 2026-10-15T18:26:58+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:27  1.6 /tmp/provjobd849937802
+    104       2       10:52  1.4 [jbd2/sda1-8]
+   2178    2158       07:16  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:53  0.4 /sbin/init
+   2158    2081       07:18  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:53  0.2 [kworker/u16:0-events_power_efficient]
+     47       2       10:53  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:43  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:53  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:44  0.0 /usr/bin/containerd
+    156       1       10:52  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:53  0.0 [rcu_sched]
+     23       2       10:53  0.0 [migration/2]
+     29       2       10:53  0.0 [migration/1]
+     35       2       10:53  0.0 [migration/3]
+    106       2       10:52  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:52  0.0 [kworker/0:2-events]
+     86       2       10:53  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:44  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=candidate sample=8 group=durable_sync at 2026-10-15T18:27:01+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:30  1.6 /tmp/provjobd849937802
+    104       2       10:55  1.4 [jbd2/sda1-8]
+   2178    2158       07:19  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       10:56  0.4 /sbin/init
+   2158    2081       07:21  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       10:56  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       10:56  0.1 [kworker/u16:2-flush-8:0]
+   1421    1062       10:46  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+     85       2       10:55  0.1 [kworker/u16:4-events_power_efficient]
+   1131       1       10:46  0.0 /usr/bin/containerd
+    156       1       10:55  0.0 /usr/lib/systemd/systemd-journald
+     15       2       10:56  0.0 [rcu_sched]
+     23       2       10:56  0.0 [migration/2]
+     29       2       10:56  0.0 [migration/1]
+     35       2       10:56  0.0 [migration/3]
+    106       2       10:55  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:54  0.0 [kworker/0:2-events]
+     86       2       10:55  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:46  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon
+--- before revision=baseline sample=8 group=durable_sync at 2026-10-15T18:27:05+00:00 ---
+    PID    PPID     ELAPSED %CPU CMD
+   2100    2096       10:34  1.6 /tmp/provjobd849937802
+    104       2       11:00  1.5 [jbd2/sda1-8]
+   2178    2158       07:23  1.1 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Worker spawnclient 142 145
+      1       0       11:00  0.4 /sbin/init
+   2158    2081       07:25  0.3 /home/runner/actions-runner/cached/2.337.0/bin/Runner.Listener run
+     12       2       11:00  0.2 [kworker/u16:0-ext4-rsv-conversion]
+     47       2       11:00  0.1 [kworker/u16:2-flush-8:0]
+     85       2       11:00  0.1 [kworker/u16:4-ext4-rsv-conversion]
+   1421    1062       10:50  0.1 /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   1131       1       10:51  0.0 /usr/bin/containerd
+    156       1       10:59  0.0 /usr/lib/systemd/systemd-journald
+     15       2       11:00  0.0 [rcu_sched]
+     23       2       11:00  0.0 [migration/2]
+     29       2       11:00  0.0 [migration/1]
+     35       2       11:00  0.0 [migration/3]
+    106       2       11:00  0.0 [kworker/1:2-mm_percpu_wq]
+    179       2       10:59  0.0 [kworker/0:2-events]
+     86       2       11:00  0.0 [kworker/u16:5-events_power_efficient]
+   1062       1       10:51  0.0 /usr/bin/python3 -u /usr/sbin/waagent -daemon

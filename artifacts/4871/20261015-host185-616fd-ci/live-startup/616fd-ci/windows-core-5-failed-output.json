@@ -1,0 +1,3 @@
+{
+  "TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes": "=== RUN   TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes\n    api_test.go:527: ValueLogRewriteOffline: namespace persistence unsupported\n--- FAIL: TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes (0.56s)\n"
+}

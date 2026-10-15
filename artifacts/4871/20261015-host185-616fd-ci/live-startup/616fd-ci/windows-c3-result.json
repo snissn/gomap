@@ -1,0 +1,42 @@
+[
+  {
+    "log": "windows-core-1.log",
+    "Time": "2026-10-15T18:27:52.8850491Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+    "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/point",
+    "Elapsed": 6.32
+  },
+  {
+    "log": "windows-core-1.log",
+    "Time": "2026-10-15T18:27:54.1482374Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+    "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/versions",
+    "Elapsed": 1.26
+  },
+  {
+    "log": "windows-core-1.log",
+    "Time": "2026-10-15T18:27:54.9118645Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+    "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/point/pointer",
+    "Elapsed": 0.76
+  },
+  {
+    "log": "windows-core-1.log",
+    "Time": "2026-10-15T18:27:56.0250398Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+    "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/versions/pointer",
+    "Elapsed": 1.11
+  },
+  {
+    "log": "windows-core-1.log",
+    "Time": "2026-10-15T18:27:56.0250398Z",
+    "Action": "pass",
+    "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+    "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission",
+    "Elapsed": 9.46
+  }
+]

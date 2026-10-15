@@ -1,0 +1,553 @@
+    PID    PPID COMMAND         %CPU %MEM COMMAND
+      1       0 systemd          0.0  0.0 /lib/systemd/systemd --system --deserialize 80 splash
+      2       0 kthreadd         0.0  0.0 [kthreadd]
+      3       2 pool_workqueue_  0.0  0.0 [pool_workqueue_release]
+      4       2 kworker/R-rcu_g  0.0  0.0 [kworker/R-rcu_g]
+      5       2 kworker/R-rcu_p  0.0  0.0 [kworker/R-rcu_p]
+      6       2 kworker/R-slub_  0.0  0.0 [kworker/R-slub_]
+      7       2 kworker/R-netns  0.0  0.0 [kworker/R-netns]
+      9       2 kworker/0:0H-ev  0.0  0.0 [kworker/0:0H-events_highpri]
+     12       2 kworker/R-mm_pe  0.0  0.0 [kworker/R-mm_pe]
+     13       2 rcu_tasks_kthre  0.0  0.0 [rcu_tasks_kthread]
+     14       2 rcu_tasks_rude_  0.0  0.0 [rcu_tasks_rude_kthread]
+     15       2 rcu_tasks_trace  0.0  0.0 [rcu_tasks_trace_kthread]
+     16       2 ksoftirqd/0      0.0  0.0 [ksoftirqd/0]
+     17       2 rcu_preempt      0.0  0.0 [rcu_preempt]
+     18       2 migration/0      0.0  0.0 [migration/0]
+     19       2 idle_inject/0    0.0  0.0 [idle_inject/0]
+     20       2 cpuhp/0          0.0  0.0 [cpuhp/0]
+     21       2 cpuhp/1          0.0  0.0 [cpuhp/1]
+     22       2 idle_inject/1    0.0  0.0 [idle_inject/1]
+     23       2 migration/1      0.0  0.0 [migration/1]
+     24       2 ksoftirqd/1      0.0  0.0 [ksoftirqd/1]
+     26       2 kworker/1:0H-ev  0.0  0.0 [kworker/1:0H-events_highpri]
+     27       2 cpuhp/2          0.0  0.0 [cpuhp/2]
+     28       2 idle_inject/2    0.0  0.0 [idle_inject/2]
+     29       2 migration/2      0.0  0.0 [migration/2]
+     30       2 ksoftirqd/2      0.0  0.0 [ksoftirqd/2]
+     32       2 kworker/2:0H-ev  0.0  0.0 [kworker/2:0H-events_highpri]
+     33       2 cpuhp/3          0.0  0.0 [cpuhp/3]
+     34       2 idle_inject/3    0.0  0.0 [idle_inject/3]
+     35       2 migration/3      0.0  0.0 [migration/3]
+     36       2 ksoftirqd/3      0.0  0.0 [ksoftirqd/3]
+     38       2 kworker/3:0H-ev  0.0  0.0 [kworker/3:0H-events_highpri]
+     39       2 cpuhp/4          0.0  0.0 [cpuhp/4]
+     40       2 idle_inject/4    0.0  0.0 [idle_inject/4]
+     41       2 migration/4      0.0  0.0 [migration/4]
+     42       2 ksoftirqd/4      0.0  0.0 [ksoftirqd/4]
+     44       2 kworker/4:0H-ev  0.0  0.0 [kworker/4:0H-events_highpri]
+     45       2 cpuhp/5          0.0  0.0 [cpuhp/5]
+     46       2 idle_inject/5    0.0  0.0 [idle_inject/5]
+     47       2 migration/5      0.0  0.0 [migration/5]
+     48       2 ksoftirqd/5      0.0  0.0 [ksoftirqd/5]
+     50       2 kworker/5:0H-ev  0.0  0.0 [kworker/5:0H-events_highpri]
+     51       2 cpuhp/6          0.0  0.0 [cpuhp/6]
+     52       2 idle_inject/6    0.0  0.0 [idle_inject/6]
+     53       2 migration/6      0.0  0.0 [migration/6]
+     54       2 ksoftirqd/6      0.0  0.0 [ksoftirqd/6]
+     56       2 kworker/6:0H-ev  0.0  0.0 [kworker/6:0H-events_highpri]
+     57       2 cpuhp/7          0.0  0.0 [cpuhp/7]
+     58       2 idle_inject/7    0.0  0.0 [idle_inject/7]
+     59       2 migration/7      0.0  0.0 [migration/7]
+     60       2 ksoftirqd/7      0.0  0.0 [ksoftirqd/7]
+     62       2 kworker/7:0H-ev  0.0  0.0 [kworker/7:0H-events_highpri]
+     63       2 cpuhp/8          0.0  0.0 [cpuhp/8]
+     64       2 idle_inject/8    0.0  0.0 [idle_inject/8]
+     65       2 migration/8      0.0  0.0 [migration/8]
+     66       2 ksoftirqd/8      0.0  0.0 [ksoftirqd/8]
+     68       2 kworker/8:0H-kb  0.0  0.0 [kworker/8:0H-kblockd]
+     69       2 cpuhp/9          0.0  0.0 [cpuhp/9]
+     70       2 idle_inject/9    0.0  0.0 [idle_inject/9]
+     71       2 migration/9      0.0  0.0 [migration/9]
+     72       2 ksoftirqd/9      0.0  0.0 [ksoftirqd/9]
+     74       2 kworker/9:0H-ev  0.0  0.0 [kworker/9:0H-events_highpri]
+     75       2 cpuhp/10         0.0  0.0 [cpuhp/10]
+     76       2 idle_inject/10   0.0  0.0 [idle_inject/10]
+     77       2 migration/10     0.0  0.0 [migration/10]
+     78       2 ksoftirqd/10     0.0  0.0 [ksoftirqd/10]
+     80       2 kworker/10:0H-e  0.0  0.0 [kworker/10:0H-events_highpri]
+     81       2 cpuhp/11         0.0  0.0 [cpuhp/11]
+     82       2 idle_inject/11   0.0  0.0 [idle_inject/11]
+     83       2 migration/11     0.0  0.0 [migration/11]
+     84       2 ksoftirqd/11     0.0  0.0 [ksoftirqd/11]
+     86       2 kworker/11:0H-e  0.0  0.0 [kworker/11:0H-events_highpri]
+     87       2 kdevtmpfs        0.0  0.0 [kdevtmpfs]
+     88       2 kworker/R-inet_  0.0  0.0 [kworker/R-inet_]
+     89       2 kauditd          0.0  0.0 [kauditd]
+     90       2 khungtaskd       0.0  0.0 [khungtaskd]
+     92       2 oom_reaper       0.0  0.0 [oom_reaper]
+     94       2 kworker/R-write  0.0  0.0 [kworker/R-write]
+     95       2 kcompactd0       0.1  0.0 [kcompactd0]
+     96       2 ksmd             0.0  0.0 [ksmd]
+     98       2 khugepaged       0.0  0.0 [khugepaged]
+     99       2 kworker/R-kinte  0.0  0.0 [kworker/R-kinte]
+    100       2 kworker/R-kbloc  0.0  0.0 [kworker/R-kbloc]
+    101       2 kworker/R-blkcg  0.0  0.0 [kworker/R-blkcg]
+    102       2 irq/9-acpi       0.0  0.0 [irq/9-acpi]
+    105       2 kworker/R-tpm_d  0.0  0.0 [kworker/R-tpm_d]
+    106       2 kworker/R-ata_s  0.0  0.0 [kworker/R-ata_s]
+    107       2 kworker/R-md     0.0  0.0 [kworker/R-md]
+    108       2 kworker/R-md_bi  0.0  0.0 [kworker/R-md_bi]
+    109       2 kworker/R-edac-  0.0  0.0 [kworker/R-edac-]
+    110       2 kworker/R-devfr  0.0  0.0 [kworker/R-devfr]
+    111       2 watchdogd        0.0  0.0 [watchdogd]
+    112       2 kworker/R-quota  0.0  0.0 [kworker/R-quota]
+    113       2 kworker/2:1H-kb  0.0  0.0 [kworker/2:1H-kblockd]
+    114       2 kswapd0          0.0  0.0 [kswapd0]
+    115       2 ecryptfs-kthrea  0.0  0.0 [ecryptfs-kthread]
+    116       2 kworker/R-kthro  0.0  0.0 [kworker/R-kthro]
+    117       2 irq/120-PCIe PM  0.0  0.0 [irq/120-PCIe PME]
+    118       2 irq/120-aerdrv   0.0  0.0 [irq/120-aerdrv]
+    119       2 irq/120-s-aerdr  0.0  0.0 [irq/120-s-aerdrv]
+    120       2 irq/120-pcie-dp  0.0  0.0 [irq/120-pcie-dpc]
+    121       2 irq/120-s-pcie-  0.0  0.0 [irq/120-s-pcie-dpc]
+    122       2 irq/121-PCIe PM  0.0  0.0 [irq/121-PCIe PME]
+    123       2 irq/121-aerdrv   0.0  0.0 [irq/121-aerdrv]
+    124       2 irq/121-s-aerdr  0.0  0.0 [irq/121-s-aerdrv]
+    125       2 irq/121-pcie-dp  0.0  0.0 [irq/121-pcie-dpc]
+    126       2 irq/121-s-pcie-  0.0  0.0 [irq/121-s-pcie-dpc]
+    127       2 irq/122-PCIe PM  0.0  0.0 [irq/122-PCIe PME]
+    128       2 irq/122-aerdrv   0.0  0.0 [irq/122-aerdrv]
+    129       2 irq/122-s-aerdr  0.0  0.0 [irq/122-s-aerdrv]
+    130       2 irq/122-pcie-dp  0.0  0.0 [irq/122-pcie-dpc]
+    131       2 irq/122-s-pcie-  0.0  0.0 [irq/122-s-pcie-dpc]
+    132       2 irq/123-PCIe PM  0.0  0.0 [irq/123-PCIe PME]
+    133       2 irq/123-aerdrv   0.0  0.0 [irq/123-aerdrv]
+    134       2 irq/123-s-aerdr  0.0  0.0 [irq/123-s-aerdrv]
+    135       2 irq/123-pcie-dp  0.0  0.0 [irq/123-pcie-dpc]
+    136       2 irq/123-s-pcie-  0.0  0.0 [irq/123-s-pcie-dpc]
+    137       2 irq/124-PCIe PM  0.0  0.0 [irq/124-PCIe PME]
+    138       2 irq/124-aerdrv   0.0  0.0 [irq/124-aerdrv]
+    139       2 irq/124-s-aerdr  0.0  0.0 [irq/124-s-aerdrv]
+    140       2 irq/124-pcie-dp  0.0  0.0 [irq/124-pcie-dpc]
+    141       2 irq/124-s-pcie-  0.0  0.0 [irq/124-s-pcie-dpc]
+    142       2 irq/125-PCIe PM  0.0  0.0 [irq/125-PCIe PME]
+    143       2 irq/125-pciehp   0.0  0.0 [irq/125-pciehp]
+    144       2 irq/125-s-pcieh  0.0  0.0 [irq/125-s-pciehp]
+    146       2 kworker/R-acpi_  0.0  0.0 [kworker/R-acpi_]
+    154       2 hwrng            0.0  0.0 [hwrng]
+    155       2 irq/8-rtc0       0.0  0.0 [irq/8-rtc0]
+    156       2 kworker/R-mld    0.0  0.0 [kworker/R-mld]
+    157       2 kworker/R-ipv6_  0.0  0.0 [kworker/R-ipv6_]
+    164       2 kworker/R-kstrp  0.0  0.0 [kworker/R-kstrp]
+    166       2 kworker/u25:0-h  0.0  0.0 [kworker/u25:0-hci0]
+    179       2 kworker/R-charg  0.0  0.0 [kworker/R-charg]
+    198       2 kworker/7:1H-kb  0.0  0.0 [kworker/7:1H-kblockd]
+    202       2 kworker/6:1H-kb  0.0  0.0 [kworker/6:1H-kblockd]
+    203       2 kworker/10:1H-k  0.0  0.0 [kworker/10:1H-kblockd]
+    215       2 kworker/3:1H-kb  0.0  0.0 [kworker/3:1H-kblockd]
+    216       2 kworker/0:1H-kb  0.0  0.0 [kworker/0:1H-kblockd]
+    217       2 kworker/9:1H-kb  0.0  0.0 [kworker/9:1H-kblockd]
+    218       2 kworker/11:1H-k  0.0  0.0 [kworker/11:1H-kblockd]
+    219       2 kworker/4:1H-kb  0.0  0.0 [kworker/4:1H-kblockd]
+    220       2 kworker/1:1H-kb  0.0  0.0 [kworker/1:1H-kblockd]
+    221       2 kworker/8:1H     0.0  0.0 [kworker/8:1H]
+    222       2 kworker/5:1H-kb  0.0  0.0 [kworker/5:1H-kblockd]
+    246       2 irq/127-xhci_hc  0.0  0.0 [irq/127-xhci_hcd]
+    247       2 kworker/R-nvme-  0.0  0.0 [kworker/R-nvme-]
+    248       2 kworker/R-nvme-  0.0  0.0 [kworker/R-nvme-]
+    249       2 kworker/R-nvme-  0.0  0.0 [kworker/R-nvme-]
+    250       2 kworker/R-nvme-  0.0  0.0 [kworker/R-nvme-]
+    251       2 irq/16-i801_smb  0.0  0.0 [irq/16-i801_smbus]
+    265       2 irq/126-ahci[00  0.0  0.0 [irq/126-ahci[0000:00:17.0]]
+    266       2 irq/129-nvme0q0  0.0  0.0 [irq/129-nvme0q0]
+    267       2 scsi_eh_0        0.0  0.0 [scsi_eh_0]
+    268       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    269       2 scsi_eh_1        0.0  0.0 [scsi_eh_1]
+    270       2 irq/131-nvme0q1  0.0  0.0 [irq/131-nvme0q1]
+    271       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    272       2 scsi_eh_2        0.0  0.0 [scsi_eh_2]
+    273       2 irq/132-nvme0q2  0.0  0.0 [irq/132-nvme0q2]
+    274       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    275       2 scsi_eh_3        0.0  0.0 [scsi_eh_3]
+    276       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    277       2 irq/133-nvme0q3  0.0  0.0 [irq/133-nvme0q3]
+    278       2 scsi_eh_4        0.0  0.0 [scsi_eh_4]
+    279       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    280       2 irq/134-nvme0q4  0.0  0.0 [irq/134-nvme0q4]
+    281       2 irq/135-nvme0q5  0.0  0.0 [irq/135-nvme0q5]
+    282       2 scsi_eh_5        0.0  0.0 [scsi_eh_5]
+    283       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+    284       2 irq/136-nvme0q6  0.0  0.0 [irq/136-nvme0q6]
+    290       2 irq/137-nvme0q7  0.0  0.0 [irq/137-nvme0q7]
+    291       2 irq/138-nvme0q8  0.0  0.0 [irq/138-nvme0q8]
+    292       2 irq/139-nvme0q9  0.0  0.0 [irq/139-nvme0q9]
+    293       2 irq/140-nvme0q1  0.0  0.0 [irq/140-nvme0q10]
+    294       2 irq/141-nvme0q1  0.0  0.0 [irq/141-nvme0q11]
+    295       2 irq/142-nvme0q1  0.0  0.0 [irq/142-nvme0q12]
+    311       2 irq/130-nvme1q0  0.0  0.0 [irq/130-nvme1q0]
+    312       2 irq/143-nvme1q1  0.0  0.0 [irq/143-nvme1q1]
+    313       2 irq/144-nvme1q2  0.0  0.0 [irq/144-nvme1q2]
+    314       2 irq/145-nvme1q3  0.0  0.0 [irq/145-nvme1q3]
+    315       2 irq/146-nvme1q4  0.0  0.0 [irq/146-nvme1q4]
+    316       2 irq/147-nvme1q5  0.0  0.0 [irq/147-nvme1q5]
+    317       2 irq/148-nvme1q6  0.0  0.0 [irq/148-nvme1q6]
+    318       2 irq/149-nvme1q7  0.0  0.0 [irq/149-nvme1q7]
+    319       2 irq/150-nvme1q8  0.0  0.0 [irq/150-nvme1q8]
+    320       2 irq/151-nvme1q9  0.0  0.0 [irq/151-nvme1q9]
+    321       2 irq/152-nvme1q1  0.0  0.0 [irq/152-nvme1q10]
+    322       2 irq/153-nvme1q1  0.0  0.0 [irq/153-nvme1q11]
+    323       2 irq/154-nvme1q1  0.0  0.0 [irq/154-nvme1q12]
+    428       2 jbd2/nvme1n1p2-  0.0  0.0 [jbd2/nvme1n1p2-8]
+    429       2 kworker/R-ext4-  0.0  0.0 [kworker/R-ext4-]
+    653       2 irq/155-mei_me   0.0  0.0 [irq/155-mei_me]
+    695       2 kworker/R-cfg80  0.0  0.0 [kworker/R-cfg80]
+    717       2 irq/156-iwlwifi  0.0  0.0 [irq/156-iwlwifi]
+    718       2 irq/156-s-iwlwi  0.0  0.0 [irq/156-s-iwlwifi]
+    735       2 kworker/u25:1-r  0.0  0.0 [kworker/u25:1-rb_allocator]
+    756       2 kworker/R-crypt  0.0  0.0 [kworker/R-crypt]
+    758       2 irq/17-snd_hda_  0.0  0.0 [irq/17-snd_hda_intel:card1]
+    759       2 irq/157-snd_hda  0.0  0.0 [irq/157-snd_hda_intel:card0]
+    772       2 nv_queue         0.0  0.0 [nv_queue]
+    773       2 nv_queue         0.0  0.0 [nv_queue]
+    783       2 nvidia-modeset/  0.0  0.0 [nvidia-modeset/kthread_q]
+    784       2 nvidia-modeset/  0.0  0.0 [nvidia-modeset/deferred_close_kthread_q]
+    787       2 irq/158-nvidia   0.0  0.0 [irq/158-nvidia]
+    788       2 irq/158-s-nvidi  0.0  0.0 [irq/158-s-nvidia]
+    789       2 nvidia           0.0  0.0 [nvidia]
+    790       2 nv_queue         0.0  0.0 [nv_queue]
+    901       2 UVM global queu  0.0  0.0 [UVM global queue]
+    902       2 UVM deferred re  0.0  0.0 [UVM deferred release queue]
+    907       2 UVM Tools Event  0.0  0.0 [UVM Tools Event Queue]
+    982       2 jbd2/nvme0n1p1-  0.0  0.0 [jbd2/nvme0n1p1-8]
+    983       2 kworker/R-ext4-  0.0  0.0 [kworker/R-ext4-]
+   1125       1 accounts-daemon  0.0  0.0 /usr/libexec/accounts-daemon
+   1126       1 acpid            0.0  0.0 /usr/sbin/acpid
+   1129       1 avahi-daemon     0.0  0.0 avahi-daemon: running [mikers-B560-DS3H-AC-Y1.local]
+   1132       1 cron             0.0  0.0 /usr/sbin/cron -f -P
+   1134       1 dbus-daemon      0.0  0.0 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   1135       1 NetworkManager   0.0  0.0 /usr/sbin/NetworkManager --no-daemon
+   1141       1 irqbalance       0.0  0.0 /usr/sbin/irqbalance --foreground
+   1144       1 networkd-dispat  0.0  0.0 /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1152       1 nvidia-persiste  0.0  0.0 /usr/bin/nvidia-persistenced --verbose
+   1155       1 power-profiles-  0.0  0.0 /usr/libexec/power-profiles-daemon
+   1166       1 switcheroo-cont  0.0  0.0 /usr/libexec/switcheroo-control
+   1175       1 systemd-logind   0.0  0.0 /lib/systemd/systemd-logind
+   1176       1 systemd-machine  0.0  0.0 /lib/systemd/systemd-machined
+   1178       1 thermald         0.0  0.0 /usr/sbin/thermald --systemd --dbus-enable --adaptive
+   1183       1 udisksd          0.0  0.0 /usr/libexec/udisks2/udisksd
+   1186       1 wpa_supplicant   0.0  0.0 /sbin/wpa_supplicant -u -s -O /run/wpa_supplicant
+   1204    1129 avahi-daemon     0.0  0.0 avahi-daemon: chroot helper
+   1244       1 pia-daemon       0.0  0.0 /opt/piavpn/bin/pia-daemon
+   1255       1 redis-server     0.0  0.0 /usr/bin/redis-server 127.0.0.1:6379
+   1260       1 run-hplip-print  0.0  0.0 /bin/sh /snap/hplip-printer-app/925/scripts/run-hplip-printer-app-server
+   1274       1 tailscaled       0.0  0.1 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+   1286       1 containerd       0.0  0.0 /usr/bin/containerd
+   1336       1 colord           0.0  0.0 /usr/libexec/colord
+   1415       1 postgres         0.0  0.0 /usr/lib/postgresql/14/bin/postgres -D /var/lib/postgresql/14/main -c config_file=/etc/postgresql/14/main/postgresql.conf
+   1416       1 postgres         0.0  0.0 /usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main -c config_file=/etc/postgresql/16/main/postgresql.conf
+   1446       1 tinyproxy        0.0  0.0 /usr/bin/tinyproxy
+   1498       1 gdm3             0.0  0.0 /usr/sbin/gdm3
+   1534    1416 postgres         0.0  0.0 postgres: 16/main: checkpointer 
+   1535    1416 postgres         0.0  0.0 postgres: 16/main: background writer 
+   1587       1 unattended-upgr  0.0  0.0 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+   1620       1 systemd          0.0  0.0 /lib/systemd/systemd --user
+   1631    1498 gdm-session-wor  0.0  0.0 gdm-session-worker [pam/gdm-autologin]
+   1657    1620 (sd-pam)         0.0  0.0 (sd-pam)
+   1881    1620 fluidsynth       1.9  0.4 /usr/bin/fluidsynth -is /usr/share/sounds/sf3/default-GM.sf3
+   1882    1620 run.sh           0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/physics-2/run.sh
+   1884    1620 run.sh           0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/physics-3/run.sh
+   1885    1620 run.sh           0.0  0.0 /bin/bash /home/mikers/.local/share/github-actions-runner-physics/run.sh
+   1887    1620 run.sh           0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/quantum-foundations/run.sh
+   1890    1620 pipewire         0.0  0.0 /usr/bin/pipewire
+   1891    1620 pipewire-media-  0.0  0.0 /usr/bin/pipewire-media-session
+   1916    1882 run-helper.sh    0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/physics-2/run-helper.sh
+   1921    1884 run-helper.sh    0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/physics-3/run-helper.sh
+   1924    1887 run-helper.sh    0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/quantum-foundations/run-helper.sh
+   1925    1885 run-helper.sh    0.0  0.0 /bin/bash /home/mikers/.local/share/github-actions-runner-physics/run-helper.sh
+   1938    1916 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-actions-runners/physics-2/bin/Runner.Listener run
+   1949    1620 pulseaudio       2.0  0.0 /usr/bin/pulseaudio --daemonize=no --log-target=journal
+   1960    1921 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-actions-runners/physics-3/bin/Runner.Listener run
+   1975    1924 Runner.Listener  0.0  0.0 /mnt/fast4tb/github-actions-runners/quantum-foundations/bin/Runner.Listener run
+   1987    1925 Runner.Listener  0.0  0.1 /home/mikers/.local/share/github-actions-runner-physics/bin/Runner.Listener run
+   2004    1620 dbus-daemon      0.0  0.0 /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   2048       1 rtkit-daemon     0.0  0.0 /usr/libexec/rtkit-daemon
+   2320    1631 gdm-x-session    0.0  0.0 /usr/libexec/gdm-x-session --run-script env GNOME_SHELL_SESSION_MODE=ubuntu /usr/bin/gnome-session --session=ubuntu
+   2333    2320 Xorg             0.0  0.0 /usr/lib/xorg/Xorg vt2 -displayfd 3 -auth /run/user/1000/gdm/Xauthority -nolisten tcp -background none -noreset -keeptty -novtswitch -verbose 3
+   2650       1 dnsmasq          0.0  0.0 /usr/sbin/dnsmasq --conf-file=/var/lib/libvirt/dnsmasq/default.conf --leasefile-ro --dhcp-script=/usr/lib/libvirt/libvirt_leaseshelper
+   2651    2650 dnsmasq          0.0  0.0 /usr/sbin/dnsmasq --conf-file=/var/lib/libvirt/dnsmasq/default.conf --leasefile-ro --dhcp-script=/usr/lib/libvirt/libvirt_leaseshelper
+   2794       2 krfcommd         0.0  0.0 [krfcommd]
+   3011    1620 xdg-document-po  0.0  0.0 /usr/libexec/xdg-document-portal
+   3024    1620 xdg-permission-  0.0  0.0 /usr/libexec/xdg-permission-store
+   3045    3011 fusermount3      0.0  0.0 fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc
+   3067    1416 postgres         0.0  0.0 postgres: 16/main: walwriter 
+   3068    1416 postgres         0.0  0.0 postgres: 16/main: autovacuum launcher 
+   3070    1416 postgres         0.0  0.0 postgres: 16/main: logical replication launcher 
+   3180    2320 gnome-session-b  0.0  0.0 /usr/libexec/gnome-session-binary --session=ubuntu
+   3487    1620 at-spi-bus-laun  0.0  0.0 /usr/libexec/at-spi-bus-launcher
+   3519    3487 dbus-daemon      0.0  0.0 /usr/bin/dbus-daemon --config-file=/usr/share/defaults/at-spi2/accessibility.conf --nofork --print-address 11 --address=unix:path=/run/user/1000/at-spi/bus_0
+   3698    1620 gnome-session-c  0.0  0.0 /usr/libexec/gnome-session-ctl --monitor
+   3717    1620 gvfsd            0.0  0.0 /usr/libexec/gvfsd
+   3743    1620 gvfsd-fuse       0.0  0.0 /usr/libexec/gvfsd-fuse /run/user/1000/gvfs -f
+   3748    1620 gnome-session-b  0.0  0.0 /usr/libexec/gnome-session-binary --systemd-service --session=ubuntu
+   3861    1620 gnome-shell      0.1  0.3 /usr/bin/gnome-shell
+   4239    1260 hplip-printer-a  0.0  0.0 /snap/hplip-printer-app/925/usr/bin/hplip-printer-app -o log-file=/var/snap/hplip-printer-app/common/hplip-printer-app.log server
+   4327    1260 run-hplip-print  0.0  0.0 /bin/sh /snap/hplip-printer-app/925/scripts/run-hplip-printer-app-server
+   4530    1620 gnome-shell-cal  0.0  0.0 /usr/libexec/gnome-shell-calendar-server
+   4550    1620 evolution-sourc  0.0  0.0 /usr/libexec/evolution-source-registry
+   4585       1 upowerd          0.0  0.0 /usr/libexec/upowerd
+   4588    1620 goa-daemon       0.0  0.0 /usr/libexec/goa-daemon
+   4604    1620 evolution-calen  0.0  0.0 /usr/libexec/evolution-calendar-factory
+   4644    1620 goa-identity-se  0.0  0.0 /usr/libexec/goa-identity-service
+   4672    1620 gvfs-udisks2-vo  0.1  0.0 /usr/libexec/gvfs-udisks2-volume-monitor
+   4706    1620 dconf-service    0.0  0.0 /usr/libexec/dconf-service
+   4720    1620 evolution-addre  0.0  0.0 /usr/libexec/evolution-addressbook-factory
+   4751    1620 gvfs-mtp-volume  0.0  0.0 /usr/libexec/gvfs-mtp-volume-monitor
+   4780    1620 gvfs-goa-volume  0.0  0.0 /usr/libexec/gvfs-goa-volume-monitor
+   4790    1620 gvfs-gphoto2-vo  0.0  0.0 /usr/libexec/gvfs-gphoto2-volume-monitor
+   4803    1620 gvfs-afc-volume  0.0  0.0 /usr/libexec/gvfs-afc-volume-monitor
+   4827       1 packagekitd      0.0  0.0 /usr/libexec/packagekitd
+   4844    3717 gvfsd-trash      0.0  0.0 /usr/libexec/gvfsd-trash --spawner :1.34 /org/gtk/gvfs/exec_spaw/0
+   4888    1620 gjs              0.0  0.0 /usr/bin/gjs /usr/share/gnome-shell/org.gnome.Shell.Notifications
+   4902    1620 at-spi2-registr  0.0  0.0 /usr/libexec/at-spi2-registryd --use-gnome-session
+   4966    1620 xdg-desktop-por  0.0  0.2 /usr/libexec/xdg-desktop-portal
+   4983    1620 sh               0.0  0.0 sh -c /usr/bin/ibus-daemon --panel disable $([ "$XDG_SESSION_TYPE" = "x11" ] && echo "--xim")
+   4984    1620 gsd-a11y-settin  0.0  0.0 /usr/libexec/gsd-a11y-settings
+   4989    1620 gsd-color        0.0  0.0 /usr/libexec/gsd-color
+   4991    1620 gsd-datetime     0.0  0.0 /usr/libexec/gsd-datetime
+   4992    4983 ibus-daemon      0.0  0.0 /usr/bin/ibus-daemon --panel disable --xim
+   4994    1620 gsd-housekeepin  0.0  0.0 /usr/libexec/gsd-housekeeping
+   4996    1620 gsd-keyboard     0.0  0.0 /usr/libexec/gsd-keyboard
+   4997    1620 gsd-media-keys   0.0  0.0 /usr/libexec/gsd-media-keys
+   4999    1620 gsd-power        0.0  0.0 /usr/libexec/gsd-power
+   5002    1620 gsd-print-notif  0.0  0.0 /usr/libexec/gsd-print-notifications
+   5012    1620 gsd-rfkill       0.0  0.0 /usr/libexec/gsd-rfkill
+   5013    1620 gsd-screensaver  0.0  0.0 /usr/libexec/gsd-screensaver-proxy
+   5015    1620 gsd-sharing      0.0  0.0 /usr/libexec/gsd-sharing
+   5018    1620 gsd-smartcard    0.0  0.0 /usr/libexec/gsd-smartcard
+   5023    1620 gsd-sound        0.0  0.0 /usr/libexec/gsd-sound
+   5030    1620 gsd-wacom        0.0  0.0 /usr/libexec/gsd-wacom
+   5036    1620 gsd-xsettings    0.0  0.0 /usr/libexec/gsd-xsettings
+   5037    3748 evolution-alarm  0.0  0.0 /usr/libexec/evolution-data-server/evolution-alarm-notify
+   5045    3748 kdeconnectd      0.0  0.0 /usr/lib/x86_64-linux-gnu/libexec/kdeconnectd
+   5051    3748 gsd-disk-utilit  0.0  0.0 /usr/libexec/gsd-disk-utility-notify
+   5067    1620 xdg-desktop-por  0.0  0.0 /usr/libexec/xdg-desktop-portal-gnome
+   5074    3748 diodon           0.0  0.0 diodon
+   5090    4992 ibus-memconf     0.0  0.0 /usr/libexec/ibus-memconf
+   5093    4992 ibus-extension-  0.0  0.0 /usr/libexec/ibus-extension-gtk3
+   5105    1620 ibus-x11         0.0  0.0 /usr/libexec/ibus-x11 --kill-daemon
+   5112    1620 ibus-portal      0.0  0.0 /usr/libexec/ibus-portal
+   5262    1620 zeitgeist-daemo  0.0  0.0 /usr/bin/zeitgeist-daemon
+   5271    1620 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --no-sandbox --ozone-platform=x11 --executed-from=/home/mikers --pid=5271
+   5275    1620 zeitgeist-fts    0.0  0.0 /usr/lib/zeitgeist/zeitgeist-fts
+   5276    1620 snap-store       0.0  0.1 /snap/snap-store/1216/usr/bin/snap-store --gapplication-service
+   5347    1620 gjs              0.0  0.0 /usr/bin/gjs /usr/share/gnome-shell/org.gnome.ScreenSaver
+   5403    4992 ibus-engine-sim  0.0  0.0 /usr/libexec/ibus-engine-simple
+   5428    1620 gsd-printer      0.0  0.0 /usr/libexec/gsd-printer
+   5430    1620 tracker-miner-f  0.0  0.0 /usr/libexec/tracker-miner-fs-3
+   5433    1620 xdg-desktop-por  0.0  0.0 /usr/libexec/xdg-desktop-portal-gtk
+   5573    5271 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --type=zygote --no-zygote-sandbox --no-sandbox
+   5574    5271 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --type=zygote --no-sandbox
+   5626    1620 chrome_crashpad  0.0  0.0 /snap/slack/254/usr/lib/slack/chrome_crashpad_handler --monitor-self-annotation=ptype=crashpad-handler --no-upload-gzip --database=/home/mikers/snap/slack/254/.config/Slack/Crashpad --url=https://slack.com/apps/sentryproxy/api/5277886/minidump/?sentry_key=fd30fe469dbf4aec9db40548e5acf91e --annotation=_productName=Slack --annotation=_version=4.51.180 --annotation=lsb-release=Ubuntu Core 24 --annotation=plat=Linux --annotation=prod=Electron --annotation=sentry___initialScope={"release":"Slack@4.51.180","environment":"production","user":{"id":"de65690c-a1d5-4a0e-aaa0-db13b7308428"},"tags":{"uuid":"de65690c-a1d5-4a0e-aaa0-db13b7308428"},"extra":{"sessionId":"ZGU2NTY5MGMtYTFkNS00YTBlLWFhYTAtZGIxM2I3MzA4NDI4XzE3ODg0MjQ1Mjk5MDM="}} --annotation=ver=43.1.1 --initial-client-fd=40 --shared-client-connection
+   5712    5271 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --no-sandbox --crashpad-handler-pid=5626 --enable-crash-reporter=2ca49aa4-4ad7-4575-90b1-e17f444ac5a2,no_channel --user-data-dir=/home/mikers/snap/slack/254/.config/Slack --standard-schemes=app,slack-webapp-dev --secure-schemes=app,slack-webapp-dev,sentry-ipc --bypasscsp-schemes=slack-webapp-dev,sentry-ipc --cors-schemes=slack-webapp-dev,sentry-ipc --fetch-schemes=slack-webapp-dev,sentry-ipc --service-worker-schemes=slack-webapp-dev --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,5945292719985261645,12699009901902681109,262144 --enable-features=PdfUseShowSaveFilePicker,WebRTCPipeWireCapturer --disable-features=AllowAggressiveThrottlingWithWebSocket,CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,EnableWatermarkView,HardwareMediaKeyHandling,IntensiveWakeUpThrottling,LocalNetworkAccessChecks,LogJsConsoleMessages,PostQuantumKyber,RequestInitiatorSiteLockEnfocement,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation,WebRtcHideLocalIpsWithMdns,WinRetrieveSuggestionsOnlyOnDemand --variations-seed-version --pseudonymization-salt-handle=7,i,6115694060714073252,17001148364688879181,4 --trace-process-track-uuid=3190708989122997041
+   5776       1 caddy            0.0  0.0 /usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+   5809       1 ClickHouseWatch  0.0  0.2 clickhouse-watchdog        --config=/etc/clickhouse-server/config.xml --pid-file=/run/clickhouse-server/clickhouse-server.pid
+   5819       1 dockerd          0.0  0.1 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+   5838       1 node_exporter    0.2  0.0 /usr/local/node_exporter/node_exporter
+   5855       1 prometheus       0.0  0.1 /usr/local/prometheus/prometheus --config.file=/usr/local/prometheus/prometheus.yml --storage.tsdb.path=/usr/local/prometheus/data
+   5917       1 Plex Media Serv  0.0  0.0 /usr/lib/plexmediaserver/Plex Media Server
+   5922       1 kerneloops       0.0  0.0 /usr/sbin/kerneloops --test
+   5950       1 kerneloops       0.0  0.0 /usr/sbin/kerneloops
+   6225    5573 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --type=gpu-process --no-sandbox --ozone-platform=x11 --crashpad-handler-pid=5626 --enable-crash-reporter=2ca49aa4-4ad7-4575-90b1-e17f444ac5a2,no_channel --user-data-dir=/home/mikers/snap/slack/254/.config/Slack --gpu-preferences=WAAAAAAAAAAgAQAEAAAAAAAAAAAAAGAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAABAAAAAAAAAAgAAAAAAAAACAAAAAAAAAAIAAAAAAAAAA== --use-gl=disabled --shared-files --field-trial-handle=3,i,5945292719985261645,12699009901902681109,262144 --enable-features=PdfUseShowSaveFilePicker,WebRTCPipeWireCapturer --disable-features=AllowAggressiveThrottlingWithWebSocket,CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,EnableWatermarkView,HardwareMediaKeyHandling,IntensiveWakeUpThrottling,LocalNetworkAccessChecks,LogJsConsoleMessages,PostQuantumKyber,RequestInitiatorSiteLockEnfocement,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation,WebRtcHideLocalIpsWithMdns,WinRetrieveSuggestionsOnlyOnDemand --variations-seed-version --pseudonymization-salt-handle=7,i,6115694060714073252,17001148364688879181,4 --trace-process-track-uuid=3190708993808206286
+   6254    5917 Plex Script Hos  0.0  0.0 Plex Plug-in [com.plexapp.system] /usr/lib/plexmediaserver/Resources/Plug-ins-1cf77d501/Framework.bundle/Contents/Resources/Versions/2/Python/bootstrap.py --server-version 1.32.6.7557-1cf77d501 /usr/lib/plexmediaserver/Resources/Plug-ins-1cf77d501/System.bundle
+   6357    5809 clickhouse-serv  4.7  3.2 /usr/bin/clickhouse-server --config=/etc/clickhouse-server/config.xml --pid-file=/run/clickhouse-server/clickhouse-server.pid
+   7056    1620 user-session-he  0.0  0.0 /snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+   8463    7056 snapd-desktop-i  0.0  0.0 /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+  10451    5917 Plex Tuner Serv  0.0  0.0 /usr/lib/plexmediaserver/Plex Tuner Service /usr/lib/plexmediaserver/Resources/Tuner/Private /usr/lib/plexmediaserver/Resources/Tuner/Shared 1.32.6.7557-1cf77d501 32600
+  16195    1415 postgres         0.0  0.0 postgres: 14/main: checkpointer 
+  16196    1415 postgres         0.0  0.0 postgres: 14/main: background writer 
+  16197    1415 postgres         0.0  0.0 postgres: 14/main: walwriter 
+  16198    1415 postgres         0.0  0.0 postgres: 14/main: autovacuum launcher 
+  16199    1415 postgres         0.0  0.0 postgres: 14/main: stats collector 
+  16200    1415 postgres         0.0  0.0 postgres: 14/main: logical replication launcher 
+  16372       1 reluv.bash       0.0  0.0 /bin/bash /home/mikers/dev/torch/torch/indexer/instagram-iphone/reluv.bash
+  16384   16372 xargs            0.0  0.0 xargs -P10 -n1 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py
+  16391   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 1765096
+  16392   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 40340
+  16393   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 557881
+  16394   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 1133226
+  16395   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 4576926
+  16396   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 4576967
+  16397   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 4576881
+  16398   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 1538220
+  16399   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 4576962
+  16400   16384 python2          0.0  0.0 python2 /ebs/torch/indexer/instagram-iphone/instagram_index.py 64572
+  17953    1620 gvfsd-metadata   0.0  0.0 /usr/libexec/gvfsd-metadata
+  17956    3748 update-notifier  0.0  0.0 update-notifier
+  19242       1 tmux: server     0.0  0.0 tmux
+  19243   19242 bash             0.0  0.0 -bash
+  20939       1 loclx            0.0  0.0 /snap/localxpose/66/loclx tunnel tcp --to localhost:22
+  32184    5574 slack            0.0  0.0 /snap/slack/254/usr/lib/slack/slack --type=renderer --crashpad-handler-pid=5626 --enable-crash-reporter=2ca49aa4-4ad7-4575-90b1-e17f444ac5a2,no_channel --user-data-dir=/home/mikers/snap/slack/254/.config/Slack --standard-schemes=app,slack-webapp-dev --secure-schemes=app,slack-webapp-dev,sentry-ipc --bypasscsp-schemes=slack-webapp-dev,sentry-ipc --cors-schemes=slack-webapp-dev,sentry-ipc --fetch-schemes=slack-webapp-dev,sentry-ipc --service-worker-schemes=slack-webapp-dev --app-path=/snap/slack/254/usr/lib/slack/resources/app.asar --enable-sandbox --enable-blink-features=ExperimentalJSProfiler --disable-blink-features --no-sandbox --ozone-platform=x11 --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=18 --time-ticks-at-unix-epoch=-1788424515844927 --launch-time-ticks=206820117 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,5945292719985261645,12699009901902681109,262144 --enable-features=PdfUseShowSaveFilePicker,WebRTCPipeWireCapturer --disable-features=AllowAggressiveThrottlingWithWebSocket,CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,EnableWatermarkView,HardwareMediaKeyHandling,IntensiveWakeUpThrottling,LocalNetworkAccessChecks,LogJsConsoleMessages,PostQuantumKyber,RequestInitiatorSiteLockEnfocement,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation,WebRtcHideLocalIpsWithMdns,WinRetrieveSuggestionsOnlyOnDemand --variations-seed-version --pseudonymization-salt-handle=7,i,6115694060714073252,17001148364688879181,4 --trace-process-track-uuid=3190709003178624776 --window-type=main
+  47999    1415 postgres         0.0  0.4 postgres: 14/main: postgres vision2 127.0.0.1(57824) idle
+  50995    1620 update-manager   0.0  0.3 /usr/bin/python3 /usr/bin/update-manager --no-update --no-focus-on-map
+ 120841   19242 npm exec @opena  0.0  0.1 npm exec @openai/codex@latest --dangerously-bypass-approvals-and-sandbox --no-alt-screen -C /mnt/fast4tb/elastic-electron-graph-20261015/repo Continue the authorized full snissn/elastic-electron ticket graph as sole coordinator in this new server185 tmux session. First read /mnt/fast4tb/elastic-electron-graph-20261015/handoff/HANDOFF.md, repo AGENTS.md, current #1/#7 state, and the fresh canonical gh-issue-planner/codex-issue-graph-executor skills identified in the handoff. Then execute the next bounded step and continue the graph. The Mac writer has released clean pushed4a10f6e; do not wait for it or duplicate it. Existing442 source bindings and exact independent ACCEPT are transferred. All C1-C20 unresolved; no detector/Bell/photon/charge-origin expansion. Analytical proofs/advisers first. A fresh corrected scalar-only60s operation is defined but has NOT been run; verify and explicitly select it before any execution. Preserve all old diagnostic artifacts. User authorized execution/repair/reviewed merge under repo gates and explicitly requested this npx bypass session on185. Do not merely return a plan or summarize the handoff; make and durably preserve useful progress toward the full carrier goal.
+ 120866  120841 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox --no-alt-screen -C /mnt/fast4tb/elastic-electron-graph-20261015/repo 'Continue the authorized full snissn/elastic-electron ticket graph as sole coordinator in this new server185 tmux session. First read /mnt/fast4tb/elastic-electron-graph-20261015/handoff/HANDOFF.md, repo AGENTS.md, current #1/#7 state, and the fresh canonical gh-issue-planner/codex-issue-graph-executor skills identified in the handoff. Then execute the next bounded step and continue the graph. The Mac writer has released clean pushed4a10f6e; do not wait for it or duplicate it. Existing442 source bindings and exact independent ACCEPT are transferred. All C1-C20 unresolved; no detector/Bell/photon/charge-origin expansion. Analytical proofs/advisers first. A fresh corrected scalar-only60s operation is defined but has NOT been run; verify and explicitly select it before any execution. Preserve all old diagnostic artifacts. User authorized execution/repair/reviewed merge under repo gates and explicitly requested this npx bypass session on185. Do not merely return a plan or summarize the handoff; make and durably preserve useful progress toward the full carrier goal.'
+ 120867  120866 MainThread       0.0  0.1 node /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -C /mnt/fast4tb/elastic-electron-graph-20261015/repo Continue the authorized full snissn/elastic-electron ticket graph as sole coordinator in this new server185 tmux session. First read /mnt/fast4tb/elastic-electron-graph-20261015/handoff/HANDOFF.md, repo AGENTS.md, current #1/#7 state, and the fresh canonical gh-issue-planner/codex-issue-graph-executor skills identified in the handoff. Then execute the next bounded step and continue the graph. The Mac writer has released clean pushed4a10f6e; do not wait for it or duplicate it. Existing442 source bindings and exact independent ACCEPT are transferred. All C1-C20 unresolved; no detector/Bell/photon/charge-origin expansion. Analytical proofs/advisers first. A fresh corrected scalar-only60s operation is defined but has NOT been run; verify and explicitly select it before any execution. Preserve all old diagnostic artifacts. User authorized execution/repair/reviewed merge under repo gates and explicitly requested this npx bypass session on185. Do not merely return a plan or summarize the handoff; make and durably preserve useful progress toward the full carrier goal.
+ 120874  120867 codex            0.7  0.5 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen -C /mnt/fast4tb/elastic-electron-graph-20261015/repo Continue the authorized full snissn/elastic-electron ticket graph as sole coordinator in this new server185 tmux session. First read /mnt/fast4tb/elastic-electron-graph-20261015/handoff/HANDOFF.md, repo AGENTS.md, current #1/#7 state, and the fresh canonical gh-issue-planner/codex-issue-graph-executor skills identified in the handoff. Then execute the next bounded step and continue the graph. The Mac writer has released clean pushed4a10f6e; do not wait for it or duplicate it. Existing442 source bindings and exact independent ACCEPT are transferred. All C1-C20 unresolved; no detector/Bell/photon/charge-origin expansion. Analytical proofs/advisers first. A fresh corrected scalar-only60s operation is defined but has NOT been run; verify and explicitly select it before any execution. Preserve all old diagnostic artifacts. User authorized execution/repair/reviewed merge under repo gates and explicitly requested this npx bypass session on185. Do not merely return a plan or summarize the handoff; make and durably preserve useful progress toward the full carrier goal.
+ 128215   19242 npm exec @opena  0.0  0.2 npm exec @openai/codex@latest --dangerously-bypass-approvals-and-sandbox --no-alt-screen --no-daemon --model gpt-6-astra -c model_reasoning_effort="xhigh" --cd /mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator Take over and CONTINUE the authorized performance-first gomap MVCC graph #4871 execution as the new sole coordinator. The user explicitly requested this new tmux session on .185 using the latest Codex CLI with approvals/sandbox bypass. This is a transfer, not a separate duplicate effort. Astra coordinates; every delegated implementation/review/advice agent must use exact gpt-6.1-sol with explicit routing, at most two independent workers.  First read /mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION.md and setup-receipt.json, the artifact worker HANDOFF.md files it links, and refresh the FOUR task-local skills under /mnt/fast4tb/gomap-mvcc-4871-20261015/skills. The global skills checkout is older; the task-local snapshot includes the active Go performance skill. Read applicable repository AGENTS and contribution policies. Live GitHub transfer: https://github.com/snissn/gomap/issues/4871#issuecomment-6196062019. Canonical graph: https://github.com/snissn/gomap/issues/4871#issuecomment-6157916554. Do not infer current state solely from old memory.  Both former workers have stopped all children and source writes; their leases are released to you. Their exact source and evidence are pushed and hash-verified in separate clean /mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary and /native worktrees. You own all further Git/GitHub/merge actions in scope. Preserve unrelated primary checkouts, sessions and services. Direct .185-to-.111 SSH is unavailable, but all active required evidence/source and pinned Go1.26.3 are transferred. Do not ask for credentials or retry peer SSH loops.  After reading those handoffs, immediately write /mnt/fast4tb/gomap-mvcc-4871-20261015/TAKEOVER_ACK.md with your session/thread identity if exposed, actual model routing, the two source heads, accepted ownership and first concrete next action; the outgoing coordinator will only verify startup and append activation to its transfer comment. Coordinate through that existing comment/canonical state and avoid overwriting simultaneous activation metadata. Then execute the graph without waiting for another resume. This is execute-and-merge authorization, not a planning-only prompt. Do not end at the ACK or a plan. Use focused correctness and early bounded representative performance evidence, then required current-head CI/review/merge and final graph qualification.  Latest: ordinary shared-base structural vacuum fix passes unchanged40% public shrink/reopen and nonlast zeroalloc controls; column+1 allocation guard remains RED. Native shared protocol exists but actual producer lacks a compatible retained-work prerequisite closure; latest builder-handoff fixture is RED and Q32/ACK0 remains. Prioritize finishing coherent ordinary work and resolve the deep native producer prerequisite decision, avoiding another ordinary-only diagnostic loop. Details, exact failures, unchanged guardrails, raw results and full acceptance are in the handoff.
+ 128231  128215 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox --no-alt-screen --no-daemon --model gpt-6-astra -c 'model_reasoning_effort="xhigh"' --cd /mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator 'Take over and CONTINUE the authorized performance-first gomap MVCC graph #4871 execution as the new sole coordinator. The user explicitly requested this new tmux session on .185 using the latest Codex CLI with approvals/sandbox bypass. This is a transfer, not a separate duplicate effort. Astra coordinates; every delegated implementation/review/advice agent must use exact gpt-6.1-sol with explicit routing, at most two independent workers.  First read /mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION.md and setup-receipt.json, the artifact worker HANDOFF.md files it links, and refresh the FOUR task-local skills under /mnt/fast4tb/gomap-mvcc-4871-20261015/skills. The global skills checkout is older; the task-local snapshot includes the active Go performance skill. Read applicable repository AGENTS and contribution policies. Live GitHub transfer: https://github.com/snissn/gomap/issues/4871#issuecomment-6196062019. Canonical graph: https://github.com/snissn/gomap/issues/4871#issuecomment-6157916554. Do not infer current state solely from old memory.  Both former workers have stopped all children and source writes; their leases are released to you. Their exact source and evidence are pushed and hash-verified in separate clean /mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary and /native worktrees. You own all further Git/GitHub/merge actions in scope. Preserve unrelated primary checkouts, sessions and services. Direct .185-to-.111 SSH is unavailable, but all active required evidence/source and pinned Go1.26.3 are transferred. Do not ask for credentials or retry peer SSH loops.  After reading those handoffs, immediately write /mnt/fast4tb/gomap-mvcc-4871-20261015/TAKEOVER_ACK.md with your session/thread identity if exposed, actual model routing, the two source heads, accepted ownership and first concrete next action; the outgoing coordinator will only verify startup and append activation to its transfer comment. Coordinate through that existing comment/canonical state and avoid overwriting simultaneous activation metadata. Then execute the graph without waiting for another resume. This is execute-and-merge authorization, not a planning-only prompt. Do not end at the ACK or a plan. Use focused correctness and early bounded representative performance evidence, then required current-head CI/review/merge and final graph qualification.  Latest: ordinary shared-base structural vacuum fix passes unchanged40% public shrink/reopen and nonlast zeroalloc controls; column+1 allocation guard remains RED. Native shared protocol exists but actual producer lacks a compatible retained-work prerequisite closure; latest builder-handoff fixture is RED and Q32/ACK0 remains. Prioritize finishing coherent ordinary work and resolve the deep native producer prerequisite decision, avoiding another ordinary-only diagnostic loop. Details, exact failures, unchanged guardrails, raw results and full acceptance are in the handoff.'
+ 128232  128231 MainThread       0.0  0.1 node /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen --no-daemon --model gpt-6-astra -c model_reasoning_effort="xhigh" --cd /mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator Take over and CONTINUE the authorized performance-first gomap MVCC graph #4871 execution as the new sole coordinator. The user explicitly requested this new tmux session on .185 using the latest Codex CLI with approvals/sandbox bypass. This is a transfer, not a separate duplicate effort. Astra coordinates; every delegated implementation/review/advice agent must use exact gpt-6.1-sol with explicit routing, at most two independent workers.  First read /mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION.md and setup-receipt.json, the artifact worker HANDOFF.md files it links, and refresh the FOUR task-local skills under /mnt/fast4tb/gomap-mvcc-4871-20261015/skills. The global skills checkout is older; the task-local snapshot includes the active Go performance skill. Read applicable repository AGENTS and contribution policies. Live GitHub transfer: https://github.com/snissn/gomap/issues/4871#issuecomment-6196062019. Canonical graph: https://github.com/snissn/gomap/issues/4871#issuecomment-6157916554. Do not infer current state solely from old memory.  Both former workers have stopped all children and source writes; their leases are released to you. Their exact source and evidence are pushed and hash-verified in separate clean /mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary and /native worktrees. You own all further Git/GitHub/merge actions in scope. Preserve unrelated primary checkouts, sessions and services. Direct .185-to-.111 SSH is unavailable, but all active required evidence/source and pinned Go1.26.3 are transferred. Do not ask for credentials or retry peer SSH loops.  After reading those handoffs, immediately write /mnt/fast4tb/gomap-mvcc-4871-20261015/TAKEOVER_ACK.md with your session/thread identity if exposed, actual model routing, the two source heads, accepted ownership and first concrete next action; the outgoing coordinator will only verify startup and append activation to its transfer comment. Coordinate through that existing comment/canonical state and avoid overwriting simultaneous activation metadata. Then execute the graph without waiting for another resume. This is execute-and-merge authorization, not a planning-only prompt. Do not end at the ACK or a plan. Use focused correctness and early bounded representative performance evidence, then required current-head CI/review/merge and final graph qualification.  Latest: ordinary shared-base structural vacuum fix passes unchanged40% public shrink/reopen and nonlast zeroalloc controls; column+1 allocation guard remains RED. Native shared protocol exists but actual producer lacks a compatible retained-work prerequisite closure; latest builder-handoff fixture is RED and Q32/ACK0 remains. Prioritize finishing coherent ordinary work and resolve the deep native producer prerequisite decision, avoiding another ordinary-only diagnostic loop. Details, exact failures, unchanged guardrails, raw results and full acceptance are in the handoff.
+ 128239  128232 codex            1.9  1.4 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen --no-daemon --model gpt-6-astra -c model_reasoning_effort="xhigh" --cd /mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator Take over and CONTINUE the authorized performance-first gomap MVCC graph #4871 execution as the new sole coordinator. The user explicitly requested this new tmux session on .185 using the latest Codex CLI with approvals/sandbox bypass. This is a transfer, not a separate duplicate effort. Astra coordinates; every delegated implementation/review/advice agent must use exact gpt-6.1-sol with explicit routing, at most two independent workers.  First read /mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION.md and setup-receipt.json, the artifact worker HANDOFF.md files it links, and refresh the FOUR task-local skills under /mnt/fast4tb/gomap-mvcc-4871-20261015/skills. The global skills checkout is older; the task-local snapshot includes the active Go performance skill. Read applicable repository AGENTS and contribution policies. Live GitHub transfer: https://github.com/snissn/gomap/issues/4871#issuecomment-6196062019. Canonical graph: https://github.com/snissn/gomap/issues/4871#issuecomment-6157916554. Do not infer current state solely from old memory.  Both former workers have stopped all children and source writes; their leases are released to you. Their exact source and evidence are pushed and hash-verified in separate clean /mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary and /native worktrees. You own all further Git/GitHub/merge actions in scope. Preserve unrelated primary checkouts, sessions and services. Direct .185-to-.111 SSH is unavailable, but all active required evidence/source and pinned Go1.26.3 are transferred. Do not ask for credentials or retry peer SSH loops.  After reading those handoffs, immediately write /mnt/fast4tb/gomap-mvcc-4871-20261015/TAKEOVER_ACK.md with your session/thread identity if exposed, actual model routing, the two source heads, accepted ownership and first concrete next action; the outgoing coordinator will only verify startup and append activation to its transfer comment. Coordinate through that existing comment/canonical state and avoid overwriting simultaneous activation metadata. Then execute the graph without waiting for another resume. This is execute-and-merge authorization, not a planning-only prompt. Do not end at the ACK or a plan. Use focused correctness and early bounded representative performance evidence, then required current-head CI/review/merge and final graph qualification.  Latest: ordinary shared-base structural vacuum fix passes unchanged40% public shrink/reopen and nonlast zeroalloc controls; column+1 allocation guard remains RED. Native shared protocol exists but actual producer lacks a compatible retained-work prerequisite closure; latest builder-handoff fixture is RED and Q32/ACK0 remains. Prioritize finishing coherent ordinary work and resolve the deep native producer prerequisite decision, avoiding another ordinary-only diagnostic loop. Details, exact failures, unchanged guardrails, raw results and full acceptance are in the handoff.
+ 128935  128239 codex-code-mode  0.1  0.0 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 206426    1415 postgres         0.0  0.3 postgres: 14/main: postgres vision2 127.0.0.1(47572) idle
+ 213435       1 systemd-resolve  0.0  0.0 /lib/systemd/systemd-resolved
+ 213437       1 fwupd            0.0  0.0 /usr/libexec/fwupd/fwupd
+ 213453       1 systemd-journal  0.0  0.2 /lib/systemd/systemd-journald
+ 213599       1 systemd-timesyn  0.0  0.0 /lib/systemd/systemd-timesyncd
+ 213645       1 systemd-udevd    0.0  0.0 /lib/systemd/systemd-udevd
+ 213744       1 systemd-oomd     0.0  0.0 /lib/systemd/systemd-oomd
+ 221209       1 bluetoothd       0.0  0.0 /usr/lib/bluetooth/bluetoothd
+ 222769       1 sshd             0.0  0.0 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+ 233841       2 kworker/u24:7-e  0.0  0.0 [kworker/u24:7-events_unbound]
+ 256158    1415 postgres         0.0  0.1 postgres: 14/main: postgres vision2 127.0.0.1(60668) idle
+ 263570       2 kworker/u24:6-f  0.0  0.0 [kworker/u24:6-flush-259:0]
+ 266680    1415 postgres         0.0  0.0 postgres: 14/main: postgres vision2 127.0.0.1(39746) idle
+ 277253       2 kworker/u24:1-e  0.0  0.0 [kworker/u24:1-ext4-rsv-conversion]
+ 289149       2 kworker/0:0-eve  0.0  0.0 [kworker/0:0-events]
+ 290958    1415 postgres         0.0  0.0 postgres: 14/main: postgres vision2 127.0.0.1(40666) idle
+ 299050       2 kworker/6:2-eve  0.0  0.0 [kworker/6:2-events]
+ 302606       2 kworker/u24:3-e  0.0  0.0 [kworker/u24:3-ext4-rsv-conversion]
+ 308030       2 kworker/3:2-eve  0.0  0.0 [kworker/3:2-events]
+ 309312    1415 postgres         0.0  0.1 postgres: 14/main: postgres vision2 127.0.0.1(57766) idle
+ 310283       2 kworker/8:0-eve  0.0  0.0 [kworker/8:0-events]
+ 312842       2 kworker/9:1-eve  0.0  0.0 [kworker/9:1-events]
+ 312851       2 kworker/u24:2-f  0.0  0.0 [kworker/u24:2-flush-259:0]
+ 328646    1415 postgres         0.0  0.0 postgres: 14/main: postgres vision2 127.0.0.1(42670) idle
+ 330454       2 kworker/7:1-eve  0.0  0.0 [kworker/7:1-events]
+ 333585    1415 postgres         0.0  0.0 postgres: 14/main: postgres vision2 127.0.0.1(59558) idle
+ 333739       2 kworker/2:0-eve  0.0  0.0 [kworker/2:0-events]
+ 334780       2 kworker/4:0-eve  0.0  0.0 [kworker/4:0-events]
+ 334781       2 kworker/5:1-eve  0.0  0.0 [kworker/5:1-events]
+ 344501       2 kworker/11:0-ev  0.0  0.0 [kworker/11:0-events]
+ 344502       2 kworker/10:2-ev  0.0  0.0 [kworker/10:2-events]
+ 345678       2 kworker/u24:9-e  0.0  0.0 [kworker/u24:9-events_unbound]
+ 348276       2 kworker/8:2-mm_  0.0  0.0 [kworker/8:2-mm_percpu_wq]
+ 348285       2 kworker/0:2-ine  0.0  0.0 [kworker/0:2-inet_frag_wq]
+ 349738    1415 postgres         0.0  0.0 postgres: 14/main: postgres vision2 127.0.0.1(58564) idle
+ 350465       2 kworker/10:0-ev  0.0  0.0 [kworker/10:0-events]
+ 350593       2 kworker/11:1-in  0.0  0.0 [kworker/11:1-inet_frag_wq]
+ 351006       2 kworker/3:3-eve  0.0  0.0 [kworker/3:3-events]
+ 351417       2 kworker/2:2-ine  0.0  0.0 [kworker/2:2-inet_frag_wq]
+ 351440       2 kworker/1:0-eve  0.0  0.0 [kworker/1:0-events]
+ 351449       2 kworker/u24:0-f  0.0  0.0 [kworker/u24:0-flush-259:2]
+ 351450       2 kworker/6:0-eve  0.0  0.0 [kworker/6:0-events]
+ 352290       2 kworker/u24:4-f  0.0  0.0 [kworker/u24:4-flush-259:2]
+ 352380    1415 postgres         0.0  0.4 postgres: 14/main: postgres vision2 127.0.0.1(54786) idle
+ 353057       2 kworker/7:2-eve  0.0  0.0 [kworker/7:2-events]
+ 353058       2 kworker/4:2-eve  0.0  0.0 [kworker/4:2-events]
+ 355633       2 kworker/9:3-eve  0.0  0.0 [kworker/9:3-events]
+ 355637       2 kworker/5:2-eve  0.0  0.0 [kworker/5:2-events]
+ 356654       2 kworker/u24:5-f  0.0  0.0 [kworker/u24:5-flush-259:2]
+ 357573       2 kworker/6:1-rcu  0.0  0.0 [kworker/6:1-rcu_gp]
+ 357574       2 kworker/8:1-eve  0.0  0.0 [kworker/8:1-events]
+ 357583       2 kworker/1:2-rcu  0.0  0.0 [kworker/1:2-rcu_gp]
+ 358581       2 kworker/10:1-in  0.0  0.0 [kworker/10:1-inet_frag_wq]
+ 358622       2 kworker/11:2-ev  0.0  0.0 [kworker/11:2-events]
+ 359671       2 kworker/2:1-eve  0.0  0.0 [kworker/2:1-events]
+ 359764       2 kworker/7:0-eve  0.0  0.0 [kworker/7:0-events]
+ 359795       2 kworker/0:1      0.0  0.0 [kworker/0:1]
+ 360988       2 kworker/4:1-rcu  0.0  0.0 [kworker/4:1-rcu_gp]
+ 362418       2 kworker/5:0-eve  0.0  0.0 [kworker/5:0-events]
+ 363561       2 kworker/1:1      0.0  0.0 [kworker/1:1]
+ 363875    4327 sleep            0.0  0.0 sleep 5
+ 363891  128239 bash             0.0  0.0 /bin/bash -c python3 - <<'PY' import pathlib,subprocess,json,os,hashlib,time D=pathlib.Path('/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/616fd-get-diagnostic');D.mkdir(exist_ok=True);T=D/'tmp';T.mkdir(exist_ok=True);assert os.access(D,os.W_OK) B=D.parent/'616fd-rawpath-hosted/measured-binaries';E=dict(os.environ,GOMAXPROCS='1',GOWORK='off',GOTOOLCHAIN='local',TMPDIR=str(T));records=[] (D/'host.txt').write_text(subprocess.check_output(['uname','-a'],text=True)+subprocess.check_output(['lscpu'],text=True));(D/'processes-before.txt').write_text(subprocess.check_output(['ps','-eo','pid,ppid,comm,pcpu,pmem,args'],text=True)) for name in ['baseline','candidate']:  b=B/(name+'-db.test');before=hashlib.sha256(b.read_bytes()).hexdigest();b.chmod(0o755);argv=['taskset','-c','0',str(b),'-test.run=^$','-test.bench=^BenchmarkGetVersioned$','-test.benchtime=5s','-test.count=1','-test.benchmem','-test.cpuprofile='+str(D/(name+'.cpu.pprof'))];start=time.monotonic()  with (D/(name+'.log')).open('w') as f:r=subprocess.run(argv,env=E,cwd=D,stdout=f,stderr=subprocess.STDOUT,timeout=60)  after=hashlib.sha256(b.read_bytes()).hexdigest();assert before==after;records.append({'name':name,'argv':argv,'exit':r.returncode,'elapsed':time.monotonic()-start,'binary_sha256':before});(D/'commands.json').write_text(json.dumps({'scope':'CPU attribution only on busy .185; timing not acceptance; fixed pair/no retries','environment':{k:E[k] for k in ['GOMAXPROCS','GOWORK','GOTOOLCHAIN','TMPDIR']},'commands':records},indent=2)+'\n');print(name,r.returncode,flush=True);assert r.returncode==0 (D/'processes-after.txt').write_text(subprocess.check_output(['ps','-eo','pid,ppid,comm,pcpu,pmem,args'],text=True)) PY
+ 363892  363891 python3          0.0  0.0 python3 -
+ 363895  363892 ps               0.0  0.0 ps -eo pid,ppid,comm,pcpu,pmem,args
+ 427615   19242 bash             0.0  0.0 -bash
+ 428636  427615 sudo             0.0  0.0 sudo su
+ 428669  428636 sudo             0.0  0.0 sudo su
+ 428670  428669 su               0.0  0.0 su
+ 428671  428670 bash             0.0  0.0 bash
+ 538321       1 EmbyServer       0.0  0.2 /opt/emby-server/system/EmbyServer -programdata /var/lib/emby -ffdetect /opt/emby-server/bin/ffdetect -ffmpeg /opt/emby-server/bin/ffmpeg -ffprobe /opt/emby-server/bin/ffprobe -restartexitcode 3 -updatepackage emby-server-deb_{version}_amd64.deb
+ 681192    1620 polystorechaind  4.6  7.5 /opt/polystore/polystorechain/polystorechaind start --home /var/lib/nilstore/nilchaind --rpc.laddr tcp://127.0.0.1:26657 --grpc.address 127.0.0.1:9091 --minimum-gas-prices 0.001aatom --api.enable
+ 684319    1620 polystore_fauce  0.0  0.0 /opt/polystore/polystore_faucet/polystore_faucet
+ 684320    1620 polystore_gatew  0.0  0.0 /opt/polystore/polystore_gateway/polystore_gateway
+ 684322    1620 polystore_gatew  0.0  0.0 /opt/polystore/polystore_gateway/polystore_gateway
+ 684325    1620 polystore_gatew  0.0  0.5 /opt/polystore/polystore_gateway/polystore_gateway
+ 684331    1620 polystore_gatew  0.0  0.5 /opt/polystore/polystore_gateway/polystore_gateway
+ 684339    1620 polystore_gatew  0.0  0.5 /opt/polystore/polystore_gateway/polystore_gateway
+ 767472       1 rsyslogd         0.0  0.0 /usr/sbin/rsyslogd -n -iNONE
+ 873199   19242 bash             0.0  0.0 -bash
+ 874030  873199 top              0.3  0.0 top
+ 949719   19242 bash             0.0  0.0 -bash
+ 974517       2 kworker/R-tls-s  0.0  0.0 [kworker/R-tls-s]
+1194890 3421733 npm exec @opena  0.0  0.0 npm exec @openai/codex@latest --dangerously-bypass-approvals-and-sandbox
+1194963 1194890 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox
+1194964 1194963 MainThread       0.0  0.0 node /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+1194972 1194964 codex            0.3  0.2 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+1195934 1194972 codex-code-mode  0.0  0.0 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+1357872   19242 bash             0.0  0.0 -bash
+1429725       1 nginx            0.0  0.0 nginx: master process /usr/sbin/nginx -g daemon on; master_process on;
+1429727 1429725 nginx            0.0  0.0 nginx: worker process
+1429728 1429725 nginx            0.0  0.0 nginx: worker process
+1429729 1429725 nginx            0.0  0.0 nginx: worker process
+1429730 1429725 nginx            0.0  0.0 nginx: worker process
+1429731 1429725 nginx            0.0  0.0 nginx: worker process
+1429732 1429725 nginx            0.0  0.0 nginx: worker process
+1429733 1429725 nginx            0.0  0.0 nginx: worker process
+1429734 1429725 nginx            0.0  0.0 nginx: worker process
+1429735 1429725 nginx            0.0  0.0 nginx: worker process
+1429736 1429725 nginx            0.0  0.0 nginx: worker process
+1429737 1429725 nginx            0.0  0.0 nginx: worker process
+1429738 1429725 nginx            0.0  0.0 nginx: worker process
+1595324 1357872 npm exec @opena  0.0  0.0 npm exec @openai/codex@latest --dangerously-bypass-approvals-and-sandbox
+1595336 1595324 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox
+1595337 1595336 MainThread       0.0  0.0 node /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+1595344 1595337 codex            0.2  0.2 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+1598578 1595344 codex-code-mode  0.0  0.0 /home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+1632086   19242 bash             0.0  0.0 -bash
+1729533    1620 cloudflared      0.0  0.0 /usr/local/bin/cloudflared --no-autoupdate --config /home/mikers/.config/cloudflared/providers.polynomialstore.com.yml tunnel run
+1737473    1620 cloudflared      0.0  0.0 /usr/local/bin/cloudflared --no-autoupdate --config /home/mikers/.config/cloudflared/hub.polynomialstore.com.user.yml tunnel run
+1837844   19242 bash             0.0  0.0 -bash
+2163878       1 libvirtd         0.0  0.0 /usr/sbin/libvirtd
+2354873    1620 gnome-keyring-d  0.0  0.0 /usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+2645070       1 polkitd          0.2  0.0 /usr/libexec/polkitd --no-debug
+2645078       1 ModemManager     0.0  0.0 /usr/sbin/ModemManager
+2711059    1620 kwalletd5        0.0  0.0 /usr/bin/kwalletd5
+3034017       1 ssh              0.0  0.0 /usr/bin/ssh -R 5433:localhost:5432 root@34.31.196.41 -A -i /home/mikers/.ssh/id_rsa -N
+3035438   19242 bash             0.0  0.0 -bash
+3037228       1 codex            0.1  0.8 /home/mikers/.codex/packages/app-server-daemon/releases/0.162.1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --analytics-default-enabled --managed-daemon
+3041210 3037228 codex-code-mode  0.0  0.0 /home/mikers/.codex/packages/app-server-daemon/releases/0.162.1-x86_64-unknown-linux-musl/bin/codex-code-mode-host
+3052845    1620 runsvc.sh        0.0  0.0 /bin/bash /mnt/fast4tb/github-runners/elastic-electron-policy/runsvc.sh
+3052848 3052845 MainThread       0.0  0.0 ./externals/node24/bin/node ./bin/RunnerService.js
+3052860 3052848 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-runners/elastic-electron-policy/bin/Runner.Listener run --startuptype service
+3052874    1620 runsvc.sh        0.0  0.0 /bin/bash /mnt/fast4tb/github-runners/elastic-electron-conformance/runsvc.sh
+3052877 3052874 MainThread       0.0  0.0 ./externals/node24/bin/node ./bin/RunnerService.js
+3052890 3052877 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-runners/elastic-electron-conformance/bin/Runner.Listener run --startuptype service
+3052912    1620 runsvc.sh        0.0  0.0 /bin/bash /mnt/fast4tb/github-runners/elastic-electron-engineering/runsvc.sh
+3052916 3052912 MainThread       0.0  0.0 ./externals/node24/bin/node ./bin/RunnerService.js
+3052925 3052916 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-runners/elastic-electron-engineering/bin/Runner.Listener run --startuptype service
+3060340    1620 run.sh           0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/rh/run.sh
+3060347 3060340 run-helper.sh    0.0  0.0 /bin/bash /mnt/fast4tb/github-actions-runners/rh/run-helper.sh
+3060351 3060347 Runner.Listener  0.0  0.1 /mnt/fast4tb/github-actions-runners/rh/bin/Runner.Listener run
+3140140  949719 htop             1.9  0.0 htop
+3389346       2 scsi_eh_6        0.0  0.0 [scsi_eh_6]
+3389347       2 kworker/R-scsi_  0.0  0.0 [kworker/R-scsi_]
+3389352       2 kworker/R-uas    0.0  0.0 [kworker/R-uas]
+3389397       2 jbd2/sda4-8      0.0  0.0 [jbd2/sda4-8]
+3389398       2 kworker/R-ext4-  0.0  0.0 [kworker/R-ext4-]
+3394313       1 codex            0.0  0.0 /home/mikers/.codex/packages/app-server-daemon/releases/0.162.1-x86_64-unknown-linux-musl/bin/codex app-server daemon pid-update-loop
+3399450    1620 usb-creator-gtk  0.0  0.0 /usr/bin/python3 /usr/bin/usb-creator-gtk -i /mnt/fast4tb/ubuntu-26.04.1-desktop-amd64.iso
+3399455       1 usb-creator-hel  0.0  0.0 /usr/bin/python3 /usr/share/usb-creator/usb-creator-helper
+3410145    1620 pkexec           0.0  0.0 /usr/bin/pkexec /usr/bin/find /mnt/fast4tb/.cleanup-20261010.TLyqmu -xdev -depth -delete
+3410150    3861 polkit-agent-he  0.0  0.0 /usr/libexec/polkit-agent-helper-1 mikers
+3421733   19242 bash             0.0  0.0 -bash
+3434885 3521162 npm exec @opena  0.0  0.0 npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox resume ***
+3434901 3434885 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox resume 01a07d6b-7d35-7160-a1ae-964cdda07668
+3434902 3434901 MainThread       0.0  0.0 node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a07d6b-7d35-7160-a1ae-964cdda07668
+3434909 3434902 codex            0.2  0.2 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a07d6b-7d35-7160-a1ae-964cdda07668
+3437258 3434909 codex-code-mode  0.0  0.0 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+3521162   19242 bash             0.0  0.0 -bash
+3806769       1 snapd            0.0  0.0 /snap/snapd/current/usr/lib/snapd/snapd
+3875538   19243 npm exec @opena  0.0  0.0 npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+3875550 3875538 sh               0.0  0.0 sh -c "codex" --dangerously-bypass-approvals-and-sandbox
+3875551 3875550 MainThread       0.0  0.0 node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+3875558 3875551 codex            0.2  0.1 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+3875885 3875558 codex-code-mode  0.0  0.0 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+3890117       1 sshd             0.0  0.0 sshd: mikers [priv]
+3890155 3890117 sshd             0.0  0.0 sshd: mikers@pts/0
+3890156 3890155 bash             0.0  0.0 -bash
+4080606       1 cupsd            0.0  0.0 /usr/sbin/cupsd -l
+4080610       1 cups-browsed     0.0  0.0 /usr/sbin/cups-browsed
+4082662 4080606 dbus             0.0  0.0 /usr/lib/cups/notifier/dbus dbus://
+4082663 4080606 dbus             0.0  0.0 /usr/lib/cups/notifier/dbus dbus://

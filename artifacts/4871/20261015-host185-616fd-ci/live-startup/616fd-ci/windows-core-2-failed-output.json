@@ -1,0 +1,3 @@
+{
+  "TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots": "=== RUN   TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots\n    vacuum_original_completion_test.go:237: online vacuum unsupported on this platform\n--- FAIL: TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots (2.78s)\n"
+}

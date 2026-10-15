@@ -1,0 +1,79 @@
+{
+  "job": "race-check (linux)-3",
+  "job_id": "116593531419",
+  "failures": [
+    "TestStableResourceSetConcurrentReadsAndRelease"
+  ],
+  "race_reports": 1,
+  "interesting": [
+    {
+      "line": 637,
+      "text": "2026-10-15T18:24:22.1143179Z {\"Time\":\"2026-10-15T18:24:22.113174248Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treemap\",\"Test\":\"TestHelperTreemapCompactPendingWALWriter\",\"Output\":\"    main_test.go:271: helper\\n\"}"
+    },
+    {
+      "line": 886,
+      "text": "2026-10-15T18:24:32.0977297Z {\"Time\":\"2026-10-15T18:24:32.094043717Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/collections/embedding\",\"Test\":\"TestRegenerateParityFixture\",\"Output\":\"    parity_test.go:49: set EMBEDDING_REGENERATE_FIXTURE=1 to rewrite testdata/hashing_parity.json\\n\"}"
+    },
+    {
+      "line": 4781,
+      "text": "2026-10-15T18:27:27.7570881Z {\"Time\":\"2026-10-15T18:27:27.756758908Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestCoordinatorEnqueueRetainedClosureAllocation\",\"Output\":\"    coordinator_resource_count_test.go:117: pending=1 entries=128 RIDs/entry=512 enqueue bytes=156160 mallocs=47\\n\"}"
+    },
+    {
+      "line": 4782,
+      "text": "2026-10-15T18:27:28.0593222Z {\"Time\":\"2026-10-15T18:27:28.058997502Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestCoordinatorEnqueueRetainedClosureAllocation\",\"Output\":\"    coordinator_resource_count_test.go:117: pending=2 entries=128 RIDs/entry=512 enqueue bytes=158080 mallocs=57\\n\"}"
+    },
+    {
+      "line": 5427,
+      "text": "2026-10-15T18:29:21.7812074Z {\"Time\":\"2026-10-15T18:29:21.780929323Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestPrimaryRootV5ExactReplacementBundleUsesRealCodecAndCustody\",\"Output\":\"    primary_bank_metadata_v5_test.go:292: isolated actual Dir+V5 record bundle: 17R/229440B; cache/meta/fences/Accepted/Finish/releases excluded and whole-F UNQUALIFIED\\n\"}"
+    },
+    {
+      "line": 5932,
+      "text": "2026-10-15T18:29:23.4026381Z {\"Time\":\"2026-10-15T18:29:23.402222162Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries\",\"Output\":\"    resource_contract_test.go:172: cached manifest assembly: entries=4096 payload=846781 bytes/build=33000 limit=1890170\\n\"}"
+    },
+    {
+      "line": 6242,
+      "text": "2026-10-15T18:29:24.4530312Z {\"Time\":\"2026-10-15T18:29:24.451047554Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourceSetConcurrentReadsAndRelease\",\"Output\":\"WARNING: DATA RACE\\n\"}"
+    },
+    {
+      "line": 6313,
+      "text": "2026-10-15T18:29:24.4886191Z {\"Time\":\"2026-10-15T18:29:24.487994174Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourceSetConcurrentReadsAndRelease\",\"Output\":\"    testing.go:1712: race detected during execution of test\\n\"}"
+    },
+    {
+      "line": 6414,
+      "text": "2026-10-15T18:29:24.5112620Z {\"Time\":\"2026-10-15T18:29:24.506519038Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership\",\"Output\":\"    resource_contract_test.go:3594: 128 retained entries: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 6417,
+      "text": "2026-10-15T18:29:24.5711888Z {\"Time\":\"2026-10-15T18:29:24.570847042Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/equal\",\"Output\":\"    resource_contract_test.go:3655: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 6422,
+      "text": "2026-10-15T18:29:24.6052092Z {\"Time\":\"2026-10-15T18:29:24.604833239Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/subset\",\"Output\":\"    resource_contract_test.go:3655: 128 entries with 256/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 6427,
+      "text": "2026-10-15T18:29:24.6340369Z {\"Time\":\"2026-10-15T18:29:24.633739146Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/different\",\"Output\":\"    resource_contract_test.go:3655: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 11031,
+      "text": "2026-10-15T18:29:45.6436397Z {\"Time\":\"2026-10-15T18:29:45.643421618Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/valuelog\",\"Test\":\"TestManagerSharedRetirementParentAccounting/nil\",\"Output\":\"    retirement_parent_accounting_test.go:52: retirement parent envelope=2048 File=2176 pool=272 entry=104 os.File=8 physical-key=48\\n\"}"
+    },
+    {
+      "line": 11036,
+      "text": "2026-10-15T18:29:45.6598847Z {\"Time\":\"2026-10-15T18:29:45.65956354Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/valuelog\",\"Test\":\"TestManagerSharedRetirementParentAccounting/registry\",\"Output\":\"    retirement_parent_accounting_test.go:52: retirement parent envelope=2048 File=2176 pool=272 entry=104 os.File=8 physical-key=48\\n\"}"
+    },
+    {
+      "line": 15837,
+      "text": "2026-10-15T18:30:45.0019990Z {\"Time\":\"2026-10-15T18:30:45.001382819Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_relaxed\",\"Output\":\"    standalone_test.go:867: command-WAL BSON visibility profile=command_wal_relaxed docs=512 workers=16 request_limit=10s ping=1.322346ms insert_wall=130.400113ms insert_max=16.716351ms initial_read_total=219.79063ms initial_read_max=631.108\u00b5s update_total=331.991913ms update_max=1.416717ms final_read_total=216.41781ms final_read_max=528.319\u00b5s scenario_wall=907.702152ms\\n\"}"
+    },
+    {
+      "line": 15842,
+      "text": "2026-10-15T18:30:46.1550835Z {\"Time\":\"2026-10-15T18:30:46.154603607Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable\",\"Output\":\"    standalone_test.go:867: command-WAL BSON visibility profile=command_wal_durable docs=512 workers=16 request_limit=10s ping=1.41899ms insert_wall=131.479534ms insert_max=12.385238ms initial_read_total=228.08356ms initial_read_max=630.19\u00b5s update_total=482.266448ms update_max=2.63684ms final_read_total=226.649442ms final_read_max=1.105402ms scenario_wall=1.077963048s\\n\"}"
+    },
+    {
+      "line": 16929,
+      "text": "2026-10-15T18:31:20.4629475Z {\"Time\":\"2026-10-15T18:31:20.461257631Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/tree\",\"Test\":\"TestTreeGetManyPointerViewVerifiedGroupedCache\",\"Output\":\"    getmany_pointer_cache_test.go:126: same-batch CRC-verified grouped cache: {Hits:71 Misses:0 Stores:1 Evictions:0 Releases:0 RetainedBytes:2048 BudgetBytes:67108864 SkippedDisabled:0 SkippedOversize:0 SkippedBudget:0 SkippedContention:0 Entries:1 Capacity:2048 AllocatedShards:1 AllocatedSlots:4}\\n\"}"
+    }
+  ],
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/race-check_linux_-3.log"
+}

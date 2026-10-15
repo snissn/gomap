@@ -1,0 +1,905 @@
+[
+  {
+    "job": "ubuntu-latest-3",
+    "job_id": "116593531455",
+    "failures": [
+      "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication"
+    ],
+    "race_reports": 0,
+    "interesting": [
+      {
+        "line": 767,
+        "text": "2026-10-15T18:21:49.1526870Z {\"Time\":\"2026-10-15T18:21:49.151667646Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treemap\",\"Test\":\"TestHelperTreemapCompactPendingWALWriter\",\"Output\":\"    main_test.go:271: helper\\n\"}"
+      },
+      {
+        "line": 2941,
+        "text": "2026-10-15T18:22:52.8694324Z {\"Time\":\"2026-10-15T18:22:52.867891602Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageIndexVacuumUnsupportedIsReported\",\"Output\":\"    compact_storage_index_vacuum_test.go:247: unsupported-platform contract runs on Windows\\n\"}"
+      },
+      {
+        "line": 3414,
+        "text": "2026-10-15T18:22:54.2190170Z {\"Time\":\"2026-10-15T18:22:54.21805098Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageWindowsKeepsPackedLeafSourcesWhenIndexVacuumUnsupported\",\"Output\":\"    compact_storage_test.go:2671: index vacuum is supported on this platform\\n\"}"
+      },
+      {
+        "line": 3713,
+        "text": "2026-10-15T18:22:55.5442352Z {\"Time\":\"2026-10-15T18:22:55.543743594Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2\",\"Output\":\"    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:1632 drained-cohort-files:2 drained-gc-deleted-files:0 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:210432 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:26048 scope-after-reader-governor-bytes:178592 scope-complete-governor-bytes:161952]\\n\"}"
+      },
+      {
+        "line": 3718,
+        "text": "2026-10-15T18:22:55.5954655Z {\"Time\":\"2026-10-15T18:22:55.595041059Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8\",\"Output\":\"    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:6528 drained-cohort-files:8 drained-gc-deleted-files:0 held-cohort-bytes:6528 held-cohort-files:8 held-gc-deleted-files:0 held-governor-bytes:303760 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:55763 scope-after-reader-governor-bytes:220400 scope-complete-governor-bytes:161952]\\n\"}"
+      },
+      {
+        "line": 3723,
+        "text": "2026-10-15T18:22:55.6564056Z {\"Time\":\"2026-10-15T18:22:55.655906908Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16\",\"Output\":\"    durable_root_bench_test.go:731: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:13056 drained-cohort-files:16 drained-gc-deleted-files:0 held-cohort-bytes:13056 held-cohort-files:16 held-gc-deleted-files:0 held-governor-bytes:429648 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:97835 scope-after-reader-governor-bytes:276144 scope-complete-governor-bytes:161952]\\n\"}"
+      },
+      {
+        "line": 3734,
+        "text": "2026-10-15T18:22:55.8282611Z {\"Time\":\"2026-10-15T18:22:55.8279002Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestDurableRootMetadataReuseLowPlacementAndFallback4627\",\"Output\":\"    durable_root_metadata_reuse_test.go:64: after32=88 after64=88 lowMetadata=true lowAux=true\\n\"}"
+      },
+      {
+        "line": 3739,
+        "text": "2026-10-15T18:22:55.9486636Z {\"Time\":\"2026-10-15T18:22:55.948338442Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestDurableRootMetadataReuseMultipageManifest4627\",\"Output\":\"    durable_root_metadata_reuse_test.go:186: manifest pages=2 entries=24 totalpages=37\\n\"}"
+      },
+      {
+        "line": 3872,
+        "text": "2026-10-15T18:22:56.6305008Z {\"Time\":\"2026-10-15T18:22:56.630247362Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestDurableRootAlternatingSlotsRetireAuxiliaryHistory\",\"Output\":\"    durable_root_open_test.go:1032: initial auxiliary=4 reused as kind=3 at commit=13 oldest-recoverable=11\\n\"}"
+      },
+      {
+        "line": 3873,
+        "text": "2026-10-15T18:22:56.6307213Z {\"Time\":\"2026-10-15T18:22:56.630271387Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestDurableRootAlternatingSlotsRetireAuxiliaryHistory\",\"Output\":\"    durable_root_open_test.go:1032: initial auxiliary=5 reused as kind=3 at commit=13 oldest-recoverable=11\\n\"}"
+      },
+      {
+        "line": 4120,
+        "text": "2026-10-15T18:22:57.0698863Z {\"Time\":\"2026-10-15T18:22:57.069437574Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=0 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 148 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4121,
+        "text": "2026-10-15T18:22:57.0706648Z {\"Time\":\"2026-10-15T18:22:57.069467119Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=1 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 148 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4122,
+        "text": "2026-10-15T18:22:57.0751711Z {\"Time\":\"2026-10-15T18:22:57.074710342Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4123,
+        "text": "2026-10-15T18:22:57.0757360Z {\"Time\":\"2026-10-15T18:22:57.074736578Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4124,
+        "text": "2026-10-15T18:22:57.0763226Z {\"Time\":\"2026-10-15T18:22:57.074781548Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4125,
+        "text": "2026-10-15T18:22:57.0768779Z {\"Time\":\"2026-10-15T18:22:57.074791706Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4130,
+        "text": "2026-10-15T18:22:57.0853226Z {\"Time\":\"2026-10-15T18:22:57.084940445Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=0 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 149 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4131,
+        "text": "2026-10-15T18:22:57.0860268Z {\"Time\":\"2026-10-15T18:22:57.08495795Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=1 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 149 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4132,
+        "text": "2026-10-15T18:22:57.0904329Z {\"Time\":\"2026-10-15T18:22:57.089923645Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4133,
+        "text": "2026-10-15T18:22:57.0911275Z {\"Time\":\"2026-10-15T18:22:57.089940245Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4134,
+        "text": "2026-10-15T18:22:57.0917360Z {\"Time\":\"2026-10-15T18:22:57.090008792Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4135,
+        "text": "2026-10-15T18:22:57.0923638Z {\"Time\":\"2026-10-15T18:22:57.090021841Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/dictionary/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 160 6 144 0 0 0 0 0] Generation:9702} lane=\\\"dictdb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=eedaeef94b00f3f3abee6df444b6c31ee2502ccc21464e98d17a0deed033c0dd frontier={Bytes:40 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.dictionary_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 159 6 144 0 0 0 0 0] Generation:9511171151447657488} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4140,
+        "text": "2026-10-15T18:22:57.1007590Z {\"Time\":\"2026-10-15T18:22:57.100384918Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=0 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 148 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4141,
+        "text": "2026-10-15T18:22:57.1012876Z {\"Time\":\"2026-10-15T18:22:57.100408023Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=1 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 148 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4142,
+        "text": "2026-10-15T18:22:57.1073866Z {\"Time\":\"2026-10-15T18:22:57.106951499Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4143,
+        "text": "2026-10-15T18:22:57.1079895Z {\"Time\":\"2026-10-15T18:22:57.106972966Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4144,
+        "text": "2026-10-15T18:22:57.1085622Z {\"Time\":\"2026-10-15T18:22:57.107015165Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4145,
+        "text": "2026-10-15T18:22:57.1090764Z {\"Time\":\"2026-10-15T18:22:57.107025862Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/manifest-v1\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4150,
+        "text": "2026-10-15T18:22:57.1251389Z {\"Time\":\"2026-10-15T18:22:57.124605308Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=0 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 149 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4151,
+        "text": "2026-10-15T18:22:57.1259967Z {\"Time\":\"2026-10-15T18:22:57.124627137Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:185: slot=1 source identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 149 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 147 6 144 0 0 0 0 0] Generation:10083407378751611764} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4152,
+        "text": "2026-10-15T18:22:57.1307480Z {\"Time\":\"2026-10-15T18:22:57.130243919Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4153,
+        "text": "2026-10-15T18:22:57.1315259Z {\"Time\":\"2026-10-15T18:22:57.130264711Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=0 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4154,
+        "text": "2026-10-15T18:22:57.1320738Z {\"Time\":\"2026-10-15T18:22:57.13030847Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 restored identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 4155,
+        "text": "2026-10-15T18:22:57.1326541Z {\"Time\":\"2026-10-15T18:22:57.130329106Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority/template/directory-v2\",\"Output\":\"    durable_root_side_store_recovery_supported_test.go:230: slot=1 fresh identity={Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 169 6 144 0 0 0 0 0] Generation:9702} lane=\\\"templatedb/index\\\" resource=\\\"index\\\" path=\\\"index.db\\\" digest=ed27c0d8bbc19becff8a5950a7eceeecf0bc6299c0af5e0ab2440c5f86695503 frontier={Bytes:38 MaxLSN:0 MaxRID:0 RIDSetDigest:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] RIDCount:0 RIDMin:0 RIDMax:0 exactRIDs:\\u003cnil\\u003e} reachability=[frame.template_generation] namespace_present=true namespace={ParentIdentity:{Platform:linux VolumeID:66305 ObjectID:[1 3 1 0 0 0 0 0 168 6 144 0 0 0 0 0] Generation:6547716407382904675} Operation:create OldName: NewName:index.db DiagnosticPath:index.db}\\n\"}"
+      },
+      {
+        "line": 5046,
+        "text": "2026-10-15T18:23:23.3284832Z {\"Time\":\"2026-10-15T18:23:23.327500807Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationManifestStablePrepareUnsupportedFailsBeforeCandidate\",\"Output\":\"    leaf_generation_manifest_stable_prepare_test.go:163: platform supports stable manifest replacement\\n\"}"
+      },
+      {
+        "line": 5455,
+        "text": "2026-10-15T18:23:25.2900589Z {\"Time\":\"2026-10-15T18:23:25.289772458Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    leaf_generation_pack_publication_test.go:779: cleanup outcome type=*errors.joinError ownership=false conflict=false closed=false recovery=true\\n\"}"
+      },
+      {
+        "line": 5456,
+        "text": "2026-10-15T18:23:25.2903457Z {\"Time\":\"2026-10-15T18:23:25.289797182Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=0 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5460,
+        "text": "2026-10-15T18:23:25.2910452Z {\"Time\":\"2026-10-15T18:23:25.289809732Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=1 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5464,
+        "text": "2026-10-15T18:23:25.2917810Z {\"Time\":\"2026-10-15T18:23:25.289821103Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5467,
+        "text": "2026-10-15T18:23:25.2922427Z {\"Time\":\"2026-10-15T18:23:25.289834743Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5470,
+        "text": "2026-10-15T18:23:25.2927348Z {\"Time\":\"2026-10-15T18:23:25.289842474Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5472,
+        "text": "2026-10-15T18:23:25.2930465Z {\"Time\":\"2026-10-15T18:23:25.289847463Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5473,
+        "text": "2026-10-15T18:23:25.2932295Z {\"Time\":\"2026-10-15T18:23:25.289850266Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=treedb: sync meta failpoint\\n\"}"
+      },
+      {
+        "line": 5474,
+        "text": "2026-10-15T18:23:25.2934070Z {\"Time\":\"2026-10-15T18:23:25.289853126Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.errorString cause=collectionwal: recovery required\\n\"}"
+      },
+      {
+        "line": 5475,
+        "text": "2026-10-15T18:23:25.2936072Z {\"Time\":\"2026-10-15T18:23:25.289855628Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=stop root publication: root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5476,
+        "text": "2026-10-15T18:23:25.2938160Z {\"Time\":\"2026-10-15T18:23:25.289858518Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.errorString cause=root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5481,
+        "text": "2026-10-15T18:23:25.3146712Z {\"Time\":\"2026-10-15T18:23:25.314429152Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    leaf_generation_pack_publication_test.go:847: cleanup outcome type=*errors.joinError ownership=false conflict=false closed=false recovery=true\\n\"}"
+      },
+      {
+        "line": 5482,
+        "text": "2026-10-15T18:23:25.3148556Z {\"Time\":\"2026-10-15T18:23:25.314442449Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=0 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5486,
+        "text": "2026-10-15T18:23:25.3155926Z {\"Time\":\"2026-10-15T18:23:25.314455307Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=1 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5490,
+        "text": "2026-10-15T18:23:25.3162081Z {\"Time\":\"2026-10-15T18:23:25.314467806Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5493,
+        "text": "2026-10-15T18:23:25.3167268Z {\"Time\":\"2026-10-15T18:23:25.314479535Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5496,
+        "text": "2026-10-15T18:23:25.3171563Z {\"Time\":\"2026-10-15T18:23:25.314495513Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5498,
+        "text": "2026-10-15T18:23:25.3174725Z {\"Time\":\"2026-10-15T18:23:25.314503967Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5499,
+        "text": "2026-10-15T18:23:25.3176416Z {\"Time\":\"2026-10-15T18:23:25.314506463Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=treedb: sync meta failpoint\\n\"}"
+      },
+      {
+        "line": 5500,
+        "text": "2026-10-15T18:23:25.3178465Z {\"Time\":\"2026-10-15T18:23:25.314510729Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.errorString cause=collectionwal: recovery required\\n\"}"
+      },
+      {
+        "line": 5501,
+        "text": "2026-10-15T18:23:25.3180250Z {\"Time\":\"2026-10-15T18:23:25.31451366Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=stop root publication: root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5502,
+        "text": "2026-10-15T18:23:25.3182202Z {\"Time\":\"2026-10-15T18:23:25.314516351Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.errorString cause=root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5511,
+        "text": "2026-10-15T18:23:25.4546117Z {\"Time\":\"2026-10-15T18:23:25.454388532Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    leaf_generation_pack_publication_test.go:992: cleanup outcome type=*errors.joinError ownership=false conflict=false closed=false recovery=true\\n\"}"
+      },
+      {
+        "line": 5512,
+        "text": "2026-10-15T18:23:25.4548264Z {\"Time\":\"2026-10-15T18:23:25.454402284Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=0 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5516,
+        "text": "2026-10-15T18:23:25.4555108Z {\"Time\":\"2026-10-15T18:23:25.454419356Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=1 type=*errors.joinError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5520,
+        "text": "2026-10-15T18:23:25.4564151Z {\"Time\":\"2026-10-15T18:23:25.454433039Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=drain root publication: root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5523,
+        "text": "2026-10-15T18:23:25.4570670Z {\"Time\":\"2026-10-15T18:23:25.454439559Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5526,
+        "text": "2026-10-15T18:23:25.4576062Z {\"Time\":\"2026-10-15T18:23:25.454445722Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.joinError cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5528,
+        "text": "2026-10-15T18:23:25.4579975Z {\"Time\":\"2026-10-15T18:23:25.454450243Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=root publication recovery required\\n\"}"
+      },
+      {
+        "line": 5529,
+        "text": "2026-10-15T18:23:25.4582399Z {\"Time\":\"2026-10-15T18:23:25.454452853Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=treedb: sync meta failpoint\\n\"}"
+      },
+      {
+        "line": 5530,
+        "text": "2026-10-15T18:23:25.4584126Z {\"Time\":\"2026-10-15T18:23:25.454455169Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.errorString cause=collectionwal: recovery required\\n\"}"
+      },
+      {
+        "line": 5531,
+        "text": "2026-10-15T18:23:25.4586044Z {\"Time\":\"2026-10-15T18:23:25.454466369Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=stop root publication: root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5532,
+        "text": "2026-10-15T18:23:25.4588009Z {\"Time\":\"2026-10-15T18:23:25.454471211Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC\",\"Output\":\"    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.errorString cause=root publication stopped before debt drained\\n\"}"
+      },
+      {
+        "line": 5713,
+        "text": "2026-10-15T18:23:26.0133742Z {\"Time\":\"2026-10-15T18:23:26.012407847Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPackStablePrepareUnsupportedFailsBeforeVisibility\",\"Output\":\"    leaf_generation_pack_stable_prepare_test.go:698: platform supports packed promotion; positive lifecycle test covers this path\\n\"}"
+      },
+      {
+        "line": 6050,
+        "text": "2026-10-15T18:23:27.2773570Z {\"Time\":\"2026-10-15T18:23:27.277085187Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafManifestRevisionGCBoundedDescriptors\",\"Output\":\"    leaf_manifest_revision_gc_fd_linux_test.go:24: isolated child:\\n\"}"
+      },
+      {
+        "line": 6052,
+        "text": "2026-10-15T18:23:27.2776505Z {\"Time\":\"2026-10-15T18:23:27.277123468Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafManifestRevisionGCBoundedDescriptors\",\"Output\":\"            leaf_manifest_revision_gc_fd_linux_test.go:117: RLIMIT_NOFILE=64 revisions=257 deleted=255 protected=2 descriptor_baseline=14 peak=31 remaining=1\\n\"}"
+      },
+      {
+        "line": 6395,
+        "text": "2026-10-15T18:23:27.6887285Z {\"Time\":\"2026-10-15T18:23:27.678854592Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestHelperOpenLock\",\"Output\":\"    lock_test.go:80: helper\\n\"}"
+      },
+      {
+        "line": 6556,
+        "text": "2026-10-15T18:23:28.1309313Z {\"Time\":\"2026-10-15T18:23:28.13075007Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestNativeGenerationPublishedFailurePredicates\",\"Output\":\"    native_generation_failure_predicates_test.go:82: actual predicates: snapshotManager=true backgroundManager=true failedSnapshot=true borrows=1\\n\"}"
+      },
+      {
+        "line": 6743,
+        "text": "2026-10-15T18:23:28.6534541Z {\"Time\":\"2026-10-15T18:23:28.653114898Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestOneShotReadAllocationBudget/Get\",\"Output\":\"    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0\\n\"}"
+      },
+      {
+        "line": 6748,
+        "text": "2026-10-15T18:23:28.6541866Z {\"Time\":\"2026-10-15T18:23:28.653299334Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestOneShotReadAllocationBudget/GetAppend\",\"Output\":\"    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0\\n\"}"
+      },
+      {
+        "line": 6753,
+        "text": "2026-10-15T18:23:28.6548962Z {\"Time\":\"2026-10-15T18:23:28.653437207Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestOneShotReadAllocationBudget/GetVersioned\",\"Output\":\"    one_shot_read_test.go:48: allocations/read=1 capture/release pairs=101 live registry pins=0\\n\"}"
+      },
+      {
+        "line": 6758,
+        "text": "2026-10-15T18:23:28.6556954Z {\"Time\":\"2026-10-15T18:23:28.653517951Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestOneShotReadAllocationBudget/GetVersionedAppend\",\"Output\":\"    one_shot_read_test.go:48: allocations/read=0 capture/release pairs=101 live registry pins=0\\n\"}"
+      },
+      {
+        "line": 7529,
+        "text": "2026-10-15T18:23:29.8296253Z {\"Time\":\"2026-10-15T18:23:29.828785972Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1ManifestConcurrentACK5095\",\"Output\":\"    owned_manifest_concurrency_capture_test.go:22: opt-in source-bound public manifest capture\\n\"}"
+      },
+      {
+        "line": 7538,
+        "text": "2026-10-15T18:23:29.8308839Z {\"Time\":\"2026-10-15T18:23:29.828827705Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1ManifestWholeGC5095\",\"Output\":\"    owned_manifest_concurrency_capture_test.go:273: opt-in source-bound public manifest capture\\n\"}"
+      },
+      {
+        "line": 7545,
+        "text": "2026-10-15T18:23:29.8842832Z {\"Time\":\"2026-10-15T18:23:29.883920347Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=5 parentCommit=26 oldest=26 classifiedUnused=false free=false\\n\"}"
+      },
+      {
+        "line": 7546,
+        "text": "2026-10-15T18:23:29.8844859Z {\"Time\":\"2026-10-15T18:23:29.883957619Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\\n\"}"
+      },
+      {
+        "line": 7551,
+        "text": "2026-10-15T18:23:30.0041439Z {\"Time\":\"2026-10-15T18:23:30.003826773Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=25 parentCommit=26 oldest=26 classifiedUnused=false free=false\\n\"}"
+      },
+      {
+        "line": 7552,
+        "text": "2026-10-15T18:23:30.0043446Z {\"Time\":\"2026-10-15T18:23:30.003862498Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\\n\"}"
+      },
+      {
+        "line": 7583,
+        "text": "2026-10-15T18:23:30.1665788Z {\"Time\":\"2026-10-15T18:23:30.165595346Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPowerLossOracleCounterexampleRecoverablePageReuse\",\"Output\":\"    power_loss_oracle_page_reuse_test.go:283: adversarial crash images: cut=cut/older-meta-live-page-reuse/before-index-data-sync/001 count=2 family_coverage=map[old-page-reuse:1 synced-only:1]\\n\"}"
+      },
+      {
+        "line": 7656,
+        "text": "2026-10-15T18:23:30.2384246Z {\"Time\":\"2026-10-15T18:23:30.238156773Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6\",\"Output\":\"    primary_capsule_v6_test.go:83: pre-corruption slot0 commit3 parent2 newest0 prior2\\n\"}"
+      },
+      {
+        "line": 7657,
+        "text": "2026-10-15T18:23:30.2385739Z {\"Time\":\"2026-10-15T18:23:30.238199363Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6\",\"Output\":\"    primary_capsule_v6_test.go:83: pre-corruption slot1 commit2 parent1 newest0 prior2\\n\"}"
+      },
+      {
+        "line": 7702,
+        "text": "2026-10-15T18:23:30.9774195Z {\"Time\":\"2026-10-15T18:23:30.977104178Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryDirectoryOrdinarySnapshotCoalesceReopen\",\"Output\":\"    primary_directory_test.go:104: initial directory count 4\\n\"}"
+      },
+      {
+        "line": 7707,
+        "text": "2026-10-15T18:23:31.4590539Z {\"Time\":\"2026-10-15T18:23:31.458761835Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport\",\"Output\":\"    primary_directory_test.go:201: last root type 11\\n\"}"
+      },
+      {
+        "line": 7774,
+        "text": "2026-10-15T18:23:32.3690473Z {\"Time\":\"2026-10-15T18:23:32.36872814Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation\",\"Output\":\"    primary_joint_completed_v6_test.go:303: physical-change refusal: collectionwal: recovery required: committed pair identity missing: index.db\\n\"}"
+      },
+      {
+        "line": 7780,
+        "text": "2026-10-15T18:23:32.4392072Z {\"Time\":\"2026-10-15T18:23:32.438794786Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules\",\"Output\":\"    primary_joint_completed_v6_test.go:303: physical-change refusal: treedb: no recoverable durable meta: slot 0: primary capsule V6: invalid complete authority; slot 1: primary capsule V6: invalid complete authority\\n\"}"
+      },
+      {
+        "line": 7786,
+        "text": "2026-10-15T18:23:32.5096093Z {\"Time\":\"2026-10-15T18:23:32.509323057Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency\",\"Output\":\"    primary_joint_completed_v6_test.go:303: physical-change refusal: treedb: no recoverable durable meta: slot 0: no such file or directory; slot 1: no such file or directory\\n\"}"
+      },
+      {
+        "line": 7866,
+        "text": "2026-10-15T18:23:33.2499435Z {\"Time\":\"2026-10-15T18:23:33.248774249Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryJointCrashProcessV6\",\"Output\":\"    primary_joint_vacuum_v6_test.go:306: subprocess entry\\n\"}"
+      },
+      {
+        "line": 8315,
+        "text": "2026-10-15T18:23:36.6283542Z {\"Time\":\"2026-10-15T18:23:36.628073766Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal\",\"Output\":\"    primary_shared_transaction_v6_test.go:172: typed codec 5R/81152B; actual ordinary relaxed member, private destination refusal\\n\"}"
+      },
+      {
+        "line": 8396,
+        "text": "2026-10-15T18:23:37.8086438Z {\"Time\":\"2026-10-15T18:23:37.804147874Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1ManifestAttribution5091\",\"Output\":\"    r1_manifest_attribution_5091_test.go:20: opt-in nonqualifying GC characterization\\n\"}"
+      },
+      {
+        "line": 8405,
+        "text": "2026-10-15T18:23:38.0988779Z {\"Time\":\"2026-10-15T18:23:38.098624563Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1NativeAppenderCreationMetadataBoundedAcrossRotations\",\"Output\":\"    r1_native_appender_metadata_test.go:113: natural rotations primary files=6 leaf files=12 metadata peaks IDs=0 segments=0\\n\"}"
+      },
+      {
+        "line": 8414,
+        "text": "2026-10-15T18:23:38.1669706Z {\"Time\":\"2026-10-15T18:23:38.16598949Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1RebuiltCurrentRootDropsUnreachablePackedDependency\",\"Output\":\"    r1_rebuilt_pack_projection_test.go:72: ordinary current vacuum: {AttemptID:2 Phase:rebuild TotalDuration:2.478113ms UserTreeDuration:6.576\u00b5s SystemReserveDuration:631ns CollectionBasisDuration:6.605\u00b5s PreflushDuration:511ns CutoverDuration:958.702\u00b5s SystemTreeDuration:7.577\u00b5s FinalPagerSyncDuration:1.213956ms SwapPublishDuration:472.473\u00b5s MaxWriterPause:2.172943ms PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:53.553\u00b5s RecoverableSetCaptureAttempts:1 RecoverableSetCaptures:1 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:2 OlderRootRebuildDuration:118.438\u00b5s OlderRootRebuilds:1 OlderRootDurableResourceCaptureDuration:9.288\u00b5s OlderRootDurableResourceCaptures:1 OlderRootDurableResourceDescriptors:2 OlderRootDurableResourceBytes:2434 OlderRootExactCandidateScans:0 OlderRootProje\"}"
+      },
+      {
+        "line": 8416,
+        "text": "2026-10-15T18:23:38.1758303Z {\"Time\":\"2026-10-15T18:23:38.175331301Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestR1RebuiltCurrentRootDropsUnreachablePackedDependency\",\"Output\":\"    r1_rebuilt_pack_projection_test.go:127: after retained member release: {GenerationsTotal:2 GenerationsWritable:1 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:1 FilesDeleted:1 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:3 ManifestRevisionsProtected:2 ManifestRevisionsEligible:1 ManifestRevisionsDeleted:1 ManifestRevisionBytesEligible:569 ManifestRevisionBytesDeleted:569}\\n\"}"
+      },
+      {
+        "line": 8709,
+        "text": "2026-10-15T18:23:40.6125882Z {\"Time\":\"2026-10-15T18:23:40.611864315Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestRootPublicationDependencyBytesExcludesSelectedDurableClosure\",\"Output\":\"    root_publication_activation_test.go:907: full closure=268435474 selected durable=268435457 new bytes=17 actual debt=17 hard limit=268435456\\n\"}"
+      },
+      {
+        "line": 9666,
+        "text": "2026-10-15T18:23:45.0740827Z {\"Time\":\"2026-10-15T18:23:45.073726051Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication\",\"Output\":\"    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).valueLogStateCaptured: published DBState escapes to a call without an analyzed body\\n\"}"
+      },
+      {
+        "line": 9919,
+        "text": "2026-10-15T18:23:46.4341163Z {\"Time\":\"2026-10-15T18:23:46.432435066Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestVacuumM0WriteArtifact\",\"Output\":\"    vacuum_m0_fixture_test.go:190: set TREEDB_VACUUM_M0_ARTIFACT to capture a characterization artifact\\n\"}"
+      },
+      {
+        "line": 10320,
+        "text": "2026-10-15T18:24:07.1573407Z {\"Time\":\"2026-10-15T18:24:07.157166995Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestValueLogGC_RemovesUnreferencedSegment\",\"Output\":\"    vlog_gc_test.go:356: pointer-bearing root: visible=2 durable=2 active_slot=1 slot_commits=[1 2] slot_records=[{commit:1 user:2 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]\\n\"}"
+      },
+      {
+        "line": 10321,
+        "text": "2026-10-15T18:24:07.1586715Z {\"Time\":\"2026-10-15T18:24:07.158480666Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestValueLogGC_RemovesUnreferencedSegment\",\"Output\":\"    vlog_gc_test.go:367: delete visible: visible=3 durable=2 active_slot=1 slot_commits=[1 2] slot_records=[{commit:1 user:2 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]\\n\"}"
+      },
+      {
+        "line": 10322,
+        "text": "2026-10-15T18:24:07.1592710Z {\"Time\":\"2026-10-15T18:24:07.159111612Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestValueLogGC_RemovesUnreferencedSegment\",\"Output\":\"    vlog_gc_test.go:377: delete durable: visible=3 durable=3 active_slot=0 slot_commits=[3 2] slot_records=[{commit:3 user:18 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]\\n\"}"
+      },
+      {
+        "line": 10323,
+        "text": "2026-10-15T18:24:07.1605046Z {\"Time\":\"2026-10-15T18:24:07.160231351Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestValueLogGC_RemovesUnreferencedSegment\",\"Output\":\"    vlog_gc_test.go:382: both slots settled: visible=4 durable=4 active_slot=1 slot_commits=[3 4] slot_records=[{commit:3 user:18 system:3 lsn:0} {commit:4 user:18 system:8 lsn:0}]\\n\"}"
+      },
+      {
+        "line": 10594,
+        "text": "2026-10-15T18:24:20.7225982Z {\"Time\":\"2026-10-15T18:24:20.722253629Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/no-wal/unchanged\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision74; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10599,
+        "text": "2026-10-15T18:24:20.7344576Z {\"Time\":\"2026-10-15T18:24:20.734113693Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/no-wal/revision-only-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10604,
+        "text": "2026-10-15T18:24:20.7467744Z {\"Time\":\"2026-10-15T18:24:20.746454595Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/no-wal/different-pointer-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10609,
+        "text": "2026-10-15T18:24:20.7601495Z {\"Time\":\"2026-10-15T18:24:20.759858698Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-durable/unchanged\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision74; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10614,
+        "text": "2026-10-15T18:24:20.7758550Z {\"Time\":\"2026-10-15T18:24:20.775635813Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-durable/revision-only-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10619,
+        "text": "2026-10-15T18:24:20.7938003Z {\"Time\":\"2026-10-15T18:24:20.793436437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-durable/different-pointer-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10624,
+        "text": "2026-10-15T18:24:20.8117932Z {\"Time\":\"2026-10-15T18:24:20.811498669Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-relaxed/unchanged\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision74; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10629,
+        "text": "2026-10-15T18:24:20.8270775Z {\"Time\":\"2026-10-15T18:24:20.826794161Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-relaxed/revision-only-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 10634,
+        "text": "2026-10-15T18:24:20.8431337Z {\"Time\":\"2026-10-15T18:24:20.842914161Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestSelectedValueLogRewriteRevisionLifetime/command-wal-relaxed/different-pointer-winner\",\"Output\":\"    vlog_rewrite_revision_test.go:199: copied2 selected frames; winning b revision991; old pointers pinned and reopened revisions retained\\n\"}"
+      },
+      {
+        "line": 11213,
+        "text": "2026-10-15T18:24:23.1534770Z {\"Time\":\"2026-10-15T18:24:23.153135334Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPowerLossCertificationStaleBuildBaseSavedPrimaryV5PublicReopen\",\"Output\":\"    power_loss_certification_stale_build_test.go:312: recovered rejected-stale counterexample at commit 4\\n\"}"
+      },
+      {
+        "line": 11218,
+        "text": "2026-10-15T18:24:23.3543417Z {\"Time\":\"2026-10-15T18:24:23.353999219Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6\",\"Output\":\"    power_loss_certification_stale_build_test.go:312: recovered rejected-stale counterexample at commit 4\\n\"}"
+      },
+      {
+        "line": 12439,
+        "text": "2026-10-15T18:24:33.1553667Z {\"Time\":\"2026-10-15T18:24:33.154134416Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/documentservice\",\"Test\":\"TestDocumentServiceTypedWrite768Diagnostic\",\"Output\":\"    typed_write_768_diagnostic_test.go:29: set GOMAP_WRITE_768_DIAGNOSTIC=1 to run the bounded durable-write sweep\\n\"}"
+      },
+      {
+        "line": 13309,
+        "text": "2026-10-15T18:24:36.9101785Z {\"Time\":\"2026-10-15T18:24:36.860431833Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWFiniteReplacementHistoryAndResume\",\"Output\":\"    cow_test.go:230: accepted constant-size replacements=240 peak engine charge=163776\\n\"}"
+      },
+      {
+        "line": 13332,
+        "text": "2026-10-15T18:24:36.9125705Z {\"Time\":\"2026-10-15T18:24:36.870592499Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1/insert\",\"Output\":\"    cow_test.go:482: n=1 kind=insert height=1 allocated=240 reserve=1216 ratio=5.07\\n\"}"
+      },
+      {
+        "line": 13337,
+        "text": "2026-10-15T18:24:36.9131196Z {\"Time\":\"2026-10-15T18:24:36.871234181Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1/replace\",\"Output\":\"    cow_test.go:482: n=1 kind=replace height=1 allocated=112 reserve=576 ratio=5.14\\n\"}"
+      },
+      {
+        "line": 13342,
+        "text": "2026-10-15T18:24:36.9136853Z {\"Time\":\"2026-10-15T18:24:36.871676801Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1/delete\",\"Output\":\"    cow_test.go:482: n=1 kind=delete height=1 allocated=112 reserve=1408 ratio=12.57\\n\"}"
+      },
+      {
+        "line": 13347,
+        "text": "2026-10-15T18:24:36.9142561Z {\"Time\":\"2026-10-15T18:24:36.871898386Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/31/insert\",\"Output\":\"    cow_test.go:482: n=31 kind=insert height=1 allocated=2352 reserve=25024 ratio=10.64\\n\"}"
+      },
+      {
+        "line": 13352,
+        "text": "2026-10-15T18:24:36.9148959Z {\"Time\":\"2026-10-15T18:24:36.872109095Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/31/replace\",\"Output\":\"    cow_test.go:482: n=31 kind=replace height=1 allocated=2352 reserve=8512 ratio=3.62\\n\"}"
+      },
+      {
+        "line": 13357,
+        "text": "2026-10-15T18:24:36.9155520Z {\"Time\":\"2026-10-15T18:24:36.872334942Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/31/delete\",\"Output\":\"    cow_test.go:482: n=31 kind=delete height=1 allocated=2352 reserve=33152 ratio=14.10\\n\"}"
+      },
+      {
+        "line": 13362,
+        "text": "2026-10-15T18:24:36.9161172Z {\"Time\":\"2026-10-15T18:24:36.872564835Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/63/insert\",\"Output\":\"    cow_test.go:482: n=63 kind=insert height=2 allocated=8440 reserve=51936 ratio=6.15\\n\"}"
+      },
+      {
+        "line": 13367,
+        "text": "2026-10-15T18:24:36.9167726Z {\"Time\":\"2026-10-15T18:24:36.872785245Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/63/replace\",\"Output\":\"    cow_test.go:482: n=63 kind=replace height=2 allocated=4144 reserve=20928 ratio=5.05\\n\"}"
+      },
+      {
+        "line": 13372,
+        "text": "2026-10-15T18:24:36.9174463Z {\"Time\":\"2026-10-15T18:24:36.873000961Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/63/delete\",\"Output\":\"    cow_test.go:482: n=63 kind=delete height=2 allocated=4144 reserve=82560 ratio=19.92\\n\"}"
+      },
+      {
+        "line": 13377,
+        "text": "2026-10-15T18:24:36.9180415Z {\"Time\":\"2026-10-15T18:24:36.873233129Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/64/insert\",\"Output\":\"    cow_test.go:482: n=64 kind=insert height=2 allocated=4792 reserve=51936 ratio=10.84\\n\"}"
+      },
+      {
+        "line": 13382,
+        "text": "2026-10-15T18:24:36.9186141Z {\"Time\":\"2026-10-15T18:24:36.873448281Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/64/replace\",\"Output\":\"    cow_test.go:482: n=64 kind=replace height=2 allocated=2744 reserve=20928 ratio=7.63\\n\"}"
+      },
+      {
+        "line": 13387,
+        "text": "2026-10-15T18:24:36.9191846Z {\"Time\":\"2026-10-15T18:24:36.87366542Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/64/delete\",\"Output\":\"    cow_test.go:482: n=64 kind=delete height=2 allocated=10984 reserve=82560 ratio=7.52\\n\"}"
+      },
+      {
+        "line": 13392,
+        "text": "2026-10-15T18:24:36.9197704Z {\"Time\":\"2026-10-15T18:24:36.874359873Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1024/insert\",\"Output\":\"    cow_test.go:482: n=1024 kind=insert height=2 allocated=7032 reserve=51936 ratio=7.39\\n\"}"
+      },
+      {
+        "line": 13397,
+        "text": "2026-10-15T18:24:36.9203558Z {\"Time\":\"2026-10-15T18:24:36.875014952Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1024/replace\",\"Output\":\"    cow_test.go:482: n=1024 kind=replace height=2 allocated=4984 reserve=20928 ratio=4.20\\n\"}"
+      },
+      {
+        "line": 13402,
+        "text": "2026-10-15T18:24:36.9209202Z {\"Time\":\"2026-10-15T18:24:36.875733973Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/1024/delete\",\"Output\":\"    cow_test.go:482: n=1024 kind=delete height=2 allocated=11176 reserve=82560 ratio=7.39\\n\"}"
+      },
+      {
+        "line": 13407,
+        "text": "2026-10-15T18:24:36.9214957Z {\"Time\":\"2026-10-15T18:24:36.876864784Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2046/insert\",\"Output\":\"    cow_test.go:482: n=2046 kind=insert height=3 allocated=12920 reserve=72608 ratio=5.62\\n\"}"
+      },
+      {
+        "line": 13412,
+        "text": "2026-10-15T18:24:36.9220687Z {\"Time\":\"2026-10-15T18:24:36.877957314Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2046/replace\",\"Output\":\"    cow_test.go:482: n=2046 kind=replace height=3 allocated=6776 reserve=31264 ratio=4.61\\n\"}"
+      },
+      {
+        "line": 13417,
+        "text": "2026-10-15T18:24:36.9226670Z {\"Time\":\"2026-10-15T18:24:36.879139806Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2046/delete\",\"Output\":\"    cow_test.go:482: n=2046 kind=delete height=3 allocated=12968 reserve=123712 ratio=9.54\\n\"}"
+      },
+      {
+        "line": 13422,
+        "text": "2026-10-15T18:24:36.9232283Z {\"Time\":\"2026-10-15T18:24:36.880369912Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2047/insert\",\"Output\":\"    cow_test.go:482: n=2047 kind=insert height=3 allocated=12968 reserve=72608 ratio=5.60\\n\"}"
+      },
+      {
+        "line": 13427,
+        "text": "2026-10-15T18:24:36.9238008Z {\"Time\":\"2026-10-15T18:24:36.88149192Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2047/replace\",\"Output\":\"    cow_test.go:482: n=2047 kind=replace height=3 allocated=6776 reserve=31264 ratio=4.61\\n\"}"
+      },
+      {
+        "line": 13432,
+        "text": "2026-10-15T18:24:36.9243794Z {\"Time\":\"2026-10-15T18:24:36.882722279Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/2047/delete\",\"Output\":\"    cow_test.go:482: n=2047 kind=delete height=3 allocated=12968 reserve=123712 ratio=9.54\\n\"}"
+      },
+      {
+        "line": 13437,
+        "text": "2026-10-15T18:24:36.9249517Z {\"Time\":\"2026-10-15T18:24:36.884902222Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/4096/insert\",\"Output\":\"    cow_test.go:482: n=4096 kind=insert height=3 allocated=9536 reserve=72608 ratio=7.61\\n\"}"
+      },
+      {
+        "line": 13442,
+        "text": "2026-10-15T18:24:36.9255325Z {\"Time\":\"2026-10-15T18:24:36.887108512Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/4096/replace\",\"Output\":\"    cow_test.go:482: n=4096 kind=replace height=3 allocated=5440 reserve=31264 ratio=5.75\\n\"}"
+      },
+      {
+        "line": 13447,
+        "text": "2026-10-15T18:24:36.9260983Z {\"Time\":\"2026-10-15T18:24:36.88921306Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWDependencyReserveWitness/4096/delete\",\"Output\":\"    cow_test.go:482: n=4096 kind=delete height=3 allocated=18360 reserve=123712 ratio=6.74\\n\"}"
+      },
+      {
+        "line": 13456,
+        "text": "2026-10-15T18:24:36.9270436Z {\"Time\":\"2026-10-15T18:24:36.889611331Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/insert/63\",\"Output\":\"    cow_test.go:533: kind=insert n=63 allocated=9984 reserved=260960 node-reserve=258400 height=2\\n\"}"
+      },
+      {
+        "line": 13461,
+        "text": "2026-10-15T18:24:36.9275962Z {\"Time\":\"2026-10-15T18:24:36.890630576Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/insert/1024\",\"Output\":\"    cow_test.go:533: kind=insert n=1024 allocated=281688 reserved=2855040 node-reserve=2821728 height=2\\n\"}"
+      },
+      {
+        "line": 13466,
+        "text": "2026-10-15T18:24:36.9281376Z {\"Time\":\"2026-10-15T18:24:36.894418091Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/insert/4096\",\"Output\":\"    cow_test.go:533: kind=insert n=4096 allocated=1144352 reserved=11139456 node-reserve=11007840 height=3\\n\"}"
+      },
+      {
+        "line": 13471,
+        "text": "2026-10-15T18:24:36.9286839Z {\"Time\":\"2026-10-15T18:24:36.894858501Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/replace/63\",\"Output\":\"    cow_test.go:533: kind=replace n=63 allocated=4896 reserved=32560 node-reserve=31008 height=2\\n\"}"
+      },
+      {
+        "line": 13476,
+        "text": "2026-10-15T18:24:36.9292520Z {\"Time\":\"2026-10-15T18:24:36.896874594Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/replace/1024\",\"Output\":\"    cow_test.go:533: kind=replace n=1024 allocated=77896 reserved=368352 node-reserve=351424 height=3\\n\"}"
+      },
+      {
+        "line": 13481,
+        "text": "2026-10-15T18:24:36.9298024Z {\"Time\":\"2026-10-15T18:24:36.902301896Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/replace/4096\",\"Output\":\"    cow_test.go:533: kind=replace n=4096 allocated=303264 reserved=1440768 node-reserve=1374688 height=3\\n\"}"
+      },
+      {
+        "line": 13486,
+        "text": "2026-10-15T18:24:36.9303877Z {\"Time\":\"2026-10-15T18:24:36.902590007Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/delete/63\",\"Output\":\"    cow_test.go:533: kind=delete n=63 allocated=4560 reserved=155584 node-reserve=155040 height=2\\n\"}"
+      },
+      {
+        "line": 13491,
+        "text": "2026-10-15T18:24:36.9309651Z {\"Time\":\"2026-10-15T18:24:36.903807345Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/delete/1024\",\"Output\":\"    cow_test.go:533: kind=delete n=1024 allocated=76520 reserved=1757664 node-reserve=1757120 height=3\\n\"}"
+      },
+      {
+        "line": 13496,
+        "text": "2026-10-15T18:24:36.9315613Z {\"Time\":\"2026-10-15T18:24:36.90798874Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/delete/4096\",\"Output\":\"    cow_test.go:533: kind=delete n=4096 allocated=289600 reserved=6873984 node-reserve=6873440 height=3\\n\"}"
+      },
+      {
+        "line": 13501,
+        "text": "2026-10-15T18:24:36.9321147Z {\"Time\":\"2026-10-15T18:24:36.908333201Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/mixed/63\",\"Output\":\"    cow_test.go:533: kind=mixed n=63 allocated=4896 reserved=2304512 node-reserve=2302976 height=2\\n\"}"
+      },
+      {
+        "line": 13506,
+        "text": "2026-10-15T18:24:36.9326714Z {\"Time\":\"2026-10-15T18:24:36.909669857Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/mixed/1024\",\"Output\":\"    cow_test.go:533: kind=mixed n=1024 allocated=184632 reserved=52993760 node-reserve=52976832 height=3\\n\"}"
+      },
+      {
+        "line": 13511,
+        "text": "2026-10-15T18:24:36.9333103Z {\"Time\":\"2026-10-15T18:24:36.914613965Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWBatchReserveWitness/mixed/4096\",\"Output\":\"    cow_test.go:533: kind=mixed n=4096 allocated=751832 reserved=211942400 node-reserve=211876320 height=3\\n\"}"
+      },
+      {
+        "line": 13526,
+        "text": "2026-10-15T18:24:36.9353519Z {\"Time\":\"2026-10-15T18:24:36.934724392Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWRetainedGenerationPlateau\",\"Output\":\"    cow_test.go:673: writes=1504 generations=8 engine=1046784 retired=1046528 peak-charge=1047040 sampled-heap-high=1534384 sampled-inuse-high=1974272 held-heap=377608 drained-heap=322592\\n\"}"
+      },
+      {
+        "line": 13535,
+        "text": "2026-10-15T18:24:36.9368073Z {\"Time\":\"2026-10-15T18:24:36.935004716Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=64 allocated=512 charge=512\\n\"}"
+      },
+      {
+        "line": 13536,
+        "text": "2026-10-15T18:24:36.9370370Z {\"Time\":\"2026-10-15T18:24:36.935450321Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=128 allocated=1152 charge=2048\\n\"}"
+      },
+      {
+        "line": 13537,
+        "text": "2026-10-15T18:24:36.9371833Z {\"Time\":\"2026-10-15T18:24:36.935606994Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=256 allocated=2304 charge=4096\\n\"}"
+      },
+      {
+        "line": 13538,
+        "text": "2026-10-15T18:24:36.9373393Z {\"Time\":\"2026-10-15T18:24:36.935762852Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=512 allocated=4864 charge=8192\\n\"}"
+      },
+      {
+        "line": 13539,
+        "text": "2026-10-15T18:24:36.9375050Z {\"Time\":\"2026-10-15T18:24:36.935896678Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=1024 allocated=9472 charge=16384\\n\"}"
+      },
+      {
+        "line": 13540,
+        "text": "2026-10-15T18:24:36.9376470Z {\"Time\":\"2026-10-15T18:24:36.936043116Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWPointerAllocationCharge\",\"Output\":\"    cow_test.go:736: pointer backing count=4096 allocated=32768 charge=32768\\n\"}"
+      },
+      {
+        "line": 13561,
+        "text": "2026-10-15T18:24:36.9401566Z {\"Time\":\"2026-10-15T18:24:36.937292973Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:961: iterator height=5 allocated=432 charge=560\\n\"}"
+      },
+      {
+        "line": 13562,
+        "text": "2026-10-15T18:24:36.9402995Z {\"Time\":\"2026-10-15T18:24:36.937709165Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:961: iterator height=7 allocated=432 charge=560\\n\"}"
+      },
+      {
+        "line": 13563,
+        "text": "2026-10-15T18:24:36.9404254Z {\"Time\":\"2026-10-15T18:24:36.938753007Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:961: iterator height=9 allocated=688 charge=816\\n\"}"
+      },
+      {
+        "line": 13564,
+        "text": "2026-10-15T18:24:36.9426530Z {\"Time\":\"2026-10-15T18:24:36.942501023Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:961: iterator height=11 allocated=688 charge=816\\n\"}"
+      },
+      {
+        "line": 13565,
+        "text": "2026-10-15T18:24:36.9428673Z {\"Time\":\"2026-10-15T18:24:36.942732567Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:984: synthetic stack height=9 allocated=448 charge=496\\n\"}"
+      },
+      {
+        "line": 13566,
+        "text": "2026-10-15T18:24:36.9432040Z {\"Time\":\"2026-10-15T18:24:36.943009701Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:984: synthetic stack height=33 allocated=2160 charge=16384\\n\"}"
+      },
+      {
+        "line": 13567,
+        "text": "2026-10-15T18:24:36.9435426Z {\"Time\":\"2026-10-15T18:24:36.943404968Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:984: synthetic stack height=65 allocated=2160 charge=32768\\n\"}"
+      },
+      {
+        "line": 13568,
+        "text": "2026-10-15T18:24:36.9437218Z {\"Time\":\"2026-10-15T18:24:36.943553391Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:984: synthetic stack height=257 allocated=9328 charge=131072\\n\"}"
+      },
+      {
+        "line": 13569,
+        "text": "2026-10-15T18:24:36.9439565Z {\"Time\":\"2026-10-15T18:24:36.943803081Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWCursorGeometricStackWitness\",\"Output\":\"    cow_test.go:984: synthetic stack height=4097 allocated=239984 charge=1114112\\n\"}"
+      },
+      {
+        "line": 13590,
+        "text": "2026-10-15T18:24:36.9527380Z {\"Time\":\"2026-10-15T18:24:36.952554244Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/memtable\",\"Test\":\"TestCOWLargeKeyAdmissionAndReadAllocations\",\"Output\":\"    cow_test.go:1211: large replacement actual=544 reserve=880 keyBytes=1048576\\n\"}"
+      },
+      {
+        "line": 13975,
+        "text": "2026-10-15T18:24:38.1791907Z {\"Time\":\"2026-10-15T18:24:38.178886914Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/powerlossoracle\",\"Test\":\"TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants\",\"Output\":\"    all_kind_authority_test.go:125: all-kind authority generator: fields=16 variants=51 omissions=16\\n\"}"
+      },
+      {
+        "line": 14116,
+        "text": "2026-10-15T18:24:38.2036573Z {\"Time\":\"2026-10-15T18:24:38.188948747Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/powerlossoracle\",\"Test\":\"TestSyncDirReplacementPrunesOldDurableSubtree\",\"Output\":\"    model_test.go:492: filesystem does not expose distinct stable directory identities\\n\"}"
+      },
+      {
+        "line": 14373,
+        "text": "2026-10-15T18:24:38.2443701Z {\"Time\":\"2026-10-15T18:24:38.199742642Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/powerlossoracle\",\"Test\":\"TestGenerateVariantsDeterministicBoundedCoverageAndNegativeControls\",\"Output\":\"    variant_test.go:107: committed generator fixture: images=14 limit=256 runtime=109.772\u00b5s peak_temp_storage_bytes=146 shard_sizes=[4 4 3 3]\\n\"}"
+      },
+      {
+        "line": 15257,
+        "text": "2026-10-15T18:24:42.2277938Z {\"Time\":\"2026-10-15T18:24:42.226834798Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/vectorpartition\",\"Test\":\"TestHomePackingPinnedKaHIPV1\",\"Output\":\"    home_packing_test.go:213: set TREEDB_KAHIP_TEST_PYTHON to the pinned KaHIP Python\\n\"}"
+      },
+      {
+        "line": 19643,
+        "text": "2026-10-15T18:25:18.3352633Z {\"Time\":\"2026-10-15T18:25:18.334760973Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_relaxed\",\"Output\":\"    standalone_test.go:867: command-WAL BSON visibility profile=command_wal_relaxed docs=512 workers=16 request_limit=10s ping=3.765373ms insert_wall=28.719937ms insert_max=7.859539ms initial_read_total=36.849696ms initial_read_max=414.553\u00b5s update_total=60.771399ms update_max=525.776\u00b5s final_read_total=41.553705ms final_read_max=178.212\u00b5s scenario_wall=172.755272ms\\n\"}"
+      },
+      {
+        "line": 19648,
+        "text": "2026-10-15T18:25:18.7383894Z {\"Time\":\"2026-10-15T18:25:18.737964373Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable\",\"Output\":\"    standalone_test.go:867: command-WAL BSON visibility profile=command_wal_durable docs=512 workers=16 request_limit=10s ping=652.608\u00b5s insert_wall=38.060462ms insert_max=8.819967ms initial_read_total=37.798951ms initial_read_max=190.02\u00b5s update_total=219.758936ms update_max=674.168\u00b5s final_read_total=46.129955ms final_read_max=331.96\u00b5s scenario_wall=343.454688ms\\n\"}"
+      },
+      {
+        "line": 20309,
+        "text": "2026-10-15T18:25:29.1559449Z {\"Time\":\"2026-10-15T18:25:29.155618606Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3CapturedCutMaterializesOutsideFloorAdmission/point\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 2 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20314,
+        "text": "2026-10-15T18:25:29.1816064Z {\"Time\":\"2026-10-15T18:25:29.181344978Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3CapturedCutMaterializesOutsideFloorAdmission/versions\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 2 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20319,
+        "text": "2026-10-15T18:25:29.2376475Z {\"Time\":\"2026-10-15T18:25:29.237378214Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3CapturedCutMaterializesOutsideFloorAdmission/point/pointer\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 2 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20324,
+        "text": "2026-10-15T18:25:29.2785606Z {\"Time\":\"2026-10-15T18:25:29.278252006Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3CapturedCutMaterializesOutsideFloorAdmission/versions/pointer\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 2 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20369,
+        "text": "2026-10-15T18:25:29.4880883Z {\"Time\":\"2026-10-15T18:25:29.487755793Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3GroupAdmissionCapabilityAndACK/legacy_fence\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 1 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20374,
+        "text": "2026-10-15T18:25:29.5158720Z {\"Time\":\"2026-10-15T18:25:29.515622739Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3GroupAdmissionCapabilityAndACK/atomic_cut\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 1 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20387,
+        "text": "2026-10-15T18:25:29.5566976Z {\"Time\":\"2026-10-15T18:25:29.55638863Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=command_wal_durable resolved_profile=command_wal_durable memtable_mode=cow_btree ordinary_ack=durable_wal_prefix force_pointers=false pointer_threshold=1073741824 dir=/tmp/gomap-c3-read-progress-1546958811\\n\"}"
+      },
+      {
+        "line": 20388,
+        "text": "2026-10-15T18:25:29.5579086Z {\"Time\":\"2026-10-15T18:25:29.557622604Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-1546958811/wal\\n\"}"
+      },
+      {
+        "line": 20389,
+        "text": "2026-10-15T18:25:29.5581442Z {\"Time\":\"2026-10-15T18:25:29.557695005Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20390,
+        "text": "2026-10-15T18:25:29.5583194Z {\"Time\":\"2026-10-15T18:25:29.557871483Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20391,
+        "text": "2026-10-15T18:25:29.5630889Z {\"Time\":\"2026-10-15T18:25:29.562762274Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20396,
+        "text": "2026-10-15T18:25:29.5801161Z {\"Time\":\"2026-10-15T18:25:29.579815404Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=command_wal_durable resolved_profile=command_wal_durable memtable_mode=cow_btree ordinary_ack=durable_wal_prefix force_pointers=true pointer_threshold=1 dir=/tmp/gomap-c3-read-progress-285112538\\n\"}"
+      },
+      {
+        "line": 20397,
+        "text": "2026-10-15T18:25:29.5821562Z {\"Time\":\"2026-10-15T18:25:29.58165457Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-285112538/wal\\n\"}"
+      },
+      {
+        "line": 20398,
+        "text": "2026-10-15T18:25:29.5824128Z {\"Time\":\"2026-10-15T18:25:29.582201655Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20399,
+        "text": "2026-10-15T18:25:29.5825726Z {\"Time\":\"2026-10-15T18:25:29.582215567Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20400,
+        "text": "2026-10-15T18:25:29.5884633Z {\"Time\":\"2026-10-15T18:25:29.588245739Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20405,
+        "text": "2026-10-15T18:25:29.6098266Z {\"Time\":\"2026-10-15T18:25:29.609460264Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=command_wal_relaxed resolved_profile=command_wal_relaxed memtable_mode=cow_btree ordinary_ack=relaxed force_pointers=false pointer_threshold=1073741824 dir=/tmp/gomap-c3-read-progress-2177692328\\n\"}"
+      },
+      {
+        "line": 20406,
+        "text": "2026-10-15T18:25:29.6101166Z {\"Time\":\"2026-10-15T18:25:29.609739461Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-2177692328/wal\\n\"}"
+      },
+      {
+        "line": 20407,
+        "text": "2026-10-15T18:25:29.6103553Z {\"Time\":\"2026-10-15T18:25:29.609823795Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20408,
+        "text": "2026-10-15T18:25:29.6106215Z {\"Time\":\"2026-10-15T18:25:29.609951174Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20409,
+        "text": "2026-10-15T18:25:29.6154922Z {\"Time\":\"2026-10-15T18:25:29.615272137Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20414,
+        "text": "2026-10-15T18:25:29.6297302Z {\"Time\":\"2026-10-15T18:25:29.629464026Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=command_wal_relaxed resolved_profile=command_wal_relaxed memtable_mode=cow_btree ordinary_ack=relaxed force_pointers=true pointer_threshold=1 dir=/tmp/gomap-c3-read-progress-2403594070\\n\"}"
+      },
+      {
+        "line": 20415,
+        "text": "2026-10-15T18:25:29.6309903Z {\"Time\":\"2026-10-15T18:25:29.630803526Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-2403594070/wal\\n\"}"
+      },
+      {
+        "line": 20416,
+        "text": "2026-10-15T18:25:29.6313741Z {\"Time\":\"2026-10-15T18:25:29.631198576Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20417,
+        "text": "2026-10-15T18:25:29.6315705Z {\"Time\":\"2026-10-15T18:25:29.631217451Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20418,
+        "text": "2026-10-15T18:25:29.6392357Z {\"Time\":\"2026-10-15T18:25:29.639020552Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20423,
+        "text": "2026-10-15T18:25:29.6579066Z {\"Time\":\"2026-10-15T18:25:29.657503118Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=no_wal_fast resolved_profile=no_wal_fast memtable_mode=cow_btree ordinary_ack=relaxed force_pointers=false pointer_threshold=1073741824 dir=/tmp/gomap-c3-read-progress-3219569184\\n\"}"
+      },
+      {
+        "line": 20424,
+        "text": "2026-10-15T18:25:29.6582828Z {\"Time\":\"2026-10-15T18:25:29.657819847Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-3219569184/wal\\n\"}"
+      },
+      {
+        "line": 20425,
+        "text": "2026-10-15T18:25:29.6585594Z {\"Time\":\"2026-10-15T18:25:29.657840341Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20426,
+        "text": "2026-10-15T18:25:29.6587623Z {\"Time\":\"2026-10-15T18:25:29.657888634Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20427,
+        "text": "2026-10-15T18:25:29.6650478Z {\"Time\":\"2026-10-15T18:25:29.664792461Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20432,
+        "text": "2026-10-15T18:25:29.6780090Z {\"Time\":\"2026-10-15T18:25:29.677723909Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: receipt requested_profile=no_wal_fast resolved_profile=no_wal_fast memtable_mode=cow_btree ordinary_ack=relaxed force_pointers=true pointer_threshold=1 dir=/tmp/gomap-c3-read-progress-1577388670\\n\"}"
+      },
+      {
+        "line": 20433,
+        "text": "2026-10-15T18:25:29.6833898Z {\"Time\":\"2026-10-15T18:25:29.683080132Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: publication hook entered point=before-cow-cut-swap resource=auxiliary root=/tmp/gomap-c3-read-progress-1577388670/wal\\n\"}"
+      },
+      {
+        "line": 20434,
+        "text": "2026-10-15T18:25:29.6845293Z {\"Time\":\"2026-10-15T18:25:29.683243672Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: paused raw snapshot control completed on old cut\\n\"}"
+      },
+      {
+        "line": 20435,
+        "text": "2026-10-15T18:25:29.6847089Z {\"Time\":\"2026-10-15T18:25:29.683467036Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:36: after-release complete group and retained history oracle passed\\n\"}"
+      },
+      {
+        "line": 20436,
+        "text": "2026-10-15T18:25:29.6888771Z {\"Time\":\"2026-10-15T18:25:29.688591061Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer\",\"Output\":\"    cow_c3_read_progress_test.go:139: owned cleanup: all 7 calls joined, observer restored, Close completed\\n\"}"
+      },
+      {
+        "line": 20443,
+        "text": "2026-10-15T18:25:29.7137397Z {\"Time\":\"2026-10-15T18:25:29.713437538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestCOWRelaxedPublicPointLaneAffinity\",\"Output\":\"    cow_point_lane_affinity_test.go:80: public CommitAt: 8 physical lane-0 pointers; 8 canonical WAL appends and COW publications; zero WAL/vlog file syncs or checkpoints; one initial directory sync\\n\"}"
+      },
+      {
+        "line": 20608,
+        "text": "2026-10-15T18:25:31.4296464Z {\"Time\":\"2026-10-15T18:25:31.42943708Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestCommitAtOversizedKeyRejectsBeforeDuplicateIdentityAllocation\",\"Output\":\"    mvcc_test.go:254: oversized-key validation allocated 1024 bytes without creating a batch\\n\"}"
+      },
+      {
+        "line": 20665,
+        "text": "2026-10-15T18:25:32.3359845Z {\"Time\":\"2026-10-15T18:25:32.335343858Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestMVCCRetainedOwnedOutputs\",\"Output\":\"    ownership_bench_test.go:148: retained-heap diagnostic requires explicit opt-in\\n\"}"
+      },
+      {
+        "line": 20860,
+        "text": "2026-10-15T18:25:33.7642810Z {\"Time\":\"2026-10-15T18:25:33.763965653Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestPopulatedCapturedSuccessorAllocation/0\",\"Output\":\"    captured_successor_test.go:144: depth=1 leaves=1\\n\"}"
+      },
+      {
+        "line": 20861,
+        "text": "2026-10-15T18:25:35.1888656Z {\"Time\":\"2026-10-15T18:25:35.188597968Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestPopulatedCapturedSuccessorAllocation/0\",\"Output\":\"    captured_successor_test.go:156: historical GetAt allocation: 11799 B/op, 12 allocs/op\\n\"}"
+      },
+      {
+        "line": 20866,
+        "text": "2026-10-15T18:25:36.2674403Z {\"Time\":\"2026-10-15T18:25:36.26711745Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestPopulatedCapturedSuccessorAllocation/8192\",\"Output\":\"    captured_successor_test.go:136: proven cross-leaf historical key=\\\"bulk-00000004\\\"\\n\"}"
+      },
+      {
+        "line": 20867,
+        "text": "2026-10-15T18:25:36.2676704Z {\"Time\":\"2026-10-15T18:25:36.267149609Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestPopulatedCapturedSuccessorAllocation/8192\",\"Output\":\"    captured_successor_test.go:144: depth=3 leaves=2728\\n\"}"
+      },
+      {
+        "line": 20868,
+        "text": "2026-10-15T18:25:37.7344790Z {\"Time\":\"2026-10-15T18:25:37.734150655Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mvcc\",\"Test\":\"TestPopulatedCapturedSuccessorAllocation/8192\",\"Output\":\"    captured_successor_test.go:156: historical GetAt allocation: 21269 B/op, 20 allocs/op\\n\"}"
+      },
+      {
+        "line": 21643,
+        "text": "2026-10-15T18:25:47.5941485Z {\"Time\":\"2026-10-15T18:25:47.593844904Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/zipper\",\"Test\":\"TestReadOnlyPreparePurePointOutputPageBoundDispersed16K\",\"Output\":\"    read_only_prepare_test.go:186: dispersed rows=16384 old leaves=118 old entries=16384 old refs=118 depth=2 bound=66074 emitted=171\\n\"}"
+      },
+      {
+        "line": 21648,
+        "text": "2026-10-15T18:25:47.5981571Z {\"Time\":\"2026-10-15T18:25:47.597871335Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/zipper\",\"Test\":\"TestReadOnlyPreparePurePointOutputPageBoundSequential16K\",\"Output\":\"    read_only_prepare_test.go:235: batch=0 old leaves=0 old entries=0 old refs=0 depth=1 bound=32834 emitted=90\\n\"}"
+      },
+      {
+        "line": 21649,
+        "text": "2026-10-15T18:25:47.6008851Z {\"Time\":\"2026-10-15T18:25:47.600668173Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/zipper\",\"Test\":\"TestReadOnlyPreparePurePointOutputPageBoundSequential16K\",\"Output\":\"    read_only_prepare_test.go:235: batch=1 old leaves=1 old entries=104 old refs=89 depth=2 bound=33222 emitted=91\\n\"}"
+      }
+    ],
+    "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/616fd-ci/ubuntu-latest-3.log"
+  }
+]

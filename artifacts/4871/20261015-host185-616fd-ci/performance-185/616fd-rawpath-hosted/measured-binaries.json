@@ -1,0 +1,141 @@
+{
+  "status": "RETAINED_ACTUAL_MEASURED_EXECUTABLES",
+  "files": [
+    {
+      "path": "measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "bytes": 55518772,
+      "mode": 493,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "source_tree": "e448be5924b4a8e66a4894090460fb559f241354",
+      "package": "./TreeDB/db",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/baseline-db.test",
+        "./TreeDB/db"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/baseline-caching.test",
+      "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+      "bytes": 32696518,
+      "mode": 493,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "source_tree": "e448be5924b4a8e66a4894090460fb559f241354",
+      "package": "./TreeDB/caching",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/baseline-caching.test",
+        "./TreeDB/caching"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/baseline-treedb.test",
+      "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+      "bytes": 52438387,
+      "mode": 493,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "source_tree": "e448be5924b4a8e66a4894090460fb559f241354",
+      "package": "./TreeDB",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/baseline-treedb.test",
+        "./TreeDB"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-db.test",
+      "sha256": "596355fc27f19ff2bd2c036edcb30a758434cb9a7b0d0fae0ade053bcf59316e",
+      "bytes": 61358099,
+      "mode": 493,
+      "source_sha": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+      "source_tree": "ff0930180692ab50e08b346b83e7d7b19a5cb74c",
+      "package": "./TreeDB/db",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/candidate-db.test",
+        "./TreeDB/db"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-caching.test",
+      "sha256": "06b1416f82088ccccc01f5723a241c322db361f4ddf07fa7184ea96997026beb",
+      "bytes": 36967055,
+      "mode": 493,
+      "source_sha": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+      "source_tree": "ff0930180692ab50e08b346b83e7d7b19a5cb74c",
+      "package": "./TreeDB/caching",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/candidate-caching.test",
+        "./TreeDB/caching"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-treedb.test",
+      "sha256": "481ca6fd9f44a08819c10109c2c323402c457277eb99c728cd5d9c20aaa21259",
+      "bytes": 56867782,
+      "mode": 493,
+      "source_sha": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+      "source_tree": "ff0930180692ab50e08b346b83e7d7b19a5cb74c",
+      "package": "./TreeDB",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.qJVUg6/candidate-treedb.test",
+        "./TreeDB"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    }
+  ],
+  "environment_sha256": "3436c2ab557983516333d4b50571d58be53b9c8122b815dc7451b84e3b94af7b",
+  "initial_digests_sha256": "1e2a9e9ee4883c13f90593edd6ccf38d40c570bf726ce516a126d4fd9c622d7a",
+  "checker_summary_sha256": "6abffe2cb96f674bd6508b728552ac71bd85d65beb5aa2e3caa284c77aae8139",
+  "identity_scope": "exact source commits/trees, explicit build argv/GOWORK and recorded environment; not complete compiler closure"
+}

@@ -1,0 +1,3 @@
+{
+  "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication": "=== RUN   TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication\n    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).valueLogStateCaptured: published DBState escapes to a call without an analyzed body\n--- FAIL: TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication (3.20s)\n"
+}

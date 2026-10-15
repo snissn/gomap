@@ -1,0 +1,69 @@
+{
+  "head": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "artifact": 11997012282,
+  "run": 38784682771,
+  "all_raw_samples_exactly_equal": true,
+  "aggregate_relative_tolerance": 1e-14,
+  "aggregate_rounding_differences": [
+    {
+      "kind": "legacy",
+      "metric": "system-reserve-ns/op",
+      "statistic": "cv",
+      "recomputed": 0.187594239595446,
+      "hosted": 0.18759423959544597
+    },
+    {
+      "kind": "public",
+      "metric": "allocs/op",
+      "statistic": "cv",
+      "recomputed": 0.2477235478060182,
+      "hosted": 0.24772354780601824
+    },
+    {
+      "kind": "public",
+      "metric": "foreground-overlap-samples/op",
+      "statistic": "cv",
+      "recomputed": 0.6953395623944115,
+      "hosted": 0.6953395623944114
+    }
+  ],
+  "python": "3.10.12 (main, Aug 31 2026, 10:18:17) [GCC 11.4.0]",
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": true,
+    "public_status_explicit": true
+  },
+  "public_status": "production-index-vacuum-available",
+  "checker_sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+  "files": {
+    "artifact-api.json": "8c65340f5acbdb28f9816dcf0f08900c4d4e9581b726b08abda92b31543b09f6",
+    "artifact.zip": "45f9892a2ad2633d0f59463ec6d8060184d71340050546497c32cd1dde3a7acf",
+    "checker-616fd.py": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+    "commands.txt": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "fixture.json": "0a8ade1456e211f485ba8807b9962af9fdfc4f55db2aa77a70e3fb1ffe3a694b",
+    "legacy-benchstat-input.txt": "5610d96609de15dc6ebf53858341bf2a2e4f3ad568c2ea78fb5446273d20151e",
+    "raw/legacy-1.txt": "5cc53b6b5a91d120a58a0535cd0181f9bf5aebf7ba629be0ba5002badac00d17",
+    "raw/legacy-10.txt": "74ec7c1fb7c69dde7f9949930277d566e2c13cd7a862c6e5af77a57bef365000",
+    "raw/legacy-2.txt": "dafaced4879034c2cf5fc141e6ebf24578ef6f896558991bdfb642ada51de40f",
+    "raw/legacy-3.txt": "5c56c8abe3c6ca09f26329c534e27466be51d1b8e283d80e73da31c4962f9e69",
+    "raw/legacy-4.txt": "5ab382cd67e30ff460052eb3c4fa9b9e31e36ca0ef2be626a6ce8531c0bcbebd",
+    "raw/legacy-5.txt": "257de7e75f4d71576f800011b3e7e04f818edab3d8de199942cced004655050a",
+    "raw/legacy-6.txt": "6b67872e213bfcf9273a0c781ee271404d77e5e40f8e0d107d46fa4b9de0aaca",
+    "raw/legacy-7.txt": "1959f73b17685c42f47f860362dd980c137d47272fd93b008b86d7c5b5f750a3",
+    "raw/legacy-8.txt": "3f5ff9bc4bf92191af731b6132a3c021fd340e874415d177ce388bd8422f4bd4",
+    "raw/legacy-9.txt": "d443553ee7968a83ed23c9c2989dba64433022a83730be53e5cfb0dc91b03f00",
+    "raw/public-1.txt": "a46b240177c7932f5b89887da04c4e1b9ac9969fd9c2c3d8005e85e031ca3971",
+    "raw/public-10.txt": "fb417c86614b1dae9965fcdc7a4040bef988a738287f0a5953695ec705358333",
+    "raw/public-2.txt": "ac486c662d7359239203b719ed16c3c6c527c1405e91acd317061ebce28c453a",
+    "raw/public-3.txt": "16b5ffc12a410008b36dda3a92ed46823fd1252a3c9e3359ab8dad3eb7f5b31d",
+    "raw/public-4.txt": "8185b92d93402cc68e878835b3ffde0c2445c6f7d1252d388145812cbedde044",
+    "raw/public-5.txt": "e73f1c0bfd3981edfb26cbabbe024e7d9141840ecb646d1208d37b0233735423",
+    "raw/public-6.txt": "9562e73f4ea7ffbe0c0b463a52534ea05ac610070cec232e8bf29df011b10358",
+    "raw/public-7.txt": "feac122115039fc3486fdb5e54d7c803b5710a7a5afac18869beb6d09531362b",
+    "raw/public-8.txt": "bcfd18f4f5d64aafd4237703f0af0928ecb84c978c276287ef7b9e19be4f08aa",
+    "raw/public-9.txt": "c9c39eeece2f1ff4779ee819c153b5d333d6b9decf991fbc2d75ed7edfab3f1c",
+    "results.json": "c86311d2b2e750fd4f7ac685d272c89bc62446d8a4f2269b968b1148bc88e41d",
+    "summary.md": "82fd45ef6edf5698237b00eea28773b2f717b5e865d6f0809eb0db515aab51d8"
+  },
+  "scope": "current head M0 stability; prior a8 variability cause remains unknown; no repeated same-head collection"
+}

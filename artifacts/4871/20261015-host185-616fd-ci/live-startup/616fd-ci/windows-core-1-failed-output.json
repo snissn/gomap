@@ -1,0 +1,4 @@
+{
+  "TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt": "=== RUN   TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt\n    vlog_ref_incarnation_test.go:291: online vacuum unsupported on this platform\n--- FAIL: TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt (0.43s)\n",
+  "TestNativeMVCCSnapshotActualCaptureAndCancellation": "=== RUN   TestNativeMVCCSnapshotActualCaptureAndCancellation\n    native_mvcc_snapshot_capture_test.go:34: actual native Snapshot capture native MVCC snapshot requires original work-bearing capture/cleanup\n    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestNativeMVCCSnapshotActualCaptureAndCancellation3634240311\\001\\index.db: The process cannot access the file because it is being used by another process.\n--- FAIL: TestNativeMVCCSnapshotActualCaptureAndCancellation (1.48s)\n"
+}
