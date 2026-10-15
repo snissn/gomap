@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/go1.26.9.linux-amd64.tar.gz",
+    "bytes": 66935201,
+    "sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.test",
+    "bytes": 61522114,
+    "sha256": "6ba3a60a327a49a9f84b85d8163efdca0b41bb9786135523c546ea58ef3c7bf7",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/pristine.test",
+    "bytes": 61515074,
+    "sha256": "d311c01bcaec510c801fd8e40b15101a72566872660af625d87bc60ace44852f",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  }
+]

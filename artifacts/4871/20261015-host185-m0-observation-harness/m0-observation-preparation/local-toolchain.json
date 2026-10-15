@@ -1,0 +1,10 @@
+{
+  "version": "go version go1.26.9 linux/amd64",
+  "archive_sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+  "root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9",
+  "binaries": {
+    "bin/go": "e90c4e12df236ea0c2e7536fd68da8a47fc0b585c19588bf6c1a70cfc296a0f9",
+    "pkg/tool/linux_amd64/compile": "b9ca04cdacb7c98120b5d84cf5a9cc9f2e8f6316bc12b147411464baa6a997c2",
+    "pkg/tool/linux_amd64/link": "4922bd0bd8fea29f7177cebe7591a8ce94470cd2f8378e4443b5781c571625bc"
+  }
+}

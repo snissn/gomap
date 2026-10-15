@@ -1,0 +1,13 @@
+{
+  "head": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "tree": "5b727b1f56eaeb6eef7c9b371ba349cfa76097fb",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "branch": "codex/4871-m0-observation-185-20261015",
+  "pr": "https://github.com/snissn/gomap/pull/5136",
+  "clean": true,
+  "remote_verified": true,
+  "source_manifest_verified_files": 9942,
+  "review_json_sha256": "c16f63c87a2c7be5ee83784e2ba910eb0c2773bfe47ad02ef92fa164446c4a9f",
+  "runtime_calls": 0,
+  "not_yet_merged": true
+}

@@ -1,0 +1,32 @@
+{
+  ".github/scripts/mvcc_m0_observation.py": {
+    "status": "new",
+    "sha256": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+    "bytes": 20603
+  },
+  ".github/scripts/mvcc_m0_observation_exec.py": {
+    "status": "new",
+    "sha256": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+    "bytes": 1067
+  },
+  ".github/scripts/mvcc_m0_observation_gc.go.txt": {
+    "status": "new",
+    "sha256": "18b656d47ffd7caa0a04fd393d1ce31caa4a8a8a0b582f6a848e4f44b738f443",
+    "bytes": 1768
+  },
+  ".github/scripts/test_mvcc_m0_observation.py": {
+    "status": "new",
+    "sha256": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979",
+    "bytes": 7073
+  },
+  ".github/workflows/treedb-vacuum-m0-observation.yml": {
+    "status": "new",
+    "sha256": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c",
+    "bytes": 3493
+  },
+  "docs/benchmarks/treedb-vacuum-m0-observation.md": {
+    "status": "new",
+    "sha256": "8687d0ca4bc9959e2524826a267245b5600107f4167251e85f0164b2a2835c9b",
+    "bytes": 6913
+  }
+}

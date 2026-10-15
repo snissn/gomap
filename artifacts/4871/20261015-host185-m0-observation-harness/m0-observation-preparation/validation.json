@@ -1,0 +1,125 @@
+{
+  "harness_unit": {
+    "argv": [
+      "python3",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-harness/.github/scripts/test_mvcc_m0_observation.py"
+    ],
+    "exit": 0,
+    "wall_start_ns": 1792104807130204352,
+    "wall_end_ns": 1792104807496006285,
+    "python": "Python 3.10.12",
+    "source_hashes": {
+      ".github/scripts/mvcc_m0_observation_gc.go.txt": "18b656d47ffd7caa0a04fd393d1ce31caa4a8a8a0b582f6a848e4f44b738f443",
+      ".github/scripts/mvcc_m0_observation.py": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+      ".github/scripts/mvcc_m0_observation_exec.py": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+      ".github/scripts/test_mvcc_m0_observation.py": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979"
+    }
+  },
+  "pure_controls_passed": 10,
+  "workflow": {
+    "parser": "PyYAML 6.0",
+    "parsed": true,
+    "manual_only": true,
+    "job_timeout_minutes": 20,
+    "workflow_sha256": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c",
+    "python_ast_parsed": true
+  },
+  "compile_only": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+        "test",
+        "-p=1",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/pristine.test",
+        "./TreeDB/db"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "elapsed_s": 76.29082590527833,
+      "exit": 0,
+      "label": "pristine-compile",
+      "outer_timeout_s": 180,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+        "version",
+        "-m",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/pristine.test"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "elapsed_s": 0.0034280503168702126,
+      "exit": 0,
+      "label": "pristine-buildinfo",
+      "outer_timeout_s": 180,
+      "output_sha256": "424ef368bdaf30c33a19bb51a29412e387c67d739e145424a7b19cf2d0b55a2e"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+        "test",
+        "-p=1",
+        "-overlay",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.json",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.test",
+        "./TreeDB/db"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "elapsed_s": 39.58394548390061,
+      "exit": 0,
+      "label": "overlay-compile",
+      "outer_timeout_s": 180,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+        "version",
+        "-m",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.test"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+      "elapsed_s": 0.003462129272520542,
+      "exit": 0,
+      "label": "overlay-buildinfo",
+      "outer_timeout_s": 180,
+      "output_sha256": "b8416253460c6d4708b2e862b55a284587fc0ffd7ac9c7ccf195137f2712376e"
+    }
+  ],
+  "product_source_equality": {
+    "equal": true
+  },
+  "binaries": {
+    "pristine": {
+      "bytes": 61515074,
+      "sha256": "d311c01bcaec510c801fd8e40b15101a72566872660af625d87bc60ace44852f"
+    },
+    "overlay": {
+      "bytes": 61522114,
+      "sha256": "6ba3a60a327a49a9f84b85d8163efdca0b41bb9786135523c546ea58ef3c7bf7"
+    }
+  },
+  "go_workloads_executed": 0,
+  "benchmark_fixture_profile_dispatch_calls": 0,
+  "historical_local_failure": {
+    "retained": "tool transcript; summarized here",
+    "reason": "first pure unit invocation on local Python3.10 lacked hashlib.file_digest",
+    "failed_tests": [
+      "test_exec_retains_actual_binary_and_exit",
+      "test_timeout_kills_and_joins_group"
+    ],
+    "resolution": "driver SHA256 streams chunks; exact candidate observer remains unmodified; final10 controls PASS"
+  },
+  "limitations": [
+    "hosted Python3.12 execution not run",
+    "no diagnostic collection or acceptance",
+    "instrumentation and ELF retention cause overhead",
+    "dedicated runner and persistent cache unavailable",
+    "GitHub30day artifacts need durable external retention",
+    "hard runner loss or job timeout may prevent always upload"
+  ]
+}

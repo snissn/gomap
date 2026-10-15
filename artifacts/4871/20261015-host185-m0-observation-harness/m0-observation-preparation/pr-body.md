@@ -1,0 +1,21 @@
+The current ordinary MVCC candidate fails M0's unchanged 10% stability limits, but the maintained packet lacks the observations needed to investigate why. This adds a manual diagnostic that retains process/host/cgroup counters, existing foreground latency samples, GC counters, actual executables, and complete source/toolchain identities. It pins product `2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49`; the harness lands independently before one separately authorized collection.
+
+Refs #4871, #5111; ordinary candidate #5127 remains blocked by M0 stability and unresolved checkpoint allocation cost. This instrumentation PR makes no performance or M0 acceptance claim.
+
+The schedule preserves the original two fixtures and 20 interleaved benchmark calls, selectors, work, timers, 10% limits, CPU0,1/GOMAXPROCS2/8GiB, and 20-minute workflow cap. A checked test overlay inserts two observations outside timing; the entire timed body and writer are unchanged. Fresh Go test processes use an explicit `-exec` seam to retain each actual temporary ELF before executing it. One quiet preflight may refuse with zero calls; there is no retry. The original summarizer's failure remains a failure.
+
+The workflow is manual-only on ephemeral ubuntu-24.04, has read-only contents permission, pinned actions, separate pristine harness/product checkouts, and an official hash-verified Go1.26.9 SDK. The advisory CI inventory now includes its member; all existing execution selectors and required gates remain intact.
+
+Validation on exact harness head `939b10c22e54caf56dc84553b65e2435862052fb`:
+
+- `python3 .github/scripts/refresh_ci_impact_inventory.py --check`: PASS, 16 workflows/58 members.
+- `python3 .github/scripts/test_refresh_ci_impact_inventory.py`: 15 PASS.
+- `python3 .github/scripts/test_ci_impact.py`: 21 PASS.
+- `python3 .github/scripts/test_treedb_ci_contract.py`: 6 PASS.
+- `python3 .github/scripts/test_treedb_windows_core_headroom.py`: 16 PASS.
+- `M0_TEST_PRODUCT=<fixed clean product> python3 .github/scripts/test_mvcc_m0_observation.py`: 10 PASS, including actual toy process-group kill/join and wrapper exit/hash controls.
+- Pinned Go1.26.9 pristine and overlay `go test -c ./TreeDB/db`: both PASS; all 10,246 product source hashes unchanged. Neither binary was executed.
+
+Independent `INTERNAL_SUBAGENT_REVIEW`, explicitly routed `gpt-6.1-sol/high`, ACCEPT with zero findings and no reviewer edits. All 9,942 committed harness files match manifest SHA256 `8d69ca1427dc4c3c65cfe277ee09a6477b479b0a5c607a3881a5559313b147a5`; exact-head review JSON SHA256 `c16f63c87a2c7be5ee83784e2ba910eb0c2773bfe47ad02ef92fa164446c4a9f`. Hosted manual review cannot pin the user-required model route, so the task-local internal-review fallback applies. Hosted CI is pending; merge remains subject to latest-head checks and thread inventory.
+
+The observations add CPU, I/O and GC/scheduling effects even outside timers. Sampled telemetry cannot resolve every scheduler/host/GC-assist event. Hard runner loss or timeout may prevent upload; hosted 30-day artifacts need durable project retention. An instrumented PASS cannot replace the failed uninstrumented M0 gate. No collection has run. See [the diagnostic contract](docs/benchmarks/treedb-vacuum-m0-observation.md).

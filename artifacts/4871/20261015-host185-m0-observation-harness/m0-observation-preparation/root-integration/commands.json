@@ -1,0 +1,33 @@
+[
+  {
+    "argv": [
+      "python3",
+      ".github/scripts/refresh_ci_impact_inventory.py",
+      "--check"
+    ],
+    "exit": 0,
+    "seconds": 0.31571165611967444,
+    "output": "0.txt",
+    "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa"
+  },
+  {
+    "argv": [
+      "python3",
+      ".github/scripts/test_refresh_ci_impact_inventory.py"
+    ],
+    "exit": 0,
+    "seconds": 12.03080679802224,
+    "output": "1.txt",
+    "sha256": "b1861e08f865c24414dd2b062a36900cde8db064dedcc7024f6ede78c36c185c"
+  },
+  {
+    "argv": [
+      "python3",
+      ".github/scripts/test_ci_impact.py"
+    ],
+    "exit": 1,
+    "seconds": 3.4902140642516315,
+    "output": "2.txt",
+    "sha256": "82b0b5a47b124e78425c910b366bdc61bc07d5555705ea13cb892ed755ed0686"
+  }
+]

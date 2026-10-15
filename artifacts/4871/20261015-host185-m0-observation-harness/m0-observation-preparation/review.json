@@ -1,0 +1,137 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "scope": "Frozen nine-path M0 observation diagnostic harness and CI inventory integration only",
+  "disposition": "ACCEPT",
+  "source_findings": [],
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "fixed_product": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "freeze_sha256": "8faa4d1d02a76f17e68ba9bc26c9e3692d50ad3fbd65dc660bf81861716a7e45",
+  "inspected_source_sha256": {
+    ".github/scripts/mvcc_m0_observation.py": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+    ".github/scripts/mvcc_m0_observation_exec.py": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+    ".github/scripts/mvcc_m0_observation_gc.go.txt": "18b656d47ffd7caa0a04fd393d1ce31caa4a8a8a0b582f6a848e4f44b738f443",
+    ".github/scripts/test_mvcc_m0_observation.py": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979",
+    ".github/workflows/treedb-vacuum-m0-observation.yml": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c",
+    "docs/benchmarks/treedb-vacuum-m0-observation.md": "8687d0ca4bc9959e2524826a267245b5600107f4167251e85f0164b2a2835c9b",
+    ".github/ci/ci_impact.json": "1e31d4de2ca94c357f266e1eccb6108f74e980f11c73c17792441919867bf1ec",
+    ".github/scripts/test_ci_impact.py": "7aef9d624854103372d5e5d50942a6ac7e5c59628e54821417ed0feca1a82f01",
+    "docs/CI_IMPACT_SELECTION.md": "150686ad42a46b294d4bbbd96c4db51661b73a3326004df7cc814913851d937e"
+  },
+  "verified_frozen_files": 9942,
+  "frozen_exceptions": [],
+  "reviewer_checks": {
+    "pure_controls": {
+      "passed": 10,
+      "failed": 0,
+      "runtime_s": 0.297,
+      "product_workloads_executed": 0
+    },
+    "product_compile_source_manifest_entries": 10246,
+    "product_before_after_current_equal": true,
+    "sdk_manifest_entries": 15045,
+    "sdk_manifest_matches_local_files": true,
+    "compile_only_elf_hashes": {
+      "pristine": "d311c01bcaec510c801fd8e40b15101a72566872660af625d87bc60ace44852f",
+      "overlay": "6ba3a60a327a49a9f84b85d8163efdca0b41bb9786135523c546ea58ef3c7bf7"
+    },
+    "sdk_archive_sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+    "root_final_pure_suites": [
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/refresh_ci_impact_inventory.py",
+          "--check"
+        ],
+        "exit": 0,
+        "output_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa"
+      },
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/test_refresh_ci_impact_inventory.py"
+        ],
+        "exit": 0,
+        "output_sha256": "e79254dd5be7e5f9d2e053fcf5838e8691e99abe1c8aae502972ca61fccdf846"
+      },
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/test_ci_impact.py"
+        ],
+        "exit": 0,
+        "output_sha256": "2e9a67a3cb725fb3207df4f3e7745e5de75065b332eb0f3c4faa1570e70d4ec4"
+      },
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/test_treedb_ci_contract.py"
+        ],
+        "exit": 0,
+        "output_sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371"
+      },
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/test_treedb_windows_core_headroom.py"
+        ],
+        "exit": 0,
+        "output_sha256": "f4891201da088cf850c27de497166c15c2596712eeda8741a61ffbdfc31a49b3"
+      },
+      {
+        "argv": [
+          "python3",
+          ".github/scripts/test_mvcc_m0_observation.py"
+        ],
+        "exit": 0,
+        "output_sha256": "67e5705f565b58ae902041ac5e614ba478057a5e24d6659619bef0d84346a88d"
+      }
+    ],
+    "root_final_commands_sha256": "9db67f89c3cd4fd67c66e5de9b4da6bdd31ccf18b0c62b3112b2f45366a82092",
+    "initial_integration_red_disposition": "Three cardinality failures retained in root-integration: stale57/15 expectations updated only to actual58/16; final suite passes without dropping cases."
+  },
+  "coverage": [
+    "all six source bodies",
+    "exact22-call schedule and fixed selectors/counts/work/order",
+    "checked preimage and full timed-body/writer equivalence",
+    "foreground writer creation after initial ReadMemStats",
+    "pristine/overlay compile-only receipts and hashes",
+    "fresh actual ELF exec wrapper retention and exit propagation",
+    "deadline/session kill/subreaper adopted child join",
+    "process/host/visible-cgroup telemetry and missing flags",
+    "original summarizer exit propagation and failure/raw retention",
+    "manual ephemeral workflow trust boundary and upload exclusions"
+  ],
+  "nonblocking_limitations": [
+    "exec.json exec_wall_ns is a pre-exec stamp captured before hashing and receipt serialization, not exact process entry",
+    "telemetry sampling/ReadMemStats/ELF copy perturb the diagnostic",
+    "sampled process/cgroup counters cannot resolve all hypervisor/scheduler/GC-assist activity",
+    "hard runner loss or job timeout may prevent upload",
+    "30-day hosted artifacts require durable project retention",
+    "22 actual runtime ELFs do not yet exist; runtime wrapper would retain them; only two compile-only ELFs exist now"
+  ],
+  "no_claims": [
+    "execution authorization",
+    "M0 qualification",
+    "ordinary/native completion",
+    "current-head CI",
+    "mergeability",
+    "environmental causality"
+  ],
+  "hosted_review_unavailability_reason": "Required reviewer/model route cannot be pinned by hosted manual review; independent explicitly routed internal reviewer used.",
+  "final_source_manifest_sha256": "8d69ca1427dc4c3c65cfe277ee09a6477b479b0a5c607a3881a5559313b147a5",
+  "final_staged_patch_sha256": "7adc7ea95f8a096cc44cfad28530fb814ed1edef149c689c0f02bc448e3b6d2f",
+  "commit_binding": {
+    "commit": "939b10c22e54caf56dc84553b65e2435862052fb",
+    "tree": "5b727b1f56eaeb6eef7c9b371ba349cfa76097fb",
+    "parent": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "git_blob_paths_verified": 9942,
+    "all_commit_blob_sha256_match_final_manifest": true,
+    "head_matches": true,
+    "worktree_clean": true,
+    "mode": "read-only Git object verification requested by root; no mutations"
+  },
+  "lease_released": true
+}

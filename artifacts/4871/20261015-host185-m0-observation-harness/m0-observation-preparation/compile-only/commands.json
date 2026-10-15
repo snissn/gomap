@@ -1,0 +1,66 @@
+[
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+      "test",
+      "-p=1",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/pristine.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 76.29082590527833,
+    "exit": 0,
+    "label": "pristine-compile",
+    "outer_timeout_s": 180,
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+      "version",
+      "-m",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/pristine.test"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 0.0034280503168702126,
+    "exit": 0,
+    "label": "pristine-buildinfo",
+    "outer_timeout_s": 180,
+    "output_sha256": "424ef368bdaf30c33a19bb51a29412e387c67d739e145424a7b19cf2d0b55a2e"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+      "test",
+      "-p=1",
+      "-overlay",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.json",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 39.58394548390061,
+    "exit": 0,
+    "label": "overlay-compile",
+    "outer_timeout_s": 180,
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.9/bin/go",
+      "version",
+      "-m",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-preparation/compile-only/overlay.test"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 0.003462129272520542,
+    "exit": 0,
+    "label": "overlay-buildinfo",
+    "outer_timeout_s": 180,
+    "output_sha256": "b8416253460c6d4708b2e862b55a284587fc0ffd7ac9c7ccf195137f2712376e"
+  }
+]

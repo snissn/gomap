@@ -1,0 +1,8 @@
+{
+  "parser": "PyYAML 6.0",
+  "parsed": true,
+  "manual_only": true,
+  "job_timeout_minutes": 20,
+  "workflow_sha256": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c",
+  "python_ast_parsed": true
+}

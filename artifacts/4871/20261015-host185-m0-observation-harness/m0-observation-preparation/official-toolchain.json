@@ -1,0 +1,13 @@
+{
+  "source": "https://go.dev/dl/?mode=json&include=all",
+  "version": "go1.26.9",
+  "archive": {
+    "filename": "go1.26.9.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.26.9",
+    "sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+    "size": 66935201,
+    "kind": "archive"
+  }
+}

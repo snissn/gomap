@@ -1,0 +1,516 @@
+{
+  "baseRefOid": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "comments": [
+    {
+      "id": "IC_kwDOIdn7C88AAAABccqtFg",
+      "author": {
+        "login": "coderabbitai"
+      },
+      "authorAssociation": "NONE",
+      "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n\n> [!IMPORTANT]\n> ## Draft PR not reviewed\n> \n> Draft PRs are not automatically reviewed by default.\n> \n> - [ ] <!-- {\"checkboxId\":\"e9bb8d72-00e8-4f67-9cb2-caf3b22574fe\"} --> Trigger a manual review\n> \n> To automatically review draft PRs, update your CodeRabbit configuration:\n> \n> ```yaml\n> reviews:\n>   auto_review:\n>     drafts: true\n> ```\n\n<!-- end of auto-generated comment: skip review by coderabbit.ai -->\n\n<!-- autopilot:start -->\n- [ ] <!-- {\"checkboxId\":\"2708ad07-9f24-4260-9c11-7dc76a49f2e3\"} --> <strong title=\"Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\">Autofix</strong> \u00b7 Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\n<!-- autopilot:end -->\n<!-- tips_start -->\n\n\n\nThanks for using [CodeRabbit](https://coderabbit.ai?utm_source=oss&utm_medium=github&utm_campaign=snissn/gomap&utm_content=5136)! It's free for OSS, and your support helps us grow. If you like it, consider giving us a shout-out.\n\n<details>\n<summary><strong>\u2764\ufe0f Share</strong></summary>\n<dl>\n<dd>\n\n- [X](https://twitter.com/intent/tweet?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A&url=https%3A//coderabbit.ai)\n- [Mastodon](https://mastodon.social/share?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A%20https%3A%2F%2Fcoderabbit.ai)\n- [Reddit](https://www.reddit.com/submit?title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&text=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code.%20Check%20it%20out%3A%20https%3A//coderabbit.ai)\n- [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fcoderabbit.ai&mini=true&title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&summary=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code)\n\n</dd>\n</dl>\n</details>\n\n\n<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>\n\n<!-- tips_end -->",
+      "createdAt": "2026-10-15T23:02:16Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/snissn/gomap/pull/5136#issuecomment-6204075286",
+      "viewerDidAuthor": false
+    }
+  ],
+  "headRefOid": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "isDraft": true,
+  "mergeStateStatus": "BLOCKED",
+  "mergeable": "MERGEABLE",
+  "number": 5136,
+  "reviews": [],
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906042/job/116716973702",
+      "name": "ubuntu-latest-1",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Root: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057423/job/116717464715",
+      "name": "append-only snapshot guardrail (linux)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "read-snapshot: guardrails"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906293/job/116716974637",
+      "name": "bench (linux)",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "redisserver: protocol bench"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:01:26Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906433/job/116716974910",
+      "name": "gofmt",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "COMPLETED",
+      "workflowName": "Format"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:22Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820905838/job/116716973192",
+      "name": "windows-latest",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "COMPLETED",
+      "workflowName": "HashDB: vet+test (Windows)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:39Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465531",
+      "name": "mvcc raw-path gate (linux)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "COMPLETED",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:03:23Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906481/job/116716975029",
+      "name": "suites (linux)",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "COMPLETED",
+      "workflowName": "unified_bench: suites (gates)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:03:24Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906399/job/116716974934",
+      "name": "ubuntu-latest",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "COMPLETED",
+      "workflowName": "unified_bench: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906042/job/116716973439",
+      "name": "ubuntu-latest-2",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Root: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906399/job/116716974642",
+      "name": "macos-latest",
+      "startedAt": "2026-10-15T23:00:57Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "unified_bench: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906042/job/116716973997",
+      "name": "macos-latest-1",
+      "startedAt": "2026-10-15T23:00:55Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Root: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906042/job/116716973748",
+      "name": "macos-latest-2",
+      "startedAt": "2026-10-15T23:00:59Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Root: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465777",
+      "name": "vet (ubuntu)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906481/job/116716975461",
+      "name": "bigkeys_guard (linux)",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "unified_bench: suites (gates)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465879",
+      "name": "vet (macos)",
+      "startedAt": "2026-10-15T23:02:17Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465893",
+      "name": "vet (windows)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466122",
+      "name": "ubuntu-latest-1",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:02Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906481/job/116716975479",
+      "name": "profiles (linux) (balanced)",
+      "startedAt": "2026-10-15T23:00:51Z",
+      "status": "COMPLETED",
+      "workflowName": "unified_bench: suites (gates)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466162",
+      "name": "ubuntu-latest-2",
+      "startedAt": "2026-10-15T23:02:23Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:06Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906481/job/116716975291",
+      "name": "profiles (linux) (fast)",
+      "startedAt": "2026-10-15T23:00:52Z",
+      "status": "COMPLETED",
+      "workflowName": "unified_bench: suites (gates)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466064",
+      "name": "ubuntu-latest-3",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:13Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38820906481/job/116716975413",
+      "name": "profiles (linux) (durable)",
+      "startedAt": "2026-10-15T23:00:52Z",
+      "status": "COMPLETED",
+      "workflowName": "unified_bench: suites (gates)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466099",
+      "name": "macos-latest-1",
+      "startedAt": "2026-10-15T23:02:20Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466111",
+      "name": "macos-latest-2",
+      "startedAt": "2026-10-15T23:02:11Z",
+      "status": "QUEUED",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466145",
+      "name": "macos-latest-3",
+      "startedAt": "2026-10-15T23:02:11Z",
+      "status": "QUEUED",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466015",
+      "name": "windows-mongo-gateway",
+      "startedAt": "2026-10-15T23:02:14Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466185",
+      "name": "windows-nativewire",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466155",
+      "name": "windows-powerloss-oracle",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466129",
+      "name": "windows-core-1",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466194",
+      "name": "windows-core-2",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466269",
+      "name": "windows-core-3",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466168",
+      "name": "windows-core-4",
+      "startedAt": "2026-10-15T23:02:15Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466187",
+      "name": "windows-core-5",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466188",
+      "name": "windows-core-6",
+      "startedAt": "2026-10-15T23:02:14Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466176",
+      "name": "windows-core-7",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466503",
+      "name": "windows-core-8",
+      "startedAt": "2026-10-15T23:02:41Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466251",
+      "name": "windows-caching-heavy-1",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466298",
+      "name": "windows-caching-heavy-2",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466219",
+      "name": "windows-caching-rest-1",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466209",
+      "name": "windows-caching-rest-2",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466080",
+      "name": "windows-caching-rest-3",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465892",
+      "name": "race-check (linux)-1",
+      "startedAt": "2026-10-15T23:02:14Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465822",
+      "name": "race-check (linux)-2",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465953",
+      "name": "race-check (linux)-3",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465852",
+      "name": "race-check (linux)-4",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465917",
+      "name": "perf-smoke (linux)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717465870",
+      "name": "snapshot-iterator-perf (linux)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-15T23:02:39Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/snissn/gomap/actions/runs/38821057367/job/116717466027",
+      "name": "CI impact (advisory only)",
+      "startedAt": "2026-10-15T23:02:13Z",
+      "status": "COMPLETED",
+      "workflowName": "TreeDB: vet+test"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "CodeRabbit",
+      "startedAt": "2026-10-15T23:02:17Z",
+      "state": "SUCCESS",
+      "targetUrl": ""
+    }
+  ],
+  "url": "https://github.com/snissn/gomap/pull/5136"
+}
