@@ -1,0 +1,162 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "repository": "snissn/gomap",
+  "pr": 5127,
+  "base_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "head_sha_or_manifest": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "head_tree": "d363fab80b10dfa7804cea1a3daf4b951c1f5949",
+  "disposition": "REJECT",
+  "candidate_edits_by_reviewer": false,
+  "candidate_edits": false,
+  "construction_role": false,
+  "reviewer_runtime_campaigns": [],
+  "unavailability_evidence": "Workstream requires exact GPT-6.1 Sol. Hosted manual review cannot pin that model and was not requested; no hosted failure or response is claimed. Coordinator reports fresh classifier zero requests/findings/threads.",
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "P1",
+      "status": "FIXED_IN_SUCCESSOR",
+      "title": "Certificate cache publication and terminal borrowed-proof custody",
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 875
+    },
+    {
+      "id": "R2",
+      "priority": "P2",
+      "status": "FIXED_IN_SUCCESSOR",
+      "title": "Closed PRIMARY iterator and backend inner alias scrub",
+      "path": "TreeDB/tree/primary_iterator.go",
+      "line": 241
+    },
+    {
+      "id": "R3",
+      "priority": "P2",
+      "status": "FIXED_IN_SUCCESSOR",
+      "title": "One preadmitted recovery marker backing",
+      "path": "TreeDB/db/primary_joint_swap_v6.go",
+      "line": 380
+    },
+    {
+      "id": "R4",
+      "priority": "P1",
+      "status": "OPEN_COORDINATOR_CONFIRMED",
+      "title": "Set retirement still races unpinned state readers and omitted publishers",
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "line": 2784,
+      "consumer_inventory": [
+        "vlog_rewrite.go:2775-2803 optimistic user rewrite",
+        "vlog_rewrite.go:2919-2943 serialized user rewrite",
+        "vlog_rewrite.go:2494-2509 system rewrite",
+        "vlog_rewrite.go:2560-2575 and2674-2691 collection rewrite",
+        "db.go:5503-5526 CompactIndex",
+        "ordered_root_publish.go:1924-1942 ordered-root base reader",
+        "compact_storage_audit.go:265-274 current Set map comparison",
+        "vlog_rewrite.go:1788-1789 online dictionary preparation",
+        "leaf_generation_pack.go:317-318 dictionary preparation"
+      ],
+      "publisher_inventory": [
+        "compact_storage_audit.go:312-338 exact topology replacement/release",
+        "leaf_generation_gc.go:846-889 refresh=true topology replacement/release",
+        "vacuum_online.go:1748-1789 replacement and1844-1846 old Set release"
+      ],
+      "safe_domains_distinguished": [
+        "Snapshot-backed fragmentation/reachability/live scans",
+        "fresh CurrentSet-owned candidate/rebinding inputs",
+        "exclusive offline vacuum/rewrite with original acquired Set",
+        "scalar-only State/basis checks"
+      ]
+    },
+    {
+      "id": "R5",
+      "priority": "P1",
+      "status": "OPEN_COORDINATOR_CONFIRMED",
+      "title": "Topology-only DBState literals erase current PRIMARY ownership",
+      "path": "TreeDB/db/compact_storage_audit.go",
+      "line": 322,
+      "sibling": "TreeDB/db/leaf_generation_gc.go:867",
+      "consequence": "Missing primaryRoot skips read-root/physical-owner capture and loses current edge needed by next-publication and terminal disposal."
+    }
+  ],
+  "reviewed_successor_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/cow_public_review_regression_test.go",
+    "TreeDB/db/currentset_refresh_test.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+    "TreeDB/db/durable_root_bench_test.go",
+    "TreeDB/db/durable_root_open_test.go",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+    "TreeDB/db/native_mvcc_snapshot_v6.go",
+    "TreeDB/db/one_shot_custody_test.go",
+    "TreeDB/db/original_startup_generation_test.go",
+    "TreeDB/db/pools.go",
+    "TreeDB/db/primary_capsule_v6_test.go",
+    "TreeDB/db/primary_joint_completed_v6_test.go",
+    "TreeDB/db/primary_joint_recovery_proof_v6.go",
+    "TreeDB/db/primary_joint_swap_v6.go",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "TreeDB/db/primary_offline_pair_v6_test.go",
+    "TreeDB/db/primary_platform_refusal_test.go",
+    "TreeDB/db/primary_review_repairs_test.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/snapshot_iterator_lifetime.go",
+    "TreeDB/db/stable_resource.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+    "TreeDB/index_vacuum_m4_matrix_test.go",
+    "TreeDB/nativewire/fixed_peer_failure_diagnostics_test.go",
+    "TreeDB/nativewire/fixed_peer_vector_initialization_v1_test.go",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+    "TreeDB/offline_maintenance_template_lookup_test.go",
+    "TreeDB/pager/pager.go",
+    "TreeDB/power_loss_oracle_test.go",
+    "TreeDB/profiles_test.go",
+    "TreeDB/tree/primary_iterator.go",
+    "TreeDB/tree/tree.go"
+  ],
+  "successor_path_count": 35,
+  "whole_foundation_diff": {
+    "files": 524,
+    "insertions": 85041,
+    "deletions": 5126
+  },
+  "prior_review_preserved": "review-f0415773.md/json",
+  "full_review": "review-a8c52ed66.md",
+  "checks_performed": [
+    "Exact head/tree and clean status revalidation",
+    "Tracked applicable policy inventory/read",
+    "All35 successor diffs and adjacent critical source/callers",
+    "Whole-foundation critical-contract review continued from prior artifact",
+    "Handoff/candidate/failure map/batch source-binding inventory and metadata results",
+    "Selected raw result and named control outcome inspection"
+  ],
+  "checks_not_performed": [
+    "Reviewer tests/builds/benchmarks",
+    "Live GitHub CI inventory or mutation",
+    "Native/Q32/final Dgraph qualification"
+  ],
+  "evidence_limits": {
+    "hosted_ci": "pending/incomplete; coordinator owns live state",
+    "hosted_raw_performance": "pending; f041 Get+13.09% seek+6.54% RED does not qualify successor",
+    "local_timing": "zero qualifying host185 samples",
+    "windows": "compilation only locally; two prior nativewire deadline failures unresolved",
+    "focused_binding": "batch-inventory.json preserves exact-final versus earlier-byte exceptions",
+    "latest_parent_report": "a8 stable-legacy-public failed foreground-p99 CV0.24501479 >0.10; all10 operations complete/no abort and exposure/error classifications pass; variability is not attributed latency regression or waiver"
+  },
+  "merge_authorized": false,
+  "mergeable": false,
+  "review_runtime_lease_released": true,
+  "lifetime_architecture_disposition": {
+    "name": "Shared Set lifetime and current-root ownership architecture",
+    "root_cause": "Shared ordinary/native final Set cleanup clears mutable backing. Partial Snapshot/Refresh repairs leave other borrowed-state readers and publishers outside the same lifetime protocol.",
+    "publisher_rule": "Inventory every state.Store publisher. Publishers obey rootReuse before db.mu, except proven initial or offline exclusion.",
+    "consumer_rule": "Inventory every state.ValueLogSet consumer across lock release. Acquire the exact Set under publication exclusion before unlocking and retain it through the last consumer. Do not pin speculatively after unlock or weaken final alias scrub.",
+    "current_root_rule": "Topology-only DBState copies preserve the same primaryRoot current ownership edge without adding or withdrawing ownership.",
+    "borrowed_state_rule": "DB.State remains shallow borrowed metadata. Pointer-bearing readers require a live Snapshot or protected capture; convert internal db.State tree readers.",
+    "exceptions": "Live Snapshot-backed readers, explicitly retained offline Sets under exclusive ownership, initial unpublished states, and scalar-only basis checks are distinct safe cases when their stated exclusions hold.",
+    "attribution": "Named architecture disposition supplied by root after independently confirming R4/R5; consistent with this review findings and recorded safe-consumer distinctions."
+  }
+}

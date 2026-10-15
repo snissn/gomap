@@ -1,0 +1,23 @@
+{
+  "raw/legacy-1.txt": "8c0864bbf3a4586c428b993d582aa89e16ab1bf98bfb2eb1fe8acbd0086de83a",
+  "raw/legacy-10.txt": "2ece93bc32c1f9059ef5827df0f0fdd7dc40df933cc77831c9766d4579fce5bb",
+  "raw/legacy-2.txt": "9c216069ec74b3fa3f139f6258f601f9c54eb0462da357543991c81edacbeb18",
+  "raw/legacy-3.txt": "9a1cc1ba2afc2e8fd1f3c853a5b7081a5efa120cd9cf36d4175b6705a49ee282",
+  "raw/legacy-4.txt": "3a99c82b893131c90fb519bc6f301ffb1fe9c2132d4592f0e151eff35d894087",
+  "raw/legacy-5.txt": "0d9d89a38459940dba77b7da61822b636b40c0bb4beda6a8b6116c3a85bd4b54",
+  "raw/legacy-6.txt": "62556dfebeed2a6937b63a6caaa643143bae94d92a37c14e7ef220a041887715",
+  "raw/legacy-7.txt": "80b356f35acab44b8818ac5373736df6587ee2c47ba7578b9066658c96a893fe",
+  "raw/legacy-8.txt": "aee473dd9a781b33a7c794050162a2b02ba01e964190e03d6a50f51456d8a78e",
+  "raw/legacy-9.txt": "f83ff2527c25949749efa581694bebea31f12b0c65f664ebee72c96210e70d2f",
+  "raw/public-1.txt": "2fc8a9321e1a26a8bb5a05cd44fdca5af5eb723b2d6abdc39751b09f61b31c94",
+  "raw/public-10.txt": "0cc505beaec1d452c28e671db916226dc794d3a319c4de5d729c69357fd5d87e",
+  "raw/public-2.txt": "8ca9e1f5a408ebd21bf29da4f85ddaf1621cb776c43df65ad0df667de08875cb",
+  "raw/public-3.txt": "9d0d8c581992f6a900cfd91a1c564e688008e7dd24dbc4241cc26033cd67c7d3",
+  "raw/public-4.txt": "7e6e2d38ad524fa7e52a83452a094e2774a5d95440ccbd248e217bc1eb01afd4",
+  "raw/public-5.txt": "1267077f85ab739dbfcf7351f2952a90def970c56accc96781cd82c8b5956fab",
+  "raw/public-6.txt": "3aab3807891946bdfdc45e90a6290970654397c30002452e40b6907d553a73ac",
+  "raw/public-7.txt": "c815cafae4041245438266849784691bfac867a752ecec2d50b4a019c34215a8",
+  "raw/public-8.txt": "7bc91b368ff8821dfc4291f71cdd0b4ce8a2a2e0dbde08fa5c5a8b4828c18958",
+  "raw/public-9.txt": "fb31463765dc7bd752dbb098f8420e00d705d3541059dc3be4bc1dc797d877d8",
+  "legacy-benchstat-input.txt": "0fc24dba6bbfe7c6cd42fc637cc4f38b7abe09892c66b7dd5c277a39d2b1eefb"
+}
