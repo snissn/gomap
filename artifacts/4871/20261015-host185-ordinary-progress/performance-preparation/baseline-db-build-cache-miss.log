@@ -1,0 +1,5 @@
+go: downloading github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
+# github.com/snissn/gomap/TreeDB/db
+TreeDB/db/db.go:15:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/TreeDB/db [setup failed]
+FAIL

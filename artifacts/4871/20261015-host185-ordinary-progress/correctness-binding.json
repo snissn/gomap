@@ -1,0 +1,36 @@
+{
+  "column-all8-current-07": {
+    "result": {
+      "elapsed": 31.168913959059864,
+      "exit": 0
+    },
+    "source_drift_during_run": [],
+    "source_paths_differing_from_frozen_candidate": []
+  },
+  "cwal-settle-05": {
+    "result": {
+      "elapsed": 31.91959870606661,
+      "exit": 0
+    },
+    "source_drift_during_run": [],
+    "source_paths_differing_from_frozen_candidate": [
+      "TreeDB/caching/cow_maintenance_lifetime_test.go"
+    ]
+  },
+  "public-failure-controls-08": {
+    "result": {
+      "elapsed": 8.07699601398781,
+      "exit": 1
+    },
+    "source_drift_during_run": [],
+    "source_paths_differing_from_frozen_candidate": []
+  },
+  "settle-lifetime-06": {
+    "result": {
+      "elapsed": 13.43623321922496,
+      "exit": 0
+    },
+    "source_drift_during_run": [],
+    "source_paths_differing_from_frozen_candidate": []
+  }
+}

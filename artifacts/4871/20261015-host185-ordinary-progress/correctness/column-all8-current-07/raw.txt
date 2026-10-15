@@ -1,0 +1,20 @@
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata
+--- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634 (0.27s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64 (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata (0.00s)
+    --- PASS: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	0.274s

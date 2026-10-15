@@ -1,0 +1,78 @@
+=== RUN   TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters
+--- PASS: TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters (2.61s)
+=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts
+=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable
+=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed
+=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast
+--- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts (1.06s)
+    --- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_durable (0.39s)
+    --- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/command_wal_relaxed (0.39s)
+    --- PASS: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast (0.29s)
+=== RUN   TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut
+--- PASS: TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut (0.46s)
+=== RUN   TestDurabilityProfilePublicEntrypointInventory
+--- PASS: TestDurabilityProfilePublicEntrypointInventory (0.05s)
+=== RUN   TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen
+--- PASS: TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen (0.30s)
+=== RUN   TestCloseOptInVacuumIndexOnlineShrinksAndReopens
+--- PASS: TestCloseOptInVacuumIndexOnlineShrinksAndReopens (0.22s)
+=== RUN   TestCompactStorageFullPacksLeafGenerationDebtOffline
+--- PASS: TestCompactStorageFullPacksLeafGenerationDebtOffline (0.97s)
+=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity
+--- PASS: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.30s)
+=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline
+--- PASS: TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline (0.29s)
+=== RUN   TestVacuumIndexOffline_LoadsPersistedFormatConfig
+--- PASS: TestVacuumIndexOffline_LoadsPersistedFormatConfig (0.15s)
+=== RUN   TestValueLogRewriteOffline_LoadsPersistedFormatConfig
+--- PASS: TestValueLogRewriteOffline_LoadsPersistedFormatConfig (0.19s)
+=== RUN   TestPowerLossCertificationRecoverablePageReusePublicReopen
+    power_loss_certification_page_reuse_test.go:95: write first post-horizon generation: sync durable-root index: power-loss-certification: stop before reused-page index sync
+--- FAIL: TestPowerLossCertificationRecoverablePageReusePublicReopen (0.15s)
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-003
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/full-writeback
+    power_loss_oracle_test.go:792: new-root state=(commit=2 applied=0) want=(3,0)
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-001
+    power_loss_oracle_test.go:764: public Open rejected namespace-without-data image without an allowed typed-sentinel classification: treedb: incompatible leaf generation manifest: decode manifest.json: empty file
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-003
+    power_loss_oracle_test.go:764: public Open rejected namespace-without-data image without an allowed typed-sentinel classification: treedb: incompatible leaf generation manifest: decode manifest.json: empty file
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-002
+    power_loss_oracle_test.go:764: public Open rejected one-missing-dependency image without an allowed typed-sentinel classification: treedb: incompatible leaf generation manifest: decode manifest.json: empty file
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-003
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/synced-only
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/target-meta-only/index%2Ftarget-meta-generation-2
+=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body
+=== NAME  TestPowerLossOracleCounterexampleNewMetaMissingClosure
+    power_loss_oracle_test.go:812: adversarial crash images: cut=cut/checkpoint-generation-2/after-meta-write/000 count=13 runtime=171.835068ms peak_temp_storage_bytes=1245044 family_coverage=map[data-without-namespace:2 full-writeback:1 namespace-without-data:2 one-missing-dependency:5 synced-only:1 target-meta-only:1 torn-format:1]
+--- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure (0.35s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-001 (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/data-without-namespace/outer-leaf%2Fouter-leaf-generation-2-003 (0.02s)
+    --- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/full-writeback (0.01s)
+    --- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-001 (0.00s)
+    --- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/namespace-without-data/outer-leaf%2Fouter-leaf-generation-2-003 (0.00s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/index%2Findex-generation-2 (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001 (0.02s)
+    --- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-002 (0.00s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-003 (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001 (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/synced-only (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/target-meta-only/index%2Ftarget-meta-generation-2 (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleNewMetaMissingClosure/cut/checkpoint-generation-2/after-meta-write/000/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body (0.02s)
+=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot
+=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/full-writeback
+=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/synced-only
+=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/target-meta-only/index%2Fchunked-intermediate-root
+=== NAME  TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot
+    power_loss_oracle_test.go:1417: adversarial crash images: cut=cut/chunked-checkpoint-intermediate-root/after-meta-write/000 count=3 family_coverage=map[full-writeback:1 synced-only:1 target-meta-only:1]
+--- PASS: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot (0.19s)
+    --- PASS: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/full-writeback (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/synced-only (0.02s)
+    --- PASS: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot/cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/target-meta-only/index%2Fchunked-intermediate-root (0.02s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	7.290s
+FAIL

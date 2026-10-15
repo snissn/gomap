@@ -1,0 +1,34 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-c",
+    "-p=1",
+    "-o",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/candidate-db.test",
+    "./TreeDB/db"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/candidate",
+  "source": {
+    "head": "0046314c626310f7ad7965360155335a80cdc459",
+    "tree": "0aafe0c30b6897b52ac9483f8b9cd4f2f803c7a1",
+    "TreeDB": "c92b52d0ac5b6a01c2acf03e4062eb56bb2cd7fc",
+    "go_mod_blob": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+    "go_sum_blob": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050"
+  },
+  "env": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/tmp",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache"
+  },
+  "timeout_s": 180,
+  "exit": 0,
+  "elapsed_s": 50.70123861497268
+}

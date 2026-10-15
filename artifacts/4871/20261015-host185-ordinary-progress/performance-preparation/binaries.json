@@ -1,0 +1,18 @@
+{
+  "baseline-db": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/baseline-db.test",
+    "sha256": "fa655eef121154e0f0b55235594c240842ec3acbe67d0e3a4f223297d8f6aa0b"
+  },
+  "baseline-primary": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/baseline-primary.test",
+    "sha256": "213997d35a6190eea8bbfa2c962cba4e54f57f57627460e50c7c02fdf1eb56f5"
+  },
+  "candidate-db": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/candidate-db.test",
+    "sha256": "384ec0facd03c3df1205dbb0fc20c2890209cd74f61556b23787d1833187a6a6"
+  },
+  "candidate-primary": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/candidate-primary.test",
+    "sha256": "88c0c924e0fd6e22285221a3f11d721c9f4db71ddfa30310c5f299af677df4e5"
+  }
+}

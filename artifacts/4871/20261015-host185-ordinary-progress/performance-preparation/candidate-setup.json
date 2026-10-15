@@ -1,0 +1,10 @@
+{
+  "mode": "git",
+  "worktree": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/candidate",
+  "branch": "codex/5111-host185-early-cost-20261015",
+  "base_sha": "f3180bb8eb8e53448a780cc743f1f4b16a3fa8bb",
+  "seed": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary",
+  "fallback_reason": "ordinary Git explicitly selected",
+  "cloned_files": 0,
+  "cloned_bytes": 0
+}

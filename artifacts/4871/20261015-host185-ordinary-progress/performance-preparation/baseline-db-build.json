@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-c",
+    "-p=1",
+    "-o",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/baseline-db.test",
+    "./TreeDB/db"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+  "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "env": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/tmp",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache"
+  },
+  "exit": 0,
+  "elapsed_s": 47.39623562106863,
+  "binary_sha256": "fa655eef121154e0f0b55235594c240842ec3acbe67d0e3a4f223297d8f6aa0b"
+}

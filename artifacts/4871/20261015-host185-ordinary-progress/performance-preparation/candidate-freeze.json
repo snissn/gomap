@@ -1,0 +1,23 @@
+{
+  "source_head": "0046314c626310f7ad7965360155335a80cdc459",
+  "base": "f3180bb8eb8e53448a780cc743f1f4b16a3fa8bb",
+  "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/coherent-checkpoint-01",
+  "files": {
+    "TreeDB/caching/cow_maintenance.go": "50895cd7ce32ded0c1b6de8eef44ec6be287e7f7822762c17078c5c42b46b847",
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "77c38a50f7344f21ccc989817843cfc83c88938310d502e67f8646e86f5f4cde",
+    "TreeDB/caching/db.go": "666e3b833cd9bc4164b5d5379e946b9b27ed44869e72cfe6a900625998391387",
+    "TreeDB/compact_storage.go": "f51f7f18bd1b2e1bd6ad1b2db466d549de15ae133b735c3a247c0a4d34a1b0e0",
+    "TreeDB/db/compact_storage.go": "3d98d88d8d59a4f68b287ab2d41e00a39c317d257c65a777ad2d66a88dad0ca4",
+    "TreeDB/db/db.go": "92eac0ee0da1afbdb83caab12087eb67d5b5d1f7bfb2f9d790370a1f25b6f53b",
+    "TreeDB/db/ordered_root_test_hooks_test.go": "ae06768841d719d21a9ab5d35dae3c542f6ff87fc4f9c57d30116ee1491582a3",
+    "TreeDB/db/pools.go": "e6b02f1ec38bc46eb588f55796b7abbf361753ecd05911da1fc687e1df421cd9",
+    "TreeDB/db/power_loss_certification_stale_build_test.go": "165c67fdf55aedba65cb00ab30ef4dbb60ea1e9ef39095d802a1161aef9dfb1c",
+    "TreeDB/db/primary_directory_test.go": "182a13f5b403d96e3bee8fc03bcb51112b48be78bed4e0aaf68a7eed28a05bdd",
+    "TreeDB/db/primary_owned_promotion_v6_test.go": "96545b4d446b0370f62ea9925f6cbe26902c17793bfa846637e36c816d70b801",
+    "TreeDB/db/primary_vacuum_v5_test.go": "d5effd50f30d2b5e2e58dfb8357ff80b62e19dc367fbb9e598682fa32f75f151",
+    "TreeDB/db/root_snapshot.go": "aad88827253b591db042fcef79bc15bdda57b3d49b433873fb55a236143963e6",
+    "TreeDB/db/snapshot_probe_test.go": "3c14efda2da479fc9944c6ff6b20d1341f25040ad67463edb7f85077787f776e",
+    "TreeDB/docs/spec/cow-cache-publication.md": "061d01913af2d63e420ad2b281ec4b0dff93dcd87928cab6798e2182868748f6"
+  },
+  "scope": "Frozen bounded diagnostic performance source; not final qualification or PR maturity"
+}

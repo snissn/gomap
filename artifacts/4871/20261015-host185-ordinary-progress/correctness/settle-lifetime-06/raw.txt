@@ -1,0 +1,28 @@
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/capture
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; capture refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/install
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; install refusal then retry; captures4 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/capture
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; capture refusal then retry; captures2 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/install
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; install refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; capture refusal then retry; captures3 oldRevision1
+=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install
+    cow_maintenance_lifetime_test.go:316: real accepted maintenance1; install refusal then retry; captures4 oldRevision1
+--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (1.16s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/capture (0.21s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/install (0.19s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/capture (0.20s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/install (0.19s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (0.18s)
+    --- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (0.18s)
+=== RUN   TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut
+=== RUN   TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-false
+=== RUN   TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-true
+--- PASS: TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut (0.18s)
+    --- PASS: TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-false (0.10s)
+    --- PASS: TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-true (0.08s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.350s
