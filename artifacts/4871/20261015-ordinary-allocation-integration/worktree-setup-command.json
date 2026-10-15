@@ -1,0 +1,20 @@
+{
+  "args": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/create_worktree.py",
+    "--repo",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "--path",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+    "--branch",
+    "codex/5111-allocation-integration-20261015",
+    "--base",
+    "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "--seed",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "--mode",
+    "git"
+  ],
+  "returncode": 0,
+  "helper_sha256": "be3c805af6dd6f696a3ef897db1d5cf3efd6fa7a664b9428c81228c08146833a"
+}

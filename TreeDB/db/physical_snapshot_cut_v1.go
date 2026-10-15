@@ -25,7 +25,9 @@ import (
 // The separately opened index handle remains readable through DB.Close. A retained
 // directory lock prevents a new writer from reusing pages after the source closes. The
 // caller must also capture the exact external dependency files before releasing
-// its higher-level storage barrier; this object exports only index.db.
+// its higher-level storage barrier; this object exports only index.db. A complete
+// store export must also retain format.json, including its required physical
+// format features, as the production archive capture does.
 type PhysicalSnapshotCutV1 struct {
 	mu              sync.Mutex
 	file            *os.File

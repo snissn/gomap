@@ -1,0 +1,8 @@
+{
+  "args": [
+    "git",
+    "diff",
+    "--check"
+  ],
+  "exit_code": 0
+}

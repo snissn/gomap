@@ -1,0 +1,11 @@
+{
+  "ordinary_head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "ordinary_index": {
+    "path": "/home/mikers/dev/snissn/gomap/.git/worktrees/ordinary-5111/index",
+    "sha256": "9320f73fa78aba4fdc2223e55beae4b243faa86ef7bc03dce1595fda65e53275"
+  },
+  "protected_whole_current_test": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  }
+}

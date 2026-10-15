@@ -1,0 +1,44 @@
+{
+  "scope": "Independent review requested for ordinary projection only; existing merged canonical31/zipper4 reviews reused where bytes/contracts match.",
+  "base": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "landed_source": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "merge_base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "candidate_source_manifest": "source-manifest.json",
+  "candidate_exact_source_root": "candidate-source",
+  "manual_conflict_and_extra_consumer_paths": [
+    "TreeDB/db/durable_root_runtime.go",
+    "TreeDB/db/open_readonly.go",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/zipper/zipper.go",
+    "TreeDB/freelist/generation_snapshot_v1.go"
+  ],
+  "seam_diff": "review-seams.patch",
+  "all_threeway_inputs": "merge-inputs/{ours,base,theirs}/<path>",
+  "threeway_inventory": "three-way-preflight.json",
+  "decisions": "integration-decisions.json",
+  "focus": [
+    "Preserve ordinary owner/Finish/shrink, named-return cleanup and readonly registry/lock custody while adding canonical topology gates before effects.",
+    "Preserve ordinary primary directory/arena, constructor/abort/failure fields while sharing maintained zipper apply scratch.",
+    "Keep retirement slot lineage and existing ordinary inline append accounting, no second allocator authority.",
+    "Direct-leaf snapshot rejects wrong key from charged canonical summary; reserves chunk before chunk dereference; bounded work semantic/exact admission tests pass.",
+    "Retained persistent COW state/encoded pages remain owning; no resetting batch arena may reclaim active snapshot/candidate/sink bytes."
+  ],
+  "evidence": [
+    "freelist.stdout",
+    "zipper.stdout",
+    "zipper.stderr",
+    "zipper-failure-inventory.json",
+    "scheduler-repair-plan.json",
+    "scheduler-repair-results.json",
+    "scheduler-repair-zipper.stdout",
+    "scheduler-repair-db-focused.stdout",
+    "public-comparison/results.json",
+    "public-comparison/binaries.json",
+    "public-comparison/timing-inputs-before.json",
+    "public-comparison/timing-inputs-after.json"
+  ],
+  "remaining_gates": [
+    "Independent exact-source projection review/checkpoint by root.",
+    "Current broader ordinary#5111 and native graph gates remain separate; no new campaign authorized."
+  ]
+}

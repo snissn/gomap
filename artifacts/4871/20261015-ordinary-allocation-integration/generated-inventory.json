@@ -1,0 +1,49 @@
+{
+  "worktrees": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-baseline-20261015",
+      "dev": 66306,
+      "inode": 108265539,
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "status": "",
+      "disposition": "RETAIN pending independent review/root durable checkpoint and exact release; no cleanup authorized."
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+      "dev": 66306,
+      "inode": 108285424,
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "status": " M TreeDB/collections/command_wal_bench_test.go\n M TreeDB/collections/command_wal_test.go\n M TreeDB/collections/document_ingestion_test.go\n M TreeDB/collections/source_atomic_column_test.go\n M TreeDB/collections/vector_index_persist_test.go\n M TreeDB/db/command_wal_feature_gate_test.go\n M TreeDB/db/command_wal_recovery_test.go\n M TreeDB/db/db.go\n M TreeDB/db/durable_root_metadata_reuse_test.go\n M TreeDB/db/durable_root_runtime.go\n M TreeDB/db/format_config.go\n M TreeDB/db/format_config_test.go\n M TreeDB/db/open_readonly.go\n M TreeDB/db/physical_snapshot_cut_v1.go\n M TreeDB/db/physical_snapshot_cut_v1_test.go\n M TreeDB/db/root_publication_activation.go\n M TreeDB/docs/spec/recovery.md\n M TreeDB/docs/spec/storage-format.md\n M TreeDB/freelist/allocator_cow.go\n M TreeDB/freelist/generation_snapshot_v1.go\n M TreeDB/freelist/generation_v1_format.go\n M TreeDB/freelist/generation_v1_metadata_cursor_test.go\n M TreeDB/freelist/generation_v1_metadata_reuse.go\n M TreeDB/freelist/generation_v1_metadata_reuse_test.go\n M TreeDB/freelist/generation_v1_reservation.go\n M TreeDB/freelist/generation_v1_test.go\n M TreeDB/freelist/generation_v1_tree.go\n M TreeDB/freelist/generation_v1_txn.go\n M TreeDB/zipper/zipper.go\n M cmd/treedb_column_graph_demo/main.go\n?? TreeDB/db/freelist_patricia_feature_v2_test.go\n?? TreeDB/freelist/generation_topology_5131_test.go\n?? TreeDB/freelist/generation_v1_private_test.go\n?? TreeDB/zipper/clone_scratch_public_test.go\n?? TreeDB/zipper/clone_scratch_test.go\n?? TreeDB/zipper/scratch-reuse.md\n",
+      "disposition": "RETAIN pending independent review/root durable checkpoint and exact release; no cleanup authorized."
+    }
+  ],
+  "binaries": [
+    {
+      "role": "baseline",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/baseline-db.test",
+      "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+      "bytes": 60842242,
+      "dev": 66306,
+      "inode": 108276851,
+      "mtime_ns": 1792052225044147109
+    },
+    {
+      "role": "candidate",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/candidate-db.test",
+      "sha256": "eaf5b47ff1a770495d13b984885eef18f67f3fddcfe9ddd4c774f9fee3c978d1",
+      "bytes": 60886719,
+      "dev": 66306,
+      "inode": 108276855,
+      "mtime_ns": 1792052265089492216
+    }
+  ],
+  "evidence_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015",
+  "protected_roots": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+    "/home/mikers/dev/snissn/gomap/.git",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence"
+  ],
+  "no_deletion": true
+}

@@ -39,8 +39,8 @@ func TestFormatConfig_SaveLoadApply_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected format config to exist")
 	}
-	if loaded.Version != formatConfigVersion {
-		t.Fatalf("loaded version=%d, want %d", loaded.Version, formatConfigVersion)
+	if loaded.Version != formatConfigRequiredFeaturesVersion {
+		t.Fatalf("loaded version=%d, want %d", loaded.Version, formatConfigRequiredFeaturesVersion)
 	}
 
 	applied := Options{
@@ -198,7 +198,7 @@ func TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile(t *test
 	if err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {
 		t.Fatalf("SaveFormatConfig initial: %v", err)
 	}
-	if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true, RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig preserving profile: %v", err)
 	}
 	loaded, ok, err := LoadFormatConfig(dir)

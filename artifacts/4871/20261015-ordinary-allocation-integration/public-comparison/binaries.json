@@ -1,0 +1,20 @@
+[
+  {
+    "role": "baseline",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/baseline-db.test",
+    "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+    "bytes": 60842242,
+    "dev": 66306,
+    "inode": 108276851,
+    "mtime_ns": 1792052225044147109
+  },
+  {
+    "role": "candidate",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/candidate-db.test",
+    "sha256": "eaf5b47ff1a770495d13b984885eef18f67f3fddcfe9ddd4c774f9fee3c978d1",
+    "bytes": 60886719,
+    "dev": 66306,
+    "inode": 108276855,
+    "mtime_ns": 1792052265089492216
+  }
+]

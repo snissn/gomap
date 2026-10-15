@@ -1,0 +1,33 @@
+{
+  "results": [
+    {
+      "name": "zipper",
+      "args": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/zipper",
+        "-count=1",
+        "-timeout=90s"
+      ],
+      "exit_code": 0,
+      "timeout": false,
+      "elapsed_seconds": 0.4146753600798547
+    },
+    {
+      "name": "db-focused",
+      "args": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-count=1",
+        "-timeout=90s",
+        "-run",
+        "^(TestFreelistPatriciaV2.*|TestFormatConfig_.*|TestLoadFormatConfig_.*|TestLoadPersistedDurabilityProfile_.*|TestSaveFormatConfig_.*|TestValidateDurabilityProfileGate_.*|TestOpen_AppliesPersistedIndexFormatConfig|TestReadOnly.*|TestDurableRootMetadataReuseLowPlacementAndFallback4627|TestDurableRootMetadataReuseRetainsBothSlotParents5135|TestDurableRootSlotRetirementsUseSuccessorCommit5135|TestActivatedRootPublicationTripsFormerDirectPublisher)$"
+      ],
+      "exit_code": 0,
+      "timeout": false,
+      "elapsed_seconds": 14.586691811680794
+    }
+  ],
+  "elapsed_seconds": 15.001521992962807
+}

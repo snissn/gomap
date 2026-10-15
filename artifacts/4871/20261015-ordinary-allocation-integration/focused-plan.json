@@ -1,0 +1,41 @@
+{
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+  "aggregate_hardcap_seconds": 150,
+  "commands": [
+    {
+      "name": "freelist",
+      "args": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/freelist",
+        "-count=1",
+        "-timeout=90s"
+      ]
+    },
+    {
+      "name": "zipper",
+      "args": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/zipper",
+        "-count=1",
+        "-timeout=90s"
+      ]
+    },
+    {
+      "name": "db-focused",
+      "args": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-count=1",
+        "-timeout=90s",
+        "-run",
+        "^(TestFreelistPatriciaV2.*|TestFormatConfig_.*|TestLoadFormatConfig_.*|TestLoadPersistedDurabilityProfile_.*|TestSaveFormatConfig_.*|TestValidateDurabilityProfileGate_.*|TestOpen_AppliesPersistedIndexFormatConfig|TestReadOnly.*|TestDurableRootMetadataReuseLowPlacementAndFallback4627|TestDurableRootMetadataReuseRetainsBothSlotParents5135|TestDurableRootSlotRetirementsUseSuccessorCommit5135|TestActivatedRootPublicationTripsFormerDirectPublisher)$"
+      ]
+    }
+  ],
+  "source_census_sha256": "7df04ce346e9815dea28aa2e7269809bdbe420819bc84d8e18b3443ae17e3e2a",
+  "source_manifest_sha256": "3b986bbeab0f4060fb05a2109314b12b96d4541467852414336411ecf1a95b23",
+  "representation_red_exception": "Merged representation already behaviorally verified; rerun real topology amplification/private selector/ordinary work admission and existing public guards, not fabricated semantic RED."
+}

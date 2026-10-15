@@ -23,6 +23,9 @@ func wrapReadOnlyValueLogRecoveryError(err error) error {
 }
 
 func openReadOnly(opts Options) (result *DB, retErr error) {
+	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
+		return nil, err
+	}
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
@@ -231,6 +234,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	return openReadOnlyNoLockWithRegistryV6(opts, nil, nil)
 }
 func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (result *DB, retErr error) {
+	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
+		return nil, err
+	}
 	if valueLogIdentityPins == nil {
 		valueLogIdentityPins = rootpublication.NewIdentityPinRegistry()
 	}

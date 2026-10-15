@@ -1,0 +1,104 @@
+{
+  "base": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "merged": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "common_base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "projection": "Actual common-base three-way merge of 35 landed paths plus ordinary-only work-bearing compressed snapshot traversal. Retain original ordinary owner/Finish/shrink/durability/primary arena and append contracts.",
+  "resolutions": [
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "resolution": "Add canonical slot-retirement helper; preserve ordinary named-return projectedValueLogReferencesV1 cleanup and inline append logic."
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "resolution": "Keep ordinary named returns, registry/lock custody and forwarding wrapper; fail closed on missing allocator marker before read effects in both actual readonly entries."
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "resolution": "Union compressed allocator fail-closed slot-lineage documentation with ordinary JointDATA/PRIMARY vacuum recovery."
+    },
+    {
+      "path": "TreeDB/zipper/zipper.go",
+      "resolution": "Clone retains ordinary primaryDirectory/primaryArena/constructor/abort fields; add shared maintained apply scratch cache."
+    }
+  ],
+  "arena_choice": [
+    {
+      "path": "TreeDB/batch/batch.go",
+      "lines": [
+        72,
+        198,
+        273,
+        304
+      ],
+      "eligible": "Batch key/value copies use existing arenaChunks; bounded reset/release after batch lifetime.",
+      "mismatch": "Allocator generations and owning encoded pages can outlive Batch.Reset/Close through rollback, snapshot, pending candidate and publication; batch reset cannot reclaim their aliases."
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "lines": [
+        11286,
+        35166,
+        36365,
+        36472
+      ],
+      "eligible": "Existing copyArena chunks/leases transfer to memtable consumers and release with memtable custody.",
+      "mismatch": "Canonical allocator state is not owned by a cache batch or memtable lease; introducing a second authority would violate generation ownership."
+    },
+    {
+      "path": "TreeDB/internal/memtable/hash_sorted.go",
+      "lines": [
+        41,
+        158,
+        211,
+        1298
+      ],
+      "eligible": "Existing hashArena for memtable common lifetime, reset waits for asynchronous index release."
+    },
+    {
+      "path": "TreeDB/internal/memtable/btree.go",
+      "lines": [
+        795,
+        801,
+        816
+      ],
+      "eligible": "Existing btreeArena for table keys/values, reset retains first chunk."
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "lines": [
+        36,
+        121,
+        362,
+        374
+      ],
+      "eligible": "Existing bounded writer scratch for transient append encoding; persistent vlog storage remains reachable until GC proves unreachable."
+    },
+    {
+      "path": "TreeDB/zipper/zipper.go",
+      "lines": [
+        1295,
+        1308,
+        1332,
+        1383
+      ],
+      "selected": "Reuse maintained applyScratch through clone-family cache and its existing capacity/retention/last-use bounds; no replacement pool or cap increase."
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "lines": [
+        199,
+        215,
+        238,
+        256,
+        315,
+        751,
+        770,
+        778
+      ],
+      "selected": "One canonical stateNode/private preparation grant; dirty topology reuse only under explicit authority; sharing revokes grant, materialization freezes before sinks. Owning persistent outputs stay detached beyond scratch lifetimes."
+    }
+  ],
+  "activation": "Full freelist controls include private repeated mutation counters (2 paths/1 reuse), clone revocation, retained candidates, partial sinks and direct-leaf work admission; public real allocator/Patricia reopen and root publication selectors pass. Public timing uses unchanged benchmark and real Batch.Write entry.",
+  "test_environment_repair": "Original full zipper at GOMAXPROCS=1 had seven retained worker-precondition failures; dispatch/tests are unchanged from ordinary177 and cap worker count to GOMAXPROCS. Corrected full zipper at GOMAXPROCS=4 passes; no tests/source/threshold edits. Benchmark remains GOMAXPROCS=1.",
+  "scope": "Finite ordinary#5111 canonical allocation integration diagnostic for #5130; not full ordinary or native acceptance."
+}

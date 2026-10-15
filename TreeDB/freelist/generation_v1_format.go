@@ -13,7 +13,7 @@ import (
 
 const (
 	generationHeaderSize  = 192
-	indexHeaderSize       = 64
+	indexHeaderSize       = 80
 	indexEntrySize        = 32
 	chunkHeaderSize       = 96
 	reservationHeaderSize = 176
@@ -184,9 +184,20 @@ func zeroTail(b []byte, used int) bool {
 
 func encodeChunkPage(id, generationID uint64, chunk *stateChunk) []byte {
 	b := make([]byte, page.PageSize)
+	if err := encodeChunkPageInto(b, id, generationID, chunk); err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func encodeChunkPageInto(b []byte, id, generationID uint64, chunk *stateChunk) error {
+	if len(b) != page.PageSize || chunk == nil || generationID == 0 || chunk.chunkNo >= 1<<56 {
+		return ErrGenerationFormat
+	}
+	clear(b)
 	encodePageHeader(b, id, page.PageTypeFreelistChunk, freelistChunkSize)
 	copy(b[16:24], chunkMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 1)
+	binary.LittleEndian.PutUint16(b[24:26], 2)
 	binary.LittleEndian.PutUint16(b[26:28], chunkHeaderSize)
 	binary.LittleEndian.PutUint64(b[32:40], generationID)
 	binary.LittleEndian.PutUint64(b[40:48], chunk.chunkNo)
@@ -201,19 +212,22 @@ func encodeChunkPage(id, generationID uint64, chunk *stateChunk) []byte {
 		binary.LittleEndian.PutUint64(b[chunkHeaderSize+i*8:], seq)
 	}
 	finishPage(b)
-	return b
+	return nil
 }
 
 func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk, error) {
 	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
-	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || pageGeneration == 0 || pageGeneration > maxGeneration {
+	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || pageGeneration == 0 || pageGeneration > maxGeneration {
 		return nil, ErrGenerationFormat
 	}
 	chunkNo := binary.LittleEndian.Uint64(b[40:48])
-	if chunkNo != expectedChunk || !zeroTail(b, chunkHeaderSize+freelistChunkSize*8) {
+	if chunkNo >= 1<<56 || chunkNo != expectedChunk || !zeroTail(b, chunkHeaderSize+freelistChunkSize*8) {
 		return nil, ErrGenerationFormat
 	}
 	h := page.DecodeHeader(b)
+	if h.Count != freelistChunkSize {
+		return nil, ErrGenerationFormat
+	}
 	c := &stateChunk{pageID: h.PageID, checksum: h.Checksum, chunkNo: chunkNo}
 	for i := range c.free {
 		c.free[i] = binary.LittleEndian.Uint64(b[64+i*8:])
@@ -233,71 +247,74 @@ func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk
 
 func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, error) {
 	b := make([]byte, page.PageSize)
+	if err := encodeIndexPageInto(b, id, generationID, n, depth); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// encodeIndexPageInto overwrites the complete destination, including reserved
+// bytes and unused entries, so a reused buffer encodes the same canonical page.
+func encodeIndexPageInto(b []byte, id, generationID uint64, n *stateNode, _ int) error {
+	if len(b) != page.PageSize || n == nil || n.chunk != nil || int(n.depth) >= chunkTrieDepth || generationID == 0 {
+		return ErrGenerationFormat
+	}
+	clear(b)
 	count := 0
-	if depth == chunkTrieDepth {
-		if n.chunk == nil || n.chunk.pageID == 0 {
-			return nil, ErrGenerationFormat
+	for _, child := range n.child {
+		if child == nil {
+			continue
 		}
-		count = 1
-	} else {
-		for _, child := range n.child {
-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
-				if child.pageID == 0 {
-					return nil, ErrGenerationFormat
-				}
-				count++
-			}
+		if child.pageID == 0 || child.freeCount+child.retiredCount == 0 {
+			return ErrGenerationFormat
 		}
+		count++
+	}
+	if count == 1 || (count == 0 && (n.depth != 0 || n.prefix != 0 || n.freeCount+n.retiredCount != 0)) {
+		return ErrGenerationFormat
 	}
 	encodePageHeader(b, id, page.PageTypeFreelistIndex, uint16(count))
 	copy(b[16:24], indexMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 1)
+	binary.LittleEndian.PutUint16(b[24:26], 2)
 	binary.LittleEndian.PutUint16(b[26:28], indexHeaderSize)
-	b[28] = byte(depth)
+	b[28] = n.depth
+	if count == 0 {
+		b[29] = 1
+	} // sole empty exact-generation root sentinel
 	binary.LittleEndian.PutUint16(b[30:32], indexEntrySize)
 	binary.LittleEndian.PutUint64(b[32:40], generationID)
 	binary.LittleEndian.PutUint64(b[40:48], n.freeCount)
 	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
 	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
+	binary.LittleEndian.PutUint64(b[64:72], n.prefix)
 	o := indexHeaderSize
-	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) error {
-		if freeCount > uint64(^uint32(0)) || retiredCount > uint64(^uint32(0)) {
+	for slot, child := range n.child {
+		if child == nil {
+			continue
+		}
+		if child.freeCount > uint64(^uint32(0)) || child.retiredCount > uint64(^uint32(0)) {
 			return ErrGenerationFormat
 		}
-		b[o], b[o+1] = slot, kind
-		binary.LittleEndian.PutUint32(b[o+2:o+6], childChecksum)
-		binary.LittleEndian.PutUint64(b[o+8:o+16], childID)
-		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(freeCount))
-		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(retiredCount))
-		binary.LittleEndian.PutUint64(b[o+24:o+32], minSeq)
+		b[o], b[o+1] = byte(slot), stateNodeKindV2(child)
+		binary.LittleEndian.PutUint32(b[o+2:o+6], child.checksum)
+		binary.LittleEndian.PutUint64(b[o+8:o+16], child.pageID)
+		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(child.freeCount))
+		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(child.retiredCount))
+		binary.LittleEndian.PutUint64(b[o+24:o+32], child.minRetiredSeq)
 		o += indexEntrySize
-		return nil
-	}
-	if depth == chunkTrieDepth {
-		retiredCount, minSeq := n.chunk.retiredSummary()
-		if err := write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq); err != nil {
-			return nil, err
-		}
-	} else {
-		for slot, child := range n.child {
-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
-				if err := write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq); err != nil {
-					return nil, err
-				}
-			}
-		}
 	}
 	finishPage(b)
-	return b, nil
+	return nil
 }
 
 func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []byte {
 	b := make([]byte, page.PageSize)
 	encodePageHeader(b, id, page.PageTypeFreelistGeneration, 1)
 	copy(b[16:24], generationMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 1)
+	binary.LittleEndian.PutUint16(b[24:26], 2)
 	binary.LittleEndian.PutUint16(b[26:28], generationHeaderSize)
 	b[28] = freelistChunkShift
+	b[29] = stateNodeKindV2(g.root)
 	binary.LittleEndian.PutUint64(b[32:40], g.generationID)
 	binary.LittleEndian.PutUint64(b[40:48], g.commitSeq)
 	binary.LittleEndian.PutUint64(b[48:56], g.parentGenerationID)
@@ -318,7 +335,9 @@ func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []
 }
 
 func generationDigest(b []byte) [32]byte {
-	canonical := append([]byte(nil), b[:generationHeaderSize]...)
+	var scratch [generationHeaderSize]byte
+	copy(scratch[:], b[:generationHeaderSize])
+	canonical := scratch[:]
 	for i := 8; i < 12; i++ {
 		canonical[i] = 0
 	}
@@ -336,7 +355,7 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(b[16:24], generationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != generationHeaderSize || b[28] != freelistChunkShift || !zeroTail(b[29:32], 0) || !zeroTail(b[116:120], 0) || !zeroTail(b[184:192], 0) || !zeroTail(b, generationHeaderSize) {
+	if !bytes.Equal(b[16:24], generationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 || binary.LittleEndian.Uint16(b[26:28]) != generationHeaderSize || b[28] != freelistChunkShift || (b[29] > 1 || !zeroTail(b[30:32], 0)) || !zeroTail(b[116:120], 0) || !zeroTail(b[184:192], 0) || !zeroTail(b, generationHeaderSize) {
 		return nil, ErrGenerationFormat
 	}
 	digest := generationDigest(b)
@@ -365,11 +384,38 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(len(record.pendingMetadata())) != binary.LittleEndian.Uint32(b[108:112]) {
 		return nil, ErrGenerationFormat
 	}
+	var target ReservationExtentV1
+	targets := 0
+	for _, extent := range record.Extents {
+		if extent.Kind == ReservationTargetMetadata {
+			target = extent
+			targets++
+		}
+	}
+	if targets != 1 || target.Count == 0 {
+		return nil, ErrGenerationFormat
+	}
+	ownership := &metadataOwnershipV2{generation: g.generationID, start: target.StartPageID, end: target.StartPageID + uint64(target.Count)}
+	if !ownership.contains(ref.HeaderPageID) {
+		return nil, ErrGenerationFormat
+	}
+	ownership.pages = 1
 	seen := make(map[uint64]struct{})
 	rootID := binary.LittleEndian.Uint64(b[64:72])
-	g.root, err = loadStateNode(src, rootID, 0, 0, g.generationID, true, g.highWater, seen)
+	seen[ref.HeaderPageID] = struct{}{}
+	for _, id := range record.pageIDs {
+		if !ownership.contains(id) {
+			return nil, ErrGenerationFormat
+		}
+		ownership.pages++
+		seen[id] = struct{}{}
+	}
+	g.root, err = loadStateRefV2(src, rootID, b[29], g.generationID, true, true, g.highWater, seen, -1, ownership)
 	if err != nil {
 		return nil, err
+	}
+	if ownership.pages != uint64(target.Count) {
+		return nil, ErrGenerationFormat
 	}
 	rootPage, err := src.ReadPage(rootID)
 	if err != nil || len(rootPage) != page.PageSize || binary.LittleEndian.Uint32(rootPage[8:12]) != binary.LittleEndian.Uint32(b[112:116]) {
@@ -386,84 +432,109 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	return g, nil
 }
 
-func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration uint64, exactGeneration bool, highWater uint64, seen map[uint64]struct{}) (*stateNode, error) {
-	if depth > chunkTrieDepth {
-		return nil, ErrGenerationFormat
+func stateNodeKindV2(n *stateNode) byte {
+	if n != nil && n.chunk != nil {
+		return 1
+	}
+	return 0
+}
+
+// metadataOwnershipV2 accounts for the pre-reserved current-generation interval
+// without a second inventory. Shared ancestors belong to older generations.
+type metadataOwnershipV2 struct{ generation, start, end, pages uint64 }
+
+func (m *metadataOwnershipV2) contains(id uint64) bool { return id >= m.start && id < m.end }
+
+func loadStateRefV2(src PageSource, id uint64, kind byte, maxGeneration uint64, exactGeneration, root bool, highWater uint64, seen map[uint64]struct{}, parentDepth int, ownershipArgs ...*metadataOwnershipV2) (*stateNode, error) {
+	fail := func() (*stateNode, error) { return nil, ErrGenerationFormat }
+	if kind > 1 {
+		return fail()
 	}
 	if _, duplicate := seen[id]; duplicate {
-		return nil, fmt.Errorf("%w: duplicate or cyclic page %d", ErrGenerationFormat, id)
+		return fail()
 	}
 	seen[id] = struct{}{}
-	b, err := readTypedPage(src, id, page.PageTypeFreelistIndex, highWater)
+	typ := page.PageTypeFreelistIndex
+	if kind == 1 {
+		typ = page.PageTypeFreelistChunk
+	}
+	b, err := readTypedPage(src, id, typ, highWater)
 	if err != nil {
 		return nil, err
 	}
-	h := page.DecodeHeader(b)
-	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
-	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || int(b[28]) != depth || b[29] != 0 || binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || pageGeneration == 0 || pageGeneration > maxGeneration || (exactGeneration && pageGeneration != maxGeneration) || int(h.Count) > 16 || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) {
-		return nil, ErrGenerationFormat
+	generation := binary.LittleEndian.Uint64(b[32:40])
+	if generation == 0 || generation > maxGeneration || exactGeneration && generation != maxGeneration {
+		return fail()
 	}
-	n := &stateNode{pageID: id, checksum: h.Checksum}
-	lastSlot := -1
+	var ownership *metadataOwnershipV2
+	if len(ownershipArgs) != 0 {
+		ownership = ownershipArgs[0]
+	}
+	if ownership != nil {
+		current := generation == ownership.generation
+		if current != ownership.contains(id) {
+			return fail()
+		}
+		if current {
+			ownership.pages++
+		}
+	}
+	if kind == 1 {
+		c, err := decodeChunkPage(b, maxGeneration, binary.LittleEndian.Uint64(b[40:48]))
+		if err != nil {
+			return nil, err
+		}
+		retired, _ := c.retiredSummary()
+		if c.freeCount()+retired == 0 {
+			return fail()
+		}
+		n := &stateNode{pageID: c.pageID, checksum: c.checksum, chunk: c}
+		recomputeStateNode(n, 0)
+		return n, nil
+	}
+	h := page.DecodeHeader(b)
+	depth := int(b[28])
+	prefix := binary.LittleEndian.Uint64(b[64:72])
+	empty := h.Count == 0
+	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 ||
+		binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || depth >= chunkTrieDepth || depth <= parentDepth ||
+		binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || h.Count > 16 || h.Count == 1 ||
+		!zeroTail(b[72:80], 0) || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) ||
+		prefix>>uint(4*depth) != 0 || (empty && (!root || depth != 0 || prefix != 0 || b[29] != 1)) ||
+		(!empty && b[29] != 0) {
+		return fail()
+	}
+	n := &stateNode{pageID: id, checksum: h.Checksum, depth: uint8(depth), prefix: prefix}
+	last := -1
 	for i := 0; i < int(h.Count); i++ {
 		o := indexHeaderSize + i*indexEntrySize
-		slot, kind := int(b[o]), b[o+1]
-		if slot <= lastSlot || slot > 15 {
-			return nil, ErrGenerationFormat
+		slot := int(b[o])
+		if slot <= last || slot > 15 || !zeroTail(b[o+6:o+8], 0) {
+			return fail()
 		}
-		lastSlot = slot
-		entryChecksum := binary.LittleEndian.Uint32(b[o+2 : o+6])
-		if !zeroTail(b[o+6:o+8], 0) {
-			return nil, ErrGenerationFormat
+		last = slot
+		child, err := loadStateRefV2(src, binary.LittleEndian.Uint64(b[o+8:o+16]), b[o+1], generation, false, false, highWater, seen, depth, ownership)
+		if err != nil {
+			return nil, err
 		}
-		childID := binary.LittleEndian.Uint64(b[o+8 : o+16])
-		entryFree := uint64(binary.LittleEndian.Uint32(b[o+16 : o+20]))
-		entryRetired := uint64(binary.LittleEndian.Uint32(b[o+20 : o+24]))
-		entryMinSeq := binary.LittleEndian.Uint64(b[o+24 : o+32])
-		childPrefix := (prefix << 4) | uint64(slot)
-		if depth == chunkTrieDepth {
-			if h.Count != 1 || kind != 1 || slot != 0 {
-				return nil, ErrGenerationFormat
-			}
-			chunkPage, err := readTypedPage(src, childID, page.PageTypeFreelistChunk, highWater)
-			if err != nil {
-				return nil, err
-			}
-			if _, duplicate := seen[childID]; duplicate {
-				return nil, ErrGenerationFormat
-			}
-			seen[childID] = struct{}{}
-			if page.DecodeHeader(chunkPage).Checksum != entryChecksum {
-				return nil, ErrGenerationDigest
-			}
-			n.chunk, err = decodeChunkPage(chunkPage, pageGeneration, prefix)
-			if err != nil {
-				return nil, err
-			}
-			retiredCount, minSeq := n.chunk.retiredSummary()
-			if n.chunk.freeCount() != entryFree || retiredCount != entryRetired || minSeq != entryMinSeq {
-				return nil, ErrGenerationFormat
-			}
-		} else {
-			if kind != 0 {
-				return nil, ErrGenerationFormat
-			}
-			child, err := loadStateNode(src, childID, depth+1, childPrefix, pageGeneration, false, highWater, seen)
-			if err != nil {
-				return nil, err
-			}
-			n.child[slot] = child
-			if child.checksum != entryChecksum {
-				return nil, ErrGenerationDigest
-			}
-			if child.freeCount != entryFree || child.retiredCount != entryRetired || child.minRetiredSeq != entryMinSeq {
-				return nil, ErrGenerationFormat
-			}
+		n.child[slot] = child
+		if child.checksum != binary.LittleEndian.Uint32(b[o+2:o+6]) {
+			return nil, ErrGenerationDigest
+		}
+		if child.freeCount != uint64(binary.LittleEndian.Uint32(b[o+16:o+20])) ||
+			child.retiredCount != uint64(binary.LittleEndian.Uint32(b[o+20:o+24])) ||
+			child.minRetiredSeq != binary.LittleEndian.Uint64(b[o+24:o+32]) ||
+			chunkPrefixV1(child.minChunk, depth) != prefix || chunkPrefixV1(child.maxChunk, depth) != prefix ||
+			chunkNibble(child.minChunk, depth) != slot || chunkNibble(child.maxChunk, depth) != slot ||
+			child.chunk == nil && int(child.depth) <= depth {
+			return fail()
 		}
 	}
 	recomputeStateNode(n, depth)
-	if n.freeCount != binary.LittleEndian.Uint64(b[40:48]) || n.retiredCount != binary.LittleEndian.Uint64(b[48:56]) || n.minRetiredSeq != binary.LittleEndian.Uint64(b[56:64]) {
-		return nil, ErrGenerationFormat
+	if n.freeCount != binary.LittleEndian.Uint64(b[40:48]) || n.retiredCount != binary.LittleEndian.Uint64(b[48:56]) ||
+		n.minRetiredSeq != binary.LittleEndian.Uint64(b[56:64]) ||
+		!empty && firstDifferingDepthV1(n.minChunk, n.maxChunk) != depth {
+		return fail()
 	}
 	return n, nil
 }

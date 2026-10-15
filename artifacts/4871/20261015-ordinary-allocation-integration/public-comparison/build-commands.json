@@ -1,0 +1,50 @@
+[
+  {
+    "role": "baseline",
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-baseline-20261015",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "timeout_seconds": 120,
+    "elapsed_seconds": 1.2152218618430197,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "role": "candidate",
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5130-allocation-integration-20261015/public-comparison/candidate-db.test",
+      "./TreeDB/db"
+    ],
+    "timeout_seconds": 120,
+    "elapsed_seconds": 40.014812344219536,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  }
+]
