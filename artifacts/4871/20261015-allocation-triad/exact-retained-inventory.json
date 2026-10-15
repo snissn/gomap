@@ -1,0 +1,67 @@
+{
+  "roots": [
+    {
+      "role": "pre",
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+      "worktree_snapshot": "pre-retained-worktree-snapshot.json",
+      "worktree_snapshot_sha256": "3509d962dabf01519e27548e5373908602d57de5c15abec2dda8d4c7a95e0fcc",
+      "tracked_object_inventory": "pre-tracked-objects.nul",
+      "tracked_object_inventory_sha256": "875e3a0656994b9f48edea1a17863d565f53e6fee1af8fadbb709f7d38143571",
+      "members": 5421,
+      "logical_regular_bytes": 454104086,
+      "head": "28aea01e19f1d62743dec5625ec3d22c1acb6703",
+      "tree": "c11e532659123bcdee2e6ebe538cf712cd71412f",
+      "binary": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+        "dev": 66306,
+        "inode": 107390190,
+        "size": 51095404,
+        "mtime_ns": 1792048243182759112,
+        "sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630"
+      }
+    },
+    {
+      "role": "ordinary",
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+      "worktree_snapshot": "ordinary-retained-worktree-snapshot.json",
+      "worktree_snapshot_sha256": "572b36233c492fdcb96775e72f2be8189854d30af14b777b9361559d26772e8a",
+      "tracked_object_inventory": "ordinary-tracked-objects.nul",
+      "tracked_object_inventory_sha256": "cebd12781b6575323b549cf12ac031801974df692f09a34b1663d17d8bbb0cc7",
+      "members": 11167,
+      "logical_regular_bytes": 907426060,
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "tree": "f88af48627ea7310a6e4e4b20de6465b2a1abfac",
+      "binary": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+        "dev": 66306,
+        "inode": 107391773,
+        "size": 60842242,
+        "mtime_ns": 1792048247744798510,
+        "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a"
+      }
+    },
+    {
+      "role": "combined",
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+      "worktree_snapshot": "combined-retained-worktree-snapshot.json",
+      "worktree_snapshot_sha256": "de1829990b84461cc574039eb32e1e0e938c8a832d7c77b353a109f4279929d7",
+      "tracked_object_inventory": "combined-tracked-objects.nul",
+      "tracked_object_inventory_sha256": "7ebf000a3c93e43499e47a298e60d3684835772558aa5a22552961d3d8869bf2",
+      "members": 10889,
+      "logical_regular_bytes": 904876871,
+      "head": "a22078f59bfe9023787d5147c51c989a4010644d",
+      "tree": "e448be5924b4a8e66a4894090460fb559f241354",
+      "binary": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+        "dev": 66306,
+        "inode": 107391793,
+        "size": 55448526,
+        "mtime_ns": 1792048286281131306,
+        "sha256": "3677726354042912600185bada4c48cbd812e8c44d00f794108c0b67a1d58d5a"
+      }
+    }
+  ],
+  "protected_common_git": "/home/mikers/dev/snissn/gomap/.git",
+  "other_protected": "all original evidence/toolchains/shared caches/ordinary-5111/native-4878-traversal/primary paths; no cleanup is authorized by this inventory",
+  "free_bytes": 274125262848
+}

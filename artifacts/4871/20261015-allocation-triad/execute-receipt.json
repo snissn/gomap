@@ -1,0 +1,9 @@
+{
+  "args": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/run-triads.py",
+    "--execute"
+  ],
+  "elapsed": 1.2504058247432113,
+  "returncode": 0
+}

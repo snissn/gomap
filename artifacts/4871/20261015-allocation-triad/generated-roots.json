@@ -1,0 +1,50 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "dev": 66306,
+    "inode": 107384756,
+    "head": "28aea01e19f1d62743dec5625ec3d22c1acb6703",
+    "members_files": 4882,
+    "logical_bytes": 454104086,
+    "branch": "codex/5130-pre-triad-20261015",
+    "release": "retain until root release"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "dev": 66306,
+    "inode": 107390199,
+    "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "members_files": 10207,
+    "logical_bytes": 907426060,
+    "branch": "codex/5130-ordinary-triad-20261015",
+    "release": "retain until root release"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "dev": 66306,
+    "inode": 107783244,
+    "head": "a22078f59bfe9023787d5147c51c989a4010644d",
+    "members_files": 9937,
+    "logical_bytes": 904876871,
+    "branch": "codex/5130-combined-triad-20261015",
+    "release": "retain until root release"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+    "logical_bytes": 51095404,
+    "sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630",
+    "release": "retain until durable publication and root release"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+    "logical_bytes": 60842242,
+    "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+    "release": "retain until durable publication and root release"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+    "logical_bytes": 55448526,
+    "sha256": "3677726354042912600185bada4c48cbd812e8c44d00f794108c0b67a1d58d5a",
+    "release": "retain until durable publication and root release"
+  }
+]

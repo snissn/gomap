@@ -1,0 +1,251 @@
+{
+  "samples": [
+    {
+      "index": 1,
+      "triad": 1,
+      "position": 1,
+      "role": "pre",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.08280607173219323,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 45144.0,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 2,
+      "triad": 1,
+      "position": 2,
+      "role": "ordinary",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.08162970095872879,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 47527.0,
+      "bytes_per_op": 154840,
+      "allocs_per_op": 286
+    },
+    {
+      "index": 3,
+      "triad": 1,
+      "position": 3,
+      "role": "combined",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.04298330610617995,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 21093.0,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 4,
+      "triad": 2,
+      "position": 1,
+      "role": "ordinary",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.08109208615496755,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 47476.0,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    },
+    {
+      "index": 5,
+      "triad": 2,
+      "position": 2,
+      "role": "combined",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.04437978006899357,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 21380.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 6,
+      "triad": 2,
+      "position": 3,
+      "role": "pre",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.07722998782992363,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 44795.0,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 7,
+      "triad": 3,
+      "position": 1,
+      "role": "combined",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.04395628580823541,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 21314.0,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 8,
+      "triad": 3,
+      "position": 2,
+      "role": "pre",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.07670517405495048,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 45563.0,
+      "bytes_per_op": 152662,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 9,
+      "triad": 3,
+      "position": 3,
+      "role": "ordinary",
+      "args": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=1000x"
+      ],
+      "elapsed": 0.08039983920753002,
+      "returncode": 0,
+      "iterations": 1000,
+      "ns_per_op": 46915.0,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    }
+  ],
+  "medians": {
+    "pre": {
+      "ns_per_op": 45144.0,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    "ordinary": {
+      "ns_per_op": 47476.0,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    },
+    "combined": {
+      "ns_per_op": 21314.0,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    }
+  },
+  "combined_percent_change": {
+    "pre": {
+      "ns_per_op": -52.7866383129541,
+      "bytes_per_op": -79.07613501634319,
+      "allocs_per_op": -54.804270462633454
+    },
+    "ordinary": {
+      "ns_per_op": -55.10573763585811,
+      "bytes_per_op": -79.37018451423737,
+      "allocs_per_op": -55.59440559440559
+    }
+  },
+  "qualification": "short component/pre-sprint diagnostic only; not final eight-repeat, M0, Dgraph, or native qualification",
+  "complete": true
+}

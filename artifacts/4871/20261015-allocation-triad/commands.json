@@ -1,0 +1,529 @@
+[
+  {
+    "name": "toolchain",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "version"
+    ],
+    "cwd": null,
+    "elapsed": 0.0017763571813702583,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "toolchain-env",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "env",
+      "-json"
+    ],
+    "cwd": null,
+    "elapsed": 0.004502542782574892,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-setup",
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/create_worktree.py",
+      "--repo",
+      "/home/mikers/dev/snissn/gomap",
+      "--path",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+      "--branch",
+      "codex/5130-pre-triad-20261015",
+      "--base",
+      "28aea01e19f1d62743dec5625ec3d22c1acb6703",
+      "--seed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "--mode",
+      "git"
+    ],
+    "cwd": null,
+    "elapsed": 1.134831154718995,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-head",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.0012392718344926834,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-status-before",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.2571726618334651,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-pre-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.002003200352191925,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-build",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 1.2416920908726752,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-pre-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.0018748883157968521,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-status-after",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.25612598191946745,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "pre-tree",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "elapsed": 0.002068829722702503,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-setup",
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/create_worktree.py",
+      "--repo",
+      "/home/mikers/dev/snissn/gomap",
+      "--path",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+      "--branch",
+      "codex/5130-ordinary-triad-20261015",
+      "--base",
+      "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "--seed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "--mode",
+      "git"
+    ],
+    "cwd": null,
+    "elapsed": 2.062153798993677,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-head",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.001200042199343443,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-status-before",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.7302990048192441,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-ordinary-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.002595436293631792,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-build",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 1.378813928924501,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-ordinary-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.002612684853374958,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-status-after",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.009765884838998318,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "ordinary-tree",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "elapsed": 0.0010710600763559341,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-setup",
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/create_worktree.py",
+      "--repo",
+      "/home/mikers/dev/snissn/gomap",
+      "--path",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+      "--branch",
+      "codex/5130-combined-triad-20261015",
+      "--base",
+      "a22078f59bfe9023787d5147c51c989a4010644d",
+      "--seed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "--mode",
+      "git"
+    ],
+    "cwd": null,
+    "elapsed": 1.4750087009742856,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-head",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.0011454299092292786,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-status-before",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.16610324895009398,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-combined-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.0019513489678502083,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-build",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 36.74632842699066,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "allocation-5130-combined-triad-20261015-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.002425533253699541,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-status-after",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.16573245683684945,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  {
+    "name": "combined-tree",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "elapsed": 0.0014661340974271297,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  }
+]

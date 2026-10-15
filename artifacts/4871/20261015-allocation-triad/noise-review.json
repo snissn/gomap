@@ -1,0 +1,8 @@
+{
+  "before_utc": "2026-10-15T07:13:33Z",
+  "after_utc": "2026-10-15T07:13:35Z",
+  "before_loadavg": "0.12 0.28 0.50 1/1204 1361254",
+  "after_loadavg": "0.12 0.28 0.50 1/1205 1361440",
+  "other_go_benchmark_or_profiler_at_boundaries": [],
+  "limitation": "Boundary process/load/stat snapshots and coordinator quiet acknowledgements; no continuous interference monitor. Short latency evidence remains directional."
+}

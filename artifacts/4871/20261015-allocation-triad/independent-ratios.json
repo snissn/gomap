@@ -1,0 +1,244 @@
+{
+  "method": "Independently parse all nine raw stdout rows using whitespace fields, sort each three-value series for its median, and compute Decimal (combined-control)/control*100; do not consume runner medians to derive ratios.",
+  "raw_rows": [
+    {
+      "index": 1,
+      "triad": 1,
+      "role": "pre",
+      "ns_per_op": 45144,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 2,
+      "triad": 1,
+      "role": "ordinary",
+      "ns_per_op": 47527,
+      "bytes_per_op": 154840,
+      "allocs_per_op": 286
+    },
+    {
+      "index": 3,
+      "triad": 1,
+      "role": "combined",
+      "ns_per_op": 21093,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 4,
+      "triad": 2,
+      "role": "ordinary",
+      "ns_per_op": 47476,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    },
+    {
+      "index": 5,
+      "triad": 2,
+      "role": "combined",
+      "ns_per_op": 21380,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 6,
+      "triad": 2,
+      "role": "pre",
+      "ns_per_op": 44795,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 7,
+      "triad": 3,
+      "role": "combined",
+      "ns_per_op": 21314,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "index": 8,
+      "triad": 3,
+      "role": "pre",
+      "ns_per_op": 45563,
+      "bytes_per_op": 152662,
+      "allocs_per_op": 281
+    },
+    {
+      "index": 9,
+      "triad": 3,
+      "role": "ordinary",
+      "ns_per_op": 46915,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    }
+  ],
+  "medians": {
+    "pre": {
+      "ns_per_op": 45144,
+      "bytes_per_op": 152663,
+      "allocs_per_op": 281
+    },
+    "ordinary": {
+      "ns_per_op": 47476,
+      "bytes_per_op": 154839,
+      "allocs_per_op": 286
+    },
+    "combined": {
+      "ns_per_op": 21314,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    }
+  },
+  "comparisons": {
+    "pre": {
+      "ns_per_op": {
+        "absolute": -23830,
+        "percent": "-52.7866383129541024277866383130",
+        "ratio": "0.472133616870458975722133616870"
+      },
+      "bytes_per_op": {
+        "absolute": -120720,
+        "percent": "-79.0761350163431872817906106915",
+        "ratio": "0.209238649836568127182093893085"
+      },
+      "allocs_per_op": {
+        "absolute": -154,
+        "percent": "-54.8042704626334519572953736655",
+        "ratio": "0.451957295373665480427046263345"
+      }
+    },
+    "ordinary": {
+      "ns_per_op": {
+        "absolute": -26162,
+        "percent": "-55.1057376358581177858286292021",
+        "ratio": "0.448942623641418822141713707979"
+      },
+      "bytes_per_op": {
+        "absolute": -122896,
+        "percent": "-79.3701845142373691382661990842",
+        "ratio": "0.206298154857626308617338009158"
+      },
+      "allocs_per_op": {
+        "absolute": -159,
+        "percent": "-55.5944055944055944055944055944",
+        "ratio": "0.444055944055944055944055944056"
+      }
+    }
+  },
+  "triads": [
+    {
+      "triad": 1,
+      "combined_vs_pre": {
+        "ns_per_op": {
+          "absolute": -24051,
+          "percent": "-53.2761828814460393407761828814",
+          "ratio": "0.467238171185539606592238171186"
+        },
+        "bytes_per_op": {
+          "absolute": -120720,
+          "percent": "-79.0761350163431872817906106915",
+          "ratio": "0.209238649836568127182093893085"
+        },
+        "allocs_per_op": {
+          "absolute": -154,
+          "percent": "-54.8042704626334519572953736655",
+          "ratio": "0.451957295373665480427046263345"
+        }
+      },
+      "combined_vs_ordinary": {
+        "ns_per_op": {
+          "absolute": -26434,
+          "percent": "-55.6189113556504723630778294443",
+          "ratio": "0.443810886443495276369221705557"
+        },
+        "bytes_per_op": {
+          "absolute": -122897,
+          "percent": "-79.3703177473521053991216739861",
+          "ratio": "0.206296822526478946008783260139"
+        },
+        "allocs_per_op": {
+          "absolute": -159,
+          "percent": "-55.5944055944055944055944055944",
+          "ratio": "0.444055944055944055944055944056"
+        }
+      }
+    },
+    {
+      "triad": 2,
+      "combined_vs_pre": {
+        "ns_per_op": {
+          "absolute": -23415,
+          "percent": "-52.2714588681772519254381069316",
+          "ratio": "0.477285411318227480745618930684"
+        },
+        "bytes_per_op": {
+          "absolute": -120719,
+          "percent": "-79.0754799787767828484963612663",
+          "ratio": "0.209245200212232171515036387337"
+        },
+        "allocs_per_op": {
+          "absolute": -154,
+          "percent": "-54.8042704626334519572953736655",
+          "ratio": "0.451957295373665480427046263345"
+        }
+      },
+      "combined_vs_ordinary": {
+        "ns_per_op": {
+          "absolute": -26096,
+          "percent": "-54.9667200269609908164125031595",
+          "ratio": "0.450332799730390091835874968405"
+        },
+        "bytes_per_op": {
+          "absolute": -122895,
+          "percent": "-79.3695386821149710344293104450",
+          "ratio": "0.206304613178850289655706895550"
+        },
+        "allocs_per_op": {
+          "absolute": -159,
+          "percent": "-55.5944055944055944055944055944",
+          "ratio": "0.444055944055944055944055944056"
+        }
+      }
+    },
+    {
+      "triad": 3,
+      "combined_vs_pre": {
+        "ns_per_op": {
+          "absolute": -24249,
+          "percent": "-53.2208151350876807936264073920",
+          "ratio": "0.467791848649123192063735926080"
+        },
+        "bytes_per_op": {
+          "absolute": -120719,
+          "percent": "-79.0759979562694056150187997013",
+          "ratio": "0.209240020437305943849812002987"
+        },
+        "allocs_per_op": {
+          "absolute": -154,
+          "percent": "-54.8042704626334519572953736655",
+          "ratio": "0.451957295373665480427046263345"
+        }
+      },
+      "combined_vs_ordinary": {
+        "ns_per_op": {
+          "absolute": -25601,
+          "percent": "-54.5689012043056591708408824470",
+          "ratio": "0.454310987956943408291591175530"
+        },
+        "bytes_per_op": {
+          "absolute": -122896,
+          "percent": "-79.3701845142373691382661990842",
+          "ratio": "0.206298154857626308617338009158"
+        },
+        "allocs_per_op": {
+          "absolute": -159,
+          "percent": "-55.5944055944055944055944055944",
+          "ratio": "0.444055944055944055944055944056"
+        }
+      }
+    }
+  ],
+  "all_combined_samples_lower_than_every_control_sample": true
+}

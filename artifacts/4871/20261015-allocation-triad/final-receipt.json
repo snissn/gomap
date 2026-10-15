@@ -1,0 +1,19 @@
+{
+  "evidence_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015",
+  "complete": true,
+  "samples": 9,
+  "all_exits_zero": true,
+  "unchanged_input_census": true,
+  "independent_ratio_check": "PASS",
+  "summary_sha256": "a3176241fce390a533c256fb4085750e6082ee7c27b705100d93c1b73c2b564c",
+  "publication_manifest_sha256": "6e9a6f7975e85350f94471be4d1cb6a2384b1939351542c1df4caa5e145ed6ee",
+  "inventory_sha256": "1d10bfea71c539ec5b80feadf2fa869a491e8b571e03760935f34b48981422f1",
+  "independent_ratios_sha256": "782854d66444d457693f1517429c9ed237b0d964aef00c08ca32207d8e4d0b95",
+  "results_sha256": "3379fdae7e16392ca1289f444acd3e7030a4117b77209a3cef594848945f255c",
+  "publish_additionally": [
+    "publication-files.json",
+    "final-receipt.json"
+  ],
+  "retention": "No deletion until durable publication and explicit root release",
+  "measurements_added": 0
+}

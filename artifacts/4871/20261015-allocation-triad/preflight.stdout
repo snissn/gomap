@@ -1,0 +1,178 @@
+{
+  "preflight": "PASS",
+  "plan": {
+    "samples": [
+      {
+        "index": 1,
+        "triad": 1,
+        "position": 1,
+        "role": "pre",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 2,
+        "triad": 1,
+        "position": 2,
+        "role": "ordinary",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 3,
+        "triad": 1,
+        "position": 3,
+        "role": "combined",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 4,
+        "triad": 2,
+        "position": 1,
+        "role": "ordinary",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 5,
+        "triad": 2,
+        "position": 2,
+        "role": "combined",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 6,
+        "triad": 2,
+        "position": 3,
+        "role": "pre",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 7,
+        "triad": 3,
+        "position": 1,
+        "role": "combined",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 8,
+        "triad": 3,
+        "position": 2,
+        "role": "pre",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 9,
+        "triad": 3,
+        "position": 3,
+        "role": "ordinary",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      }
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "fixture": "unchanged public default-engine Batch.Write; 10000 seed entries; 100ms root publication delay; stopped-timer Checkpoint every eight writes; foreground publisher/debt assertions",
+    "scope": "short component/pre-sprint diagnostic only; not final eight-repeat, M0, Dgraph, or native qualification"
+  }
+}

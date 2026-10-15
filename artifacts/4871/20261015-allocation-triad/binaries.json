@@ -1,0 +1,35 @@
+[
+  {
+    "role": "pre",
+    "source": "28aea01e19f1d62743dec5625ec3d22c1acb6703",
+    "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+    "tree": "c11e532659123bcdee2e6ebe538cf712cd71412f",
+    "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+    "binary_bytes": 51095404,
+    "binary_sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630",
+    "input_census_sha256": "739609536f77a71326867846aa5ac608abcee0b068e5a503c52cabb35d19fdb7",
+    "benchmark_blob": "ae3a6d3cd0ca244781e7843168dc5b35aac5d898"
+  },
+  {
+    "role": "ordinary",
+    "source": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+    "tree": "f88af48627ea7310a6e4e4b20de6465b2a1abfac",
+    "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+    "binary_bytes": 60842242,
+    "binary_sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+    "input_census_sha256": "972e80b888efa4300f801c404e702687dc58248dc4e32b4c8048bc75ec038278",
+    "benchmark_blob": "ae3a6d3cd0ca244781e7843168dc5b35aac5d898"
+  },
+  {
+    "role": "combined",
+    "source": "a22078f59bfe9023787d5147c51c989a4010644d",
+    "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+    "tree": "e448be5924b4a8e66a4894090460fb559f241354",
+    "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+    "binary_bytes": 55448526,
+    "binary_sha256": "3677726354042912600185bada4c48cbd812e8c44d00f794108c0b67a1d58d5a",
+    "input_census_sha256": "24f3ecd42c75a64403b4488b0f4fa085592cefefb3b73cc83f94f6bbfac24308",
+    "benchmark_blob": "ae3a6d3cd0ca244781e7843168dc5b35aac5d898"
+  }
+]
