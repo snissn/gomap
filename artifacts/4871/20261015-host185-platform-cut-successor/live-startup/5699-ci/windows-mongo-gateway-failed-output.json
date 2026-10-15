@@ -1,0 +1,4 @@
+{
+  "TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility": "=== RUN   TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility\n--- FAIL: TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility (20.47s)\n",
+  "TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable": "=== RUN   TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable\n    standalone_test.go:770: insert 11 after 5.0934027s (request limit 10s): write exception: write errors: [Mongo gateway multi-write command exceeded its execution-time budget]\n--- FAIL: TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable (12.85s)\n"
+}

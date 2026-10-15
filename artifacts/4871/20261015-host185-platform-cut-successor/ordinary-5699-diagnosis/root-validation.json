@@ -1,0 +1,29 @@
+{
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "source_files": 10246,
+  "all_sources_verified": true,
+  "before_after_freeze_equal": true,
+  "raw_and_three_windows_binary_hashes_verified": true,
+  "checks": {
+    "coherent-normal-01": {
+      "exit": 0,
+      "elapsed": 17.193290608935058,
+      "top_level_pass_events": 16,
+      "subtest_pass_events": 54
+    },
+    "coherent-race-01": {
+      "exit": 0,
+      "elapsed": 94.5340746990405,
+      "top_level_pass_events": 16,
+      "subtest_pass_events": 54
+    },
+    "coherent-windows-build-01": {
+      "exit": 0,
+      "elapsed": 47.90443519875407,
+      "top_level_pass_events": 0,
+      "subtest_pass_events": 0
+    }
+  },
+  "expected_negative_controls_preserved": true,
+  "scope": "Focused Linux normal/race plus Windows compile only; gateway delay unattributed; source accepted only after independent review."
+}

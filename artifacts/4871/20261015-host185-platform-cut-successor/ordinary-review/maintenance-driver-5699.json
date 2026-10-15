@@ -1,0 +1,80 @@
+{
+  "schema": "ordinary-maintenance-driver-review-v1",
+  "disposition": "ACCEPT",
+  "scope": "Exact frozen artifact-only fourteen-call bounded premerge diagnostic driver",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "git_or_github_operations_performed": false,
+  "tests_builds_or_benchmarks_executed_by_reviewer": false,
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "tree": "5fe3e7ba4538f7c6db9733878a2379a861da0a1b",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "runtime_grant_issued_by_this_review": false,
+  "authorization_existed_at_review": false,
+  "input_sha256": {
+    "performance-185/maintenance-planning/prepare.py": "93a4fdb8182c37ec9a1e4e6b26a0653d8c43d5ff732358be38809844f6ed3b84",
+    "performance-185/maintenance-planning/collect.py": "811ef82119dccb1840bf167d05b048196808275f19d37fd95f697cf6d0963253",
+    "performance-185/maintenance-build-01/freeze.json": "ae35262f4f53d3a11ee39a72791af40cc6b8c2f28e2065cf2f3f6330fe368129",
+    "performance-185/maintenance-build-01/sources-before.json": "ab8702e9db395e20769675a8ffb1effb51687d4c6725a14742de5de235519bf1",
+    "performance-185/maintenance-build-01/sources-after.json": "ab8702e9db395e20769675a8ffb1effb51687d4c6725a14742de5de235519bf1",
+    "performance-185/maintenance-build-01/binaries.json": "e12aa6df5f9c1b83136524af4eb978e8ea40f30938d8a7ebdfb91ce0ba9ab38c",
+    "performance-185/maintenance-build-01/environment.json": "8175a91f4ebfc8274c12563fe0616e9053ac39d56291d40e6b31b582fee242cd",
+    "ordinary-repair/scripts/mvcc_primary_cost_gate.py": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb"
+  },
+  "binaries": {
+    "baseline-db": {
+      "package": "./TreeDB/db",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-01/baseline-db.test",
+      "sha256": "fa655eef121154e0f0b55235594c240842ec3acbe67d0e3a4f223297d8f6aa0b",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "baseline-public": {
+      "package": "./TreeDB",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-01/baseline-public.test",
+      "sha256": "19dc2f61d62e77331a91770b68a304b157d124cd1faa4f971ae80681ba982999",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate-db": {
+      "package": "./TreeDB/db",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-01/candidate-db.test",
+      "sha256": "8bf97400ed93e948f3b96bf582fe5a4a71dc634d57308bec474929a136c42260",
+      "source_head": "5699f8e791c753f204cc297416e0b742d415afe3"
+    },
+    "candidate-public": {
+      "package": "./TreeDB",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-01/candidate-public.test",
+      "sha256": "24638da9cb47622ee96875a9dfb9d5d56c997c42c5c454811d0ddbd5f4801396",
+      "source_head": "5699f8e791c753f204cc297416e0b742d415afe3"
+    }
+  },
+  "source_manifest_counts": {
+    "baseline": 9936,
+    "candidate": 10246
+  },
+  "independently_checked": [
+    "manifest before/after equality and hashes against freeze",
+    "preparation and compiler hashes against freeze",
+    "four binary hashes and binaries manifest equality against freeze",
+    "all four recorded compile exits zero",
+    "complete prepare.py and collect.py source",
+    "imported ProcessObservation and its identity",
+    "parser positive and six negative control source, not executed"
+  ],
+  "blockers": [],
+  "schedule_calls": 14,
+  "child_timeout_seconds": 120,
+  "outer_child_cap_seconds": 150,
+  "preflight_seconds": 10,
+  "limits": [
+    "No numeric runtime grant issued",
+    "No cost acceptance or current-head CI claim",
+    "250ms sampling and interval-average foreign CPU threshold",
+    "One reported cohort leaf per size; last-reader cleanup one event",
+    "Vacuum lacks full digest/physical input-output bytes/shrink",
+    "Reviewed frozen manifests/environment remain trusted immutable inputs"
+  ],
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin required model; not requested."
+}

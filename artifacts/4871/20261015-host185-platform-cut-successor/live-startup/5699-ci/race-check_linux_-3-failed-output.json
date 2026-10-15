@@ -1,0 +1,3 @@
+{
+  "TestPowerLossOracleCounterexampleNewMetaMissingClosure": "=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure\n    power_loss_oracle_test.go:619: actual relaxed finalize did not stop at AfterMetaWrite: err=collectionwal: recovery required: root publication cannot safely progress; reopen required\n--- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure (0.61s)\n"
+}

@@ -1,0 +1,61 @@
+{
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "raw_summary_equal": true,
+  "raw_binaries_verified": 6,
+  "primary_samples_reparsed": 16,
+  "primary_summary_equal": true,
+  "primary_binaries_verified": 2,
+  "primary_runner_and_harness_verified": true,
+  "primary_quiet_observation": true,
+  "scope": "Exact hosted matrix only; no causal attribution of Get improvement or final graph qualification",
+  "raw_paired_deltas": {
+    "BenchmarkGetVersioned": -1.5175050639435195,
+    "BenchmarkConditionalTxnBaselineBatchWrite": -5.600209681697693,
+    "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek": 2.897483925188582,
+    "BenchmarkRepeatedIterator": 0.621446371790707,
+    "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1": 1.7934103982618077
+  },
+  "primary": {
+    "accepted": true,
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "5699f8e791c753f204cc297416e0b742d415afe3",
+    "gates": {
+      "allocations": true,
+      "bytes": true,
+      "candidate_primary_activation": true,
+      "timing": true
+    },
+    "measurement_pass": true,
+    "median_paired_delta_percent": -50.15515168397317,
+    "medians": {
+      "baseline": {
+        "B/op": 280183.0,
+        "allocs/op": 476.0,
+        "generation_advances/op": 2.0,
+        "ns/op": 15021725.5
+      },
+      "candidate": {
+        "B/op": 228295.5,
+        "allocs/op": 391.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 7464238.0
+      }
+    },
+    "paired_deltas_percent": [
+      -50.41593285095234,
+      -49.766220071129005,
+      -49.518633362762465,
+      -50.03195837261103,
+      -51.7424166099687,
+      -88.20415802388158,
+      -50.037744600122714,
+      -50.27255876782364
+    ],
+    "quiet": true
+  },
+  "primary_operations_per_second": {
+    "baseline": 66.57024853769296,
+    "candidate": 133.9721482621535
+  }
+}

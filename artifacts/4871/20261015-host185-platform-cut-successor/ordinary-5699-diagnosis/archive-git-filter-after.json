@@ -1,0 +1,48 @@
+{
+  "files": [
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/README.md",
+      "sha256": "a5d4f7275119ed3a8a74ccc1b5785b13f9d493e782f7e874db51054cd4c7bc09",
+      "bytes": 1436,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/binding.json",
+      "sha256": "b039d22418d22a38494180b9864163278c31af0979065b12852f1f6c2873c3a7",
+      "bytes": 1781,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/contracts.json",
+      "sha256": "fa0b475ce045a435602efca9dcb6a30b526a58bf3035532bf6c65faa1c7c09a9",
+      "bytes": 56686,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/ledger.json",
+      "sha256": "57837810c392f42a7e7343585462aad9618fa31a1007cdd85ba903a1c25793f0",
+      "bytes": 9675,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/original-build-info.txt",
+      "sha256": "e7a0f3aae79330b7a562c02ebfe6747f990ddd34b238c35245a45a17cc9c1561",
+      "bytes": 531,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/original-replay.log",
+      "sha256": "69074d572dcfae23e78a28ff44a91d2af9d016bb41c1c046331bf962557e2a9f",
+      "bytes": 245,
+      "core_autocrlf_true_exact": true
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/witness.go.txt",
+      "sha256": "9abf532bd5a44dc7b6f91b13cabf00f0d744e19de760925061668d7e0d610fcb",
+      "bytes": 11107,
+      "core_autocrlf_true_exact": true
+    }
+  ],
+  "gitattributes_sha256": "5b9a21ec6f73a64e048f20013d35c8c319de1b370a1baae96bfff2189891848c",
+  "production_or_test_assertions_changed": false
+}

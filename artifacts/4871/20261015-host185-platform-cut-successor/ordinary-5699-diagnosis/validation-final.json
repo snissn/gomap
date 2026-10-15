@@ -1,0 +1,174 @@
+{
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "created_utc": "2026-10-15T20:36:46.397115+00:00",
+  "source_frozen": true,
+  "runtime_released": true,
+  "checks": {
+    "coherent-normal-01": {
+      "exit": 0,
+      "elapsed": 17.193290608935058,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "./TreeDB",
+          "./TreeDB/db",
+          "./TreeDB/mongo_gateway",
+          "-run",
+          "TestPowerLossOracleCounterexample(NewMetaMissingClosure|ChunkedSyncIntermediateRoot)|TestCOWPublicModeled(StableImageCheckpointAndNoWALVolatileAck|InterruptedDependencyAndRootPublicationCuts)|TestHistoricalStaleBuildV1ArchiveExactLineageAndNoCurrentCoverage|TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility|TestMongoFirstWrite|TestMongoMultiWriteMaxTimeMSBoundsCommandDeadline|TestMongoMissingCollectionWriteDeadlineStopsBeforeCatalogCreate|TestMongoWriteBudgetRejectsExpiredAndExhaustedWork",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "package_results": [
+        "ok  \tgithub.com/snissn/gomap/TreeDB\t10.668s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.070s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/mongo_gateway\t4.207s"
+      ],
+      "top_level_pass_events": 16,
+      "subtest_pass_events": 54,
+      "data_race_reports": 0,
+      "raw_sha256": "30988041038618ceeb01a153534cc234bf466518110dde144fb16b261039be44"
+    },
+    "coherent-race-01": {
+      "exit": 0,
+      "elapsed": 94.5340746990405,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB",
+          "./TreeDB/db",
+          "./TreeDB/mongo_gateway",
+          "-run",
+          "TestPowerLossOracleCounterexample(NewMetaMissingClosure|ChunkedSyncIntermediateRoot)|TestCOWPublicModeled(StableImageCheckpointAndNoWALVolatileAck|InterruptedDependencyAndRootPublicationCuts)|TestHistoricalStaleBuildV1ArchiveExactLineageAndNoCurrentCoverage|TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility|TestMongoFirstWrite|TestMongoMultiWriteMaxTimeMSBoundsCommandDeadline|TestMongoMissingCollectionWriteDeadlineStopsBeforeCatalogCreate|TestMongoWriteBudgetRejectsExpiredAndExhaustedWork",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "package_results": [
+        "ok  \tgithub.com/snissn/gomap/TreeDB\t46.523s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.618s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/mongo_gateway\t7.004s"
+      ],
+      "top_level_pass_events": 16,
+      "subtest_pass_events": 54,
+      "data_race_reports": 0,
+      "raw_sha256": "80c949413f31613836f74557ab4c00cb071c9fb629e5ca761131a962aa2af5e0"
+    },
+    "coherent-windows-build-01": {
+      "exit": 0,
+      "elapsed": 47.90443519875407,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-c",
+          "-p=1",
+          "-o",
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-5699-diagnosis/windows-build/",
+          "./TreeDB",
+          "./TreeDB/db",
+          "./TreeDB/mongo_gateway"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "0",
+          "GOOS": "windows",
+          "GOARCH": "amd64"
+        }
+      },
+      "package_results": [],
+      "top_level_pass_events": 0,
+      "subtest_pass_events": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "causal_controls": {
+    "cut-positive-01": {
+      "exit": 0,
+      "elapsed": 5.172347066923976,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "raw_sha256": "a4ead382af10f7d0b5090a9a1aac3cef22cd2dabad16f8cdb0e3c4fd3d4c3e98"
+    },
+    "cut-negative-01": {
+      "exit": 1,
+      "elapsed": 3.5701924520544708,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "raw_sha256": "f2417e171bf1b70fd346d192a791ce914e83c75fe1b81f317143ac80c3ded303"
+    },
+    "gateway-diagnostics-negative-01": {
+      "exit": 1,
+      "elapsed": 10.931838370859623,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "raw_sha256": "73d7ff845f0eeba683edb7f47c90ea7bb0561d9f8dbcca30934abd4851949341"
+    }
+  },
+  "gofmt_clean": true,
+  "diff_check_clean": true,
+  "windows_binaries": {
+    "windows-build/TreeDB.test.exe": "476b24b97880dd5cd9c5ec766306588cb883364bbf41494ebc8111c42ff1262f",
+    "windows-build/db.test.exe": "150aa439a4b72eb9a98dff5a3c30d5b681d779f4b24823d9639383c846707be2",
+    "windows-build/mongo_gateway.test.exe": "70615224b568c18924e7a6b6b45e3f75129674f484ef19415cdefd517269c5d7"
+  },
+  "limits": [
+    "focused local validation only",
+    "Windows compilation only; hosted execution remains required",
+    "gateway hosted delay remains unattributed; diagnostics-only change",
+    "M0 variability remains root-owned; no timing runtime in this packet",
+    "no ordinary/native/graph acceptance claim"
+  ]
+}

@@ -1,0 +1,70 @@
+[
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/baseline-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "elapsed_s": 1.165807981044054,
+    "exit": 0,
+    "log": "baseline-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "elapsed_s": 1.2656569853425026,
+    "exit": 0,
+    "log": "baseline-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/candidate-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 1.2158759157173336,
+    "exit": 0,
+    "log": "candidate-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/candidate-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 1.315897945780307,
+    "exit": 0,
+    "log": "candidate-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

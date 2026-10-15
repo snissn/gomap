@@ -1,0 +1,502 @@
+[
+  {
+    "argv": [
+      "bash",
+      "/home/runner/work/gomap/gomap/scripts/mvcc_candidate_checkout_guard.sh",
+      "/home/runner/work/gomap/gomap",
+      "5699f8e791c753f204cc297416e0b742d415afe3"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.034524098000019876,
+    "exit": 0,
+    "label": "candidate-guard-before",
+    "output": "candidate-guard-before.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "go",
+      "version"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.003402395999955843,
+    "exit": 0,
+    "label": "go-version",
+    "output": "go-version.txt",
+    "output_sha256": "34113d5d84bc5406ab3bfd0028c381611cad764f40baa15e43cffd89485c0aee"
+  },
+  {
+    "argv": [
+      "uname",
+      "-a"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.0013550610000265806,
+    "exit": 0,
+    "label": "uname",
+    "output": "uname.txt",
+    "output_sha256": "cd8e31ad3f05d597238a1403bb5c2d25c975d53959c3d48af034216515712dc5"
+  },
+  {
+    "argv": [
+      "lscpu"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.0033668419999912658,
+    "exit": 0,
+    "label": "lscpu",
+    "output": "lscpu.txt",
+    "output_sha256": "9e4b12c784c42c427436ccf7cee76f48c7cabb56fc17fefb5e682ff1a67bc73c"
+  },
+  {
+    "argv": [
+      "ps",
+      "-eo",
+      "pid,ppid,etime,pcpu,args"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.007429841999964992,
+    "exit": 0,
+    "label": "processes",
+    "output": "processes.txt",
+    "output_sha256": "3515dc8eb5f801018797bed93dd117aa100ba18fbac08cfd8e4a1781cdf16569"
+  },
+  {
+    "argv": [
+      "git",
+      "worktree",
+      "add",
+      "--detach",
+      "/home/runner/work/_temp/mvcc-primary-cost-bg7zbmtu/baseline",
+      "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.8647470579999208,
+    "exit": 0,
+    "label": "baseline-worktree",
+    "output": "baseline-worktree.txt",
+    "output_sha256": "6b6e7674b7dfa05b24d5433f0517c8888f3df5b345f7b75f861099e4dec1cb5b"
+  },
+  {
+    "argv": [
+      "go",
+      "test",
+      "-c",
+      "-p=1",
+      "-tags=treedb_test",
+      "-trimpath",
+      "-buildvcs=false",
+      "-overlay",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-overlay.json",
+      "-o",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "./TreeDB/mvcc"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-primary-cost-bg7zbmtu/baseline",
+    "elapsed_s": 3.6154788460000873,
+    "exit": 0,
+    "label": "build-baseline",
+    "output": "build-baseline.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "go",
+      "test",
+      "-c",
+      "-p=1",
+      "-tags=treedb_test",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "./TreeDB/mvcc"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 4.267651101999945,
+    "exit": 0,
+    "label": "build-candidate",
+    "output": "build-candidate.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$",
+      "-test.count=1",
+      "-test.timeout=90s",
+      "-test.v"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.16406505899999502,
+    "exit": 0,
+    "label": "candidate-public-lifecycle",
+    "output": "candidate-public-lifecycle.txt",
+    "output_sha256": "a9f4b2a8eddf74dae2f177826089afef8e44ae6602c706ba1efa90b00e1de7bd"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.142323788999988,
+    "exit": 0,
+    "label": "pair-1-baseline",
+    "output": "pair-1-baseline.txt",
+    "output_sha256": "b37fe69dde905e270c8f4db4778af9862a7009d72ffb87af861705b7dde2cf0a"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.0807710540000244,
+    "exit": 0,
+    "label": "pair-1-candidate",
+    "output": "pair-1-candidate.txt",
+    "output_sha256": "e34aadaf60d2c538b93b4ea7ef13a04048ad425e17294ae2510b3995b2d12c0f"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.1317000529999177,
+    "exit": 0,
+    "label": "pair-2-candidate",
+    "output": "pair-2-candidate.txt",
+    "output_sha256": "eb52e51f161ff6db13f74dbfae470ca0c14756c396ff5eb8b96d8874968b4ff2"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.0928466240000034,
+    "exit": 0,
+    "label": "pair-2-baseline",
+    "output": "pair-2-baseline.txt",
+    "output_sha256": "0ed1221f27580fa0c067155193de7470e2b38685dac3c51e1424a8cd9e90df0a"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.0930425490000744,
+    "exit": 0,
+    "label": "pair-3-baseline",
+    "output": "pair-3-baseline.txt",
+    "output_sha256": "e336ac1befa9739afc3e9ba1aac2d33781200eda63ac4b5b40d368a4721a2071"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.1308481610000172,
+    "exit": 0,
+    "label": "pair-3-candidate",
+    "output": "pair-3-candidate.txt",
+    "output_sha256": "5349449bcc4957970007dcd16a581256051549e2493741ba4ba837c7cef3052b"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.0802900520000094,
+    "exit": 0,
+    "label": "pair-4-candidate",
+    "output": "pair-4-candidate.txt",
+    "output_sha256": "76010bfc92c8bd102761304e5abc6be07d1118ebc7c7e547c9806769c1a43a5b"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.0928640939999923,
+    "exit": 0,
+    "label": "pair-4-baseline",
+    "output": "pair-4-baseline.txt",
+    "output_sha256": "5869db19c0d3696a670ea503ea93e1ad44e5c694a848adc132b4da47c5d788ee"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.1617393770000035,
+    "exit": 0,
+    "label": "pair-5-baseline",
+    "output": "pair-5-baseline.txt",
+    "output_sha256": "5c664373ebb2f9c8bba144af2af43f2be663b64a8e6aa702fa196d02c6117ed5"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.0817827289999968,
+    "exit": 0,
+    "label": "pair-5-candidate",
+    "output": "pair-5-candidate.txt",
+    "output_sha256": "ab15db79a363266d9ad573dcc7fa2f67bcb22f6b495d32367587cf002c2c1182"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.0812339620000557,
+    "exit": 0,
+    "label": "pair-6-candidate",
+    "output": "pair-6-candidate.txt",
+    "output_sha256": "66a704ec6723824acd938d06b82c197782d09dbcf621ec3e2106cd6360ed2c90"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 8.273616178999987,
+    "exit": 0,
+    "label": "pair-6-baseline",
+    "output": "pair-6-baseline.txt",
+    "output_sha256": "dcac4d2082394b2d435f8b303a040d1c617e410109cc1a98b36c042c0f1ff93f"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.0933332319999636,
+    "exit": 0,
+    "label": "pair-7-baseline",
+    "output": "pair-7-baseline.txt",
+    "output_sha256": "cd12c30e88ed47eaedc265f3cfd6ab8886b927941aa41ef8dea266d77bf1956d"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.0792179159999478,
+    "exit": 0,
+    "label": "pair-7-candidate",
+    "output": "pair-7-candidate.txt",
+    "output_sha256": "c571df7a0384d0790421970589803e95932839aa6fa29c41c61c6bc68eb75c71"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.1292343990000973,
+    "exit": 0,
+    "label": "pair-8-candidate",
+    "output": "pair-8-candidate.txt",
+    "output_sha256": "bf0d438306674494526176ebf6c536ea4c2bfea4541c9575e48164352871e7b3"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=90s"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.1402816949999988,
+    "exit": 0,
+    "label": "pair-8-baseline",
+    "output": "pair-8-baseline.txt",
+    "output_sha256": "68e94b8be6787f813df473d5f9edc7afa0ef275f40477dfc6078e30946b6f3b0"
+  },
+  {
+    "argv": [
+      "bash",
+      "/home/runner/work/gomap/gomap/scripts/mvcc_candidate_checkout_guard.sh",
+      "/home/runner/work/gomap/gomap",
+      "5699f8e791c753f204cc297416e0b742d415afe3"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.031792892999988,
+    "exit": 0,
+    "label": "candidate-guard-after",
+    "output": "candidate-guard-after.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "bash",
+      "/home/runner/work/gomap/gomap/scripts/mvcc_candidate_checkout_guard.sh",
+      "/home/runner/work/_temp/mvcc-primary-cost-bg7zbmtu/baseline",
+      "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.2153627110000116,
+    "exit": 0,
+    "label": "baseline-guard-after",
+    "output": "baseline-guard-after.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "git",
+      "worktree",
+      "remove",
+      "/home/runner/work/_temp/mvcc-primary-cost-bg7zbmtu/baseline"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.2507718660000364,
+    "exit": 0,
+    "label": "baseline-worktree-remove",
+    "output": "baseline-worktree-remove.txt",
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

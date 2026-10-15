@@ -1,0 +1,19 @@
+{
+  "build_freeze_sha256": "2849330620e63f8eb63514d2247beb20fdcf3f509d14a8401991461e1797d36e",
+  "source_before_after_equal": true,
+  "all_four_binary_hashes_verified": true,
+  "heads": {
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+  },
+  "runner_sha256": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+  "builder_sha256": "b7d0d11dd7f308d939a65a14da7fc46e6aa4e00bdf6ebea0d502736fe70563ab",
+  "test_bodies_executed": false,
+  "runtime_authorized": false,
+  "infrastructure": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: no dedicated measurement runner provisioned for this transferred task; fallback is shared host185, subject to the retained external-process quietness guard.",
+    "Persistent task Go build/module caches are available under /mnt/fast4tb; exact environment is in the build freeze.",
+    "Durable task artifact storage is available under /mnt/fast4tb; publication occurs outside timing."
+  ],
+  "mount": "/mnt/fast4tb ext4   rw,noatime"
+}

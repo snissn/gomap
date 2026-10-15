@@ -1,0 +1,284 @@
+{
+  "schema_version": 1,
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "tree": "5fe3e7ba4538f7c6db9733878a2379a861da0a1b",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "bounded read-only acceptance reconciliation",
+  "candidate_edits": false,
+  "runtime_operations": false,
+  "children_spawned": false,
+  "source_disposition": "prior exact-source ACCEPT unchanged; no new implementation blocker identified",
+  "ordinary_acceptance": "INCOMPLETE_EVIDENCE",
+  "merge_authorized": false,
+  "groups": [
+    {
+      "group": 1,
+      "name": "Arena indexes/read roots",
+      "state": "covered-local/currentCIpending",
+      "source": "pager/primary_read_root_v6.go; internal/primaryarena/arena.go",
+      "test_file": "TreeDB/internal/primaryarena/read_root_v6_test.go",
+      "representative_test": "TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody",
+      "contract": "arena/root custody and exact independent copies",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 2,
+      "name": "Banks/chunks/logical custody",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/primaryarena/retention.go; bundle.go; zipper/primary_directory.go",
+      "test_file": "TreeDB/internal/primaryarena/claim_retention_test.go",
+      "representative_test": "TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease",
+      "contract": "preadmission, aliases, bank/current/reader ownership",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 3,
+      "name": "Pager lookup/growth",
+      "state": "covered-local/currentCIpending",
+      "source": "pager/primary_read_root_v6.go; pager/grow_work.go",
+      "test_file": "TreeDB/internal/primaryarena/physical_close_work_test.go",
+      "representative_test": "TestArenaPhysicalCloseWorkOriginalCaptureRemains",
+      "contract": "same original grower, bounded turn, final physical completion",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 4,
+      "name": "DATA prepared roots",
+      "state": "covered-local/currentCIpending",
+      "source": "db/root_publication_activation.go; db/ordered_root_publish.go",
+      "test_file": "TreeDB/db/primary_shared_transaction_v6_test.go",
+      "representative_test": "TestPrimarySharedTransactionV6ReusesExactDataCertificate",
+      "contract": "real DATA generation retained across PRIMARY-only writes; replaced on DATA materialization",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 5,
+      "name": "Transaction/candidate/member controls",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/primary_transaction_construction_v6.go; db/primary_runtime_metadata.go",
+      "test_file": "TreeDB/db/primary_shared_transaction_v6_test.go",
+      "representative_test": "TestPrimarySharedTransactionV6SinglePublicationOwner",
+      "contract": "SAME transaction/allocator/authority; constructor refusal and Abort custody",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 6,
+      "name": "Current/slot/retired arrays",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_runtime_metadata.go; db/primary_capsule_runtime_v6.go",
+      "test_file": "TreeDB/db/primary_runtime_metadata_test.go",
+      "representative_test": "TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow",
+      "contract": "full replacement overlap/overflow and alias scrub",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 7,
+      "name": "Capsule/recovery/selection images",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_capsule_recovery_v6.go; db/primary_capsule_snapshot_rebind_v6.go",
+      "test_file": "TreeDB/db/primary_slot_custody_v6_test.go",
+      "representative_test": "TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6",
+      "contract": "both slots and embedded proof roots; distinct images/dependency charges",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 8,
+      "name": "Seal/prefix/callbacks",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_runtime_metadata.go; db/primary_capsule_runtime_v6.go",
+      "test_file": "TreeDB/db/primary_owned_promotion_v6_test.go",
+      "representative_test": "TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure",
+      "contract": "immutable old logical root and separate promoted dependency closure",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 9,
+      "name": "Retirement/failure/Snapshot custody",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_arena_owner_v5.go; db/snapshot_primary_retention.go; db/pools.go",
+      "test_file": "TreeDB/db/primary_arena_release_work_test.go",
+      "representative_test": "TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt",
+      "contract": "last actual reader, physical completion, exact custody/refund",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 10,
+      "name": "Startup/handoff/dictionary",
+      "state": "covered-local/currentCIpending",
+      "source": "caching/cow_cut.go; caching/cow_flush.go; internal/retainedalloc",
+      "test_file": "TreeDB/caching/cow_dictionary_cleanup_test.go",
+      "representative_test": "TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor",
+      "contract": "fixed owner pair; temporary borrow versus activated producer; later writes remain valid",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 11,
+      "name": "Namespace/file/proof owner",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_arena_owner_v5.go; internal/rootpublication/file_metadata.go",
+      "test_file": "TreeDB/pager/owned_file_metadata_test.go",
+      "representative_test": "TestOwnedChildFileContributionActualCompletion",
+      "contract": "real parent/file/name containing admission and checked completion",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 12,
+      "name": "PRIMARY tokens/operations",
+      "state": "covered-local/currentCIpending",
+      "source": "db/stable_pager_owned_operations.go; internal/rootpublication/resource_token_allocation.go",
+      "test_file": "TreeDB/db/stable_pager_owned_operations_test.go",
+      "representative_test": "TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor",
+      "contract": "consumed Set reference distinct from failed physical completion and retained governor",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 13,
+      "name": "Namespace token/lease/sync",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/resource_namespace*; resource_original_cleanup.go",
+      "test_file": "TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go",
+      "representative_test": "TestOriginalObservedNamespaceFailureAndAdmissionRefusal",
+      "contract": "original physical operands/first failure, pre-effect platform refusal",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 14,
+      "name": "Identity registry",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/registry_capacity.go; pin_registry.go",
+      "test_file": "TreeDB/internal/rootpublication/registry_capacity_test.go",
+      "representative_test": "TestRegistryCapacityOverlapRefusalAndPhysicalAliases",
+      "contract": "whole typed backing/key capacity, failed growth rollback, finite churn and terminal pins",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 15,
+      "name": "Dependency directories/leases",
+      "state": "covered-local/currentCIpending",
+      "source": "db/primary_dependency_v5.go; db/primary_bank_construction_v5.go",
+      "test_file": "TreeDB/internal/rootpublication/dependency_directory_metadata_test.go",
+      "representative_test": "TestPrimaryDependencyMetadataFailedPhysicalReleaseRetainsDebt",
+      "contract": "original last-read/descriptor and failed bank closure retain admission",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 16,
+      "name": "Manifest codecs/load/rebind",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/resource_manifest_allocation.go; resource_manifest_load.go",
+      "test_file": "TreeDB/internal/rootpublication/resource_manifest_load_test.go",
+      "representative_test": "TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal",
+      "contract": "actual output/scratch overlap, exact canonical identity/load, refusal unwind",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 17,
+      "name": "Builder/set/clone/import/scope",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/resource_builder_allocation.go; resource_set_allocation.go; import helpers",
+      "test_file": "TreeDB/internal/rootpublication/resource_import_allocation_test.go",
+      "representative_test": "TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+      "contract": "foreign original action, selected scope/last alias; raw selected Union escape refused",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 18,
+      "name": "Rope/exact RID/history/proofs",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/rootpublication/resource_rope_allocation.go; resource_logical_allocation.go; resource_rid_allocation.go",
+      "test_file": "TreeDB/internal/rootpublication/resource_coalesce_allocation_test.go",
+      "representative_test": "TestOwnedSameIdentityAppendRetainsCanonicalIndexAndCustody",
+      "contract": "canonical merged frontier and separately immutable old rope, release once",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    },
+    {
+      "group": 19,
+      "name": "Release/outcomes/diagnostics",
+      "state": "covered-local/currentCIpending",
+      "source": "internal/primaryarena/release_queue.go; internal/rootpublication/resource_original_cleanup.go; resource_diagnostics_allocation.go",
+      "test_file": "TreeDB/internal/rootpublication/resource_set_allocation_test.go",
+      "representative_test": "TestOwnedSetActualPhysicalCloseFailureRetainsOriginalGraph",
+      "contract": "consumption/deferred action/debt distinction; selected backing scoped, generic diagnostics immutable",
+      "evidence": "ordinary-hook-work/validation-final.json; ordinary-lifetime-work/test-inventory-final.json; ordinary-repair-work/HANDOFF.md; ordinary-30ee-diagnosis/validation-final.json; parent30ee hosted test receipts",
+      "ci_selection": "normal platform package/test enumeration; Linux race package/test enumeration; platform-specific files only on supported builds"
+    }
+  ],
+  "missing_obligations": [
+    {
+      "id": "P-checkpoint",
+      "state": "missing",
+      "kind": "performance evidence",
+      "boundary": "one matched fixed actual dirty Checkpoint main/candidate with activation/time/allocation and setup boundary"
+    },
+    {
+      "id": "P-vacuum",
+      "state": "missing",
+      "kind": "performance evidence",
+      "boundary": "one matched same compatible M0 fixed vacuum benchmark main/candidate; same-head legacy/public CV is insufficient"
+    },
+    {
+      "id": "P-cohort",
+      "state": "missing",
+      "kind": "enabled retained-cost evidence",
+      "boundary": "reviewed/landed existing8/16selected cohort harness; finite cost/scaling and physical/governor residuals explicitly dispositioned; no fabricated prefeature baseline"
+    },
+    {
+      "id": "D-current",
+      "state": "missing",
+      "kind": "delivery gate",
+      "boundary": "successor exact-head required CI, final-base compatibility and root acceptance/merge"
+    },
+    {
+      "id": "D-docs",
+      "state": "missing",
+      "kind": "documentation reconciliation",
+      "boundary": "historically attribute stale remaining implementation notes; link current matrix and preserve true open gates"
+    },
+    {
+      "id": "D-cleanup",
+      "state": "missing",
+      "kind": "deferred closeout",
+      "boundary": "exact disposable cleanup only after native/other consumers release, verify absence/unregistration"
+    }
+  ],
+  "historical_reusable": [
+    "parent30ee raw5 and matched PRIMARY performance packet, unchanged production/harness source",
+    "parent30ee M0 absolute/stability/availability packet, not product-base regression comparison",
+    "parent30ee real cohort2/8/16storage and zero-terminal correctness observations",
+    "earlier source-bound M4/lifecycle controls only through unchanged relevant source and refreshed later caller tests"
+  ],
+  "native_only": [
+    "#4878actual bounded producer/capture/Finish and Q32",
+    "#5047/#4879final Dgraph gates",
+    "original M7bounds/Accepted/onceACK/SAME Request and M3/M8 holds"
+  ],
+  "limits": [
+    "current head hosted CI not refetched or claimed passed",
+    "no new whole-foundation source review",
+    "no benchmark or test rerun",
+    "absence of supplied qualified cost packet is not evidence of a regression",
+    "prior measurements not relabeled exact5699timing"
+  ],
+  "created_utc": "2026-10-15T20:10:28.968246+00:00"
+}

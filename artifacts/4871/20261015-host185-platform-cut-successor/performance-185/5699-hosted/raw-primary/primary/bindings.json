@@ -1,0 +1,26 @@
+{
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "binaries": {
+    "baseline": {
+      "bytes": 25225278,
+      "path": "baseline-primary.test",
+      "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate": {
+      "bytes": 29169378,
+      "path": "candidate-primary.test",
+      "sha256": "01dfe042a37ad3d866b42dee95021c097a431421e4e28c7dddea5f74e4b55632",
+      "source_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+    }
+  },
+  "bytes_and_allocations": "no median growth",
+  "candidate": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "cpu": 0,
+  "gomaxprocs": 1,
+  "harness_sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11",
+  "iterations": 128,
+  "max_paired_regression_percent": 5.0,
+  "runner_sha256": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+  "samples": 8
+}

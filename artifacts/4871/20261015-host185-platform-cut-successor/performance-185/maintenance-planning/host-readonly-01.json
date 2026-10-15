@@ -1,0 +1,25 @@
+{
+  "scope": "read-only planning; no timed benchmark launched",
+  "active": [
+    {
+      "pid": 6357,
+      "comm": "clickhouse-serv",
+      "ticks": 17597668,
+      "cpu_pct": 2.469176026266462
+    },
+    {
+      "pid": 128239,
+      "comm": "codex",
+      "ticks": 31920,
+      "cpu_pct": 2.9630112315197543
+    },
+    {
+      "pid": 3140140,
+      "comm": "htop",
+      "ticks": 857420,
+      "cpu_pct": 2.469176026266462
+    }
+  ],
+  "loadavg": "1.36 2.29 2.50 1/2741 476601\n",
+  "sample_seconds": 2.0249670119956136
+}

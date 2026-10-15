@@ -1,0 +1,20 @@
+{
+  "job": "windows-mongo-gateway",
+  "job_id": "116643051311",
+  "failures": [
+    "TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable",
+    "TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility"
+  ],
+  "race_reports": 0,
+  "interesting": [
+    {
+      "line": 4141,
+      "text": "2026-10-15T20:13:38.7285824Z {\"Time\":\"2026-10-15T20:13:38.7189965Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_relaxed\",\"Output\":\"    standalone_test.go:867: command-WAL BSON visibility profile=command_wal_relaxed docs=512 workers=16 request_limit=10s ping=1.0976ms insert_wall=744.593ms insert_max=714.4266ms initial_read_total=101.0623ms initial_read_max=2.0157ms update_total=120.2113ms update_max=2.0183ms final_read_total=106.2662ms final_read_max=2.0214ms scenario_wall=1.0743463s\\n\"}"
+    },
+    {
+      "line": 4146,
+      "text": "2026-10-15T20:13:54.4089121Z {\"Time\":\"2026-10-15T20:13:54.3987899Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/mongo_gateway\",\"Test\":\"TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility/command_wal_durable\",\"Output\":\"    standalone_test.go:770: insert 11 after 5.0934027s (request limit 10s): write exception: write errors: [Mongo gateway multi-write command exceeded its execution-time budget]\\n\"}"
+    }
+  ],
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/5699-ci/windows-mongo-gateway.log"
+}

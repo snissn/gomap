@@ -1,0 +1,67 @@
+{
+  "schema": "ordinary-platform-successor-review-v1",
+  "disposition": "ACCEPT",
+  "head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "tree": "fa4e2c46824a09ef5ea890fa8e1a523021bbcd73",
+  "parent": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "git_github_operations_performed": false,
+  "tests_builds_benchmarks_runtime_executed_by_reviewer": false,
+  "review_scope": "Complete five-path delta and exact two artifact-only driver successors, adjacent admission/poison/hook lifetime contracts; not a new whole-foundation rereview",
+  "source_sha256": {
+    ".gitattributes": "5b9a21ec6f73a64e048f20013d35c8c319de1b370a1baae96bfff2189891848c",
+    ".github/ci/ci_impact.json": "e101548a66015edb4fa9103120b14cb519e35bfc13a4f882bf618e7380da85a9",
+    "TreeDB/power_loss_oracle_test.go": "66a1ee1c478bb60139e66baaec1e56adcdc8381f79d05902fa9daff874b63f54",
+    "TreeDB/mongo_gateway/standalone_test.go": "c97fc6edb134841880c78a81cafdf52ad55d065f0c8cd979f0c2a8276bb59f03",
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md": "181192737693917ba7a7796fee4630a9da8f3a71c0be5f8c2db981edcec7fbfd"
+  },
+  "driver_sha256": {
+    "performance-185/maintenance-planning/prepare-02.py": "b7d0d11dd7f308d939a65a14da7fc46e6aa4e00bdf6ebea0d502736fe70563ab",
+    "performance-185/maintenance-planning/collect-02.py": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259"
+  },
+  "driver_disposition": "ACCEPT_EXACT_DIFFERENTIAL",
+  "driver_changes": [
+    "collect: build/output/auth paths01 to02 only",
+    "prepare: build01 to02 and full candidate5699 to72e01 only"
+  ],
+  "blockers": [],
+  "independently_verified": {
+    "tested_final_freeze_files": 10246,
+    "differences_vs_tested_freeze": [
+      ".github/ci/ci_impact.json"
+    ],
+    "four_changed_frozen_files_equal_candidate": true,
+    "archive_payloads_checked": 7,
+    "archive_payloads_equal_receipt": true,
+    "complete_script_differential_matches_declared_changes": true
+  },
+  "reported_local_evidence": {
+    "normal_top_level_pass": 16,
+    "normal_subtest_pass": 54,
+    "race_top_level_pass": 16,
+    "race_subtest_pass": 54,
+    "data_race_reports": 0,
+    "windows_packages_compiled": 3,
+    "metadata_checks_exit_zero": 6
+  },
+  "controls_inspected": [
+    "same exact cut positive raw, all ten variants",
+    "successful-cut latch negative raw correctly rejects typed recovery",
+    "same cold-gate diagnostic negative raw records5s refusal and bounded active stacks"
+  ],
+  "limits": [
+    "Gateway hosted delay remains unattributed; diagnostics-only change",
+    "Focused Linux normal/race and Windows compile are not hosted Windows runtime",
+    "No new build02 binary qualification",
+    "No numeric runtime grant",
+    "No exact-head CI/M0/cost acceptance or mergeability claim",
+    "No native/Q32/final Dgraph qualification"
+  ],
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin required model; not requested.",
+  "review_slot_released": true
+}

@@ -1,0 +1,84 @@
+{
+  "schema": "ordinary-maintenance-harness-review-v1",
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "tree": "5fe3e7ba4538f7c6db9733878a2379a861da0a1b",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "disposition": "ACCEPT_BOUNDED_DIAGNOSTIC_HARNESS",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "runtime_campaign_performed": false,
+  "git_or_github_operations_performed": false,
+  "children_spawned": false,
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin the required model; not requested.",
+  "source_hashes_sha256": {
+    "TreeDB/cow_public_cost_bench_test.go": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+    "TreeDB/db/vacuum_collection_bench_test.go": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+    "TreeDB/db/durable_root_bench_test.go": "ddcb7d9b1f2af926e7c4c8050d3adc6c919fbe69899529e7df4cf882ba23717e",
+    "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "cmd/unified_bench/README.md": "e07d1d211a27cfb7b35fca6456ade527d9e4cd8ae108acaa79cddc83c56de294"
+  },
+  "confirmed_source_blockers": [],
+  "checkpoint_timer": "CORRECT: initial StopTimer, ResetTimer preserves stopped state, setup before StartTimer each iteration",
+  "vacuum_choice": "ProductionForegroundChurn/bytes_64x; legacy arm disables coordinator and is insufficient alone for production publisher regression cost",
+  "minimum_matrix": {
+    "checkpoint": {
+      "profile": "command_wal_durable",
+      "mode": "btree",
+      "layout": "Pointer4096",
+      "records": 1024,
+      "operation": "DirtyCheckpoint",
+      "iterations": 16,
+      "baseline_candidate_pairs": 3
+    },
+    "vacuum": {
+      "benchmark": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "iterations": 1,
+      "baseline_candidate_pairs": 3
+    },
+    "cohort": {
+      "benchmark": "BenchmarkPrimaryBorrowedValueLogCohort",
+      "sizes": [
+        8,
+        16
+      ],
+      "iterations": 128,
+      "fresh_processes_minimum": 2,
+      "baseline": "none; enabled scaling only"
+    }
+  },
+  "mandatory_receipt_checks": [
+    "freeze product/harness/toolchain/binaries and collection schedule",
+    "existing applicable cost requirements unchanged",
+    "vacuum exposure misses/errors/aborts all zero",
+    "vacuum4096samples2048points2048ranges and actual traversal/work",
+    "all raw attempted samples and exit statuses retained",
+    "quiet host and no competing native runtime; sampling limitation disclosed",
+    "cohort physical/governor residuals reported honestly",
+    "final physical cleanup oracle passes",
+    "coordinator explicitly dispositions finite cohort tradeoff"
+  ],
+  "limits": [
+    "No measurement or cost gate passed by this review",
+    "No sustained qualification or universal performance claim",
+    "No native/Q32 qualification",
+    "No current-head CI, M0 or mergeability claim",
+    "Expensive collection still requires harness landing",
+    "No independent review of a new collection driver"
+  ],
+  "fixture_equivalence": {
+    "sufficient_for_bounded_cost": "Identical committed production fixture source/config, actual successful traversal,4096writes, zero exposure/errors/aborts",
+    "new_overlay_required": false,
+    "seed_documents": 1024,
+    "catalog_entries": 131072,
+    "initial_collection_publications": 1,
+    "not_same_as_M0_storage_fixture": true,
+    "not_measured": [
+      "full collection-content digest",
+      "setup/final DATA/vlog physical bytes",
+      "shrink ratio"
+    ],
+    "separate_evidence": "M4 shrink/storage and accepted persistence/publication correctness tests"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/witness.go.txt",
+  "lf_blob": "0276e8409fdcdc098f19f5cd60ee44eed6699229",
+  "crlf_blob": "0f3969eb9957359aec2ee19ea416955a78d44b99",
+  "reported_windows_blob": "0f3969eb9957359aec2ee19ea416955a78d44b99",
+  "lf_line_count": 336,
+  "existing_crlf_count": 0,
+  "expected_historical_blob": "0276e8409fdcdc098f19f5cd60ee44eed6699229"
+}

@@ -1,0 +1,605 @@
+{
+  "total_count": 30,
+  "artifacts": [
+    {
+      "id": 12005635264,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNTYzNTI2NA==",
+      "name": "treedb-test-json-windows-core-5",
+      "size_in_bytes": 98834,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12005635264",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12005635264/zip",
+      "expired": false,
+      "digest": "sha256:c9dc44d65bdbe7cc1037cb377a6713f91fb2f1d28bcbac2260c8dee5ab5b7578",
+      "created_at": "2026-10-15T20:29:21Z",
+      "updated_at": "2026-10-15T20:29:21Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12005015144,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNTAxNTE0NA==",
+      "name": "treedb-race-json-linux-4",
+      "size_in_bytes": 450481,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12005015144",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12005015144/zip",
+      "expired": false,
+      "digest": "sha256:a006caab939e70cb06204482b3c516123159dc5ad559859de261964d6b8ef172",
+      "created_at": "2026-10-15T20:26:09Z",
+      "updated_at": "2026-10-15T20:26:09Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004850289,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDg1MDI4OQ==",
+      "name": "treedb-test-json-windows-mongo-gateway",
+      "size_in_bytes": 58215,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004850289",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004850289/zip",
+      "expired": false,
+      "digest": "sha256:a6dc2828d87eff42bf679dc4332ca27b226233840080744894e1946d10bde13c",
+      "created_at": "2026-10-15T20:17:41Z",
+      "updated_at": "2026-10-15T20:17:41Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004830934,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDgzMDkzNA==",
+      "name": "treedb-test-json-windows-core-3",
+      "size_in_bytes": 167447,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004830934",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004830934/zip",
+      "expired": false,
+      "digest": "sha256:51fdbf9acd0d8f02862814fe76ea602f3cbeba327e85ad981c1da6368946285a",
+      "created_at": "2026-10-15T20:21:23Z",
+      "updated_at": "2026-10-15T20:21:23Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004830784,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDgzMDc4NA==",
+      "name": "treedb-test-json-ubuntu-latest-2",
+      "size_in_bytes": 721964,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004830784",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004830784/zip",
+      "expired": false,
+      "digest": "sha256:119e57c0815c0d73b8a355c25ac115293cc542fff0e7796088085bb8661d7c36",
+      "created_at": "2026-10-15T20:20:27Z",
+      "updated_at": "2026-10-15T20:20:27Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004677539,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDY3NzUzOQ==",
+      "name": "treedb-test-json-windows-core-1",
+      "size_in_bytes": 137232,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004677539",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004677539/zip",
+      "expired": false,
+      "digest": "sha256:513134076a002ea610ee9542073a78018f3c447f692fffb1e3f4e99f4fb52bf4",
+      "created_at": "2026-10-15T20:29:32Z",
+      "updated_at": "2026-10-15T20:29:32Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004677345,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDY3NzM0NQ==",
+      "name": "treedb-test-json-windows-core-6",
+      "size_in_bytes": 160722,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004677345",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004677345/zip",
+      "expired": false,
+      "digest": "sha256:1ecd92070caa4d7267090d24897c32266253c790d9af9357d9a906fe8c345661",
+      "created_at": "2026-10-15T20:28:28Z",
+      "updated_at": "2026-10-15T20:28:28Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004525557,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDUyNTU1Nw==",
+      "name": "treedb-test-json-macos-latest-1",
+      "size_in_bytes": 366170,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004525557",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004525557/zip",
+      "expired": false,
+      "digest": "sha256:5b54c518fbb06830712cb46107767c34c77c481feef53ec377c7f22af9e43fec",
+      "created_at": "2026-10-15T20:16:37Z",
+      "updated_at": "2026-10-15T20:16:37Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004517246,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDUxNzI0Ng==",
+      "name": "treedb-test-json-macos-latest-2",
+      "size_in_bytes": 621510,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004517246",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004517246/zip",
+      "expired": false,
+      "digest": "sha256:0ea108fdfb61f1dd60bb01a278b80318ae49afcfa800b55f9d8572ab0ed968f8",
+      "created_at": "2026-10-15T20:26:31Z",
+      "updated_at": "2026-10-15T20:26:31Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004350803,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDM1MDgwMw==",
+      "name": "treedb-test-json-ubuntu-latest-3",
+      "size_in_bytes": 378233,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004350803",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004350803/zip",
+      "expired": false,
+      "digest": "sha256:9b9cafdf86bf0eb64436959828a3d157a9d4a22f6c5a37ba789e636f424c0049",
+      "created_at": "2026-10-15T20:14:21Z",
+      "updated_at": "2026-10-15T20:14:21Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004271759,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDI3MTc1OQ==",
+      "name": "treedb-test-json-windows-core-4",
+      "size_in_bytes": 116462,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004271759",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004271759/zip",
+      "expired": false,
+      "digest": "sha256:263058dfb5030510a1235d5f8a6ecf73d5594a1b4832c9a981f3f6a026c82640",
+      "created_at": "2026-10-15T20:19:26Z",
+      "updated_at": "2026-10-15T20:19:26Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004083959,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDA4Mzk1OQ==",
+      "name": "treedb-race-json-linux-1",
+      "size_in_bytes": 363599,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004083959",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004083959/zip",
+      "expired": false,
+      "digest": "sha256:646e5091068f51affde3042f5cf6ac0af059a0806d804611888176cca7132875",
+      "created_at": "2026-10-15T20:31:45Z",
+      "updated_at": "2026-10-15T20:31:45Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12004021560,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwNDAyMTU2MA==",
+      "name": "treedb-test-json-windows-caching-rest-3",
+      "size_in_bytes": 31870,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004021560",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12004021560/zip",
+      "expired": false,
+      "digest": "sha256:0f7e91a3a94168601e118a707d936b42e9ecff42b9967ab3fe8ad16a8cf85e83",
+      "created_at": "2026-10-15T20:09:11Z",
+      "updated_at": "2026-10-15T20:09:11Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003923220,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzkyMzIyMA==",
+      "name": "treedb-test-json-windows-nativewire",
+      "size_in_bytes": 81848,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003923220",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003923220/zip",
+      "expired": false,
+      "digest": "sha256:e7666f29210a5acbe8bf81f995483e92db73a2fb4882c5df79b0a45509c47af4",
+      "created_at": "2026-10-15T20:16:58Z",
+      "updated_at": "2026-10-15T20:16:58Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003898282,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzg5ODI4Mg==",
+      "name": "treedb-test-json-macos-latest-3",
+      "size_in_bytes": 332033,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003898282",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003898282/zip",
+      "expired": false,
+      "digest": "sha256:f521b4eca71817d3aa2444082ea39864b4115a3132492b7143282db2d1e5511c",
+      "created_at": "2026-10-15T20:17:03Z",
+      "updated_at": "2026-10-15T20:17:03Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003887553,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzg4NzU1Mw==",
+      "name": "mvcc-raw-path-gate-5699f8e791c753f204cc297416e0b742d415afe3",
+      "size_in_bytes": 175980138,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003887553",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003887553/zip",
+      "expired": false,
+      "digest": "sha256:a79765705e42906882da696a8944fd05c47a3cae173802b217fb146137666ecd",
+      "created_at": "2026-10-15T20:12:18Z",
+      "updated_at": "2026-10-15T20:12:18Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003858244,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzg1ODI0NA==",
+      "name": "treedb-test-json-windows-powerloss-oracle",
+      "size_in_bytes": 4129,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003858244",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003858244/zip",
+      "expired": false,
+      "digest": "sha256:8753e43fcd28c2dfccf1e84fb7e6c8477558a47cfd569ab0c81a81cc8f5ad0fe",
+      "created_at": "2026-10-15T20:16:22Z",
+      "updated_at": "2026-10-15T20:16:22Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003819454,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzgxOTQ1NA==",
+      "name": "treedb-test-json-windows-core-2",
+      "size_in_bytes": 115806,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003819454",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003819454/zip",
+      "expired": false,
+      "digest": "sha256:bbff0c7c5e349b3ef63613ba77de0a3f3c03e765af1d0a017c089b5231027b40",
+      "created_at": "2026-10-15T20:23:59Z",
+      "updated_at": "2026-10-15T20:23:59Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003743401,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzc0MzQwMQ==",
+      "name": "treedb-test-json-ubuntu-latest-1",
+      "size_in_bytes": 448587,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003743401",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003743401/zip",
+      "expired": false,
+      "digest": "sha256:4e1d64a4d3dd74bd9626f2510d4407b3e9c9c13c5f2da530d9b1295ee6178762",
+      "created_at": "2026-10-15T20:19:03Z",
+      "updated_at": "2026-10-15T20:19:03Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003724098,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzcyNDA5OA==",
+      "name": "treedb-race-json-linux-3",
+      "size_in_bytes": 305246,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003724098",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003724098/zip",
+      "expired": false,
+      "digest": "sha256:8490034fee82e91a4213dd5fa12cffab64183a3e617f4059edf5d9497d84d7e1",
+      "created_at": "2026-10-15T20:19:37Z",
+      "updated_at": "2026-10-15T20:19:37Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003722807,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzcyMjgwNw==",
+      "name": "treedb-test-json-windows-caching-heavy-1",
+      "size_in_bytes": 898,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003722807",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003722807/zip",
+      "expired": false,
+      "digest": "sha256:7b84de24e49d521f99ce6bd6e55f7e09adfd40fdfd1391ab3dd668c0813b00f3",
+      "created_at": "2026-10-15T20:11:37Z",
+      "updated_at": "2026-10-15T20:11:37Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003686608,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzY4NjYwOA==",
+      "name": "ci-impact-shadow-38799071015-1",
+      "size_in_bytes": 17656,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003686608",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003686608/zip",
+      "expired": false,
+      "digest": "sha256:758dcdce320a749da6e96d4b86c04ca1bd0720e705df9cfcff237c03b8c970df",
+      "created_at": "2026-10-15T20:05:32Z",
+      "updated_at": "2026-10-15T20:05:32Z",
+      "expires_at": "2026-11-14T20:05:31Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003658709,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzY1ODcwOQ==",
+      "name": "treedb-test-json-windows-core-7",
+      "size_in_bytes": 77527,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003658709",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003658709/zip",
+      "expired": false,
+      "digest": "sha256:a024f50bd2fd52196e4a451bb77225985d2c50f858b98f79c45ff277cbb87fa6",
+      "created_at": "2026-10-15T20:20:42Z",
+      "updated_at": "2026-10-15T20:20:42Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003467447,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzQ2NzQ0Nw==",
+      "name": "treedb-test-json-windows-caching-rest-1",
+      "size_in_bytes": 32388,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003467447",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003467447/zip",
+      "expired": false,
+      "digest": "sha256:b1d4c01de2e0372062ae54e20ae150dc7f130cc6a6a4283a31201909a233fb80",
+      "created_at": "2026-10-15T20:11:02Z",
+      "updated_at": "2026-10-15T20:11:02Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003312989,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzMxMjk4OQ==",
+      "name": "vlog-perf-smoke-38799071015-1",
+      "size_in_bytes": 218156,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003312989",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003312989/zip",
+      "expired": false,
+      "digest": "sha256:221ed6a25d03038cc7be13386aa7403e0412d1b9718fd9e99d16ad61bb01cad8",
+      "created_at": "2026-10-15T20:12:26Z",
+      "updated_at": "2026-10-15T20:12:26Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003214113,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzIxNDExMw==",
+      "name": "treedb-test-json-windows-core-8",
+      "size_in_bytes": 95931,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003214113",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003214113/zip",
+      "expired": false,
+      "digest": "sha256:cd2ec52c979df331a78fb3a3e0f8197ad8fab8d856e55ea96be35f3ff551248c",
+      "created_at": "2026-10-15T20:18:40Z",
+      "updated_at": "2026-10-15T20:18:40Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003144722,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzE0NDcyMg==",
+      "name": "treedb-race-json-linux-2",
+      "size_in_bytes": 330966,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003144722",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003144722/zip",
+      "expired": false,
+      "digest": "sha256:819b33d7e7fb11e25cb096d6582f5398e9e4855abc8177fdb6617d2010df17f1",
+      "created_at": "2026-10-15T20:22:49Z",
+      "updated_at": "2026-10-15T20:22:49Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12003093232,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMzA5MzIzMg==",
+      "name": "snapshot-iterator-perf-4d4044ea5633666545109e59590a56bcd6ad8c4c",
+      "size_in_bytes": 28508252,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003093232",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12003093232/zip",
+      "expired": false,
+      "digest": "sha256:725df9cd09c283d9515a4b7a0773a191c871401bddcdafa1fb76daf87f074340",
+      "created_at": "2026-10-15T20:07:24Z",
+      "updated_at": "2026-10-15T20:07:24Z",
+      "expires_at": "2026-10-29T20:07:22Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12002954302,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMjk1NDMwMg==",
+      "name": "treedb-test-json-windows-caching-rest-2",
+      "size_in_bytes": 33892,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12002954302",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12002954302/zip",
+      "expired": false,
+      "digest": "sha256:6b7f03eaa6eb8e10199030f61854f6c5651f39c5b804319e43dc1d785501c17f",
+      "created_at": "2026-10-15T20:10:57Z",
+      "updated_at": "2026-10-15T20:10:57Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    },
+    {
+      "id": 12002829300,
+      "node_id": "MDg6QXJ0aWZhY3QxMjAwMjgyOTMwMA==",
+      "name": "treedb-test-json-windows-caching-heavy-2",
+      "size_in_bytes": 2998,
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12002829300",
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12002829300/zip",
+      "expired": false,
+      "digest": "sha256:8c47cc0f3f8bb87edcb695efcb2c79d66eb56f3bf9c40acf261425516f8bf0e3",
+      "created_at": "2026-10-15T20:09:25Z",
+      "updated_at": "2026-10-15T20:09:25Z",
+      "expires_at": "2027-01-13T20:05:01Z",
+      "workflow_run": {
+        "id": 38799071015,
+        "repository_id": 567933707,
+        "head_repository_id": 567933707,
+        "head_branch": "codex/5111-ordinary-data-primary-publication",
+        "head_sha": "5699f8e791c753f204cc297416e0b742d415afe3"
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "at_utc": "2026-10-15T20:16:08.845537+00:00",
+  "run_id": 38799071114,
+  "failed_attempt": 1,
+  "source": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "baseline_comparison": "Parent30ee is source-equivalent for production, benchmark, build and workflow inputs; this is not a matched-host product performance ratio.",
+  "failure": {
+    "vacuum_total_cv": 0.2356444817065872,
+    "foreground_p99_cv": 0.964361036956542,
+    "original_limit": 0.1
+  },
+  "observations": [
+    "All ten legacy operations completed with zero aborts, 4096 foreground operations and zero exposure misses; public classification available without unexpected errors.",
+    "Fixture logical digest, physical byte debt, parameters and toolchain go1.26.9 match parent30ee.",
+    "Parent raw CPU AMD EPYC 7763; failed successor CPU AMD EPYC 9V74. Same ubuntu-24.04 label does not establish identical hardware.",
+    "Failed last legacy sample 48.736s and p99 104.031ms; other samples and all phases retained. No process or host-steal telemetry exists in this workflow, so external interference is not proved."
+  ],
+  "decision": "One targeted unchanged-source reproducibility rerun of this failed M0 job on a fresh GitHub-hosted VM. No threshold, fixture, selector or sample deletion. Preserve attempt1 as failed; do not call it proven unrelated or use parent success as current-head success. If the rerun fails, stop retries and improve environment diagnosis before further collection.",
+  "retained_files_sha256": {
+    "results.json": "0975f28b205d3938171a1d28894630a397a0fc2b392241779af0c3558cf40a15",
+    "hosted-run-attempt1.json": "61b894a343656ccb349f393e00feeae0150e20af37dedc424c78d2230ba0543e",
+    "summary.md": "1b468622b3ca13687ac67089feec70802bf23819f6a5fc4a3f3236a5c7c25c99",
+    "legacy-benchstat-input.txt": "baef56245844d5cca53c438c752c65da80f19b6dcfe0eb1a938d584884a6e3a8",
+    "commands.txt": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "fixture.json": "3f49ba9ce2f713a41105721b35f18268d9b431edb74efbcf77740dfefc0f9932",
+    "raw/legacy-9.txt": "9f4ab3d6c0149c569d3828aff1c0251cd781466befacc0917e4108ac799e59bf",
+    "raw/public-8.txt": "17bbda0d335a095762da286c3faa42b79b5bc4c42fc6d9873f52621691471e46",
+    "raw/public-10.txt": "1faade440b20e5c113e038add035b44b8f6f148378944b30629d657e1f6c079f",
+    "raw/public-5.txt": "d5d4ea6139d1f231f7f31284f0ae98dd6aed79664495f794b23aed492e965914",
+    "raw/legacy-8.txt": "28c764d41897315be2a3b080cfbea668c14e78ef390b799d032166508d97381f",
+    "raw/legacy-7.txt": "c568f18ad12d3e01d4f829a4831692181316932dd147fda5428a633e02f293e3",
+    "raw/public-1.txt": "9310187825a891f44b27235d8dc924d347523ba6a76ed7f1d7e67b50669fdb9a",
+    "raw/public-4.txt": "72a8d89f2b1669610d0fb9d83129069043435544d5f4f71a7bd30c7a285000c0",
+    "raw/legacy-4.txt": "a10b8a6a73c1c276692a2ca557963f6a7d08b9023567f5f59dcd5b4300747b8f",
+    "raw/legacy-5.txt": "e2d790d94f3f10594ba6dab706d42e26bca139cb76b9492af2d5e436183f4883",
+    "raw/public-7.txt": "c95e73a27fcc4ffa73dac60cc588669dd03e2196860bf11b60cd342efed7b73c",
+    "raw/legacy-3.txt": "6d73df9dc57ba397c77f2f2b245bf1fe11f9a8f89e1c97a807df2962d5189285",
+    "raw/legacy-2.txt": "13b8894f1735f733b4142156146ef9d6e7b4f2dbd26a343f38f51b5c239ca700",
+    "raw/public-2.txt": "d0e987e621f59dbe72cb1d89f5a1d1955fad1e716b3a81a2de21d21dbaa73d75",
+    "raw/legacy-10.txt": "80bdee47c1a2dbac5c70c6a8dc88cd913118a83aa7bcdf5abc2489fed2846edb",
+    "raw/public-9.txt": "842682f85bafdaeb50344b678a6d67cdaa2ea502ac04504a210e305609edfd65",
+    "raw/public-6.txt": "dc334a7cb178396265803edb082e663fe20d0ec17ba8745cf8c0f9b9cf8a2d9e",
+    "raw/legacy-6.txt": "b2e9cded402abadca30469e46f923f483cbd16480972f334549ae4f617bf9c80",
+    "raw/public-3.txt": "1e2feb829830b1d32e78340d204ca16f2707d7246f1250fa7b20f91ac0bd640c",
+    "raw/legacy-1.txt": "71f437e0ebf31b51d93c2e5e22d91c8078c5d1df7753f55887709db8fc0bea1e"
+  }
+}

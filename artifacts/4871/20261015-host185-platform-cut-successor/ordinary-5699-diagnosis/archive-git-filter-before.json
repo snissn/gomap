@@ -1,0 +1,7 @@
+{
+  "git_core_autocrlf": true,
+  "source": "HEAD:TreeDB/testdata/power_loss_legacy_stale_build_v1/witness.go.txt",
+  "filtered_bytes": 11443,
+  "filtered_blob": "0f3969eb9957359aec2ee19ea416955a78d44b99",
+  "matches_original_failure": true
+}

@@ -1,0 +1,26 @@
+{
+  "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "production_benchmark_gate_and_archive_payload_bytes_equal_head": true,
+  "files": {
+    ".gitattributes": {
+      "owner": "root",
+      "sha256": "5b9a21ec6f73a64e048f20013d35c8c319de1b370a1baae96bfff2189891848c",
+      "head_sha256": "e8419a8acd97393108330b36cac4a6d792c7100f480811ae566ec4fd037ecd7a"
+    },
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md": {
+      "owner": "root",
+      "sha256": "181192737693917ba7a7796fee4630a9da8f3a71c0be5f8c2db981edcec7fbfd",
+      "head_sha256": "cacf2358f93402ed6982f22b043219272446826c15a467b724e4df77996ff118"
+    },
+    "TreeDB/mongo_gateway/standalone_test.go": {
+      "owner": "ordinary_completion",
+      "sha256": "c97fc6edb134841880c78a81cafdf52ad55d065f0c8cd979f0c2a8276bb59f03",
+      "head_sha256": "44d403c7d4c589f38446e32f2af6602815a549b83882be362fad454cbe98651f"
+    },
+    "TreeDB/power_loss_oracle_test.go": {
+      "owner": "ordinary_completion",
+      "sha256": "66a1ee1c478bb60139e66baaec1e56adcdc8381f79d05902fa9daff874b63f54",
+      "head_sha256": "2c6907d7c37ba5905865e1005f9ece98b2ee1baa5d1220259768692436282f5b"
+    }
+  }
+}
