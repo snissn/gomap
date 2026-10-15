@@ -150,6 +150,12 @@ func TestOfflineReplacementOriginalPagerCompletion(t *testing.T) {
 				if !errors.Is(e, lockfile.ErrLocked) {
 					t.Fatalf("physical refusal lost LOCK: %v", e)
 				}
+				// Model process shutdown only after fatal receipt, retained
+				// charge and no-replay assertions; never retry the failed pager.
+				if err = lock.Close(); err != nil {
+					t.Fatal(err)
+				}
+
 			} else {
 				var receipt *OpenRecoveryCleanupError
 				if errors.As(first, &receipt) || replacement.metadataCharge != 0 || replacement.startupDB != nil || replacement.startupCustody != nil || replacement.pager != nil {
@@ -698,6 +704,14 @@ func TestOfflineRewriteNoSegmentsOriginalSourceCompletion(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dir, indexNewFileName)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("no-segment refusal produced replacement: %v", err)
 			}
+			if fault {
+				// Model process shutdown after the exact retained LOCK, sticky
+				// receipt and no-refund assertions; do not retry failed Close.
+				if err := original.startupLock.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
 		})
 	}
 }

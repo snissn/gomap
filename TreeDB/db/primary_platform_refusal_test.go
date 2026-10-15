@@ -81,3 +81,51 @@ func requireNoPrivatePrimaryPair(t testing.TB, dir string) {
 		}
 	}
 }
+
+// Closed-source maintenance must refuse before mutating either authoritative
+// pair member or deleting any persistent value-log/cache input.
+func primaryOfflinePlatformRefusal(t testing.TB, opts Options, rewrite bool) bool {
+	t.Helper()
+	if rootpublication.StableRelativeNamespaceSupported() {
+		return false
+	}
+	pair := primaryPairImages(t, opts.Dir)
+	var files []string
+	err := filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && entry.Name() != "LOCK" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string][]byte, len(files))
+	for _, path := range files {
+		image, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = image
+	}
+	if rewrite {
+		_, err = ValueLogRewriteOffline(opts)
+	} else {
+		err = VacuumIndexOffline(opts)
+	}
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("offline platform refusal rewrite=%v: %v", rewrite, err)
+	}
+	requirePrimaryPairImages(t, opts.Dir, pair)
+	requireNoPrivatePrimaryPair(t, opts.Dir)
+	for path, image := range before {
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(image, after) {
+			t.Fatalf("unsupported maintenance changed persistent input %s: %v", path, err)
+		}
+	}
+	return true
+}

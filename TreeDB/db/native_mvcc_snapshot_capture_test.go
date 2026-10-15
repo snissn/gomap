@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"testing"
@@ -79,7 +80,15 @@ func TestNativeMVCCSnapshotPinsOwnedEmptySet(t *testing.T) {
 		t.Fatal("fixture did not publish owned empty Set")
 	}
 	w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	s, ready, err := d.BeginNativeMVCCSnapshotV6(func(SnapshotAllocationSizes) error { return nil }, &w)
+	beforeEpoch, beforeRefs := d.snapshotAcquireEpoch.Load(), original.RefCount.Load()
+	admitted := false
+	s, ready, err := d.BeginNativeMVCCSnapshotV6(func(SnapshotAllocationSizes) error { admitted = true; return nil }, &w)
+	if !d.idx.Load().pager.SupportsBoundedPhysicalClose() {
+		if s != nil || ready || !errors.Is(err, ErrNativeMVCCSnapshotWork) || admitted || d.snapshotAcquireEpoch.Load() != beforeEpoch || original.RefCount.Load() != beforeRefs {
+			t.Fatalf("unsupported native capture changed custody/admission/epoch: ready=%v admitted=%v err=%v", ready, admitted, err)
+		}
+		return
+	}
 	if s != nil {
 		defer func() {
 			for turn := 0; turn < 100; turn++ {

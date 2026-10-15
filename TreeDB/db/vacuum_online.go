@@ -1745,6 +1745,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		oldRootPublication := db.rootPublication
 		previousDurableResources := db.durableRoot.slotResources
 		previousPrimary := db.durableRoot.primary
+		// Finish every old-view Set capture before replacing its publication
+		// reference. Its eventual release may run outside this short gate.
+		db.rootReuseMu.Lock()
 		db.mu.Lock()
 		oldState = db.state.Load()
 		if oldGen.primary != nil && oldGen.primary != newGen.primary {
@@ -1790,6 +1793,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		replacementRuntime = nil
 		replacementPrimary = nil
 		db.mu.Unlock()
+		db.rootReuseMu.Unlock()
 		db.clearLeafGenerationReachabilityCaches()
 
 		relocationFinish(true)

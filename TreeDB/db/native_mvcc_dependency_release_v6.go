@@ -7,6 +7,21 @@ import (
 	"unsafe"
 )
 
+// Match the original physical pager's eligibility before a directory transfers
+// its last reference to native cleanup. Ordinary disposal remains available.
+func (lease *primaryDependencyLeaseV5) SupportsBoundedDependencyDirectoryReleaseV6() bool {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		// Eligibility only: the directory's cached cleanupConsumed/failure
+		// still distinguishes actual consumption from sticky original debt.
+		return true
+	}
+	// The live lease owns an arena edge; another owner borrower cannot close
+	// or refund this physical owner while lease.mu protects its transfer.
+	return lease.owner != nil && lease.owner.arena != nil && lease.owner.arena.Pager().SupportsBoundedPhysicalClose()
+}
+
 // The SAME admitted lease carries original physical progress, then returns its
 // containing charge by value after unlocking. Its directory clears the typed
 // provider alias before actual external removal.

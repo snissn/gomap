@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -228,20 +229,38 @@ func TestSnapshotAllocationAdmissionRefusesRefreshedExactView(t *testing.T) {
 	if original.state.ValueLogSet == nil || len(original.state.ValueLogSet.Files) != 1 || original.state.ValueLogSet.RefCount.Load() != 1 {
 		t.Fatal("original persistent Set not singly owned by actual view")
 	}
+	// Admission runs inside the original capture fence. A competing real
+	// refresh must wait; a synchronous refresh here would recursively acquire
+	// the same gate. Refuse this admission before any reader/Set effects, then
+	// let the pending publisher retire the exact unacquired original view.
+	refreshed := make(chan error, 1)
+	crossedCapture := false
 	snapshot, err := d.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error {
-		if refreshErr := d.RefreshValueLogSet(); refreshErr != nil {
-			t.Fatal(refreshErr)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			refreshed <- d.RefreshValueLogSet()
+		}()
+		<-started
+		select {
+		case refreshErr := <-refreshed:
+			crossedCapture = true
+			refreshed <- refreshErr
+		case <-time.After(20 * time.Millisecond):
 		}
-		if d.snapshotViewRO.Load() == original || original.state.ValueLogSet.RefCount.Load() != 0 {
-			t.Fatal("actual refresh did not retire original Set during admission")
+		if d.snapshotViewRO.Load() != original || original.state.ValueLogSet.RefCount.Load() != 1 {
+			crossedCapture = true
 		}
-		return nil
+		return ErrSnapshotCapacity
 	})
 	if snapshot != nil {
 		defer snapshot.Close()
 	}
-	if snapshot != nil || err != ErrSnapshotCapacity || original.state.ValueLogSet.RefCount.Load() != 0 {
-		t.Fatalf("retired view resurrected after admission: snapshot=%p err=%v originalSetRefs=%d", snapshot, err, original.state.ValueLogSet.RefCount.Load())
+	if refreshErr := <-refreshed; refreshErr != nil {
+		t.Fatal(refreshErr)
+	}
+	if crossedCapture || snapshot != nil || err != ErrSnapshotCapacity || d.snapshotViewRO.Load() == original || original.state.ValueLogSet.RefCount.Load() != 0 || original.state.ValueLogSet.Files != nil {
+		t.Fatalf("refused original view crossed capture or resurrected: crossed=%v snapshot=%p err=%v originalSetRefs=%d", crossedCapture, snapshot, err, original.state.ValueLogSet.RefCount.Load())
 	}
 	if d.MinPinnedSnapshotCommitSeq() != ^uint64(0) {
 		t.Fatal("refused original view registered a reader")

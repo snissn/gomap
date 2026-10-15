@@ -13,10 +13,14 @@ import (
 // Restore the exact original COMMIT bytes after a completed canonical pair has
 // advanced through ordinary system-root publications. This models a retained
 // optional decision name; it does not forge a newer generation receipt.
-func prepareAdvancedCompletedJointDecisionV6(t *testing.T, dir string) (Options, uint64) {
+func prepareAdvancedCompletedJointDecisionV6(t *testing.T, dir string) (Options, uint64, bool) {
 	t.Helper()
-	prepareOfflinePointerPairV6(t, dir)
+	seq := prepareOfflinePointerPairV6(t, dir)
 	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	if primaryOfflinePlatformRefusal(t, opts, true) {
+		assertOfflinePointerPairV6(t, dir, seq)
+		return opts, seq, false
+	}
 	injected := errors.New("retain original joint decision")
 	testHookPrimaryJointSwapV6 = func(phase string) error {
 		if phase == "after-commit" {
@@ -59,7 +63,7 @@ func prepareAdvancedCompletedJointDecisionV6(t *testing.T, dir string) (Options,
 	if matched {
 		t.Fatal("fixture did not retire original decision generation from both slots")
 	}
-	seq := d.State().CommitSeq
+	seq = d.State().CommitSeq
 	if err = d.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +71,15 @@ func prepareAdvancedCompletedJointDecisionV6(t *testing.T, dir string) (Options,
 		t.Fatal(err)
 	}
 
-	return opts, seq
+	return opts, seq, true
 }
 
 func TestPrimaryJointCompletedV6AdvancedCanonicalPair(t *testing.T) {
 	dir := t.TempDir()
-	opts, seq := prepareAdvancedCompletedJointDecisionV6(t, dir)
+	opts, seq, supported := prepareAdvancedCompletedJointDecisionV6(t, dir)
+	if !supported {
+		return
+	}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatalf("complete same canonical pair rejected after ordinary advance: %v", err)
@@ -92,7 +99,10 @@ func TestPrimaryJointCompletedV6PhysicalProofRefusal(t *testing.T) {
 	for _, phase := range []string{"before-proof-close", "proof-pager-close", "before-dependency-close", "before-parent-close"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
-			opts, seq := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			opts, seq, supported := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			if !supported {
+				return
+			}
 			var captured *primaryJointRecoveryProofV6
 			calls := 0
 			testHookPrimaryJointRecoveryProofV6 = func(at string, p *primaryJointRecoveryProofV6) {
@@ -181,7 +191,10 @@ func TestPrimaryJointRecoveryV6OriginalFailurePropagation(t *testing.T) {
 	for _, caller := range []string{"Open", "ReadOnly", "Vacuum", "Rewrite"} {
 		t.Run(caller, func(t *testing.T) {
 			dir := t.TempDir()
-			opts, _ := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			opts, _, supported := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			if !supported {
+				return
+			}
 			var captured *primaryJointRecoveryProofV6
 			testHookPrimaryJointRecoveryProofV6 = func(phase string, p *primaryJointRecoveryProofV6) {
 				if phase == "before-marker-close" && p.marker != nil && captured == nil {
@@ -234,7 +247,10 @@ func TestPrimaryJointCompletedV6RejectsPhysicalChange(t *testing.T) {
 				assertPrimaryJointRecoveredV6(t, dir, prior)
 				return
 			}
-			opts, _ := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			opts, _, supported := prepareAdvancedCompletedJointDecisionV6(t, dir)
+			if !supported {
+				return
+			}
 			marker, err := os.ReadFile(filepath.Join(dir, indexReadyFileName))
 			if err != nil {
 				t.Fatal(err)

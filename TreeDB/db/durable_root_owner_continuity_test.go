@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -225,7 +226,11 @@ func TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure(t *testing.T) {
 	database.vacuumInProgress.Store(true)
 	err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Time{}, nil)
 	database.vacuumInProgress.Store(false)
-	if !errors.Is(err, ErrVacuumInProgress) || !errors.Is(err, os.ErrClosed) {
+	admission := ErrVacuumInProgress
+	if runtime.GOOS == "windows" {
+		admission = ErrVacuumUnsupported
+	}
+	if !errors.Is(err, admission) || !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("vacuum result=%v want admission and actual original Close refusal", err)
 	}
 	if !errors.Is(database.backgroundError(), prior) || !errors.Is(database.backgroundError(), os.ErrClosed) {

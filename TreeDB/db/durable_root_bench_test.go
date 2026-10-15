@@ -751,9 +751,12 @@ func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.
 				return err
 			}
 		}
-		if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, want) {
-			return fmt.Errorf("rebuild refusal=%v want %v", err, want)
+		if !primaryOnlinePlatformRefusal(t, f.db, context.Background()) {
+			if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, want) {
+				return fmt.Errorf("rebuild refusal=%v want %v", err, want)
+			}
 		}
+
 		if value, err := loan.snapshot.Get(f.keys[0]); err != nil || !bytes.Equal(value, f.value) {
 			return fmt.Errorf("refused rebuild changed original reader: %w", err)
 		}

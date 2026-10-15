@@ -58,28 +58,46 @@ func TestPrimaryDependencyFailedLeaseRemainsOnActualOwner(t *testing.T) {
 	// detach their actual provider aliases before that terminal continuation.
 	var directoryRelease rootpublication.DependencyDirectoryReleaseWork
 	work := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	if ready, err := directoryRelease.Bind(directory, &work); !ready || err != nil {
-		t.Fatal("directory release bind", ready, err)
-	}
-	directory = nil
-	consumed, ready, cleanup := directoryRelease.ContinueWork(&work)
-	if consumed || ready || cleanup != nil || !sibling.closed {
-		t.Fatal("producer did not return before containing refund", consumed, ready, cleanup)
-	}
-	if !sibling.ownerReleaseConsumed || sibling.owner != nil || sibling.metadataCharge != 0 || sibling.failed || owner.failedDependencies != lease || lease.failedNext != nil {
-		t.Fatal("earlier error misclassified consumed sibling ownership")
-	}
-	sibling = nil
-	for !ready {
-		work = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-		consumed, ready, cleanup = directoryRelease.ContinueWork(&work)
-		if cleanup != nil && !ready {
-			t.Fatal(cleanup)
+	if !owner.arena.Pager().SupportsBoundedPhysicalClose() {
+		beforeRefs, beforeCharge := owner.refs, metadata.Bytes()
+		if ready, e := directoryRelease.Bind(directory, &work); ready || !errors.Is(e, retainedalloc.ErrWorkRequired) {
+			t.Fatalf("unsupported bounded directory release: ready=%v err=%v", ready, e)
+		}
+		if owner.refs != beforeRefs || metadata.Bytes() != beforeCharge || sibling.closed || sibling.releasePhase != 0 || sibling.owner != owner || sibling.metadataCharge != charge || owner.failedDependencies != lease || lease.failedNext != nil {
+			t.Fatal("unsupported bind consumed original directory/producer custody")
+		}
+		// Use the SAME directory's ordinary completion after the unchanged
+		// bounded refusal; it still reports the actual earlier sibling error.
+		consumed, cleanup := directory.ReleaseOutcome()
+		if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained || owner.failedDependencies != lease || lease.failedNext != nil {
+			t.Fatalf("ordinary completion after bounded refusal: consumed=%v err=%v", consumed, cleanup)
+		}
+		directory, sibling = nil, nil
+	} else {
+		if ready, err := directoryRelease.Bind(directory, &work); !ready || err != nil {
+			t.Fatal("directory release bind", ready, err)
+		}
+		directory = nil
+		consumed, ready, cleanup := directoryRelease.ContinueWork(&work)
+		if consumed || ready || cleanup != nil || !sibling.closed {
+			t.Fatal("producer did not return before containing refund", consumed, ready, cleanup)
+		}
+		if !sibling.ownerReleaseConsumed || sibling.owner != nil || sibling.metadataCharge != 0 || sibling.failed || owner.failedDependencies != lease || lease.failedNext != nil {
+			t.Fatal("earlier error misclassified consumed sibling ownership")
+		}
+		sibling = nil
+		for !ready {
+			work = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+			consumed, ready, cleanup = directoryRelease.ContinueWork(&work)
+			if cleanup != nil && !ready {
+				t.Fatal(cleanup)
+			}
+		}
+		if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained {
+			t.Fatal("earlier error misclassified consumed sibling ownership")
 		}
 	}
-	if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained {
-		t.Fatal("earlier error misclassified consumed sibling ownership")
-	}
+
 	// Constructor refusal must not return an error embedded in a lease whose
 	// own physical edge and admitted allocation were successfully disposed.
 	if e := metadata.AddPending(charge); e != nil {

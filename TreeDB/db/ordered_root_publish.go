@@ -1921,7 +1921,14 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		err = errors.New("missing index")
 		return
 	}
+	db.rootReuseMu.RLock()
+	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
+	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { err = errors.Join(err, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("ordered-root", state)
 	if state == nil {
 		err = errors.New("missing backend state")
 		return

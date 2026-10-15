@@ -88,6 +88,11 @@ func TestPrimaryOfflineVlogV6CacheInvalidationRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			if primaryOfflinePlatformRefusal(t, opts, true) {
+				assertOfflinePointerPairV6(t, dir, seq)
+				return
+			}
 			injected := errors.New("cache boundary cut")
 			testHookPrimaryJointSwapV6 = func(p string) error {
 				if p == phase {
@@ -117,8 +122,12 @@ func TestPrimaryOfflineVlogV6IndependentFallback(t *testing.T) {
 	for badSlot := uint64(0); badSlot < 2; badSlot++ {
 		t.Run(fmt.Sprint(badSlot), func(t *testing.T) {
 			dir := t.TempDir()
-			prepareOfflinePointerPairV6(t, dir)
+			seq := prepareOfflinePointerPairV6(t, dir)
 			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			if primaryOfflinePlatformRefusal(t, opts, true) {
+				assertOfflinePointerPairV6(t, dir, seq)
+				return
+			}
 			if _, err := ValueLogRewriteOffline(opts); err != nil {
 				t.Fatal(err)
 			}
@@ -521,6 +530,9 @@ func TestPrimaryOfflinePairV6ConstructionUsesRetainedParent(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer d.Close()
+			if primaryOfflineScopePlatformRefusal(t, d) {
+				return
+			}
 			scope, err := d.captureOfflinePrimaryScopeV6()
 			if err != nil {
 				t.Fatal(err)
@@ -590,6 +602,9 @@ func TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage(t *testing.
 		t.Fatal(err)
 	}
 	defer d.Close()
+	if primaryOfflineScopePlatformRefusal(t, d) {
+		return
+	}
 	scope, err := d.captureOfflinePrimaryScopeV6()
 	if err != nil {
 		t.Fatal(err)
@@ -630,6 +645,9 @@ func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
 	}
 	defer d.Close()
 	metadata := d.idx.Load().primary.MetadataOwner()
+	if primaryOfflineScopePlatformRefusal(t, d) {
+		return
+	}
 	scope, err := d.captureOfflinePrimaryScopeV6()
 	if err != nil {
 		t.Fatal(err)
@@ -687,6 +705,9 @@ func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	if primaryOfflineScopePlatformRefusal(t, d) {
+		return
+	}
 	scope, err := d.captureOfflinePrimaryScopeV6()
 	if err != nil {
 		t.Fatal(err)

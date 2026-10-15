@@ -35,7 +35,9 @@ type uncheckedLeafPageBatchScratch struct {
 	missIndexes []int
 }
 
-// ValueReaderForState returns a reader that resolves value-log pointers.
+// ValueReaderForState returns a borrowed reader that resolves value-log pointers.
+// The caller must keep the Snapshot or explicitly acquired Set supplying state
+// alive through the last read. A shallow DB.State() result supplies no borrow.
 func ValueReaderForState(state *DBState) tree.SlabReader {
 	if state == nil {
 		return nil

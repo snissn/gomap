@@ -905,6 +905,29 @@ and segment retirement still use their existing owners. Standalone rewrite
 writers retain their complete created-file history for publication and cleanup.
 This bookkeeping bound does not establish a whole-database physical-space bound.
 
+## Published Set and current-root lifetime
+
+A published DBState owns one reference to its exact value-log Set. Final Set
+cleanup clears its mutable file map and native backing; a later Acquire cannot
+revive that storage. Every consumer using the Set after state-selection locks
+are released must acquire the SAME Set before unlocking and retain it through
+the last tree, iterator, zipper, dictionary or file-metadata use. Its actual
+release result participates in the original operation's completion.
+
+Every replacing publisher excludes in-flight Snapshot capture with the existing
+`rootReuseMu` then `db.mu` order. Initial unpublished state construction and
+exclusively owned offline sources have their own exclusion. Helpers already
+inside that publication fence do not recursively acquire it. Online dictionary
+and compact carry scans use a live Snapshot's state and pager together; a failed
+capture never falls back to shallow `DB.State()` metadata.
+
+A topology-only DBState replacement carries the SAME `primaryRoot` descriptor
+unchanged. This transfers the existing single current-root edge; it acquires no
+new edge and drops none. Logical-root replacement continues through the original
+activation, old-root withdrawal and post-work protocol. Snapshot admission and
+last-iterator cleanup therefore retain the original PRIMARY metadata/physical
+owner even after slots and parents advance.
+
 ## Constructor-owned mappings and parent handles
 
 Files retain constructor-owned mapping descriptors alongside their immutable read views.
@@ -933,3 +956,8 @@ then creates the new proof on that same parent. A hard cleanup refusal preserves
 the original proof/handle payload, first error and charge rather than replaying a
 physical action or refunding unresolved custody. Persistent leaf references
 remain protected by the original reader and deletion authorities.
+
+Snapshot allocation admission runs inside that capture fence. Admission callbacks
+may reserve charges for selected owners, but must not synchronously publish,
+refresh, or close the same DB. A competing publisher waits until capture either
+pins the selected state or refuses without acquiring a reader/Set reference.

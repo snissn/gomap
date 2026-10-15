@@ -580,11 +580,11 @@ func rewriteLeafDictBytes(cfg compression.TrainConfig) int {
 
 var errRewriteLeafDictEnoughSamples = errors.New("vlog-rewrite: enough leaf dict samples")
 
-func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression.TrainConfig) ([]byte, error) {
-	if d == nil || state == nil || d.valueLogManager == nil {
+func trainRewriteLeafDictFromLiveLeafRefs(p *pager.Pager, state *DBState, cfg compression.TrainConfig) ([]byte, error) {
+	if p == nil || state == nil || state.ValueLogSet == nil {
 		return nil, nil
 	}
-	maintenanceRoots, err := collectMaintenanceRoots(d.Pager(), newValueReader(state.ValueLogSet), state)
+	maintenanceRoots, err := collectMaintenanceRoots(p, newValueReader(state.ValueLogSet), state)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +607,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 			return nil
 		}
 		seen[valuePtr] = struct{}{}
-		leafPage, usedScratch, err := d.valueLogManager.ReadUnsafeTo(valuePtr, scratch[:0])
+		leafPage, usedScratch, err := state.ValueLogSet.ReadUnsafeTo(valuePtr, scratch[:0])
 		if err != nil {
 			return err
 		}
@@ -629,7 +629,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 		}
 		return nil
 	}
-	if err := leafrefscan.WalkRoots(context.Background(), roots, d.Pager().Get, nil, visit); err != nil && !errors.Is(err, errRewriteLeafDictEnoughSamples) {
+	if err := leafrefscan.WalkRoots(context.Background(), roots, p.Get, nil, visit); err != nil && !errors.Is(err, errRewriteLeafDictEnoughSamples) {
 		return nil, err
 	}
 	if len(samples) < minRecords {
@@ -739,8 +739,8 @@ func resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode func(context.Context,
 	return fallbackUseRawPages, nil
 }
 
-func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
-	if d == nil || state == nil {
+func prepareRewriteLeafDict(p *pager.Pager, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
+	if p == nil || state == nil {
 		return 0, nil, false, nil
 	}
 	canLookupDict := dictLookup != nil
@@ -793,7 +793,7 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	if !canPublishDict {
 		return 0, nil, false, nil
 	}
-	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(d, state, cfg)
+	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(p, state, cfg)
 	if err != nil || len(dictBytes) == 0 {
 		return 0, nil, false, err
 	}
@@ -812,6 +812,18 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 		}
 	}
 	return dictID, dictBytes, false, nil
+}
+
+// prepareCurrentRewriteLeafDict retains the same state and pager for scans and
+// training, including dictionary callbacks that may themselves publish a root.
+func (db *DB) prepareCurrentRewriteLeafDict() (id uint64, data []byte, raw bool, retErr error) {
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return 0, nil, false, ErrClosed
+	}
+	defer func() { retErr = errors.Join(retErr, snap.Close()) }()
+	db.valueLogStateCaptured("dictionary", snap.state)
+	return prepareRewriteLeafDict(snap.idx.pager, snap.state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -1785,14 +1797,12 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	if db.indexOuterLeavesInValueLog {
-		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
-			if err != nil {
-				return stats, err
-			}
-			if leafDictID != 0 && len(leafDictBytes) > 0 {
-				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
-			}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := db.prepareCurrentRewriteLeafDict()
+		if err != nil {
+			return stats, err
+		}
+		if leafDictID != 0 && len(leafDictBytes) > 0 {
+			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 	}
 	defer func() { _ = writer.Close() }()
@@ -2472,7 +2482,7 @@ func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, colle
 	}
 }
 
-func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2491,12 +2501,17 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-system", state)
 	if state == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
 	}
@@ -2534,7 +2549,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	return nil
 }
 
-func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2557,12 +2572,17 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-collection", state)
 	if state == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
 	}
@@ -2762,7 +2782,7 @@ func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) b
 	return false
 }
 
-func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
+func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (committed bool, retErr error) {
 	db.writeMu.RLock()
 	writeReadLocked := true
 	idx := db.idx.Load()
@@ -2780,6 +2800,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
+	db.acquireStateValueLogSetLocked(state)
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
@@ -2789,10 +2810,8 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 			db.writeMu.RUnlock()
 		}
 	}()
-	if vlogSet != nil {
-		db.valueLogManager.Acquire(vlogSet)
-		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
-	}
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-user-optimistic", state)
 
 	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
@@ -2901,7 +2920,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	return true, nil
 }
 
-func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (retErr error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -2925,14 +2944,13 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
+	db.acquireStateValueLogSetLocked(state)
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
 	defer idx.registry.Unregister(regID)
-	if vlogSet != nil {
-		db.valueLogManager.Acquire(vlogSet)
-		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
-	}
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-user-serialized", state)
 
 	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
@@ -3370,7 +3388,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		return stats, err
 	}
 	if writer.blockCompression && rewriteUsesLeafLog {
-		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d.Pager(), state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
 			_ = closeReplacement()
 			return stats, err

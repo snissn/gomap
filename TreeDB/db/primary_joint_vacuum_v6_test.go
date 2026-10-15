@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -88,6 +89,9 @@ func TestPrimaryJointVacuumV6PointersAndIndependentFallback(t *testing.T) {
 			held := d.AcquireSnapshot()
 			defer held.Close()
 			put("second", ptrs[1])
+			if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+				return
+			}
 			old := d.idx.Load()
 			cut, e := d.CapturePhysicalSnapshotCutV1(context.Background())
 			if e != nil {
@@ -320,8 +324,19 @@ func TestPrimaryJointCrashProcessV6(t *testing.T) {
 	}
 	t.Fatalf("phase %s was not reached", phase)
 }
-func runPrimaryJointCrashV6(t *testing.T, dir, mode, phase string) {
+func runPrimaryJointCrashV6(t *testing.T, dir, mode, phase string) bool {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+		if e != nil {
+			t.Fatal(e)
+		}
+		refused := primaryOnlinePlatformRefusal(t, d, context.Background())
+		if e = d.Close(); e != nil {
+			t.Fatal(e)
+		}
+		return !refused
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		t.Fatal(e)
@@ -333,6 +348,7 @@ func runPrimaryJointCrashV6(t *testing.T, dir, mode, phase string) {
 	if !errors.As(e, &exit) || exit.ExitCode() != 81 {
 		t.Fatalf("child %s/%s: %v\n%s", mode, phase, e, out)
 	}
+	return true
 }
 func preparePrimaryJointCrashV6(t *testing.T, dir string) uint64 {
 	t.Helper()
@@ -381,7 +397,9 @@ func TestPrimaryJointVacuumV6UncleanPublicationAndRecovery(t *testing.T) {
 		t.Run("publication/"+phase, func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
-			runPrimaryJointCrashV6(t, dir, "vacuum", phase)
+			if !runPrimaryJointCrashV6(t, dir, "vacuum", phase) {
+				return
+			}
 			want := prior + 1
 			if phase == "before-commit" || phase == "before-staging-barrier" || phase == "after-staging-barrier" {
 				want = prior
@@ -393,8 +411,12 @@ func TestPrimaryJointVacuumV6UncleanPublicationAndRecovery(t *testing.T) {
 		t.Run("recovery/"+phase, func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
-			runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit")
-			runPrimaryJointCrashV6(t, dir, "recovery", phase)
+			if !runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit") {
+				return
+			}
+			if !runPrimaryJointCrashV6(t, dir, "recovery", phase) {
+				return
+			}
 			assertPrimaryJointRecoveredV6(t, dir, prior+1)
 		})
 	}
@@ -404,7 +426,9 @@ func TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			preparePrimaryJointCrashV6(t, dir)
-			runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit")
+			if !runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit") {
+				return
+			}
 			path := filepath.Join(dir, indexReadyFileName)
 			image, e := os.ReadFile(path)
 			if e != nil {
@@ -472,6 +496,10 @@ func TestPrimaryJointVacuumV6OfflineUsesPairAuthority(t *testing.T) {
 	dir := t.TempDir()
 	prior := preparePrimaryJointCrashV6(t, dir)
 	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	if primaryOfflinePlatformRefusal(t, opts, false) {
+		assertPrimaryJointRecoveredV6(t, dir, prior)
+		return
+	}
 	if e := VacuumIndexOffline(opts); e != nil {
 		t.Fatal(e)
 	}
@@ -597,7 +625,9 @@ func TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback(t *testin
 		t.Run(fmt.Sprint(damaged), func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
-			runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit")
+			if !runPrimaryJointCrashV6(t, dir, "vacuum", "after-commit") {
+				return
+			}
 			path := filepath.Join(dir, primaryNewFileName)
 			image, e := os.ReadFile(path)
 			if e != nil {

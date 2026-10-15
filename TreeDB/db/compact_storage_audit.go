@@ -222,7 +222,7 @@ func (db *DB) runCompactStorageAuditProtectedBasisHook(stage string, attempt int
 	}
 }
 
-func (db *DB) prepareCompactStorageAuditTopology() error {
+func (db *DB) prepareCompactStorageAuditTopology() (retErr error) {
 	if db == nil {
 		return nil
 	}
@@ -262,7 +262,14 @@ func (db *DB) prepareCompactStorageAuditTopology() error {
 			return nil
 		}
 	}
+	db.rootReuseMu.RLock()
+	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
+	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("audit-topology", state)
 	currentSet := (*valuelog.Set)(nil)
 	if state != nil {
 		currentSet = state.ValueLogSet
@@ -313,6 +320,8 @@ func (db *DB) publishCompactStorageValueLogSet(valueLogSet *valuelog.Set) error 
 	if db == nil || db.valueLogManager == nil || valueLogSet == nil {
 		return nil
 	}
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	oldState := db.state.Load()
 	if oldState == nil || compactStorageValueLogSetsMatch(oldState.ValueLogSet, valueLogSet) {
@@ -320,6 +329,7 @@ func (db *DB) publishCompactStorageValueLogSet(valueLogSet *valuelog.Set) error 
 		return db.valueLogManager.Release(valueLogSet)
 	}
 	newState := &DBState{
+		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,

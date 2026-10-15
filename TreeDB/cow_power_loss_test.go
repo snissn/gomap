@@ -46,7 +46,17 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 			}
 			var stable *powerlossoracle.Model
 			metaEvents := 0
+			var observerMu sync.Mutex
+			active := true
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !cowEventBelongsToDB(opts.Dir, event) {
+					return nil
+				}
+				observerMu.Lock()
+				defer observerMu.Unlock()
+				if !active {
+					return nil
+				}
 				if err := model.Observe(opts.Dir, event); err != nil {
 					return err
 				}
@@ -57,11 +67,19 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 				return nil
 			})
 			observing := true
+			deactivate := func() {
+				observerMu.Lock()
+				active = false
+				observerMu.Unlock()
+				restore()
+				observing = false
+			}
 			defer func() {
 				if observing {
-					restore()
+					deactivate()
 				}
 			}()
+
 			value := bytes.Repeat([]byte("persistent-pointer-"), 256)
 			b := db.NewBatch()
 			if err = b.Set([]byte("a"), value); err != nil {
@@ -77,12 +95,13 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 				t.Fatal(err)
 			}
 			_ = b.Close()
+			observerMu.Lock()
 			volatileCut := model.Clone()
+			observerMu.Unlock()
 			if err = db.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			restore()
-			observing = false
+			deactivate()
 			if stable == nil || metaEvents == 0 {
 				t.Fatal("actual COW checkpoint emitted no completed meta sync")
 			}
@@ -170,23 +189,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				active := true
 				matchingCuts := 0
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-					// Some value-log events omit Root and identify their owning
-					// database through an exact path instead.
-					eventRoot := event.Root
-					if eventRoot == "" {
-						eventRoot = event.Path
-					}
-					if eventRoot == "" {
-						eventRoot = event.NewPath
-					}
-					if eventRoot == "" {
-						eventRoot = event.OldPath
-					}
-					if eventRoot == "" && len(event.Paths) != 0 {
-						eventRoot = event.Paths[0]
-					}
-					rel, err := filepath.Rel(opts.Dir, eventRoot)
-					if err != nil || eventRoot == "" || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					if !cowEventBelongsToDB(opts.Dir, event) {
 						return nil
 					}
 					observerMu.Lock()
@@ -291,4 +294,22 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 			})
 		}
 	}
+}
+
+func cowEventBelongsToDB(dir string, event durabilitycut.Event) bool {
+	eventRoot := event.Root
+	if eventRoot == "" {
+		eventRoot = event.Path
+	}
+	if eventRoot == "" {
+		eventRoot = event.NewPath
+	}
+	if eventRoot == "" {
+		eventRoot = event.OldPath
+	}
+	if eventRoot == "" && len(event.Paths) != 0 {
+		eventRoot = event.Paths[0]
+	}
+	rel, err := filepath.Rel(dir, eventRoot)
+	return err == nil && eventRoot != "" && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

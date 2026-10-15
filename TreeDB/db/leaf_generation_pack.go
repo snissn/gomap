@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -314,11 +313,9 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	var leafDictBytes []byte
 	var leafDictUseRawPages bool
 	if blockCompression {
-		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err = prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
-			if err != nil {
-				return stats, err
-			}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err = db.prepareCurrentRewriteLeafDict()
+		if err != nil {
+			return stats, err
 		}
 	}
 

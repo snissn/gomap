@@ -558,6 +558,7 @@ type DB struct {
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
+	testValueLogStateCapturedHook func(string, *DBState)
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
@@ -1742,6 +1743,8 @@ var ErrSnapshotCapacity = errors.New("bounded snapshot capacity exhausted")
 // allocation and pin acquisition; the caller owns its charge through Close.
 // Fixed registry storage admits at most FastReaderShardCount distinct sequence
 // cohorts; snapshots of the same sequence share a cohort.
+// admit runs inside the capture fence and must not synchronously publish,
+// refresh, or close this DB. It may reserve charges for the selected owners.
 func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocationSizes) error) (*Snapshot, error) {
 	if db == nil {
 		return nil, ErrClosed
@@ -1995,9 +1998,9 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		}
 	}
 
-	// Same-root VLog/leaf topology refresh also uses the publication reader
-	// side. Revalidate and acquire original references under its existing state
-	// lock, after external admission and before any capture reference effects.
+	// Revalidate and acquire original references under the existing state lock,
+	// after external admission and before any capture reference effects. Every
+	// replacing publisher also excludes this capture through rootReuseMu.
 	// This is the same rootReuseMu -> db.mu order as original build groups.
 	db.mu.RLock()
 	if db.closing.Load() {
@@ -5173,6 +5176,9 @@ func (db *DB) InlineThresholdForKey(key []byte) int {
 	return ResolveInlineThresholdForKey(db.InlineThreshold(), key, db.valueLogDomainThresholds)
 }
 
+// State returns a shallow metadata observation, without retaining its Set or
+// index generation. Pointer-bearing reads require a live Snapshot; copying this
+// result does not extend the lifetime of ValueLogSet or its mutable backing.
 func (db *DB) State() *DBState {
 	if db == nil {
 		return nil
@@ -5478,7 +5484,7 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 // This improves Full Scan performance by restoring physical locality.
 // Note: This operation causes file growth as old pages are not immediately reclaimed
 // (they are leaked to the freelist but not reused during this append-only build).
-func (db *DB) CompactIndex() error {
+func (db *DB) CompactIndex() (retErr error) {
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
 	db.writeMu.Lock()
@@ -5500,14 +5506,19 @@ func (db *DB) CompactIndex() error {
 		return errors.New("missing index")
 	}
 
-	// Acquire Snapshot
+	// Pin the exact selected Set before releasing publication exclusion.
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	reader := newValueReader(state.ValueLogSet)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("compact-index", state)
 
 	// Collect pages in the old tree so they can be retired after the swap.
 	retired, err := tr.CollectPageIDs()

@@ -847,6 +847,8 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 	if db == nil {
 		return nil
 	}
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	oldState := db.state.Load()
@@ -867,6 +869,7 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 	}
 
 	newState := &DBState{
+		primaryRoot:       oldState.primaryRoot,
 		CommitSeq:         oldState.CommitSeq,
 		RootPageID:        oldState.RootPageID,
 		SystemRootPageID:  oldState.SystemRootPageID,

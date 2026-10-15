@@ -531,6 +531,12 @@ When the cached layer is enabled:
 
 ## 5. Snapshot Contracts
 
+`db.DB.State()` is a shallow metadata observation. It does not retain the index
+or the returned `ValueLogSet`, and copying that result creates no read lifetime.
+Pointer-bearing reads, including `ValueReaderForState`, require the supplying
+live Snapshot or an explicitly retained internal Set and index generation.
+`Snapshot.State()` remains borrowed from that Snapshot's lifetime.
+
 - Exported snapshot handles are single-use and MUST NOT be recycled: a closed
   alias stays closed after any later snapshot acquisition.
 - Backend `DB.Get`, `GetAppend`, `GetVersioned`, and `GetVersionedAppend` use a
