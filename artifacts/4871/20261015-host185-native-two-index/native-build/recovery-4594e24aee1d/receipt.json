@@ -1,0 +1,15 @@
+{
+  "head": "4594e24aee1d468690c3c57639e83d42ebb86e8b",
+  "tree": "2be345dec45bcc615dc9011a4d5004027911f1d3",
+  "parent": "b9ce4f320c860ad0ca65b8741308684584853fe1",
+  "branch": "codex/4878-native-185-20261015",
+  "source_files": 10308,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/two-index-control-rerun3-all-source-after.json",
+  "source_manifest_sha256": "64307447b3b698ca389ecc10ce826a052610ed16afffc7fcb461e93009529c15",
+  "source_unchanged": true,
+  "qualified": false,
+  "gate": "Q32 RED, ACK0; actual publication/Consume/Finish and paused-Finish/newer-writer remain outstanding",
+  "remote_verified": true,
+  "at_utc": "2026-10-15T18:52:21.707270+00:00",
+  "remote_ref": "4594e24aee1d468690c3c57639e83d42ebb86e8b\trefs/heads/codex/4878-native-185-20261015"
+}

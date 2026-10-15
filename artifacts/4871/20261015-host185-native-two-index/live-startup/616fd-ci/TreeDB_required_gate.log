@@ -1,0 +1,63 @@
+﻿2026-10-15T18:47:15.3973376Z Current runner version: '2.337.0'
+2026-10-15T18:47:15.4006800Z ##[group]Runner Image Provisioner
+2026-10-15T18:47:15.4007323Z Hosted Compute Agent
+2026-10-15T18:47:15.4007668Z Version: 20261012.601
+2026-10-15T18:47:15.4008126Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-15T18:47:15.4008540Z Build Date: 2026-10-12T17:48:21Z
+2026-10-15T18:47:15.4008951Z Worker ID: {5f4598a2-b905-41e9-af58-02dd40016c00}
+2026-10-15T18:47:15.4009369Z Region: centralus
+2026-10-15T18:47:15.4009693Z Cloud: Azure
+2026-10-15T18:47:15.4010073Z ##[endgroup]
+2026-10-15T18:47:15.4010794Z ##[group]Operating System
+2026-10-15T18:47:15.4011139Z Ubuntu
+2026-10-15T18:47:15.4011494Z 24.04.5
+2026-10-15T18:47:15.4011799Z LTS
+2026-10-15T18:47:15.4012194Z ##[endgroup]
+2026-10-15T18:47:15.4012513Z ##[group]Runner Image
+2026-10-15T18:47:15.4012856Z Image: ubuntu-24.04
+2026-10-15T18:47:15.4013228Z Version: 20261012.334.1
+2026-10-15T18:47:15.4013967Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-15T18:47:15.4014843Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-15T18:47:15.4015371Z ##[endgroup]
+2026-10-15T18:47:15.4016370Z ##[group]GITHUB_TOKEN Permissions
+2026-10-15T18:47:15.4017726Z Contents: read
+2026-10-15T18:47:15.4018126Z Metadata: read
+2026-10-15T18:47:15.4018456Z PullRequests: read
+2026-10-15T18:47:15.4018817Z ##[endgroup]
+2026-10-15T18:47:15.4020080Z Secret source: Actions
+2026-10-15T18:47:15.4020692Z Cache mode: write
+2026-10-15T18:47:15.4021302Z Prepare workflow directory
+2026-10-15T18:47:15.4209002Z Prepare all required actions
+2026-10-15T18:47:15.4271137Z Complete job name: TreeDB required gate
+2026-10-15T18:47:15.4763638Z ##[group]Run set -euo pipefail
+2026-10-15T18:47:15.4764112Z [36;1mset -euo pipefail[0m
+2026-10-15T18:47:15.4764540Z [36;1mfailed=false[0m
+2026-10-15T18:47:15.4764977Z [36;1mfor result in \[0m
+2026-10-15T18:47:15.4765309Z [36;1m  "$MVCC_RESULT" \[0m
+2026-10-15T18:47:15.4765977Z [36;1m  "$VET_RESULT" \[0m
+2026-10-15T18:47:15.4766335Z [36;1m  "$TEST_RESULT" \[0m
+2026-10-15T18:47:15.4766684Z [36;1m  "$RACE_RESULT" \[0m
+2026-10-15T18:47:15.4767123Z [36;1m  "$PERF_RESULT" \[0m
+2026-10-15T18:47:15.4767502Z [36;1m  "$SNAPSHOT_ITERATOR_PERF_RESULT"; do[0m
+2026-10-15T18:47:15.4767953Z [36;1m  if ! [[ "$result" == "success" ]]; then[0m
+2026-10-15T18:47:15.4768421Z [36;1m    echo "required TreeDB job result is ${result}" >&2[0m
+2026-10-15T18:47:15.4768851Z [36;1m    failed=true[0m
+2026-10-15T18:47:15.4769248Z [36;1m  fi[0m
+2026-10-15T18:47:15.4769552Z [36;1mdone[0m
+2026-10-15T18:47:15.4769903Z [36;1mif [[ "$failed" == "true" ]]; then[0m
+2026-10-15T18:47:15.4770458Z [36;1m  exit 1[0m
+2026-10-15T18:47:15.4770789Z [36;1mfi[0m
+2026-10-15T18:47:15.5398771Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-15T18:47:15.5399658Z env:
+2026-10-15T18:47:15.5400030Z   MVCC_RESULT: failure
+2026-10-15T18:47:15.5400438Z   VET_RESULT: success
+2026-10-15T18:47:15.5400849Z   TEST_RESULT: failure
+2026-10-15T18:47:15.5401241Z   RACE_RESULT: failure
+2026-10-15T18:47:15.5401654Z   PERF_RESULT: success
+2026-10-15T18:47:15.5402104Z   SNAPSHOT_ITERATOR_PERF_RESULT: success
+2026-10-15T18:47:15.5402598Z ##[endgroup]
+2026-10-15T18:47:15.5630691Z required TreeDB job result is failure
+2026-10-15T18:47:15.5631607Z required TreeDB job result is failure
+2026-10-15T18:47:15.5633027Z required TreeDB job result is failure
+2026-10-15T18:47:15.5647274Z ##[error]Process completed with exit code 1.
+2026-10-15T18:47:15.5752304Z Cleaning up orphan processes
