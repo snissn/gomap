@@ -1,0 +1,66 @@
+{
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "head_after": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "status_before": " M TreeDB/db/durable_primary_runtime_v5.go\n M TreeDB/db/original_primary_runtime_cleanup.go\n M TreeDB/internal/rootpublication/native_primary_finish_work_v6.go\n M TreeDB/internal/rootpublication/native_publication_v6.go\n M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/db/primary_runtime_disposal_work_v6.go\n?? TreeDB/db/primary_runtime_disposal_work_v6_test.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "status_after": " M TreeDB/db/durable_primary_runtime_v5.go\n M TreeDB/db/original_primary_runtime_cleanup.go\n M TreeDB/internal/rootpublication/native_primary_finish_work_v6.go\n M TreeDB/internal/rootpublication/native_publication_v6.go\n M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/db/primary_runtime_disposal_work_v6.go\n?? TreeDB/db/primary_runtime_disposal_work_v6_test.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "index_before_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596",
+  "index_after_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596",
+  "source_count": 4403,
+  "source_unchanged": true,
+  "sources": {
+    "TreeDB/db/original_primary_runtime_cleanup.go": {
+      "size": 4257,
+      "sha256": "d0df9b5f4c79cda28ec9b20ec687ba9c1263c7baf8e3fdd8489e37772b3f870a",
+      "head_preimage": {
+        "size": 8577,
+        "sha256": "1a6baa03f3b03720d6937b6172f495188d28606fb7eed514d5a3aa73d9ad6131"
+      }
+    },
+    "TreeDB/db/durable_primary_runtime_v5.go": {
+      "size": 32928,
+      "sha256": "9e9cf732bf7c766c3108f95b461b44ac19e8eb83541b4d86f6c9c29ef1a0c6cb",
+      "head_preimage": {
+        "size": 32787,
+        "sha256": "85205679fae38abc565014f6c7eae1f2b4018dd7df6a185d33311a3a0e8e12f5"
+      }
+    },
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": {
+      "size": 8726,
+      "sha256": "a702028abff0e1374df1537f3fd2ab92981ecd39f43b9b3638f238dfa28eca51",
+      "head_preimage": null
+    },
+    "TreeDB/db/primary_runtime_disposal_work_v6_test.go": {
+      "size": 5938,
+      "sha256": "c2886a0a13f03e98405fe06416666f935d8e026d4c8e6665b90088c505d4586d",
+      "head_preimage": null
+    }
+  },
+  "protected_foreign": {
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "size": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "size": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "size": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  },
+  "results": {
+    "normal": {
+      "exit": 0,
+      "timeout": false,
+      "wall_seconds": 14.40809864224866
+    },
+    "race": {
+      "exit": 0,
+      "timeout": false,
+      "wall_seconds": 31.450488477014005
+    }
+  },
+  "scope": "runtime descriptor disposal only; no Publish caller connected; bounded typed Set classes and seal retirement remain open",
+  "ordering": "ordinary and native first real error now stop attempts and retain later operands as original debt"
+}

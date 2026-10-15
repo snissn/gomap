@@ -1,0 +1,12 @@
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered
+--- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor (0.01s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh (0.01s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6
+--- PASS: TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6 (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6
+--- PASS: TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.012s

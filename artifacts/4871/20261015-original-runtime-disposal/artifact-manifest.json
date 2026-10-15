@@ -1,0 +1,87 @@
+[
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/README.md",
+    "bytes": 1157,
+    "sha256": "b5ac59386e3825d92f37623fe4c6cf633dc253d4bf754410ee4a0ac4a753e3a1"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/head-preimages/TreeDB/db/durable_primary_runtime_v5.go",
+    "bytes": 32787,
+    "sha256": "85205679fae38abc565014f6c7eae1f2b4018dd7df6a185d33311a3a0e8e12f5"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/head-preimages/TreeDB/db/original_primary_runtime_cleanup.go",
+    "bytes": 8577,
+    "sha256": "1a6baa03f3b03720d6937b6172f495188d28606fb7eed514d5a3aa73d9ad6131"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/manifest.json",
+    "bytes": 2165,
+    "sha256": "6e6f0a202fec453124d4fcc6ff29d4cd9c2de03558886afbbe9c002bb4bffd07"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/normal-command.json",
+    "bytes": 729,
+    "sha256": "6bce2be924b26e62853f73a9c22f2a0db97e2706af838ba6e78e25862f217c29"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/normal-exit.json",
+    "bytes": 73,
+    "sha256": "7fb1a0a67fea2dcb3b0bb2729fa36dff0a976aefa4ee1d7a5adeee9a4a70f596"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/normal.raw",
+    "bytes": 835,
+    "sha256": "c185bc639819e03e777cc5a2c0e6b8860631294c118c773a7860e3edc6ef26d8"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/race-command.json",
+    "bytes": 742,
+    "sha256": "d859e3371592b5e6bcce80ab9bf51b607a7f499b78e1beba16f050f41f2b3256"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/race-exit.json",
+    "bytes": 74,
+    "sha256": "b25fffb08d80c4aad69dd735caaa06c5a72b8a512fe80868478a87ad07133f29"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/race.raw",
+    "bytes": 835,
+    "sha256": "3fd9c91221dc3dc7af838ac358fe4e3342d946c712c89271431aa4cd076bc527"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/receipt.json",
+    "bytes": 3813,
+    "sha256": "4289fff6e9ff4cc7526f515d59e6e565b207c298bf8a94e0d0c72036a2976a76"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/source-after.json",
+    "bytes": 566306,
+    "sha256": "ed0e0797886133944db9bd001763029528412c9fe60153d6622dab2044a3bc21"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/source-before.json",
+    "bytes": 566306,
+    "sha256": "ed0e0797886133944db9bd001763029528412c9fe60153d6622dab2044a3bc21"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/tested-sources/TreeDB/db/durable_primary_runtime_v5.go",
+    "bytes": 32928,
+    "sha256": "9e9cf732bf7c766c3108f95b461b44ac19e8eb83541b4d86f6c9c29ef1a0c6cb"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/tested-sources/TreeDB/db/original_primary_runtime_cleanup.go",
+    "bytes": 4257,
+    "sha256": "d0df9b5f4c79cda28ec9b20ec687ba9c1263c7baf8e3fdd8489e37772b3f870a"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/tested-sources/TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "bytes": 8726,
+    "sha256": "a702028abff0e1374df1537f3fd2ab92981ecd39f43b9b3638f238dfa28eca51"
+  },
+  {
+    "path": "artifacts/4871/20261015-original-runtime-disposal/tested-sources/TreeDB/db/primary_runtime_disposal_work_v6_test.go",
+    "bytes": 5938,
+    "sha256": "c2886a0a13f03e98405fe06416666f935d8e026d4c8e6665b90088c505d4586d"
+  }
+]
