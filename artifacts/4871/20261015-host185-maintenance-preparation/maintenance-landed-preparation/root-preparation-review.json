@@ -1,0 +1,60 @@
+{
+  "scope": "Root complete source inspection of preparation-only six-file packet; not final candidate acceptance",
+  "freeze_sha256": "f09c1145d6e69a6fd450a1dbea760a1936dc8dfbeb7d44dcb96330aae5fe3d0d",
+  "all_frozen_files_checked": 9948,
+  "read_complete_paths": [
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml"
+  ],
+  "source_findings": [],
+  "verified_validation": {
+    "argv": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness",
+    "exit": 0,
+    "elapsed_s": 1.9184792758896947,
+    "outer_timeout_s": 30,
+    "python": "Python 3.10.12",
+    "tests": 10,
+    "source_unchanged": true,
+    "stdout_sha256": "9d6f8086501fc75db7c769eacdb352fd56b2cf79c9f900be3430bd192115e151",
+    "stderr_sha256": "dc00eacc4ba49b4a69854d819639f798e462a0442245fbb5af230523bd36b5cc",
+    "yaml": "PyYAML 6.0",
+    "yaml_and_ast_pass": true,
+    "go_executions": 0,
+    "dispatches": 0,
+    "historical_prior_pure_runs": [
+      {
+        "tests": 9,
+        "exit": 0
+      },
+      {
+        "tests": 10,
+        "exit": 0
+      }
+    ],
+    "candidate_finalization_pending": true
+  },
+  "pending": [
+    "reviewed ordinary successor commit and all candidate constants/labels",
+    "remove preparation guard only after concrete fixed SHA binding",
+    "CI inventory integration and exact final tree review",
+    "landed exact harness plus separate one-run grant before retained collection"
+  ],
+  "review_notes": [
+    "All14 original selectors/counts/order/parser and 10s2percent preflight preserved",
+    "Shared bootstrap module and SAME process subreaper keep child-group cleanup within originating supervisor",
+    "Unexpected survivors fail closed even when leader returns0; original operation deadline is unchanged and2s allowance only for killed-child cleanup",
+    "No PR/push trigger or persistent runner, fixed main-only dispatch, read-only contents and pinned actions",
+    "Full source/SDK archives plus actual four binaries and environment retained, original caches/worktrees excluded",
+    "Snapshot/capture cohort metrics do not prove zero surviving files and single cleanup event is not a latency distribution; source caveats preserved"
+  ],
+  "runtime_executed_by_root": false
+}

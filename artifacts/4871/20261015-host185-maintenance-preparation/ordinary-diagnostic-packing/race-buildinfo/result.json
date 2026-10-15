@@ -1,0 +1,14 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 0.0036013382486999035,
+  "exit": 0,
+  "failure": null,
+  "leader_joined": true,
+  "name": "race-buildinfo",
+  "process_group_absent": true,
+  "source_equal": true,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "eb177d3da9b0a52a069a0e483c2d9282b381abd6749354879c42922859c33867",
+  "timeout": false,
+  "top_level_passing_tests": []
+}

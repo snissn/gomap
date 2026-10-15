@@ -1,0 +1,31 @@
+{
+  "candidate_parent": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "patch_sha256": "0ec61f996092a3521cb22465c62a020d6001db140caddfde4663cc8461ac8278",
+  "source_paths": {
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go": "084811f8df05515037223ef4e6ebd43ffde2860005303ba20ec9893fcbca75ea",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go": "d9fe5cd0a27dedd05ce0bf4cee594f54478e601eec25d28e3c4323976af3b6da"
+  },
+  "source_manifest_sha256": "22aabd96fb63261284cdf7e75efc43b01ca992df8aa1dd72aba38ad0462035dc",
+  "validation_sha256": "6ec3bb68e686570daab79b6d36e6217886a17d5800d78f18d20699d59390c93d",
+  "compiler_stderr_sha256": "b794256c4c012d68dab35a45ed8dea2885145abfe28a99f45aeea3d5d87a320a",
+  "assembly": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "objdump",
+      "-s",
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication.newGenericResourceDiagnostics$",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/normal.test"
+    ],
+    "output_sha256": "5f05bc5f82ff89d534b1f6a43827e44ba9da31638931742a2bf9f0aa1a6bd897",
+    "binary_sha256": "d887c9f609bed7c2d6017816c1901a8bea7b5b5eb7f506804db03864c4adbbb6",
+    "observed_runtime_newobject_calls": 3,
+    "observed_strings_Join_calls": 1,
+    "note": "Three static newobject call sites: registry-only header; namespace containing header+descriptor; shared counter if first capture. Branches are not three allocations per capture. Fixed five operand headers and range copy reside in stack frame."
+  },
+  "stdlib": {
+    "strings.go_sha256": "ba9478be775d11b6956c828ebf870a8f8e7b7318ee382834f1e741f02d1336ef",
+    "builder.go_sha256": "02370c56ffbd50bbe8e8ab02f8cc0a0ecf934f02981aeb9a85b025daffdb428b"
+  },
+  "scope": "Compiler/source ownership and focused correctness only. No current timed cost or M0 acceptance inferred."
+}

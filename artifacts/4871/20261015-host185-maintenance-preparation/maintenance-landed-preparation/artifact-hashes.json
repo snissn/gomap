@@ -1,0 +1,18 @@
+{
+  "HANDOFF.md": "8f47c464db438223de20e4e46a0d65d028f297ca1eea77f09674f576fe0a782d",
+  "algorithm-equivalence.json": "3c09f46f164cb48d616784bfeac54bf8d28d9e485a090ed29f972828a8bc70b8",
+  "changed-files.json": "107c6c04573a26935db23f5fd09860df2c0cff3e7f0c01f47de8e0e950005afd",
+  "deviations.md": "2134416025e02f093e69aacab7df11025d8b86ef7717fe3674e6e3c02a7d4149",
+  "freeze.json": "f09c1145d6e69a6fd450a1dbea760a1936dc8dfbeb7d44dcb96330aae5fe3d0d",
+  "mvcc_maintenance_README.md.diff": "9a729babeb78e3e8583295ecc9e0ffd70ceb7170e290b994b3028dba972011ad",
+  "mvcc_maintenance_bootstrap.py.diff": "3a853e3a5c95e0a8ff8f3ce27d14034d5a1bafe94629db3697b04c873d2058b3",
+  "mvcc_maintenance_collect.py.diff": "058442516dcda1e0ca1a01fe6a3476745ee7fd92e88474b0daeec147d7a74f29",
+  "mvcc_maintenance_prepare.py.diff": "9ed361c3263c9620b3e862dcb46040c66d280fb4e9528334b85e73f6d24ad64e",
+  "mvcc_maintenance_test.py.diff": "dfa3610756a41e4f30fa7379116167520e338146d36181c884941ee3a448d73a",
+  "pure-tests.stderr.txt": "dc00eacc4ba49b4a69854d819639f798e462a0442245fbb5af230523bd36b5cc",
+  "pure-tests.stdout.txt": "9d6f8086501fc75db7c769eacdb352fd56b2cf79c9f900be3430bd192115e151",
+  "source-after.json": "e162268d3f6e409f2ed501ec7e910371cda6f588d4d06d482cbf2b24ab2477a1",
+  "source-before.json": "e162268d3f6e409f2ed501ec7e910371cda6f588d4d06d482cbf2b24ab2477a1",
+  "treedb-mvcc-maintenance-diagnostic.yml.diff": "e7348720565058d0e423ad06490387c40c377a5952de02db4d616ed6807e06a3",
+  "validation.json": "b13f3ff2b67e5d10df2763603a08ad34597ad76d69dad24c526a9884e512a1c5"
+}

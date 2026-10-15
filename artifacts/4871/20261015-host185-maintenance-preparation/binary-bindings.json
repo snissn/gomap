@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/source-before.tar.gz",
+    "bytes": 155810129,
+    "sha256": "85fed95501a9af194fc79d6d94f0e5475c5a81cd620b0e77b02d2a2338716f50",
+    "reason": "large binary/source archive retained locally; exact hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/race.test",
+    "bytes": 18866947,
+    "sha256": "971d8c0b593fa233e5526bde5fb330da1206a6a0a4b8f71f3cfbdc51eeef1d2f",
+    "reason": "large binary/source archive retained locally; exact hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/normal.test",
+    "bytes": 14145955,
+    "sha256": "d887c9f609bed7c2d6017816c1901a8bea7b5b5eb7f506804db03864c4adbbb6",
+    "reason": "large binary/source archive retained locally; exact hash and provenance published"
+  }
+]

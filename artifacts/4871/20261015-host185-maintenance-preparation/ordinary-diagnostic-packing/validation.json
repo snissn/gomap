@@ -1,0 +1,123 @@
+{
+  "all_pass": true,
+  "all_source_equal": true,
+  "binaries": {
+    "normal.test": {
+      "bytes": 14145955,
+      "sha256": "d887c9f609bed7c2d6017816c1901a8bea7b5b5eb7f506804db03864c4adbbb6"
+    },
+    "race.test": {
+      "bytes": 18866947,
+      "sha256": "971d8c0b593fa233e5526bde5fb330da1206a6a0a4b8f71f3cfbdc51eeef1d2f"
+    }
+  },
+  "checks": [
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 7.92751672398299,
+      "exit": 0,
+      "failure": null,
+      "leader_joined": true,
+      "name": "build-normal",
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "b794256c4c012d68dab35a45ed8dea2885145abfe28a99f45aeea3d5d87a320a",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timeout": false,
+      "top_level_passing_tests": []
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 0.031885521952062845,
+      "exit": 0,
+      "expected_tests_match": true,
+      "failure": null,
+      "leader_joined": true,
+      "name": "normal",
+      "no_race_report": true,
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "648da614e43031575e47aa079a43f5e8e5e9e9a3ae54989cf1fe0126e6eaf181",
+      "timeout": false,
+      "top_level_passing_tests": [
+        "TestGenericEmptyCloneUsesAbsentClosure",
+        "TestStableResourceSetConcurrentReadsAndRelease",
+        "TestStableResourcePublicationDebtCoverage",
+        "TestGenericResourceDiagnosticsOwnAllNamespaceText",
+        "TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease",
+        "TestGenericAbsentDiagnosticBackingDoesNotAllocate",
+        "TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape"
+      ]
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 9.029589083045721,
+      "exit": 0,
+      "failure": null,
+      "leader_joined": true,
+      "name": "build-race",
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timeout": false,
+      "top_level_passing_tests": []
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 1.0653002415783703,
+      "exit": 0,
+      "expected_tests_match": true,
+      "failure": null,
+      "leader_joined": true,
+      "name": "race",
+      "no_race_report": true,
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "62e207cbacb2a8ab853e96217fdb71923bbf41049a02ed79916c73ebc479b77c",
+      "timeout": false,
+      "top_level_passing_tests": [
+        "TestGenericEmptyCloneUsesAbsentClosure",
+        "TestStableResourceSetConcurrentReadsAndRelease",
+        "TestStableResourcePublicationDebtCoverage",
+        "TestGenericResourceDiagnosticsOwnAllNamespaceText",
+        "TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease",
+        "TestGenericAbsentDiagnosticBackingDoesNotAllocate",
+        "TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape"
+      ]
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 0.003578116185963154,
+      "exit": 0,
+      "failure": null,
+      "leader_joined": true,
+      "name": "normal-buildinfo",
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "af6aeff43e493c211386d7bce99232ff19e399d21b96a7cb630e2b3766d4863d",
+      "timeout": false,
+      "top_level_passing_tests": []
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 0.0036013382486999035,
+      "exit": 0,
+      "failure": null,
+      "leader_joined": true,
+      "name": "race-buildinfo",
+      "process_group_absent": true,
+      "source_equal": true,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "eb177d3da9b0a52a069a0e483c2d9282b381abd6749354879c42922859c33867",
+      "timeout": false,
+      "top_level_passing_tests": []
+    }
+  ],
+  "complete": true,
+  "source_files": 10246,
+  "source_patch_sha256": "0ec61f996092a3521cb22465c62a020d6001db140caddfde4663cc8461ac8278"
+}

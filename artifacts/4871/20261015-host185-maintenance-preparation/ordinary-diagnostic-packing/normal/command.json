@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/normal.test",
+    "-test.run=^(TestGenericResourceDiagnosticsOwnAllNamespaceText|TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease|TestGenericAbsentDiagnosticBackingDoesNotAllocate|TestGenericEmptyCloneUsesAbsentClosure|TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape|TestStableResourcePublicationDebtCoverage|TestStableResourceSetConcurrentReadsAndRelease)$",
+    "-test.count=1",
+    "-test.timeout=120s",
+    "-test.v"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOAMD64": "v1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/tmp"
+  },
+  "executable_sha256": "d887c9f609bed7c2d6017816c1901a8bea7b5b5eb7f506804db03864c4adbbb6",
+  "outer_timeout_seconds": 150,
+  "started_utc": "2026-10-15T23:22:45.880791+00:00"
+}

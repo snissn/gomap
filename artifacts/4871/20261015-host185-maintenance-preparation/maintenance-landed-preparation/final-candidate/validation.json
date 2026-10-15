@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    ".github/scripts/mvcc_maintenance_test.py"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness",
+  "exit": 0,
+  "elapsed_s": 1.1336446260102093,
+  "outer_timeout_s": 30,
+  "python": "3.10.12 (main, Aug 31 2026, 10:18:17) [GCC 11.4.0]",
+  "tests": 10,
+  "source_unchanged": true,
+  "stdout_sha256": "f7d9eecd42e133b9a8da7baa9a105908e72584c65a881154799f8ffc5b933ebe",
+  "stderr_sha256": "c9454f81ea70fb739c7f09b90eb99cc03a8a1da3afa9a3f95948eeb0c66ff0a2",
+  "yaml_version": "6.0",
+  "yaml_and_ast_pass": true,
+  "go_executions": 0,
+  "dispatches": 0,
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "preparation_guard_removed": true
+}

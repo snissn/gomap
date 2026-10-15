@@ -1,0 +1,14 @@
+{
+  "pr": "https://github.com/snissn/gomap/pull/5136",
+  "head": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "merged_commit": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "merged_at": "2026-10-15T23:35:00Z",
+  "checks_success": 50,
+  "unresolved_threads": 0,
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "review_model": "gpt-6.1-sol",
+  "review_disposition": "ACCEPT",
+  "runtime_executed": false,
+  "ordinary_M0_accepted": false,
+  "local_cleanup": "deferred: exact-source provenance and descendant maintenance harness still use this source"
+}

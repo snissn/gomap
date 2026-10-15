@@ -1,0 +1,24 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 0.031885521952062845,
+  "exit": 0,
+  "expected_tests_match": true,
+  "failure": null,
+  "leader_joined": true,
+  "name": "normal",
+  "no_race_report": true,
+  "process_group_absent": true,
+  "source_equal": true,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "648da614e43031575e47aa079a43f5e8e5e9e9a3ae54989cf1fe0126e6eaf181",
+  "timeout": false,
+  "top_level_passing_tests": [
+    "TestGenericEmptyCloneUsesAbsentClosure",
+    "TestStableResourceSetConcurrentReadsAndRelease",
+    "TestStableResourcePublicationDebtCoverage",
+    "TestGenericResourceDiagnosticsOwnAllNamespaceText",
+    "TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease",
+    "TestGenericAbsentDiagnosticBackingDoesNotAllocate",
+    "TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape"
+  ]
+}

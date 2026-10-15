@@ -1,0 +1,24 @@
+{
+  "base": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "preparation_parent": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "base_tree_equal": true,
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "paths": [
+    ".github/ci/ci_impact.json",
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/scripts/test_ci_impact.py",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+    "docs/CI_IMPACT_SELECTION.md"
+  ],
+  "source_files": 9948,
+  "source_manifest_sha256": "b2e21b3e08792259b0281311471368416931e585006e8ef6d9d555df3f480cc6",
+  "staged_diff_sha256": "7df7829f34a45ae3a331292543af199f3fc67f62fb8974fda78e808f29aedc13",
+  "all_seven_pure_commands_pass": true,
+  "go_runtime": false,
+  "workflow_count": 17,
+  "members": 59
+}

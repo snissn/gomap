@@ -1,0 +1,13 @@
+{
+  "base": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "source_review_sha256": "9450934167f22ff40554bab706af780adfc305ea34a897484fb1906ac58cb82a",
+  "verified_source_inputs": 15,
+  "owned_source": [
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go"
+  ],
+  "selection": "Conditional header+descriptor containing allocation and exactly five text operands copied under namespace lock using strings.Join with empty separator; empty fields remain canonical empty strings. No new owner/cache/pool, same counter/clone identity and registry-only header.",
+  "tradeoff": "Escaping a short field can retain the whole diagnostic text blob. No physical aliases retained.",
+  "allowed_validation": "Pinned Go1.26.3 compiler escape and retained test binaries; focused normal/race ownership, original release/debt/concurrency controls. No profile or public performance run.",
+  "performance_gate": "11707B/op and 28allocs/op remain unaccepted; M0 failure unchanged; fixed2588 observation remains fixed; no empirical saving claimed."
+}

@@ -1,0 +1,20 @@
+{
+  "source_inspection_sha256": {
+    "TreeDB/db/durable_primary_runtime_v5.go": "fd2c6d5adab04892e92d3555bfad4059950e3b02c2db8990d7a0bca105932bb2",
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/snapshot_pins.go": "c2c3f66020578ad5720e666978be9ead09186381f4309fb3b463a95556b3428e",
+    "TreeDB/freelist/allocator_cow.go": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "TreeDB/freelist/allocator_publication_work_v6.go": "db606aa3225a911755f10a59390ca9c9127c492b59b8c7a5ceae7944d8e5a360",
+    "TreeDB/freelist/generation_v1_txn.go": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+    "TreeDB/freelist/generation_v1_prune_work.go": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b"
+  },
+  "rejected": "minPinned=0 is NOT conservative: permits and capabilityThreshold ignore zero snapshot constraint",
+  "selected": "On original nonnil native scope only, omit live durableRootReuseCapabilityV1(current) and pass canonical zero-value ReuseCapability; existing scope.Commit eagerPrune=false never consumes or stores it. Ordinary scope=nil retains real capability/scans. Preserve separate oldest-recoverable-slot calculation for actual retirement return semantics.",
+  "requirements": [
+    "No capability sentinel pretending to be actual snapshot minimum",
+    "Verify sole capability consumer remains guarded by eagerPrune and all scope.Commit sites",
+    "Existing next preparation obtains real reuse capability",
+    "Complete fixed-control/stack admission and no-prune source control in full coherent packet"
+  ],
+  "runtime_grant": false
+}

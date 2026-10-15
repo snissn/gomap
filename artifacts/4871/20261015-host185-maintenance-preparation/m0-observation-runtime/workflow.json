@@ -1,0 +1,12 @@
+{
+  "id": 386103837,
+  "node_id": "W_kwDOIdn7C84XA3od",
+  "name": "TreeDB: M0 observation diagnostic (manual only)",
+  "path": ".github/workflows/treedb-vacuum-m0-observation.yml",
+  "state": "active",
+  "created_at": "2026-10-15T13:35:02.000-10:00",
+  "updated_at": "2026-10-15T13:35:02.000-10:00",
+  "url": "https://api.github.com/repos/snissn/gomap/actions/workflows/386103837",
+  "html_url": "https://github.com/snissn/gomap/blob/main/.github/workflows/treedb-vacuum-m0-observation.yml",
+  "badge_url": "https://github.com/snissn/gomap/workflows/TreeDB:%20M0%20observation%20diagnostic%20(manual%20only)/badge.svg"
+}

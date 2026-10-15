@@ -1,0 +1,5 @@
+{
+  "error": "root integration helper expected new_paths instead of actual owned_paths key",
+  "completed": "fast-forward to merged equivalent-tree base only",
+  "no_checks_or_workload_started": true
+}

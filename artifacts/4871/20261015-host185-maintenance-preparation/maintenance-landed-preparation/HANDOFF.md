@@ -1,0 +1,13 @@
+# Maintenance harness preparation handoff
+
+SOURCE AND RUNTIME LEASE RELEASED. No further source edits or executions are active.
+
+The six new paths in `changed-files.json` are frozen in `/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness`, HEAD `939b10c22e54caf56dc84553b65e2435862052fb`. `freeze.json` binds all 9948 source files and has SHA256 `f09c1145d6e69a6fd450a1dbea760a1936dc8dfbeb7d44dcb96330aae5fe3d0d`. Existing tracked files, including the original M0 workflow, M0 observation harness, and product source, are unchanged. Before/after source manifests match.
+
+This is PREPARATION ONLY. The temporary candidate is `2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49`; `CANDIDATE_FINALIZED=False` refuses bootstrap execution. Root must provide the reviewed successor SHA, bind all fixed candidate constants and labels, review the resulting exact packet, integrate CI inventory and any main rebase, commit, independently review, and land the harness before future retained collection. A separate runtime grant remains required. No dispatch is authorized by this handoff.
+
+Validation: all 10 pure Python controls pass on Python 3.10.12; syntax and manual-workflow static checks pass. `validation.json` retains exact argv, timeout, exits and output hashes. Toy subprocess controls prove normal leader exit preservation, actual descendant kill/reap and empty-group observation, and refusal of unexpected surviving descendants. They do not retrospectively establish descendant joins for old hosted packets. No Go builds, tests, fixtures, benchmarks or profiles ran; no network dispatch ran.
+
+The original 14-call schedule, selectors, fixed work, parser, ordering, quiet threshold and child operation caps are preserved. `algorithm-equivalence.json` binds AST equivalence for schedule/parser/selftest. `deviations.md` and six old-to-new diffs enumerate infrastructure changes. Source archives, full SDK identities/archive, executable hashes, argv/environment and failures are retained by the prepared runtime path. Cache/tmp data are excluded from upload.
+
+Remaining limits: ephemeral hosted infrastructure is not guaranteed quiet; the single original preflight may refuse. Persistent runner/cache infrastructure is unavailable, not assumed. The added process-custody observation and archival overhead make this diagnostic only. Cleanup has a bounded two-second reap allowance after the unchanged operation deadline and fails closed if the group is not empty. Hard runner termination may prevent final cleanup/upload. GitHub artifact retention is 14 days and requires external archival for durable evidence. No performance, M0, cost, native or merge acceptance is claimed.

@@ -1,0 +1,119 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "base_tree_independently_equal_939b": true,
+  "candidate_edits_by_reviewer": false,
+  "changed_path_sha256": {
+    ".github/ci/ci_impact.json": "3f20ebf509200bc64fa7b9798dd1b5c471a24afec8d5cf4a432f22dba83d9f4b",
+    ".github/scripts/mvcc_maintenance_README.md": "2f07bb2370e423696486a907d9862329594bf36bb9210a80f1e6c5054dce6ea3",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "69ddd5266db59a42611b924ebb68a522a789c7fae89fbdc1f53a83571fe79366",
+    ".github/scripts/mvcc_maintenance_collect.py": "fcc1291961907e6b3bde63ac1bc992a90eb379479bd04da243ecd8207b65f557",
+    ".github/scripts/mvcc_maintenance_prepare.py": "223178a8e185e7402488af30fdd906970c84306aebaba9a7107dda228e1a9f79",
+    ".github/scripts/mvcc_maintenance_test.py": "0e5e34f2230ff6976096245ed18dd73387b4531a8bf664db1685eb18777a4b5e",
+    ".github/scripts/test_ci_impact.py": "2cdfd01711aae9fe036a912c0218207821739f95a5b8a890735a211f955d1111",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8",
+    "docs/CI_IMPACT_SELECTION.md": "2d8abda2f4131dcc8b404ece3db78d9ace23c5445a5314598b7cd5f03b15da8a"
+  },
+  "children_spawned": false,
+  "constructed_by_reviewer": false,
+  "coverage": [
+    "Read all six new paths completely; reviewed each binding-only finalization diff and all three CI integration diffs. Read base AGENTS, CONTRIBUTING and task-local retained-evidence-velocity policy.",
+    "Fixed main-only manual context validates repo/Linux/x64/path inputs and clean harness GitHub SHA; no arbitrary refs/PR triggers/secrets/persistent runner. Exact baseline/candidate clean detached worktrees separate measured products from harness; no source overlay or new benchmark.",
+    "Bootstrap retains harness/product archive and manifests, SDK archive/manifest, compiler/linker/executable identities, host/image/disk/process/environment metadata; package deps prefill then offline inventory/module verification, source hashes before/after deps/build/measurement. Exact go executable hash1.26.3 enforced; compiler output is four retained binaries/buildinfo.",
+    "Original fourteen Go process invocations: checkpoint16x three AB/BA pairs and production vacuum1x three AB/BA pairs, candidate-only cohort8/16 at128x. Original slash-anchored selectors, run-empty, one reported row, fixed iteration count, GOMAXPROCS2/CPU0,1/memory settings and timer scopes retained. Independently compared schedule/parse/selftest AST to accepted local collect02.",
+    "Parser requires exit0 plus exactPASS, one selected/concurrency row, finite nonnegative metrics, positive ns/op, mandatoryB/op+allocs. Exact vacuum4096/2048/2048 with zero exposure/errors/aborts and actual traversal/timing. Checkpoint activity is fixture totals, not timed deltas. Cohort exact geometry, original physical bytes and held/reader/scope/finalzero charges; only omitted surviving-path counters defaultzero.",
+    "Same frozen candidate ProcessObservation: strict2percent threshold,10s preflight,250ms sampling, exited observed processes retain increments. Busy preflight executeszero; busy measurement contaminated and returnsfailure. No retries/discards/waivers.",
+    "Same Python bootstrap runs both drivers in-process and establishes Linux subreaper. Each supervised Go build/benchmark/bootstrap command starts a new session. Original deadline triggers remain; kill+leaderwait+adopted waitpid and group-empty evidence recorded. Two seconds are cleanup only; failed leader/group drain or unexpected surviving child cannot complete successfully. Repeated cancellation does not interrupt bounded cleanup.",
+    "Every attempted raw sample/argv/exit/hash/interruption and pending command survives failure, fresh output refuses overwrite, final source/binary verification failcloses. Workflow always uploads setup/failure/refusal receipts plus full source/SDK archives and binary output, excluding expendable caches/tmp/worktree metadata.",
+    "CI integration adds exactly one manual owner/member and conservative all-input dynamic consumer/full/docs forecast inclusion; no original jobs/thresholds/gates/selectors removed. Test cardinalities and docs16/58 to17/59 accurately match manifest; root7pure commands78tests+inventory pass."
+  ],
+  "disposition": "ACCEPT",
+  "exact_staged_paths": [
+    ".github/ci/ci_impact.json",
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/scripts/test_ci_impact.py",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+    "docs/CI_IMPACT_SELECTION.md"
+  ],
+  "findings": [],
+  "frozen_source_manifest_sha256": "b2e21b3e08792259b0281311471368416931e585006e8ef6d9d555df3f480cc6",
+  "frozen_staged_diff_sha256": "7df7829f34a45ae3a331292543af199f3fc67f62fb8974fda78e808f29aedc13",
+  "full_current_files_verified": 9948,
+  "full_staged_git_blobs_verified": 9948,
+  "git_readonly_operations": true,
+  "go_build_test_benchmark_profile_or_dispatch_executed": false,
+  "harness_base_commit": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "harness_base_tree": "5b727b1f56eaeb6eef7c9b371ba349cfa76097fb",
+  "harness_candidate_commit": null,
+  "hosted_model_routing_unavailability": "Hosted manual review cannot pin the explicitly required model; not requested. Independent subagent uses the required explicit routing.",
+  "limits": [
+    "Uncommitted staged exact-byte acceptance only. Root must commit/bind and land the harness, freeze landed SHA and product refs, and separately grant dispatch. This review grants no runtime.",
+    "No new four-binary build, collection, performance result, M0 or CI qualification claimed; build/ELF retention code is reviewed prospectively. Existing product source review is separate.",
+    "Three matched pairs per maintenance route and one cohort leaf per size are bounded diagnostic observations, not universal/sustained qualification. Go fixed-count benchmark may execute calibration in addition to reported iterations.",
+    "Process quietness is sampled average CPU per external process across observation interval, not instantaneous/per-leaf quietness. Short-lived work, disk interference, host noise or GC/cache differences can remain; require honest result interpretation, no external-cause assumption.",
+    "Vacuum1024doc/131072catalog cost fixture is not M0 storage fixture; no full logical digest, setup/final physical bytes or shrink ratio credit. Cohort last-reader cleanup is one off-timer event, not a distribution; reported residuals are not silently treatedzero.",
+    "Subreaper/process-group proof covers supervised original groups; it is not arbitrary malicious-daemon containment. Selected benchmark bodies do not spawn independent executable groups. SIGKILL/hard runner termination can prevent cleanup/upload; no historical leader-only packet is relabeledjoined.",
+    "Ephemeral ubuntu24.04, fresh task caches, possible hosted toolcache are accurately disclosed; no persistent infrastructure assumed. Fourteen-day artifact retention requires durable archival.120minute workflow hard bound can truncate pathological cumulative setup/cleanup; partial packet availability is not guaranteed after platform termination.",
+    "COMPLETE_BOUNDED_DIAGNOSTIC has timings_qualify=false and does not replace failed cost/M0/native acceptance. Root must assess raw results under unchanged applicable gates."
+  ],
+  "original_collect02_algorithm_AST_sha256": {
+    "parse": {
+      "ast_sha256": "08c21b50bace4954db65d4a06ef9860c0723247bbc0bd5dbe48a52c31e21999f",
+      "equal": true
+    },
+    "schedule": {
+      "ast_sha256": "5323e2ff46d310326b032152c8b44fa0086feea02ce07403cfc68882da3fd15e",
+      "equal": true
+    },
+    "selftest": {
+      "ast_sha256": "937dd197f07eee5770ebb5ec655d5236e7cc98c56f84e3d242cb3cf13447030c",
+      "equal": true
+    }
+  },
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "product_candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "product_candidate_source_review": "../ordinary-diagnostic-packing/review.json",
+  "reasoning_effort": "high",
+  "review_lease_released": true,
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewed_evidence_sha256": {
+    "HANDOFF.md": "8f47c464db438223de20e4e46a0d65d028f297ca1eea77f09674f576fe0a782d",
+    "algorithm-equivalence.json": "3c09f46f164cb48d616784bfeac54bf8d28d9e485a090ed29f972828a8bc70b8",
+    "deviations.md": "2134416025e02f093e69aacab7df11025d8b86ef7717fe3674e6e3c02a7d4149",
+    "final-candidate/HANDOFF.md": "b89a1c90f47377a3561f1eb8cc27c60d9deb920aa33fd1478188c3fd3ca7156e",
+    "final-candidate/validation.json": "ab8dc0061c4c4a88ef320ed385e3516b4906b8c8401460b772c8e2d5ad924e5d",
+    "root-integration-final/binding.json": "ce5e45dc88393a7c4a905110feac489939eb40b83aca17fe2ff6762e75d2ce28",
+    "root-integration-final/commands.json": "d7e1a2e16f078e4f6faa631d0eb86ee5329a78bfec2b0d8fdfd1409893a7f1c8",
+    "root-integration-final/integration-initial-error.json": "3092ca97a8ac65bfab6ad548f4555519b74734e7e3b58bc76e320bca145737cc"
+  },
+  "reviewer": "/root/ordinary_review",
+  "scope": "Exact frozen nine-path staged maintenance harness only, prerequisite review before landing and separately authorized collection",
+  "source_or_git_mutations": false,
+  "verification": {
+    "all_current_files_equal_manifest": true,
+    "all_root_pure_commands_exit_zero": true,
+    "all_staged_blobs_equal_manifest": true,
+    "no_go_runtime": true,
+    "no_unstaged_or_untracked_source": true,
+    "retained_pure_tests_total": 78,
+    "reviewer_pure_command": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "reviewer_pure_elapsed_reported_seconds": 0.11,
+    "reviewer_pure_environment": {
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/tmp"
+    },
+    "reviewer_pure_exit": 0,
+    "reviewer_pure_tests": 10,
+    "reviewer_toy_controls": "normal exit7 leader joined; killed original group includes adopted child wait status9; unexpected surviving child killed/reaped and marked refusal. Each process group observed empty.",
+    "root_seven_pure_command_logs_hashes_verified": true,
+    "staged_diff_equals_frozen_artifact": true
+  },
+  "written_utc": "2026-10-15T23:40:20.970849+00:00"
+}

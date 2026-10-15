@@ -1,0 +1,14 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 0.003578116185963154,
+  "exit": 0,
+  "failure": null,
+  "leader_joined": true,
+  "name": "normal-buildinfo",
+  "process_group_absent": true,
+  "source_equal": true,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "af6aeff43e493c211386d7bce99232ff19e399d21b96a7cb630e2b3766d4863d",
+  "timeout": false,
+  "top_level_passing_tests": []
+}

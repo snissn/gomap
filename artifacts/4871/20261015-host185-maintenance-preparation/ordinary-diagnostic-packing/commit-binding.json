@@ -1,0 +1,17 @@
+{
+  "head": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "parent": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "tree": "3d61eacb580bb65ff2696627f85f483f0bde85f5",
+  "branch": "codex/5111-ordinary-review-repairs-185-20261015",
+  "clean": true,
+  "all_source_manifest_files_unchanged": 10246,
+  "source_manifest_sha256": "22aabd96fb63261284cdf7e75efc43b01ca992df8aa1dd72aba38ad0462035dc",
+  "review_json_precommit_sha256": "21a0bcd7c9071d047d287efb64720da673646944602335d22f8bde37793e7132",
+  "review_md_precommit_sha256": "a3898196f4b17d3b4da3b8693bad7481e116eaf466900d5546cfe5a35c658cdf",
+  "product_paths": [
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go"
+  ],
+  "pushed": false,
+  "performance_or_M0_accepted": false
+}

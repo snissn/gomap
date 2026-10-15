@@ -1,0 +1,13 @@
+{
+  "head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "branch": "codex/4871-maintenance-landed-185-20261015",
+  "remote": "a1db58c790e056a02340c98e7dbae11f40c8ed48\trefs/heads/codex/4871-maintenance-landed-185-20261015\n",
+  "pr": {
+    "baseRefName": "main",
+    "headRefOid": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+    "isDraft": true,
+    "number": 5137,
+    "state": "OPEN",
+    "url": "https://github.com/snissn/gomap/pull/5137"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "head": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "tree": "3d61eacb580bb65ff2696627f85f483f0bde85f5",
+  "parent": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "construction_branch": "codex/5111-diagnostic-packing-185-20261015",
+  "remote_verified": true,
+  "review_sha256": "1a060f07b1d345267223936912751690db7c6bfb0cbefdc5e5efbe713f7e66d4",
+  "PR5127_head_unchanged": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "purpose": "Retrievable exact reviewed source pin for landed maintenance harness; no public PR update/performance acceptance",
+  "source_clean": true
+}

@@ -1,0 +1,14 @@
+{
+  "schedule": {
+    "equal": true,
+    "ast_sha256": "5323e2ff46d310326b032152c8b44fa0086feea02ce07403cfc68882da3fd15e"
+  },
+  "parse": {
+    "equal": true,
+    "ast_sha256": "08c21b50bace4954db65d4a06ef9860c0723247bbc0bd5dbe48a52c31e21999f"
+  },
+  "selftest": {
+    "equal": true,
+    "ast_sha256": "937dd197f07eee5770ebb5ec655d5236e7cc98c56f84e3d242cb3cf13447030c"
+  }
+}
