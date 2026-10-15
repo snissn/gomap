@@ -1,56 +1,58 @@
-name: "TreeDB: index-vacuum M0 evidence"
+name: "TreeDB: bounded maintenance diagnostic (manual only)"
 
 on:
-  pull_request:
-    paths:
-      - "TreeDB/db/vacuum*.go"
-      - "TreeDB/db/recoverable_root_set.go"
-      - "TreeDB/db/durable_root*.go"
-      - "TreeDB/db/root_publication*.go"
-      - "TreeDB/internal/rootpublication/**"
-      - "TreeDB/db/ordered_root_publish.go"
-      - "TreeDB/db/stable_resource.go"
-      - "TreeDB/db/db.go"
-      - "TreeDB/public.go"
-      - "scripts/treedb_vacuum_m0_capture.sh"
-      - "scripts/treedb_vacuum_m0_summarize.py"
-      - "scripts/treedb_vacuum_m0_summarize_test.py"
-      - ".github/workflows/treedb-vacuum-m0.yml"
   workflow_dispatch:
-
-concurrency:
-  group: treedb-vacuum-m0-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  capture:
-    name: stable legacy/public capture
+  diagnostic:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/4871-maintenance-diagnostic-185-20261015'
+    name: fixed 5bca / 72e01 fourteen-call diagnostic
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 120
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - name: Checkout exact head
+      - name: Checkout reviewed diagnostic harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Setup Go
+      - name: Initialize retained attempt packet
+        run: |
+          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
+          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
+
+      - name: Setup exact Go 1.26.3
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: "1.26.3"
+          check-latest: false
+          cache: false
 
-      - name: Capture and enforce M0 evidence
-        run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh
+      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
+        run: python3 -B .github/scripts/mvcc_maintenance_test.py
 
-      - name: Upload complete evidence packet
+      - name: Prepare exact inputs and collect once
+        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py
+
+      - name: Upload complete attempt, including failure/refusal
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/treedb-vacuum-m0
+          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mvcc-maintenance-72e01/*.json
+            ${{ runner.temp }}/mvcc-maintenance-72e01/*.log
+            ${{ runner.temp }}/mvcc-maintenance-72e01/compiler
+            ${{ runner.temp }}/mvcc-maintenance-72e01/go1.26.3-linux-amd64.tar.gz
+            ${{ runner.temp }}/mvcc-maintenance-72e01/harness
+            ${{ runner.temp }}/mvcc-maintenance-72e01/performance-185
+            ${{ runner.temp }}/mvcc-maintenance-setup
           if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
