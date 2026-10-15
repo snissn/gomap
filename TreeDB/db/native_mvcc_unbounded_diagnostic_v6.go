@@ -3,15 +3,15 @@ package db
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 
-	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 // NativeMVCCDiagnosticAwaitV6 drains only already-visible publication debt.
@@ -25,10 +25,10 @@ func (db *DB) NativeMVCCDiagnosticAwaitV6() error {
 
 // PublishNativeMVCCUnboundedDiagnosticV6 transfers the SAME native constructor
 // into the original BuildGroup/candidate/publisher. It is a synchronous,
-// explicitly unmetered O(current tree) reconstruction diagnostic, not an
+// explicitly unmetered captured-prefix/materialized-DATA diagnostic, not an
 // implementation or cost prediction of the bounded prepared-output ABI.
-func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis *Snapshot, input iterator.UnsafeIterator) (accepted bool, retErr error) {
-	if c == nil || c.phase != 3 || c.transaction == nil || c.db == nil || input == nil {
+func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis *Snapshot, input iterator.UnsafeIterator, delta *batch.Batch) (accepted bool, retErr error) {
+	if c == nil || c.phase != 3 || c.transaction == nil || c.db == nil || input == nil || delta == nil {
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	txn := c.transaction
@@ -56,24 +56,43 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 	if !ready || err != nil {
 		return false, err
 	}
-	filtered := nativeDiagnosticSurvivorsV6{UnsafeIterator: input, selected: c.record}
-	filtered.skip()
-	root, err := bulk.BuildWithOptions(&filtered, group.tracker, group.idx.pager, bulk.BuildOptions{EntryRevisions: true, LeafPrefixCompression: true, PackedValuePtr: true})
-	if err != nil {
-		return false, err
-	}
-	if err = filtered.Error(); err != nil {
-		return false, err
-	}
-	if !filtered.removed {
+	// Validate against the SAME retained composite winner immediately before
+	// applying its physical delete. Do not omit the overlay row and resurrect
+	// an older disk incarnation.
+	input.Seek(c.record.Key)
+	if !input.Valid() || !bytes.Equal(input.UnsafeKey(), c.record.Key) {
 		return false, rootpublication.ErrDurableRootOwnership
 	}
-	image, err := group.idx.pager.Get(root)
+	v, p, f, r := iterator.UnsafeEntryWithRevision(input)
+	if r != c.record.Revision || p != c.record.ValuePtr || f != c.record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, c.record.Value)) {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	if err = input.Error(); err != nil {
+		return false, err
+	}
+	if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(c.record.Key), Revision: c.record.Revision}}); err != nil {
+		return false, err
+	}
+	group.pinBatchValueLogSegmentsLocked(delta)
+	z := group.idx.zipper.CloneWithAllocator(group.tracker)
+	var oldPointerRefs zipper.PointerRefCounts
+	var oldEntriesRemoved uint64
+	base, sequence, retired, metrics, err := z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
 	if err != nil {
 		return false, err
 	}
+	entries, ranges := delta.ApplyPlan()
+	refs, err := c.db.buildValueLogRefDelta(group.idx.pager, group.currentRoot, group.baseSeq, entries, ranges, &oldPointerRefs, oldEntriesRemoved, true)
+	if err != nil {
+		return false, err
+	}
+	group.mergeValueLogRefDeltaLocked(refs)
+	releaseValueLogRefDelta(refs)
+	group.retired = append(group.retired, retired...)
+	mergeOrderedRootPublishMetrics(&group.metrics, metrics)
+	group.recordVacuumMutationLocked(entries, ranges)
 	directory := make([]byte, page.PageSize)
-	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, group.baseSeq+1, node.PrimaryOperand{Ref: page.PageChildRef(root), Digest: sha256.Sum256(image)}, nil); err != nil {
+	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, sequence, base, nil); err != nil {
 		return false, err
 	}
 	ready, err = txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
@@ -81,9 +100,17 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 		return false, err
 	}
 	group.currentRoot = txn.PrimaryConstructionReferenceV6().PageID
+	if coverage := group.negativeCoverage; coverage != nil {
+		for i := range entries {
+			coverage.filter.Add(entries[i].Key)
+		}
+		coverage.nextRoot = group.currentRoot
+	}
 	group.maxEntryRevision = page.EntryRevision(c.db.meta.MaxEntryRevision)
-	if filtered.maxRevision > group.maxEntryRevision {
-		group.maxEntryRevision = filtered.maxRevision
+	for _, entry := range entries {
+		if entry.Revision > group.maxEntryRevision {
+			group.maxEntryRevision = entry.Revision
+		}
 	}
 	retErr = group.finalizeLocked(&Batch{db: c.db, physicalOnly: true}, true)
 	accepted = group.accepted
@@ -101,40 +128,4 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 		c.record = node.LeafEntry{}
 	}
 	return accepted, retErr
-}
-
-type nativeDiagnosticSurvivorsV6 struct {
-	iterator.UnsafeIterator
-	selected    node.LeafEntry
-	removed     bool
-	failure     error
-	maxRevision page.EntryRevision
-}
-
-func (it *nativeDiagnosticSurvivorsV6) skip() {
-	for it.UnsafeIterator.Valid() {
-		v, p, f, r := iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
-		if r > it.maxRevision {
-			it.maxRevision = r
-		}
-		if !bytes.Equal(it.UnsafeIterator.UnsafeKey(), it.selected.Key) {
-			return
-		}
-		if it.removed || r != it.selected.Revision || p != it.selected.ValuePtr || f != it.selected.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, it.selected.Value)) {
-			it.failure = rootpublication.ErrDurableRootOwnership
-			return
-		}
-		it.removed = true
-		it.UnsafeIterator.Next()
-	}
-}
-func (it *nativeDiagnosticSurvivorsV6) Next() { it.UnsafeIterator.Next(); it.skip() }
-func (it *nativeDiagnosticSurvivorsV6) Valid() bool {
-	return it.failure == nil && it.UnsafeIterator.Valid()
-}
-func (it *nativeDiagnosticSurvivorsV6) Error() error {
-	return errors.Join(it.failure, it.UnsafeIterator.Error())
-}
-func (it *nativeDiagnosticSurvivorsV6) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
-	return iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
 }

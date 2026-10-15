@@ -7,6 +7,8 @@ import (
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"runtime"
 	"strconv"
 	"testing"
@@ -16,7 +18,21 @@ import (
 // Positive target-profile control: the same physical key exists in the backend
 // and a newer overlay incarnation. Backend-only deletion would resurrect it.
 func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
-	for _, pointers := range []bool{false, true} {
+	runNativePruneCOWDiagnostic(t, false)
+}
+
+// The public lifecycle may be correct while a whole-tree rebuild silently
+// discards every unrelated immutable DATA child. This is the path oracle.
+func TestNativePruneCOWIncrementalPublication(t *testing.T) {
+	runNativePruneCOWDiagnostic(t, true)
+}
+
+func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+	layouts := []bool{false, true}
+	if multileaf {
+		layouts = []bool{true}
+	}
+	for _, pointers := range layouts {
 		t.Run(fmt.Sprintf("pointer%t", pointers), func(t *testing.T) {
 			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 			opts.MemtableMode = "cow_btree"
@@ -43,8 +59,24 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
 			if err = s.CommitAt(1, []Mutation{{Key: selected, Value: []byte("disk-original")}}, CommitDurable); err != nil {
 				t.Fatal(err)
 			}
+			if multileaf {
+				seed := make([]Mutation, 1024)
+				for i := range seed {
+					seed[i] = Mutation{Key: []byte(fmt.Sprintf("z%04d-unchanged-backend-long-key-to-form-real-leaves", i)), Value: []byte("unchanged-backend-value")}
+				}
+				if err = s.CommitAt(100, seed, CommitDurable); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err = d.Checkpoint(); err != nil {
 				t.Fatal(err)
+			}
+			var beforeChildren map[page.ChildRef]bool
+			if multileaf {
+				beforeChildren = nativeDiagnosticDATAChildren(t, d)
+				if len(beforeChildren) < 3 {
+					t.Fatal("fixture needs actual multileaf DATA", len(beforeChildren))
+				}
 			}
 			// No checkpoint/drain follows: these are genuine C1 overlay publications.
 			if err = s.CommitAt(1, []Mutation{{Key: selected, Value: []byte("overlay-replacement")}}, CommitDurable); err != nil {
@@ -140,7 +172,7 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
 					t.Error("checked native cursor Close", e)
 				}
 			}
-			t.Logf("UNBOUNDED_FULL_CURRENT_RECONSTRUCTION public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
+			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
 			t.Logf("COW_NATIVE_UNBOUNDED_DIAGNOSTIC pointers=%t overlayBytes=%d ACK=%d writes=%d nativePrepared=%d nativeCut=%d error=%v", pointers, mutable, ack, writes, prepared, cut, pruneErr)
 			if ack == 1 {
 				got, e := d.Get(selectedKey)
@@ -169,6 +201,16 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
 				if e != nil || !bytes.Equal(got, append([]byte{1}, []byte("after-ACK")...)) {
 					t.Fatal("current post-ACK writer", e, got)
 				}
+			}
+			sharedChildren := 0
+			if multileaf {
+				afterChildren := nativeDiagnosticDATAChildren(t, d)
+				for ref := range afterChildren {
+					if beforeChildren[ref] {
+						sharedChildren++
+					}
+				}
+				t.Logf("INCREMENTAL_DATA_PATH before_children=%d after_children=%d shared_children=%d", len(beforeChildren), len(afterChildren), sharedChildren)
 			}
 			if e = old.Close(); e != nil {
 				t.Fatal(e)
@@ -199,9 +241,52 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
 			if e = reopened.Close(); e != nil {
 				t.Fatal(e)
 			}
+			if multileaf && sharedChildren == 0 {
+				t.Fatal("incremental publication replaced every unrelated backend ChildRef")
+			}
 			if pruneErr != nil || ack != 1 || prepared == 0 || writes == 0 {
 				t.Fatalf("positive composite publication: error=%v ACK=%d writes=%d prepared=%d cut=%d", pruneErr, ack, writes, prepared, cut)
 			}
 		})
 	}
+}
+
+// Scoped scalar copies only: the certificate/image never outlive its original
+// backend Snapshot. The child references are observations, not retained owners.
+func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]bool {
+	t.Helper()
+	snapshot := d.NativeMembershipSnapshotForTest()
+	if snapshot == nil {
+		t.Fatal("backend snapshot")
+	}
+	defer func() {
+		if e := snapshot.Close(); e != nil {
+			t.Error(e)
+		}
+	}()
+	cert, e := snapshot.PrimaryReadRootCertificateV6()
+	if e != nil || cert == nil {
+		t.Fatal("primary certificate", e)
+	}
+	base, _ := cert.Directory().Base()
+	if base.Ref.Kind != page.ChildRefPage {
+		t.Fatal("DATA page", base.Ref)
+	}
+	image, e := snapshot.Pager().Get(base.Ref.Page)
+	if e != nil {
+		t.Fatal(e)
+	}
+	n := node.NewNode(image)
+	if n.Type() != page.PageTypeInternal {
+		t.Fatal("DATA root must be internal", n.Type())
+	}
+	refs := make(map[page.ChildRef]bool, int(n.Count()))
+	for i := uint16(0); i < n.Count(); i++ {
+		_, ref, e := n.GetInternalEntryRefView(i)
+		if e != nil {
+			t.Fatal(e)
+		}
+		refs[ref] = true
+	}
+	return refs
 }

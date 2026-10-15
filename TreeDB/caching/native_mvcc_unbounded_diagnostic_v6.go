@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -90,8 +92,42 @@ func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeM
 		lease.Close()
 		return errors.Join(ErrCOWUnsupported, merged.Close(), c.releaseCut(cut))
 	}
+	// Exactly the original frozen prefix, oldest to newest. The batch copies
+	// borrowed entry payloads before iterator advance; its final duplicate-key
+	// normalization preserves the canonical winner without reading untouched DATA.
+	delta := batch.New(nil, int(^uint(0)>>1))
+	defer delta.Close()
+	for _, root := range cut.frozen {
+		it := root.NewIterator(nil, nil)
+		metadata, ok := it.(iterator.RevisionUnsafeIterator)
+		raw, rawOK := it.(iterator.UnsafeIterator)
+		if !ok || !rawOK {
+			err = errors.Join(ErrCOWUnsupported, it.Close())
+			break
+		}
+		for it.Valid() {
+			v, p, f, r := metadata.UnsafeEntryWithRevision()
+			op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
+			if f&node.FlagTombstone != 0 {
+				op.Type = batch.OpDelete
+				op.Value = nil
+			}
+			if err = delta.SetOps([]batch.Entry{op}); err != nil {
+				break
+			}
+			it.Next()
+		}
+		err = errors.Join(err, it.Error(), it.Close())
+		if err != nil {
+			break
+		}
+	}
+	if err != nil {
+		lease.Close()
+		return errors.Join(err, merged.Close(), c.releaseCut(cut))
+	}
 	raw := &nativeDiagnosticMergeV6{Iterator: owner.Iterator}
-	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(cut.basis.snapshot, raw)
+	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(cut.basis.snapshot, raw, delta)
 	closeErr := merged.Close()
 	if accepted {
 		handoff.accepted = true
