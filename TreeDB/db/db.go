@@ -1766,23 +1766,37 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 // Private one-shot reads cannot mint a later stable resource capture. Only
 // their immutable empty Sets can omit the original containing Manager borrow.
 func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapshot, oneShot bool) bool {
+	var rollbackManager *valuelog.Manager
+	var acqShard int
+	acquisitionStarted := false
 	db.rootReuseMu.RLock()
-	defer db.rootReuseMu.RUnlock()
+	// One capture-exit defer keeps the ordinary read on Go's open-coded path.
+	// Nested cleanup preserves the original rollback, acquisition, unlock order
+	// even when an original Manager cleanup panics.
+	defer func() {
+		defer db.rootReuseMu.RUnlock()
+		if acquisitionStarted {
+			defer func() {
+				// Publish completion before dropping the in-flight count so a
+				// minimum-reader scan cannot miss a just-registered snapshot.
+				db.snapshotAcquireEpoch.Add(1)
+				db.snapshotAcquireRO[acqShard].Add(-1)
+			}()
+		}
+		if rollbackManager != nil {
+			snap.nativeMVCC.managerRelease.ReleaseOriginal(rollbackManager)
+		}
+	}()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return false
 	}
 	if snap.registryShardHint == snapshotShardHintUnset {
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
-	acqShard := snapshotAcquireShard()
+	acqShard = snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
 	db.snapshotAcquireEpoch.Add(1)
-	defer func() {
-		// Publish the completion epoch before dropping the in-flight count so
-		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
-		db.snapshotAcquireEpoch.Add(1)
-		db.snapshotAcquireRO[acqShard].Add(-1)
-	}()
+	acquisitionStarted = true
 	if db.closing.Load() {
 		return false
 	}
@@ -1804,16 +1818,11 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 	if oneShot && !vlogNeedsPin {
 		vm = nil
 	}
-	managerBorrowAdopted := false
 	if vm != nil {
 		if !vm.RetainSnapshotWrapper() {
 			return false
 		}
-		defer func() {
-			if !managerBorrowAdopted {
-				snap.nativeMVCC.managerRelease.ReleaseOriginal(vm)
-			}
-		}()
+		rollbackManager = vm
 	}
 	if vlogNeedsPin {
 		if vm == nil {
@@ -1876,7 +1885,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogWrapperBorrowed = vm != nil
-	managerBorrowAdopted = true
+	rollbackManager = nil
 	snap.vlogPinned = vlogNeedsPin
 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
 	if oneShot && !vlogNeedsPin {

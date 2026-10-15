@@ -605,7 +605,19 @@ func stableResourceKindViewCount(views *resourceKindBacking) int {
 }
 
 func rangeStableResourceKindViews(views *resourceKindBacking, visit func(*stableResourceEntry) bool) bool {
-	if views != nil && views.allocation != nil {
+	if views == nil {
+		return true
+	}
+	if len(views.cells) <= 1 {
+		// Empty and singleton views are already in canonical kind order.
+		for _, cell := range views.cells {
+			if !rangeStableResourceLogicalIndex(cell.view.logical, visit) {
+				return false
+			}
+		}
+		return true
+	}
+	if views.allocation != nil {
 		// Selected cells are already canonical and independently retained.
 		for _, cell := range views.cells {
 			if !rangeStableResourceLogicalIndex(cell.view.logical, visit) {

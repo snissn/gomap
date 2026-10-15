@@ -527,10 +527,18 @@ func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
 // Currently Pager.Get holds RLock.
 func (p *Pager) IsVerified(pageID uint64) bool {
 	if p.immutableReadRoots.retention != nil {
-		p.metadataReadMu.RLock()
-		defer p.metadataReadMu.RUnlock()
+		return p.isVerifiedRetained(pageID)
 	}
+	return p.isVerifiedPage(pageID)
+}
 
+func (p *Pager) isVerifiedRetained(pageID uint64) bool {
+	p.metadataReadMu.RLock()
+	defer p.metadataReadMu.RUnlock()
+	return p.isVerifiedPage(pageID)
+}
+
+func (p *Pager) isVerifiedPage(pageID uint64) bool {
 	if isPrimaryBankID(pageID) {
 		if companion := p.primaryBanks.Load(); companion != nil {
 			return companion.IsVerified(pageID - page.PrimaryBankNamespace)
