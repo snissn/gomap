@@ -1,0 +1,109 @@
+{
+  "verdict": "REJECT",
+  "scope": "Independent bounded source-only review of frozen canonical mutation, BeginCandidate and activation continuation delta; prior canonical allocator review reused where unchanged.",
+  "frozen_packet": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-canonical-activation-source-freeze-20261015T070919Z",
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "receipt_sha256": "1cce1d2de85af75fa22b44da3af65b2897ee9111590276d142eceaec4892cb82",
+  "owned_manifest_sha256": "c3c64fc25f75dca31309b3c9e9b0f1a6c95c9583bae2f3e0c6655a004985496a",
+  "owned_hash_verification": {
+    "paths": 80,
+    "mismatches": 0,
+    "method": "SHA256 each immutable packet sources/<path> against owned-source-manifest.json"
+  },
+  "reviewed_source_sha256": {
+    "TreeDB/freelist/generation_v1_tree_work.go": "5362602af0b74796dddb7eed2c1e56bd2b4123c89673cafe2836cf570fa51660",
+    "TreeDB/freelist/generation_v1_begin_work.go": "21652881f4a32f1bd215f76576b6457d9f1ac92b4f739aab8ca234541db944d8",
+    "TreeDB/freelist/allocator_activation_work.go": "b664aad5d78cc47c4e49220677961dc29ca1ca9ba09ccdd916b4574f5433bd70",
+    "TreeDB/freelist/generation_v1_tree_work_test.go": "058647fbd621128fa12850705be58519edcfab94744073735f705fd730a00063",
+    "TreeDB/freelist/generation_v1_tree.go": "485430d1ec3011db73d92279125d6c9788a1deffcde725ce273fb5251aa5233e",
+    "TreeDB/freelist/generation_v1_txn.go": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7",
+    "TreeDB/freelist/allocator_cow.go": "a9aca033cbce7c9a2a567eb48e5489c74e8dc425e80c91412cfcedd58d213ee4",
+    "TreeDB/freelist/generation_v1_reservation.go": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7",
+    "TreeDB/freelist/append_work.go": "c32cf198af71a244f41c4559890de25539cf5740b4e2ccb16c795859312da48a"
+  },
+  "supporting_object_read": {
+    "path": "TreeDB/freelist/append_work.go",
+    "object_commit": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+    "binding": "Object SHA256 matches frozen source-final.json entry; appendReserve lines27-34 compares each request to full limits, then Reserve checks remaining allowance."
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "blocking": true,
+      "category": "bounded progress",
+      "file": "TreeDB/freelist/generation_v1_begin_work.go",
+      "lines": [
+        28,
+        46
+      ],
+      "summary": "Split map admission can yield forever under an unchanged sufficient-per-request Q32 allowance.",
+      "reproduction_by_source": "For a missing key with len(map)==31, lookup reserves1 record, then insertion requests32 records. The latter is within the full RecordLimit32 but exceeds the31 remaining, so returns false,nil. Each retry repeats lookup and never inserts. At phase3 or markPath, their repeated preceding read reservation can produce the same stall at len(map)==30. Byte limits have the analogous combined-prefix issue.",
+      "affected_branches": [
+        {
+          "branch": "phase2 header insert",
+          "lines": [
+            194,
+            198
+          ]
+        },
+        {
+          "branch": "phase3 reservation-page insert, including repeated page-ID read",
+          "lines": [
+            201,
+            209
+          ]
+        },
+        {
+          "branch": "markPath empty-node insert",
+          "lines": [
+            124,
+            128
+          ]
+        },
+        {
+          "branch": "markPath leaf insert",
+          "lines": [
+            133,
+            137
+          ]
+        },
+        {
+          "branch": "markPath branch-node insert",
+          "lines": [
+            146,
+            149
+          ]
+        },
+        {
+          "branch": "phase7 changedChunks insert",
+          "lines": [
+            247,
+            250
+          ]
+        }
+      ],
+      "minimal_repair": "Retain the admitted map probe and exact key/map binding across yield, with retained caller page/path observations; or explicitly reject an intrinsically oversized combined unit rather than indefinitely returning false,nil. Keep genuinely oversized growth an explicit UnitTooLarge refusal.",
+      "regression": "Exercise actual BeginCandidate Q32 map-growth boundaries around30/31/32 prior entries; assert eventual completion or explicit oversized-unit error, never endless false,nil.",
+      "owner_status_at_review": "Root and native owner notified. Owner acknowledged and proposed an embedded retained map-insert cursor plus retained page/path observations. Fix is outside this frozen checkpoint and not yet reviewed."
+    }
+  ],
+  "positive_checks": [
+    "Ordinary nil drivers drain the same new canonical mutation/detachment/summary/BeginCandidate/activation core rather than a second implementation.",
+    "Changed tree wrappers preserve compressed Patricia split, child collapse and summary semantics on inspected branches.",
+    "Private-grant and PageID0 detachment remain; unchanged materialization revokes authority on validation failure and freezes before sink callbacks.",
+    "Finite leaf summary admits all256 retirement slots, branch summaries admit16 children, and recursive detachment uses retained frames.",
+    "Opaque callbacks are rejected under finite work; callback errors are sticky and not replayed; frozen tests cover these behaviors.",
+    "BeginCandidate borrows normalized immutable extents, streams retirement by chunk, and copies the small cursor by value without hidden pendingMetadata expansion or retireMany sorting.",
+    "MarkVisible delegates to transition lines499-523: one candidate map lookup and scalar state transition, with no reservation scan.",
+    "Activation admits vector growth and successor transfer before MarkVisible; no post-effect budget refusal was found in inspected activation.",
+    "Embedded reused control storage introduces no new pool or second allocator. Persistent COW nodes remain objects with generation/transaction lifetimes, unsuitable for reset-on-return scratch arenas."
+  ],
+  "limits": [
+    "No Go execution, benchmarks, source edits, Git/GitHub writes or cleanup performed.",
+    "Review used immutable frozen packet sources; one unchanged supporting helper was read from the packet HEAD object and checked against the frozen compiler census hash.",
+    "All80 owned source hashes were checked, but the review was scoped to the requested new continuation delta and relevant callers, not a fresh whole80-file audit.",
+    "Reported focused normal test passes are coordinator/owner evidence, not independently rerun here; first DB selector matching nothing remains disclosed.",
+    "No native public ACK, Q32 completion qualification or performance acceptance is claimed; live owner materialization changes are outside this review.",
+    "Frozen checkpoint remains unaccepted until F1 is repaired and the bounded changed seam is reviewed."
+  ]
+}
