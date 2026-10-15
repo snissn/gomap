@@ -553,6 +553,10 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 
 // AddLeafEntryWithRevision appends a native revision-bearing leaf entry.
 func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
+	return b.addLeafEntryWithRevision(key, value, flags, valPtr, revision)
+}
+
+func (b *Builder) addLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}

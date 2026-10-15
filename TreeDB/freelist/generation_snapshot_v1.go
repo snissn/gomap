@@ -19,6 +19,12 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedV1(id, oldestCommit uint64) (bo
 // reservation-extent operand actually inspected. It never hides a full metadata
 // classifier beneath a scalar reservation. Under-admission changes no state.
 func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uint64, w *iterator.OrdinalScanWork) (bool, bool, error) {
+	return g.pageUnavailableWithWorkV1(id, oldestCommit, false, w)
+}
+
+// Private candidates require live membership, rather than export readability.
+// The classifier shares the actual immutable trie and reservation walk.
+func (g *FreelistGenerationV1) pageUnavailableWithWorkV1(id, oldestCommit uint64, live bool, w *iterator.OrdinalScanWork) (bool, bool, error) {
 	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(FreelistGenerationV1{}))) {
 		return false, false, nil
 	}
@@ -39,7 +45,7 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uin
 		chunk := n.chunk
 		if chunk != nil {
 			offset := id & (freelistChunkSize - 1)
-			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && chunk.retired[offset] < oldestCommit) {
+			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && (live || chunk.retired[offset] < oldestCommit)) {
 				return true, true, nil
 			}
 		}
@@ -61,8 +67,13 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uin
 			return false, false, nil
 		}
 		extent := g.record.Extents[lo-1]
-		if id-extent.StartPageID < uint64(extent.Count) && extent.Kind == ReservationPendingMetadataRetirement {
-			return extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit, true, nil
+		if id-extent.StartPageID < uint64(extent.Count) {
+			if live && (extent.Kind == ReservationTargetMetadata || extent.Kind == ReservationAbandonedAppend) {
+				return true, true, nil
+			}
+			if extent.Kind == ReservationPendingMetadataRetirement {
+				return live || (extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit), true, nil
+			}
 		}
 	}
 	return false, true, nil

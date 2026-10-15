@@ -323,10 +323,16 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	if id > start {
 		t.abandonedAppends = appendReservationRange(t.abandonedAppends, start, id-start, ReservationAbandonedAppend, 0)
 	}
+	t.installAppend(id)
+	return id, nil
+}
+
+// installAppend records an already selected append in the SAME transaction.
+// Work-bearing callers prove capacity and guard the original ledger first.
+func (t *FreelistTxn) installAppend(id uint64) {
 	t.highWater = id + 1
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
 	t.stats.AppendAllocations++
-	return id, nil
 }
 
 // allocateContiguousRange first tries a bounded reusable extent, then appends.
