@@ -1,0 +1,150 @@
+{
+  "utc": "2026-10-15T06:52:21.400160+00:00",
+  "pr": {
+    "headRefOid": "a22078f59bfe9023787d5147c51c989a4010644d",
+    "mergeCommit": {
+      "oid": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "mergedAt": "2026-10-15T06:52:13Z",
+    "state": "MERGED",
+    "url": "https://github.com/snissn/gomap/pull/5135"
+  },
+  "main": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "merge_parents": [
+    "9029eb4e06fb99913c08dd2b3d7424f310445469",
+    "a22078f59bfe9023787d5147c51c989a4010644d"
+  ],
+  "verified_count": 31,
+  "files": [
+    {
+      "path": "TreeDB/collections/command_wal_bench_test.go",
+      "git_blob": "50f4f70762a0278c7957ad674cffbb70859ef322"
+    },
+    {
+      "path": "TreeDB/collections/command_wal_test.go",
+      "git_blob": "6dbce3e87426b714d766d91b2fac9f9266a94d57"
+    },
+    {
+      "path": "TreeDB/collections/document_ingestion_test.go",
+      "git_blob": "0f38bfeba73aa5bbf7e7c63e43eab93bc30d8b58"
+    },
+    {
+      "path": "TreeDB/collections/source_atomic_column_test.go",
+      "git_blob": "b892d32b4f73fedc15724087fcf80fde251af9c4"
+    },
+    {
+      "path": "TreeDB/collections/vector_index_persist_test.go",
+      "git_blob": "8e901fad96366839d51cb8a54a635387a7cf6ec6"
+    },
+    {
+      "path": "TreeDB/db/command_wal_feature_gate_test.go",
+      "git_blob": "499fdd4b462a1c1714f3e1cb625cd6a1218a25da"
+    },
+    {
+      "path": "TreeDB/db/command_wal_recovery_test.go",
+      "git_blob": "81ac0d4a3a1136e85e1dafc4c23fd3cee1e97ff9"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "git_blob": "45562cb3177b5a770607a6ea898eb534f6135e4f"
+    },
+    {
+      "path": "TreeDB/db/durable_root_metadata_reuse_test.go",
+      "git_blob": "c3b1b9a694935817f90ceb2af44c39c691195ae8"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "git_blob": "92e5632ba0882d1247f5e87628e02acd23ad3bb6"
+    },
+    {
+      "path": "TreeDB/db/format_config.go",
+      "git_blob": "06a605bc0149490c0790890bf6e564b53225634e"
+    },
+    {
+      "path": "TreeDB/db/format_config_test.go",
+      "git_blob": "a3da8e8c913b79c80714baa8ae0d4db70edb5504"
+    },
+    {
+      "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+      "git_blob": "a06181b66c0be72564c2a08150e3c5266cd031ae"
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "git_blob": "677b7e0961dda55d7e8e4fdcae5b40eaba05cd97"
+    },
+    {
+      "path": "TreeDB/db/physical_snapshot_cut_v1.go",
+      "git_blob": "8ee064d921970bb970a19240b845882cb99609a6"
+    },
+    {
+      "path": "TreeDB/db/physical_snapshot_cut_v1_test.go",
+      "git_blob": "cd463953ad5807f9d3fd74d0194cb6302465f9f3"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "git_blob": "28bf00efc3483250142f9e1bea3995a35697d054"
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "git_blob": "548df031270830d01581190263a1e88b3325eccb"
+    },
+    {
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "git_blob": "d9ddec1d63dd39fc6b946653abe224a6ca2a2f9a"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "git_blob": "198b21edbc444c6e8488c050e93fe9bcf024548a"
+    },
+    {
+      "path": "TreeDB/freelist/generation_topology_5131_test.go",
+      "git_blob": "961fb4169cc00f82b02d335a22d582dc4e2a3522"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "git_blob": "b0e3d464e23f6d00e359b97c65c252804dcd8e7f"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+      "git_blob": "c612a0bc4d711e69de4e6bd3c280ba89b2af4ead"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_reuse.go",
+      "git_blob": "2d69ef3f208017f428697660b51065466fc15295"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+      "git_blob": "6681f9bdef38e3b96a8984eaaf4b87ea214a3e12"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_private_test.go",
+      "git_blob": "45c5ff71a7b66c73f074af52e3b93bbddb142396"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_reservation.go",
+      "git_blob": "4fed0e787ad2659d36f4ba5bb56d00859699072e"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_test.go",
+      "git_blob": "ec542bd6339ed91c17c0982316f832f77679bd60"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_tree.go",
+      "git_blob": "9586c4e219ba0d343af3180e974789931f76ba1c"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "git_blob": "4bfaf4de7290e1b798dd61175f730b2b5e935b1a"
+    },
+    {
+      "path": "cmd/treedb_column_graph_demo/main.go",
+      "git_blob": "8158b22f9c02eaacbd5e0e60306a11691775753a"
+    }
+  ],
+  "issues": {
+    "5131": "closed",
+    "5132": "closed",
+    "5130": "open"
+  },
+  "source_manifest": "final-a220-source.json"
+}

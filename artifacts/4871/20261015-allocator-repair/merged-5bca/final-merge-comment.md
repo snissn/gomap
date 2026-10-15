@@ -1,0 +1,9 @@
+Final merge gate for `a22078f59bfe9023787d5147c51c989a4010644d` against main `9029eb4e06fb99913c08dd2b3d7424f310445469`:
+
+- All **51** current-head checks passed, including **TreeDB required gate**, all platform and Linux race shards, and Vacuum M0.
+- [Hosted Codex completed cleanly on this exact head](https://github.com/snissn/gomap/pull/5135#issuecomment-6185901780); final classifier is clean. Independent allocator/repair/final-fixture reviews accepted their exact source scopes.
+- CodeRabbit completed its full 31-file review. Its two trivial maintainability suggestions have inspected rationale replies and resolved threads; final unresolved-thread count is zero.
+- Final source manifest binds all 31 changed Git blobs. Production/module/public-harness inputs are byte-identical to measured `7702`, so its three paired public allocation/latency results remain applicable; the final test-only delta separately passed normal and race checks.
+- [Frozen source, public measurement, correctness and review evidence](https://github.com/snissn/gomap/blob/fad5aad24cd72d190e67df2e1475a23ec99adb9d/artifacts/4871/20261015-allocator-repair/README.md), [final fixture/equivalence](https://github.com/snissn/gomap/blob/97c3ce2585dd3025f2123f2dd6163ab50a96c1d9/artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/README.md), and [full final/earlier M0 outcomes plus exact-head review receipts](https://github.com/snissn/gomap/blob/dd3623c5485fcc20e151ab92123d9515ca22f5a7/artifacts/4871/20261015-allocator-repair/final-a220-gates/README.md) are durable. Earlier failures and cancelled retries remain distinct from final acceptance.
+
+Active ruleset 19140463 requires the now-passing TreeDB gate and zero approving reviews; there is no outstanding human/code-owner gate. PR is MERGEABLE/CLEAN. Proceeding with the authorized exact-head merge. Parent #5130/#4871 qualification remains open.

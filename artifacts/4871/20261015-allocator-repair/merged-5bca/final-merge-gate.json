@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-15T06:52:10.864154+00:00",
+  "head": "a22078f59bfe9023787d5147c51c989a4010644d",
+  "base": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "checks": 51,
+  "all_passed": true,
+  "unresolved_threads": 0,
+  "codex": "clean",
+  "ruleset": 19140463,
+  "authorization": "parent delegated explicit PR5135 merge authorization"
+}

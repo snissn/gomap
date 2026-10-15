@@ -1,0 +1,97 @@
+[
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/README.md",
+    "bytes": 666,
+    "sha256": "e28a7048de02ff99fe1e059d4df95d93d29fd98cbc59f0eef404444e2447ae09"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/body-new.md",
+    "bytes": 6701,
+    "sha256": "6720fc1c6d2246c0d07a5489e06ff2b6a9ff1627ff869cbec590a1bd7bdaf509"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/checks-a220.json",
+    "bytes": 6603,
+    "sha256": "5d3db663c465fa751ee0d65b6a615beb741ec306b44761e639e8f39c5caa15dc"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/ci-publication-classification.json",
+    "bytes": 185,
+    "sha256": "1a0f4437c56177747c185181142b2daa9477bd4da2fc983718e3acd500a85c41"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/coderabbit-a220-dispositions.json",
+    "bytes": 2079,
+    "sha256": "3149a47e102a474d00280adf182f173a1ad7e102df65842ce93d60cf15952b3d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/codex-final-clean.json",
+    "bytes": 1415,
+    "sha256": "288756bdf03e4e51db55a3ca8e8d89e8483229b6fd0e72475dd656fcc8291b70"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/final-merge-comment.md",
+    "bytes": 1894,
+    "sha256": "add13cb62447d29559b535e90d64ac769fd47b060c12fceddea87eaf76665cf2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/final-merge-gate.json",
+    "bytes": 339,
+    "sha256": "c34d5301db52b3b92e32930cea2d7ba847967bbb6c8b70a63f31b336498b5933"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/main-final-premerge.json",
+    "bytes": 5088,
+    "sha256": "30dc9d9ddd9dc7f1e993916c0ea496f06b213cbca3c677e586133903a5a9b672"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/merge-closeout-allowlist.json",
+    "bytes": 2829,
+    "sha256": "f9af24444b9f72e8d9a57ee037dde9ce9fbbea53a6e9f44c1217fac9a7419df2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/merged-readback.json",
+    "bytes": 4734,
+    "sha256": "1f5fd5104913539456a62a929e0b1a7776514a4d30f31dec2adb4d90f0a6fb1a"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/merged-readback.py",
+    "bytes": 1709,
+    "sha256": "be5307cbb83105a69ac256f56624a889840d0cc72d2310377facc44c3eab3b77"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/pr-final-premerge.json",
+    "bytes": 15118,
+    "sha256": "4d2e2fc0ee6664bbd4eab391b4536fb0f960d2db0bfb744ee49fbbd6dff846aa"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/reviews-a220.json",
+    "bytes": 7338,
+    "sha256": "f8934889a695be9b7e87b22ccdd07cbc5b1f19ce024d71a36cb473ebc1df15d4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/root-independent-merged-readback.json",
+    "bytes": 4374,
+    "sha256": "2c35908c9a82ab6e71696f026f41b2af55f7bf4f78f271ecc8be61cf170b4412"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/ruleset-final.json",
+    "bytes": 1148,
+    "sha256": "d5c9ccd44128c82880f4ca5bdddcbfcbe9e5724891461dba104953042bdb2535"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/threads-final.json",
+    "bytes": 11073,
+    "sha256": "c1da74f45cc9e5ebd8d7e3ec7e6cb8b9d990ae9c60c8435bc76e80ea822eeb87"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/treedb-final-jobs.json",
+    "bytes": 77932,
+    "sha256": "c33419becc41fc9eb7d70c7351500de3345dcbb802f38e1df5cbb965cd97d1b5"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/merged-5bca/treedb-final-run.json",
+    "bytes": 11335,
+    "sha256": "04efd4ea612a5a39ff5af5a280b69e5ac771fce6276b3dea2b4f00671d050e85"
+  }
+]

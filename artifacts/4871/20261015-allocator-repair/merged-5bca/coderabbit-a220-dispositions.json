@@ -1,0 +1,34 @@
+[
+  {
+    "thread": "PRRT_kwDOIdn7C86spkp2",
+    "comment_id": 4279800636,
+    "reply_url": "https://github.com/snissn/gomap/pull/5135#discussion_r4279814509",
+    "disposition": "Disposition: nonblocking diagnostic suggestion; no source change in this PR. For stable input, `ValidateFormatRequiredFeatureGate` above this branch already rejects malformed JSON containing `required_features`, with the gate's decode error. The subsequent defensive branch still returns the original wrapped `LoadFormatConfig` error and fails closed. A missing `format.json` returns `(cfg, false, nil)` from `LoadFormatConfig`, so it takes the initial successful path rather than this fallback; a later read failure also aborts safely. Returning the narrower error could improve diagnostics in a concurrent external-file-change case, but does not repair a current compatibility or recovery defect.",
+    "resolution": {
+      "data": {
+        "resolveReviewThread": {
+          "thread": {
+            "id": "PRRT_kwDOIdn7C86spkp2",
+            "isResolved": true
+          }
+        }
+      }
+    }
+  },
+  {
+    "thread": "PRRT_kwDOIdn7C86spkqG",
+    "comment_id": 4279800658,
+    "reply_url": "https://github.com/snissn/gomap/pull/5135#discussion_r4279814778",
+    "disposition": "Disposition: nonblocking API-hardening suggestion; no source change in this PR. I checked every call site: the sole production entry (`LoadGenerationV1`) passes a nonnil `metadataOwnershipV2`, and every recursive call forwards it. Only three direct decoder test calls omit ownership. Thus the public load/recovery path always enforces current-generation extent membership and page accounting. Requiring an explicit final pointer could improve future-call-site clarity, but does not change validation on the current public path. The frozen production implementation and its measured evidence are retained.",
+    "resolution": {
+      "data": {
+        "resolveReviewThread": {
+          "thread": {
+            "id": "PRRT_kwDOIdn7C86spkqG",
+            "isResolved": true
+          }
+        }
+      }
+    }
+  }
+]

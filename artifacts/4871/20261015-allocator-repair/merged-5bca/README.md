@@ -1,0 +1,3 @@
+PR5135 merged as 5bca87ffe6e1bfba2d693264d2dc82936adc234f from exact a22078f59bfe9023787d5147c51c989a4010644d.
+
+All51 current-head checks passed, including required TreeDB/allplatform/race/M0. Hosted Codex clean; CodeRabbit two trivial suggestions dispositioned/resolved; zero unresolved threads. Coordinator independently verified both merge parents and all31 final Git blobs. Allocation children5131/5132/5133 closed. Tracker5130 acceptance/closeout is separate; native4878 production ACK and the full4871 sprint performance gates remain OPEN. Earlier failed/cancelled outcomes and matched public performance inputs remain preserved in preceding artifact commits.
