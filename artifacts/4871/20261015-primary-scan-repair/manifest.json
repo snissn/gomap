@@ -1,0 +1,22 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 4968,
+    "sha256": "552e378bcdd1e0faadcd78714068b0474b2edf605baf760d3207b1217a0919da"
+  },
+  {
+    "path": "performance-summary.json",
+    "bytes": 7246,
+    "sha256": "e9712419fa925ec4100ad6cef5867df10ce29d80683c3703af274307efd50099"
+  },
+  {
+    "path": "primary-scan-repair.tar.gz",
+    "bytes": 3651612,
+    "sha256": "f7525eb309e5b64929f4c48c993709aeb3f6dc07e181ea2ff8308992f6ace7c8"
+  },
+  {
+    "path": "source-overlay-manifest.json",
+    "bytes": 4769,
+    "sha256": "1fcbe2c4172b71445015883d965079b915667ace60c5a99ca280ee7089514ac5"
+  }
+]

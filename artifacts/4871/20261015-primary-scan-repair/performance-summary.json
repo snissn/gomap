@@ -1,0 +1,215 @@
+{
+  "GetVersioned": {
+    "baseline": {
+      "rows": [
+        {
+          "raw": "GetVersioned-1-baseline.raw",
+          "line": "BenchmarkGetVersioned \t 1882382\t       318.1 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 318.1,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        {
+          "raw": "GetVersioned-2-baseline.raw",
+          "line": "BenchmarkGetVersioned \t 1885114\t       317.4 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 317.4,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        {
+          "raw": "GetVersioned-3-baseline.raw",
+          "line": "BenchmarkGetVersioned \t 1886457\t       318.2 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 318.2,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      ],
+      "medians": {
+        "ns/op": 318.1,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "raw": "GetVersioned-1-candidate.raw",
+          "line": "BenchmarkGetVersioned \t 1791837\t       337.5 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 337.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        {
+          "raw": "GetVersioned-2-candidate.raw",
+          "line": "BenchmarkGetVersioned \t 1790078\t       334.3 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 334.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        {
+          "raw": "GetVersioned-3-candidate.raw",
+          "line": "BenchmarkGetVersioned \t 1779428\t       333.5 ns/op\t       0 B/op\t       0 allocs/op",
+          "ns/op": 333.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      ],
+      "medians": {
+        "ns/op": 334.3,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    "delta": {
+      "ns/op": 16.19999999999999,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "time_change_pct": 5.092738132662689
+  },
+  "ConditionalTxnBaselineBatchWrite": {
+    "baseline": {
+      "rows": [
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-1-baseline.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20866 ns/op\t   31943 B/op\t     127 allocs/op",
+          "ns/op": 20866.0,
+          "B/op": 31943.0,
+          "allocs/op": 127.0
+        },
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-2-baseline.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21228 ns/op\t   31943 B/op\t     127 allocs/op",
+          "ns/op": 21228.0,
+          "B/op": 31943.0,
+          "allocs/op": 127.0
+        },
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-3-baseline.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21134 ns/op\t   31944 B/op\t     127 allocs/op",
+          "ns/op": 21134.0,
+          "B/op": 31944.0,
+          "allocs/op": 127.0
+        }
+      ],
+      "medians": {
+        "ns/op": 21134.0,
+        "B/op": 31943.0,
+        "allocs/op": 127.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-1-candidate.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20639 ns/op\t   31503 B/op\t     104 allocs/op",
+          "ns/op": 20639.0,
+          "B/op": 31503.0,
+          "allocs/op": 104.0
+        },
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-2-candidate.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20368 ns/op\t   31503 B/op\t     104 allocs/op",
+          "ns/op": 20368.0,
+          "B/op": 31503.0,
+          "allocs/op": 104.0
+        },
+        {
+          "raw": "ConditionalTxnBaselineBatchWrite-3-candidate.raw",
+          "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20397 ns/op\t   31504 B/op\t     104 allocs/op",
+          "ns/op": 20397.0,
+          "B/op": 31504.0,
+          "allocs/op": 104.0
+        }
+      ],
+      "medians": {
+        "ns/op": 20397.0,
+        "B/op": 31503.0,
+        "allocs/op": 104.0
+      }
+    },
+    "delta": {
+      "ns/op": -737.0,
+      "B/op": -440.0,
+      "allocs/op": -23.0
+    },
+    "time_change_pct": -3.487271694899219
+  },
+  "CommitAtPrimaryOnlyAfterDataGeneration": {
+    "baseline": {
+      "rows": [
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-1-baseline.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    151547 ns/op\t         2.000 generation_advances/op\t  279182 B/op\t     474 allocs/op",
+          "ns/op": 151547.0,
+          "generation_advances/op": 2.0,
+          "B/op": 279182.0,
+          "allocs/op": 474.0
+        },
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-2-baseline.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    143142 ns/op\t         2.000 generation_advances/op\t  279177 B/op\t     474 allocs/op",
+          "ns/op": 143142.0,
+          "generation_advances/op": 2.0,
+          "B/op": 279177.0,
+          "allocs/op": 474.0
+        },
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-3-baseline.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    142543 ns/op\t         2.000 generation_advances/op\t  279178 B/op\t     474 allocs/op",
+          "ns/op": 142543.0,
+          "generation_advances/op": 2.0,
+          "B/op": 279178.0,
+          "allocs/op": 474.0
+        }
+      ],
+      "medians": {
+        "ns/op": 143142.0,
+        "generation_advances/op": 2.0,
+        "B/op": 279178.0,
+        "allocs/op": 474.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-1-candidate.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    155985 ns/op\t         0 generation_advances/op\t  283896 B/op\t     390 allocs/op",
+          "ns/op": 155985.0,
+          "generation_advances/op": 0.0,
+          "B/op": 283896.0,
+          "allocs/op": 390.0
+        },
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-2-candidate.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    154349 ns/op\t         0 generation_advances/op\t  283896 B/op\t     390 allocs/op",
+          "ns/op": 154349.0,
+          "generation_advances/op": 0.0,
+          "B/op": 283896.0,
+          "allocs/op": 390.0
+        },
+        {
+          "raw": "CommitAtPrimaryOnlyAfterDataGeneration-3-candidate.raw",
+          "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    154615 ns/op\t         0 generation_advances/op\t  283896 B/op\t     390 allocs/op",
+          "ns/op": 154615.0,
+          "generation_advances/op": 0.0,
+          "B/op": 283896.0,
+          "allocs/op": 390.0
+        }
+      ],
+      "medians": {
+        "ns/op": 154615.0,
+        "generation_advances/op": 0.0,
+        "B/op": 283896.0,
+        "allocs/op": 390.0
+      }
+    },
+    "delta": {
+      "ns/op": 11473.0,
+      "generation_advances/op": -2.0,
+      "B/op": 4718.0,
+      "allocs/op": -84.0
+    },
+    "time_change_pct": 8.015117854997133
+  }
+}
