@@ -18,7 +18,9 @@ retried or selectively discarded. Hosted execution is not presumed quiet.
 
 Bootstrap uses pinned setup-go1.26.3 and enforces the original Go executable
 SHA256. It creates fresh task build/module caches under RUNNER_TEMP, downloads
-and verifies both exact source module graphs before the fixed build freeze,
+and verifies downloaded modules before the fixed build freeze. It inventories
+the two actual compiled packages and their test dependencies in read-only mode
+with verified network access, then repeats the same inventory offline,
 then compiles/collects with GOPROXY/GOSUMDBoff. Toolchain provenance, compiler
 executables/full toolchain archive, host/image/process information, source
 manifests, build environment/logs/buildinfo, four binaries, authorization/binding,

@@ -161,9 +161,15 @@ def main():
         for label, directory in [('baseline', 'coordinator'), ('candidate', 'ordinary-repair')]:
             source = root / directory
             command(label + '-download', [go, 'mod', 'download'], cwd=source, env=deps_env, timeout=600)
+            # Inventory the actual compiled packages and their test dependencies.
+            # A complete module graph also traverses unrelated dependency tools
+            # whose local replacement directives do not apply in this module.
+            packages = [go, 'list', '-mod=readonly', '-deps', '-test', '-json', './TreeDB', './TreeDB/db']
+            command(label + '-packages-prefill', packages,
+                    cwd=source, env=deps_env, timeout=600)
             offline = dict(deps_env, GOPROXY='off', GOSUMDB='off')
             command(label + '-verify', [go, 'mod', 'verify'], cwd=source, env=offline)
-            command(label + '-modules', [go, 'list', '-m', '-json', 'all'], cwd=source, env=offline)
+            command(label + '-packages-offline', packages, cwd=source, env=offline, timeout=600)
             assert not command(label + '-clean-after-deps', ['git', 'status', '--porcelain'], cwd=source).strip()
         actual_sources('sources-after-dependencies.json')
         scripts = harness / '.github/scripts'
