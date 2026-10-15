@@ -1,0 +1,2543 @@
+{
+  "ordinary_batch_cpu": {
+    "profile": "ordinary-batch-cpu",
+    "focus": null,
+    "whole_weight": 5280000000,
+    "focused_weight": 5280000000,
+    "focused_rows": 496,
+    "flat_top": [
+      [
+        "runtime.tryDeferToSpanScan",
+        240000000
+      ],
+      [
+        "runtime.scanblock",
+        180000000
+      ],
+      [
+        "crypto/internal/fips140/sha256.blockSHANI",
+        160000000
+      ],
+      [
+        "runtime.memmove",
+        150000000
+      ],
+      [
+        "runtime.typePointers.next",
+        150000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).retiredSummary",
+        140000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        140000000
+      ],
+      [
+        "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512",
+        140000000
+      ],
+      [
+        "runtime.heapArenaOf",
+        110000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func6",
+        80000000
+      ],
+      [
+        "time.runtimeNow",
+        70000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.recomputeStateNode",
+        70000000
+      ],
+      [
+        "runtime.memclrNoHeapPointers",
+        70000000
+      ],
+      [
+        "runtime.(*sweepLocked).sweep",
+        70000000
+      ],
+      [
+        "runtime.(*spanSet).push",
+        70000000
+      ],
+      [
+        "runtime.gcmarknewobject",
+        60000000
+      ],
+      [
+        "runtime.scanObject",
+        60000000
+      ],
+      [
+        "internal/runtime/maps.(*Iter).Next",
+        60000000
+      ],
+      [
+        "internal/runtime/syscall/linux.Syscall6",
+        50000000
+      ],
+      [
+        "internal/sync.(*Mutex).Unlock",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func4",
+        50000000
+      ],
+      [
+        "runtime.wbBufFlush1",
+        50000000
+      ],
+      [
+        "internal/sync.(*Mutex).Lock",
+        50000000
+      ],
+      [
+        "internal/runtime/atomic.(*Uint32).Add",
+        50000000
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "testing.(*B).runN",
+        4030000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite",
+        4020000000
+      ],
+      [
+        "testing.(*B).launch",
+        4020000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight",
+        3880000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic",
+        3880000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent",
+        3880000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).write",
+        3880000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).Write",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        2810000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        2780000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1",
+        2390000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate",
+        2260000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        2070000000
+      ],
+      [
+        "runtime.mallocgc",
+        1490000000
+      ],
+      [
+        "runtime.systemstack",
+        1460000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        1000000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany",
+        990000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions",
+        940000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        920000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.mutateChunk",
+        900000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive",
+        850000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run",
+        790000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication",
+        780000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6",
+        770000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata",
+        710000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        690000000
+      ],
+      [
+        "runtime.makeslice",
+        630000000
+      ],
+      [
+        "runtime.newobject",
+        630000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        600000000
+      ],
+      [
+        "runtime.(*mcache).nextFree",
+        590000000
+      ],
+      [
+        "runtime.(*mcache).refill",
+        560000000
+      ],
+      [
+        "runtime.mallocgcSmallNoscan",
+        550000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate",
+        500000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        500000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany",
+        470000000
+      ],
+      [
+        "runtime.mallocgcSmallScanNoHeader",
+        470000000
+      ],
+      [
+        "runtime.(*mcentral).cacheSpan",
+        460000000
+      ],
+      [
+        "runtime.gcBgMarkWorker",
+        440000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare",
+        430000000
+      ],
+      [
+        "runtime.deductAssistCredit",
+        410000000
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 2390000000,
+        "percent_of_focus": 45.265151515151516
+      },
+      "allocator_materialize": {
+        "weight": 2070000000,
+        "percent_of_focus": 39.20454545454545
+      },
+      "allocator_encoding": {
+        "weight": 990000000,
+        "percent_of_focus": 18.75
+      },
+      "allocator_state_cloning": {
+        "weight": 640000000,
+        "percent_of_focus": 12.121212121212121
+      },
+      "mallocgc": {
+        "weight": 1490000000,
+        "percent_of_focus": 28.219696969696972
+      },
+      "gc_work": {
+        "weight": 850000000,
+        "percent_of_focus": 16.098484848484848
+      },
+      "gc_or_malloc_union": {
+        "weight": 1930000000,
+        "percent_of_focus": 36.553030303030305
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 140000000,
+        "percent_of_focus": 2.6515151515151514
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 120000000,
+        "percent_of_focus": 2.272727272727273
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "ordinary_batch_actual_write_cpu": {
+    "profile": "ordinary-batch-cpu",
+    "focus": "(*Batch).Write",
+    "whole_weight": 5280000000,
+    "focused_weight": 3860000000,
+    "focused_rows": 368,
+    "flat_top": [
+      [
+        "runtime.tryDeferToSpanScan",
+        150000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        140000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).retiredSummary",
+        130000000
+      ],
+      [
+        "crypto/internal/fips140/sha256.blockSHANI",
+        130000000
+      ],
+      [
+        "github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512",
+        120000000
+      ],
+      [
+        "runtime.typePointers.next",
+        100000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func6",
+        80000000
+      ],
+      [
+        "runtime.heapArenaOf",
+        80000000
+      ],
+      [
+        "time.runtimeNow",
+        70000000
+      ],
+      [
+        "runtime.(*sweepLocked).sweep",
+        70000000
+      ],
+      [
+        "internal/runtime/maps.(*Iter).Next",
+        60000000
+      ],
+      [
+        "runtime.scanblock",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.recomputeStateNode",
+        50000000
+      ],
+      [
+        "runtime.memclrNoHeapPointers",
+        50000000
+      ],
+      [
+        "runtime.gcmarknewobject",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func4",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.detachMetadataSiblings",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone",
+        40000000
+      ],
+      [
+        "runtime.scanObject",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.findFreeLE",
+        40000000
+      ],
+      [
+        "runtime.wbBufFlush1",
+        40000000
+      ],
+      [
+        "runtime.(*mspan).writeHeapBitsSmall",
+        40000000
+      ],
+      [
+        "runtime.(*spanSet).push",
+        40000000
+      ],
+      [
+        "internal/sync.(*Mutex).Lock",
+        40000000
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).Write",
+        3860000000
+      ],
+      [
+        "testing.(*B).runN",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic",
+        3860000000
+      ],
+      [
+        "testing.(*B).launch",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).write",
+        3860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        2810000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        2780000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate",
+        2260000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1",
+        2120000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        1870000000
+      ],
+      [
+        "runtime.mallocgc",
+        1300000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions",
+        920000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        910000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        900000000
+      ],
+      [
+        "runtime.systemstack",
+        880000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany",
+        870000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive",
+        840000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.mutateChunk",
+        800000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        680000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata",
+        600000000
+      ],
+      [
+        "runtime.newobject",
+        570000000
+      ],
+      [
+        "runtime.makeslice",
+        560000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        520000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate",
+        490000000
+      ],
+      [
+        "runtime.(*mcache).nextFree",
+        480000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        460000000
+      ],
+      [
+        "runtime.mallocgcSmallNoscan",
+        460000000
+      ],
+      [
+        "runtime.(*mcache).refill",
+        460000000
+      ],
+      [
+        "runtime.mallocgcSmallScanNoHeader",
+        400000000
+      ],
+      [
+        "runtime.deductAssistCredit",
+        390000000
+      ],
+      [
+        "runtime.gcAssistAlloc",
+        390000000
+      ],
+      [
+        "runtime.gcAssistAlloc.func2",
+        390000000
+      ],
+      [
+        "runtime.gcAssistAlloc1",
+        390000000
+      ],
+      [
+        "runtime.gcDrainN",
+        390000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany",
+        390000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc",
+        390000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc",
+        380000000
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 2120000000,
+        "percent_of_focus": 54.92227979274611
+      },
+      "allocator_materialize": {
+        "weight": 1870000000,
+        "percent_of_focus": 48.44559585492228
+      },
+      "allocator_encoding": {
+        "weight": 910000000,
+        "percent_of_focus": 23.57512953367876
+      },
+      "allocator_state_cloning": {
+        "weight": 600000000,
+        "percent_of_focus": 15.544041450777202
+      },
+      "mallocgc": {
+        "weight": 1300000000,
+        "percent_of_focus": 33.67875647668394
+      },
+      "gc_work": {
+        "weight": 390000000,
+        "percent_of_focus": 10.103626943005182
+      },
+      "gc_or_malloc_union": {
+        "weight": 1300000000,
+        "percent_of_focus": 33.67875647668394
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 90000000,
+        "percent_of_focus": 2.33160621761658
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 120000000,
+        "percent_of_focus": 3.1088082901554404
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "ordinary_get_cpu": {
+    "profile": "ordinary-get-cpu",
+    "focus": null,
+    "whole_weight": 4020000000,
+    "focused_weight": 4020000000,
+    "focused_rows": 209,
+    "flat_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID",
+        350000000
+      ],
+      [
+        "internal/sync.(*Mutex).Unlock",
+        350000000
+      ],
+      [
+        "internal/sync.(*Mutex).Lock",
+        350000000
+      ],
+      [
+        "sync/atomic.(*Int32).Add",
+        340000000
+      ],
+      [
+        "cmpbody",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld",
+        210000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Put",
+        130000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView",
+        110000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset",
+        110000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt",
+        100000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).RetainSnapshotWrapper",
+        90000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Snapshot).invalidateBoundIteratorsLocked",
+        80000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint",
+        60000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryClaimFast",
+        60000000
+      ],
+      [
+        "sync/atomic.(*Bool).CompareAndSwap",
+        50000000
+      ],
+      [
+        "encoding/binary.littleEndian.Uint64",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).getWithWork",
+        50000000
+      ],
+      [
+        "runtime.deferprocStack",
+        40000000
+      ],
+      [
+        "sync.(*RWMutex).Unlock",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.getUint16At",
+        40000000
+      ],
+      [
+        "sync/atomic.(*Uint64).Load",
+        30000000
+      ],
+      [
+        "sync/atomic.(*Int64).Add",
+        30000000
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned.func2",
+        3980000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend",
+        3980000000
+      ],
+      [
+        "testing.(*B).RunParallel.func1",
+        3980000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend.func1",
+        3950000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).GetVersionedAppend",
+        1680000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView",
+        1670000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr",
+        1220000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld",
+        1090000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*oneShotRead).close",
+        1040000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Snapshot).Close",
+        1010000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseIfUnreferenced",
+        860000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID",
+        590000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf",
+        470000000
+      ],
+      [
+        "sync.(*Mutex).Unlock",
+        350000000
+      ],
+      [
+        "internal/sync.(*Mutex).Unlock",
+        350000000
+      ],
+      [
+        "internal/sync.(*Mutex).Lock",
+        350000000
+      ],
+      [
+        "sync.(*Mutex).Lock",
+        350000000
+      ],
+      [
+        "bytes.Compare",
+        350000000
+      ],
+      [
+        "sync/atomic.(*Int32).Add",
+        340000000
+      ],
+      [
+        "cmpbody",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Put",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerWrapperReleaseWork).ReleaseOriginal",
+        300000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerWrapperReleaseWork).releaseStep",
+        300000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueViewWithRevision",
+        250000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint",
+        250000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision",
+        240000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto",
+        240000000
+      ],
+      [
+        "sync.(*RWMutex).Unlock",
+        220000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.compareInternalSuffix",
+        200000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).RetainSnapshotWrapper",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt",
+        180000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.compareLeafKey",
+        160000000
+      ],
+      [
+        "sync.(*RWMutex).Lock",
+        150000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset",
+        120000000
+      ],
+      [
+        "sync.(*RWMutex).RLock",
+        110000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryClaimFast",
+        110000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*indexGen).releaseWrapperBorrowCompletionV6",
+        100000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Snapshot).invalidateBoundIteratorsLocked",
+        90000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).Get",
+        80000000
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 10000000,
+        "percent_of_focus": 0.24875621890547264
+      },
+      "allocator_materialize": {
+        "weight": 10000000,
+        "percent_of_focus": 0.24875621890547264
+      },
+      "allocator_encoding": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_state_cloning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mallocgc": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 2260000000,
+        "percent_of_focus": 56.21890547263681
+      },
+      "mutex_or_atomic": {
+        "weight": 1230000000,
+        "percent_of_focus": 30.597014925373134
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "ordinary_seek_cpu": {
+    "profile": "ordinary-seek-cpu",
+    "focus": null,
+    "whole_weight": 3780000000,
+    "focused_weight": 3780000000,
+    "focused_rows": 193,
+    "flat_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).seek",
+        800000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefView",
+        710000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadNodeRef",
+        500000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf",
+        420000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt",
+        160000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal",
+        150000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).getWithWork",
+        100000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto",
+        90000000
+      ],
+      [
+        "cmpbody",
+        80000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafKeyFlagsView",
+        70000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto",
+        70000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.getUint64BEAt",
+        60000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryLayoutAt",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).localPageID",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadCurrent",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.BenchmarkSnapshotIteratorSeekNext.func1.1",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*combinedLeafKeyState).init",
+        40000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified",
+        40000000
+      ],
+      [
+        "encoding/binary.littleEndian.Uint16",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*snapshotBoundIterator).begin",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).getLeafKeyFlags",
+        20000000
+      ],
+      [
+        "runtime.asyncPreempt",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.getUint16At",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).InternalFenceBounds",
+        20000000
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "testing.(*B).runN",
+        3770000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.BenchmarkSnapshotIteratorSeekNext.func1.1",
+        3770000000
+      ],
+      [
+        "testing.(*B).launch",
+        3770000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*snapshotBoundIterator).Seek",
+        3720000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).Seek",
+        3690000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).seek",
+        3690000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadNodeRef",
+        1620000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefView",
+        1120000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf",
+        490000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadCurrent",
+        430000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto",
+        400000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Iterator).getLeafKeyFlags",
+        390000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto",
+        330000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafKeyFlagsView",
+        320000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternal",
+        300000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt",
+        240000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).Get",
+        140000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).GetWithWork",
+        130000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.compareInternalSuffix",
+        120000000
+      ],
+      [
+        "bytes.Compare",
+        120000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).getWithWork",
+        120000000
+      ],
+      [
+        "cmpbody",
+        80000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified",
+        80000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryLayoutAt",
+        60000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.getUint64BEAt",
+        60000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/pager.(*Pager).localPageID",
+        50000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/tree.(*combinedLeafKeyState).init",
+        50000000
+      ],
+      [
+        "encoding/binary.littleEndian.Uint16",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*snapshotBoundIterator).begin",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnar",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).GetInternalChildRef",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.InitFreshNodeView",
+        20000000
+      ],
+      [
+        "runtime.asyncPreempt",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.getUint16At",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).rawFlags",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).InternalFenceBounds",
+        20000000
+      ],
+      [
+        "internal/bytealg.Compare",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).releasePublishedMemtableView",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/memtable.(*AppendOnly).resetLockedWithPolicy",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).publishMemtablesLocked",
+        10000000
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_materialize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_encoding": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_state_cloning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mallocgc": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "native_prune_cpu": {
+    "profile": "native-diagnostic-cpu",
+    "focus": "PruneVersionsUnboundedDiagnosticForTest",
+    "whole_weight": 16050000000,
+    "focused_weight": 920000000,
+    "focused_rows": 84,
+    "flat_top": [
+      [
+        "runtime.memclrNoHeapPointers",
+        120000000
+      ],
+      [
+        "internal/runtime/syscall/linux.Syscall6",
+        60000000
+      ],
+      [
+        "runtime.step",
+        50000000
+      ],
+      [
+        "github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock",
+        50000000
+      ],
+      [
+        "runtime.memmove",
+        40000000
+      ],
+      [
+        "hash/crc32.ieeeCLMUL",
+        30000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*MaterializedWriteWork).Complete",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/page.(*PageHeader).Encode",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.DecodePrimaryDirectory",
+        20000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest",
+        10000000
+      ],
+      [
+        "internal/filepathlite.(*lazybuf).append",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        10000000
+      ],
+      [
+        "internal/runtime/atomic.(*Uint32).Add",
+        10000000
+      ],
+      [
+        "runtime.(*mcache).refill",
+        10000000
+      ],
+      [
+        "internal/sync.(*Mutex).Unlock",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCFrameReaderV6).BeginProjectionFrame",
+        10000000
+      ],
+      [
+        "internal/sync.(*Mutex).Lock",
+        10000000
+      ],
+      [
+        "runtime.selectnbsend",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.combineResourceFieldCells",
+        10000000
+      ],
+      [
+        "weak.Make[go.shape.a0eb151c52d8a12c5a7a936a616b2221bc4fdfebc527568368270ef882750e87]",
+        10000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.decodeFrameValueBounds",
+        10000000
+      ],
+      [
+        "internal/filepathlite.Clean",
+        10000000
+      ],
+      [
+        "sync.(*Pool).Get",
+        10000000
+      ],
+      [
+        "internal/runtime/maps.(*table).Clear",
+        10000000
+      ],
+      [
+        "runtime.growslice",
+        10000000
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "testing.tRunner",
+        920000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1",
+        920000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest",
+        920000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersions",
+        910000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6",
+        910000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step",
+        870000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        690000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        690000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6",
+        630000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked",
+        570000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        560000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        550000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithMetadataV1",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1",
+        310000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateValueLogReferencesWithCountsAndLimitsV1",
+        290000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1",
+        290000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan",
+        260000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func6",
+        240000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren",
+        230000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func6.1",
+        230000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func5",
+        230000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeTo",
+        200000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeTo",
+        200000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.valueReader.ReadLeafLogPageUnsafeToWithState",
+        200000000
+      ],
+      [
+        "runtime.mallocgc",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readAtWithDictTo",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeTo",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.readAtWithDictToScratch",
+        190000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1.func2",
+        140000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).RunNativeUnboundedDiagnosticV6",
+        140000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallPolicyV6",
+        140000000
+      ],
+      [
+        "runtime.newobject",
+        120000000
+      ],
+      [
+        "runtime.memclrNoHeapPointers",
+        120000000
+      ],
+      [
+        "runtime.systemstack",
+        100000000
+      ],
+      [
+        "runtime.mallocgcLarge",
+        90000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).stepNativeMVCCMaterializedOutputV6",
+        90000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).StepNativeMVCCUnboundedDiagnosticOutputV6",
+        90000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.(*DB).StepNativeMVCCUnboundedDiagnosticOutputV6",
+        90000000
+      ],
+      [
+        "runtime.memclrNoHeapPointersChunked",
+        80000000
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate",
+        80000000
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 60000000,
+        "percent_of_focus": 6.521739130434782
+      },
+      "allocator_materialize": {
+        "weight": 60000000,
+        "percent_of_focus": 6.521739130434782
+      },
+      "allocator_encoding": {
+        "weight": 40000000,
+        "percent_of_focus": 4.3478260869565215
+      },
+      "allocator_state_cloning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mallocgc": {
+        "weight": 190000000,
+        "percent_of_focus": 20.652173913043477
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 190000000,
+        "percent_of_focus": 20.652173913043477
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 20000000,
+        "percent_of_focus": 2.1739130434782608
+      },
+      "prune_finalize": {
+        "weight": 570000000,
+        "percent_of_focus": 61.95652173913043
+      },
+      "capture_resources": {
+        "weight": 310000000,
+        "percent_of_focus": 33.69565217391305
+      },
+      "reachability_scanning": {
+        "weight": 290000000,
+        "percent_of_focus": 31.521739130434785
+      }
+    }
+  },
+  "ordinary_batch_alloc": {
+    "profile": "ordinary-batch-alloc",
+    "focus": null,
+    "whole_weight": 545239464,
+    "focused_weight": 545239464,
+    "focused_rows": 3404,
+    "flat_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        225509376
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        61807680
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone",
+        49446144
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.newMergeScratch",
+        33545184
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage",
+        29556736
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages",
+        14094216
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage",
+        14004224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.reservationDigest",
+        14004224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata",
+        9835584
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized",
+        9809280
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*recordingSink).write",
+        7326496
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1",
+        5413632
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.appendIDExtents",
+        5115312
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare",
+        4064152
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage",
+        3690648
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        3485312
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.durableRootRecordDigestV1",
+        3252224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.DurableRootRecordV1.EncodePage",
+        3252224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).markReplacedPath",
+        3198312
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.collectPrunable",
+        3094880
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        2424416
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction",
+        2392632
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.normalizeExtents",
+        2306192
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked",
+        2274800
+      ],
+      [
+        "maps.clone",
+        2227056
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "testing.(*B).runN",
+        474762792
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite",
+        474736480
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight",
+        469519760
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent",
+        469519760
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic",
+        469519760
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).write",
+        469519760
+      ],
+      [
+        "testing.(*B).launch",
+        469274032
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).Write",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1",
+        381667584
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        380592032
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        380398688
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        356931296
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate",
+        342242088
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        265702232
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        225509376
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany",
+        114944472
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.mutateChunk",
+        111253824
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions",
+        87615848
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        87134232
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run",
+        70409920
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication",
+        70409344
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6",
+        70320640
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate",
+        68703840
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        61807680
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare",
+        54059776
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive",
+        50067152
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc",
+        49871776
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc",
+        49661040
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate",
+        49661040
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).allocCOWLocked",
+        49661040
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone",
+        49446144
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany",
+        41367368
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        34298224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.newMergeScratch",
+        33545184
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).acquireApplyScratch",
+        33545184
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage",
+        29556736
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata",
+        28638400
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1",
+        28432640
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).ActivateCOWCandidateV1",
+        28431088
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages",
+        28207848
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 381667584,
+        "percent_of_focus": 69.99999251704935
+      },
+      "allocator_materialize": {
+        "weight": 356931296,
+        "percent_of_focus": 65.46321746072292
+      },
+      "allocator_encoding": {
+        "weight": 301213160,
+        "percent_of_focus": 55.244196337189564
+      },
+      "allocator_state_cloning": {
+        "weight": 111253824,
+        "percent_of_focus": 20.40458025246683
+      },
+      "mallocgc": {
+        "weight": 4000,
+        "percent_of_focus": 0.000733622612467391
+      },
+      "gc_work": {
+        "weight": 512,
+        "percent_of_focus": 9.390369439582605e-05
+      },
+      "gc_or_malloc_union": {
+        "weight": 4000,
+        "percent_of_focus": 0.000733622612467391
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 2802544,
+        "percent_of_focus": 0.5140024127087031
+      },
+      "reachability_scanning": {
+        "weight": 84160,
+        "percent_of_focus": 0.015435419766313907
+      }
+    }
+  },
+  "ordinary_batch_actual_write_alloc": {
+    "profile": "ordinary-batch-alloc",
+    "focus": "(*Batch).Write",
+    "whole_weight": 545239464,
+    "focused_weight": 464099984,
+    "focused_rows": 664,
+    "flat_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        198590464
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        52473600
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone",
+        41978880
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.newMergeScratch",
+        33323104
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage",
+        26501120
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages",
+        12366120
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage",
+        12292096
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.reservationDigest",
+        12292096
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized",
+        8736384
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata",
+        8642880
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*recordingSink).write",
+        6434144
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1",
+        5377792
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.appendIDExtents",
+        4465488
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare",
+        3577192
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        3457152
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage",
+        3241080
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).markReplacedPath",
+        2808936
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction",
+        2376792
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked",
+        2256752
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        2127680
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceSetBuilder",
+        2112704
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.normalizeExtents",
+        2024864
+      ],
+      [
+        "maps.clone",
+        1982704
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze",
+        1728576
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1",
+        1584528
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight",
+        464099984
+      ],
+      [
+        "testing.(*B).runN",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).Write",
+        464099984
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*Batch).write",
+        464099984
+      ],
+      [
+        "testing.(*B).launch",
+        463947384
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        378122448
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        377930384
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate",
+        340019048
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1",
+        334785176
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate",
+        314853352
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.emitStatePages",
+        234541016
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage",
+        198590464
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany",
+        97693560
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.mutateChunk",
+        94452480
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions",
+        84680824
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig",
+        84202104
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate",
+        62150976
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode",
+        52473600
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive",
+        47397840
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc",
+        47198224
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc",
+        47007664
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate",
+        47007664
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).allocCOWLocked",
+        47007664
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone",
+        41978880
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany",
+        36070760
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.newMergeScratch",
+        33323104
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).acquireApplyScratch",
+        33323104
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal",
+        31720336
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage",
+        26501120
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).EnqueueBuilt",
+        26219440
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).enqueueLocked",
+        25739280
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata",
+        25532192
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).activateFromCoordinatorWithWork",
+        25094016
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).activateFromCoordinator",
+        25094016
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate",
+        25094016
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4",
+        25094016
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.activateDurableRootGroup",
+        25094016
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 334785176,
+        "percent_of_focus": 72.13643342853466
+      },
+      "allocator_materialize": {
+        "weight": 314853352,
+        "percent_of_focus": 67.84170714386407
+      },
+      "allocator_encoding": {
+        "weight": 265595080,
+        "percent_of_focus": 57.22798732093901
+      },
+      "allocator_state_cloning": {
+        "weight": 94452480,
+        "percent_of_focus": 20.351752479267486
+      },
+      "mallocgc": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "prune_finalize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "capture_resources": {
+        "weight": 2784928,
+        "percent_of_focus": 0.60007069511125
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "native_prune_mutex": {
+    "profile": "native-diagnostic-mutex",
+    "focus": "PruneVersionsUnboundedDiagnosticForTest",
+    "whole_weight": 1867213,
+    "focused_weight": 476294,
+    "focused_rows": 1,
+    "flat_top": [
+      [
+        "sync.(*Mutex).Unlock",
+        476294
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).RunNativeUnboundedDiagnosticV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallPolicyV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersions",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareCapsuleSealV6",
+        476294
+      ],
+      [
+        "sync.(*Mutex).Unlock",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).preparePrimarySealV5",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest",
+        476294
+      ],
+      [
+        "runtime.deferreturn",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare",
+        476294
+      ],
+      [
+        "testing.tRunner",
+        476294
+      ],
+      [
+        "testing.(*T).Run.gowrap1",
+        476294
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).PreparePrimaryPromotionV6",
+        476294
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_materialize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_encoding": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_state_cloning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mallocgc": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 476294,
+        "percent_of_focus": 100.0
+      },
+      "prune_finalize": {
+        "weight": 476294,
+        "percent_of_focus": 100.0
+      },
+      "capture_resources": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "native_prune_block": {
+    "profile": "native-diagnostic-block",
+    "focus": "PruneVersionsUnboundedDiagnosticForTest",
+    "whole_weight": 36535346660,
+    "focused_weight": 331443,
+    "focused_rows": 1,
+    "flat_top": [
+      [
+        "sync.(*Mutex).Lock",
+        331443
+      ]
+    ],
+    "cumulative_top": [
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1",
+        331443
+      ],
+      [
+        "testing.tRunner",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallPolicyV6",
+        331443
+      ],
+      [
+        "testing.(*T).Run.gowrap1",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersions",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB.(*DB).PublishNativeMVCCUnboundedDiagnosticV6",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked",
+        331443
+      ],
+      [
+        "sync.(*Mutex).Lock",
+        331443
+      ],
+      [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).RunNativeUnboundedDiagnosticV6",
+        331443
+      ]
+    ],
+    "union_groups": {
+      "allocator_prepare": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_materialize": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_encoding": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "allocator_state_cloning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mallocgc": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_work": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "gc_or_malloc_union": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "snapshot_acquire_or_close": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "mutex_or_atomic": {
+        "weight": 331443,
+        "percent_of_focus": 100.0
+      },
+      "prune_finalize": {
+        "weight": 331443,
+        "percent_of_focus": 100.0
+      },
+      "capture_resources": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      },
+      "reachability_scanning": {
+        "weight": 0,
+        "percent_of_focus": 0.0
+      }
+    }
+  },
+  "ordinary_get_mutex_atomic_callers": {
+    "github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr": 70000000,
+    "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryJoinFast": 30000000,
+    "github.com/snissn/gomap/TreeDB/db.(*indexGen).retainWrapperBorrow": 60000000,
+    "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint": 40000000,
+    "github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseIfUnreferenced": 110000000,
+    "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryClaimFast": 50000000,
+    "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld": 220000000,
+    "github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerWrapperReleaseWork).releaseStep": 260000000,
+    "github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Put": 100000000,
+    "github.com/snissn/gomap/TreeDB/db.(*Snapshot).Close": 60000000,
+    "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).RetainSnapshotWrapper": 100000000,
+    "github.com/snissn/gomap/TreeDB/db.(*indexGen).releaseWrapperBorrowCompletionV6": 100000000,
+    "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.func1": 20000000,
+    "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).Unregister": 10000000
+  }
+}

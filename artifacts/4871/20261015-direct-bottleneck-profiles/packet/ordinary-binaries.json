@@ -1,0 +1,10 @@
+{
+  "ordinary-treedb.test": {
+    "size": 56559849,
+    "sha256": "f01ba46049809664d46e7cb53ad15604c091e5f255b2961e5301e73b9b7e7d72"
+  },
+  "ordinary-db.test": {
+    "size": 60842242,
+    "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a"
+  }
+}

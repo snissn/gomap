@@ -1,0 +1,43 @@
+File: after-mvcc.test
+Build ID: fcae18271431156a325a97e4424de336c486980d
+Type: delay
+Time: 2026-10-14 18:30:48 HST
+Showing nodes accounting for 1848.70us, 99.01% of 1867.21us total
+Dropped 81 nodes (cum <= 9.34us)
+Showing top 35 nodes out of 77
+      flat  flat%   sum%        cum   cum%
+ 1046.60us 56.05% 56.05%  1046.60us 56.05%  runtime.unlock (partial-inline)
+         0     0% 56.05%   887.61us 47.54%  runtime.systemstack
+         0     0% 56.05%   863.68us 46.25%  runtime.gcBgMarkWorker
+         0     0% 56.05%   845.69us 45.29%  runtime.gcMarkDone
+         0     0% 56.05%   841.25us 45.05%  runtime.gcMarkTermination
+         0     0% 56.05%   802.11us 42.96%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallPolicyV6
+  802.11us 42.96% 99.01%   802.11us 42.96%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.01%   755.09us 40.44%  runtime.forEachP (inline)
+         0     0% 99.01%   755.09us 40.44%  runtime.forEachPInternal
+         0     0% 99.01%   750.65us 40.20%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 99.01%   528.28us 28.29%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare
+         0     0% 99.01%   528.28us 28.29%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareCapsuleSealV6
+         0     0% 99.01%   528.28us 28.29%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).preparePrimarySealV5
+         0     0% 99.01%   528.28us 28.29%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).PreparePrimaryPromotionV6
+         0     0% 99.01%   528.28us 28.29%  runtime.deferreturn
+         0     0% 99.01%   496.66us 26.60%  github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1
+         0     0% 99.01%   496.66us 26.60%  testing.tRunner
+         0     0% 99.01%   481.78us 25.80%  testing.(*T).Run.gowrap1
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB.(*DB).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).RunNativeUnboundedDiagnosticV6
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersions
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest
+         0     0% 99.01%   476.29us 25.51%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6
+         0     0% 99.01%   325.81us 17.45%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication
+         0     0% 99.01%   325.81us 17.45%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6 (inline)
+         0     0% 99.01%   320.32us 17.16%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0% 99.01%   320.32us 17.16%  github.com/snissn/gomap/TreeDB/internal/rootpublication.New.gowrap1
+         0     0% 99.01%   116.83us  6.26%  runtime.mcall
+         0     0% 99.01%    90.60us  4.85%  runtime.gcMarkTermination.func3

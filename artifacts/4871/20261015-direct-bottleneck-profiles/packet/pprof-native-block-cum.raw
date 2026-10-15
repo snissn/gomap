@@ -1,0 +1,43 @@
+File: after-mvcc.test
+Build ID: fcae18271431156a325a97e4424de336c486980d
+Type: delay
+Time: 2026-10-14 18:30:48 HST
+Showing nodes accounting for 36531.96ms, 100% of 36535.35ms total
+Dropped 69 nodes (cum <= 182.68ms)
+Showing top 35 nodes out of 38
+      flat  flat%   sum%        cum   cum%
+25446.75ms 69.65% 69.65% 25446.75ms 69.65%  runtime.selectgo
+         0     0% 69.65% 10648.16ms 29.14%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogWriter.gowrap1
+         0     0% 69.65% 10648.16ms 29.14%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogWriteLoop
+         0     0% 69.65%  7012.97ms 19.20%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker
+         0     0% 69.65%  7012.97ms 19.20%  github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool.gowrap1
+ 7012.97ms 19.20% 88.84%  7012.97ms 19.20%  runtime.chanrecv2
+         0     0% 88.84%  4128.59ms 11.30%  testing.tRunner
+ 4072.24ms 11.15%   100%  4072.24ms 11.15%  runtime.chanrecv1
+         0     0%   100%  4070.97ms 11.14%  testing.(*T).Run
+         0     0%   100%  3530.51ms  9.66%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop
+         0     0%   100%  3530.51ms  9.66%  github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower.gowrap1
+         0     0%   100%  2092.46ms  5.73%  testing.(*T).Run.gowrap1
+         0     0%   100%  2036.13ms  5.57%  github.com/snissn/gomap/TreeDB/mvcc.TestMain
+         0     0%   100%  2036.13ms  5.57%  go.uber.org/goleak.VerifyTestMain
+         0     0%   100%  2036.13ms  5.57%  main.main
+         0     0%   100%  2036.13ms  5.57%  runtime.main
+         0     0%   100%  2036.13ms  5.57%  testing.(*M).Run
+         0     0%   100%  2036.13ms  5.57%  testing.runTests
+         0     0%   100%  2036.13ms  5.57%  testing.runTests.func1
+         0     0%   100%  2034.84ms  5.57%  github.com/snissn/gomap/TreeDB/mvcc.TestNativePruneCOWRetainedOutputDiagnosticLatency
+         0     0%   100%  2034.84ms  5.57%  github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6
+         0     0%   100%  1765.20ms  4.83%  github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).loop
+         0     0%   100%  1765.20ms  4.83%  github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).start.gowrap1
+         0     0%   100%  1471.23ms  4.03%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0%   100%  1471.23ms  4.03%  github.com/snissn/gomap/TreeDB/internal/rootpublication.New.gowrap1
+         0     0%   100%  1275.49ms  3.49%  github.com/snissn/gomap/TreeDB/db.(*DB).commitCombinerLoop
+         0     0%   100%  1275.49ms  3.49%  github.com/snissn/gomap/TreeDB/db.(*DB).startCommitCombiner.gowrap2
+         0     0%   100%  1250.65ms  3.42%  github.com/snissn/gomap/TreeDB/db.(*pruneWorker).Start.func1
+         0     0%   100%   948.13ms  2.60%  github.com/snissn/gomap/TreeDB/caching.retainPoolPressureSampler.gowrap1
+         0     0%   100%   948.13ms  2.60%  github.com/snissn/gomap/TreeDB/caching.runPoolPressureSampler
+         0     0%   100%   936.38ms  2.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).startProcessMemorySampler.func1
+         0     0%   100%   936.33ms  2.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLoop
+         0     0%   100%   936.33ms  2.56%  github.com/snissn/gomap/TreeDB/caching.Open.gowrap1
+         0     0%   100%   927.02ms  2.54%  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop.gowrap1
+         0     0%   100%   927.02ms  2.54%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop

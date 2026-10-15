@@ -1,0 +1,43 @@
+File: ordinary-db.test
+Build ID: fd30ba7aa3995a951b8b8626cf10e4de38b5ef68
+Type: alloc_objects
+Time: 2026-10-14 18:30:46 HST
+Showing nodes accounting for 436775, 41.64% of 1049018 total
+Dropped 609 nodes (cum <= 5245)
+Showing top 35 nodes out of 110
+      flat  flat%   sum%        cum   cum%
+         2 0.00019% 0.00019%     923047 87.99%  testing.(*B).runN
+         2 0.00019% 0.00038%     922884 87.98%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0% 0.00038%     889736 84.82%  testing.(*B).launch
+         0     0% 0.00038%     857459 81.74%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+      6157  0.59%  0.59%     857459 81.74%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         0     0%  0.59%     857459 81.74%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0%  0.59%     857459 81.74%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0%  0.59%     844499 80.50%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+         0     0%  0.59%     616560 58.77%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+      6042  0.58%  1.16%     607497 57.91%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+     18126  1.73%  2.89%     415716 39.63%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+      3419  0.33%  3.22%     414685 39.53%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1
+      3419  0.33%  3.54%     363880 34.69%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany
+         0     0%  3.54%     343376 32.73%  github.com/snissn/gomap/TreeDB/freelist.mutateChunk
+    321915 30.69% 34.23%     321915 30.69%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)
+     17115  1.63% 35.86%     308518 29.41%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate
+      5933  0.57% 36.43%     222323 21.19%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+      3029  0.29% 36.72%     216390 20.63%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+         0     0% 36.72%     212050 20.21%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate (inline)
+      6141  0.59% 37.30%     177073 16.88%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+      9030  0.86% 38.16%     170285 16.23%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+         0     0% 38.16%     161255 15.37%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc
+         0     0% 38.16%     161255 15.37%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).allocCOWLocked
+      9109  0.87% 39.03%     161255 15.37%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate
+      6830  0.65% 39.68%     155424 14.82%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany
+         0     0% 39.68%     126629 12.07%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata
+         3 0.00029% 39.68%     123848 11.81%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0% 39.68%     123843 11.81%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication
+       772 0.074% 39.76%     123051 11.73%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6
+         0     0% 39.76%     122415 11.67%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+      3021  0.29% 40.04%     122257 11.65%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).EnqueueBuilt
+     13682  1.30% 41.35%     117841 11.23%  github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1
+         7 0.00067% 41.35%     117834 11.23%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).ActivateCOWCandidateV1
+      3021  0.29% 41.64%     116215 11.08%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).enqueueLocked
+         0     0% 41.64%     109381 10.43%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4

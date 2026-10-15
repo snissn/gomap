@@ -1,0 +1,43 @@
+File: ordinary-db.test
+Build ID: fd30ba7aa3995a951b8b8626cf10e4de38b5ef68
+Type: alloc_space
+Time: 2026-10-14 18:30:46 HST
+Showing nodes accounting for 371711.52kB, 69.81% of 532460.41kB total
+Dropped 642 nodes (cum <= 2662.30kB)
+Showing top 35 nodes out of 77
+      flat  flat%   sum%        cum   cum%
+    0.12kB 2.3e-05% 2.3e-05% 463635.54kB 87.07%  testing.(*B).runN
+    0.06kB 1.2e-05% 3.5e-05% 463609.84kB 87.07%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0% 3.5e-05% 458515.39kB 86.11%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+  261.41kB 0.049% 0.049% 458515.39kB 86.11%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         0     0% 0.049% 458515.39kB 86.11%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0% 0.049% 458515.39kB 86.11%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0% 0.049% 458275.42kB 86.07%  testing.(*B).launch
+         0     0% 0.049% 453222.64kB 85.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+  427.38kB  0.08%  0.13% 372722.25kB 70.00%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1
+         0     0%  0.13% 371671.91kB 69.80%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+   94.41kB 0.018%  0.15% 371483.09kB 69.77%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+ 2367.59kB  0.44%  0.59% 348565.72kB 65.46%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate
+  920.46kB  0.17%  0.76% 334220.79kB 62.77%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+         0     0%  0.76% 259474.84kB 48.73%  github.com/snissn/gomap/TreeDB/freelist.emitStatePages
+  220224kB 41.36% 42.12%   220224kB 41.36%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage
+  480.80kB  0.09% 42.21% 112250.46kB 21.08%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany
+         0     0% 42.21% 108646.31kB 20.40%  github.com/snissn/gomap/TreeDB/freelist.mutateChunk
+  470.33kB 0.088% 42.30% 85562.35kB 16.07%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+ 3403.62kB  0.64% 42.94% 85092.02kB 15.98%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+    0.34kB 6.5e-05% 42.94% 68759.69kB 12.91%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0% 42.94% 68759.12kB 12.91%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication
+   26.58kB 0.005% 42.95% 68672.50kB 12.90%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6
+         0     0% 42.95% 67093.59kB 12.60%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate (inline)
+60359.06kB 11.34% 54.28% 60359.06kB 11.34%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)
+  763.80kB  0.14% 54.43% 52792.75kB  9.91%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Prepare
+  142.97kB 0.027% 54.45% 48893.70kB  9.18%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+  205.80kB 0.039% 54.49% 48702.91kB  9.15%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+         0     0% 54.49% 48497.11kB  9.11%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc
+         0     0% 54.49% 48497.11kB  9.11%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).allocCOWLocked
+  356.48kB 0.067% 54.56% 48497.11kB  9.11%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate
+48287.25kB  9.07% 63.63% 48287.25kB  9.07%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)
+  160.08kB  0.03% 63.66% 40397.82kB  7.59%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany
+         0     0% 63.66% 33494.36kB  6.29%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+         0     0% 63.66% 32758.97kB  6.15%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).acquireApplyScratch
+32758.97kB  6.15% 69.81% 32758.97kB  6.15%  github.com/snissn/gomap/TreeDB/zipper.newMergeScratch (inline)

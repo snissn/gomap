@@ -1,0 +1,322 @@
+[
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/analyze-direct-profiles-20261015.py",
+    "bytes": 4444,
+    "sha256": "293761dcafb9100de851f425da6da8c226875a581ff5ad5475bdf0d12846e25e"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/build-ordinary-db.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/build-ordinary-treedb.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/commands.json",
+    "bytes": 26529,
+    "sha256": "67739d7cc88ad518b90a80502b5973c078a29b493b9613961502d58384aa2114"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-native-diagnostic-block.txt",
+    "bytes": 27468,
+    "sha256": "2ef6dfe63e951c9341f301d227a11e95a2e80d597316a90caafddfd8ffffac11"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-native-diagnostic-cpu.txt",
+    "bytes": 791423,
+    "sha256": "cdffcefaa10b8bcd0f179bd446f0685ae646728b01d29b4e39034c9791473b09"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-native-diagnostic-mutex.txt",
+    "bytes": 42827,
+    "sha256": "ab5238f47b7e64d04cedf7ab0c34d3519e21bb314755973e29f4f58b47b1b02d"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-ordinary-batch-alloc.txt",
+    "bytes": 641736,
+    "sha256": "36d84a5bcb7324bce792d10d1af95f3c3154d3186d17291a022e5be920d3e04d"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-ordinary-batch-cpu.txt",
+    "bytes": 190075,
+    "sha256": "7812818e488192537c88808bf08bee928ee69a6345c4d891e558091827265795"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-ordinary-get-cpu.txt",
+    "bytes": 55609,
+    "sha256": "73729d6b795070fc368ca0ffa57d55aff0cb37fe0e53539b8cffda6599232774"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/decoded-ordinary-seek-cpu.txt",
+    "bytes": 46007,
+    "sha256": "b0a22051e2a7eda8ad63559ae7b750c58ec91cb4d693c62595e5b26e505fc603"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/direct-profile-20261015.py",
+    "bytes": 7766,
+    "sha256": "7a271bceae96313166b6338f039df2d3ee6932350a9cd9d6fb7f155135d45da1"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-binary.json",
+    "bytes": 402,
+    "sha256": "403ca028d0b7e22060467eb87f0e77af07c75c782fbaf9b89f178e0f61ec3c7a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-diagnostic-block.pprof",
+    "bytes": 6056,
+    "sha256": "9ff81b767492e727f64f6d1bdaac4399ac4343ec3f5abbbca678b4f4d8c2ad33"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-diagnostic-contention.raw",
+    "bytes": 5,
+    "sha256": "c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-diagnostic-cpu.pprof",
+    "bytes": 112914,
+    "sha256": "61022b587b0edc2f1ee5ee18752e52b093e4a7445ba79e0919134b1a7bd04cac"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-diagnostic-cpu.raw",
+    "bytes": 2169626,
+    "sha256": "1e0cd0e8e3ddae9e6e498fbbf1bdad2be9a932e9be193a2ca18dbe76fc1c204e"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/native-diagnostic-mutex.pprof",
+    "bytes": 8168,
+    "sha256": "10c821818b171503daa2558f13d8e6ff18e521c3dfb9bb1156929d50c3cc2109"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-batch-alloc.pprof",
+    "bytes": 73093,
+    "sha256": "60fe081d42248d37bbe76006ccbdda58e607636227f2061430911f438ea44a2f"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-batch-alloc.raw",
+    "bytes": 225,
+    "sha256": "311446602877d722b2b3bdfaf982de0ba9abd9003c020e5ffe2270d73b0917be"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-batch-cpu.pprof",
+    "bytes": 35435,
+    "sha256": "e261d2b21a2aa0c2e01b9288ffe3b469fa76e78c5ba4a012123b48cdfeb32087"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-batch-cpu.raw",
+    "bytes": 225,
+    "sha256": "0a0c2c490a28ae9d667e0de0cd16f5e2f7aa2490f71287cf69d1006739633d74"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-binaries.json",
+    "bytes": 271,
+    "sha256": "ed57ce4f3bd064ceb10ffd3a4b89665537f717d386abba20135c1efaa92df148"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-get-cpu.pprof",
+    "bytes": 8853,
+    "sha256": "079822b305013a1146d9e393e485ff0cf4847965c1b4df1fa25761f1c76617a0"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-get-cpu.raw",
+    "bytes": 207,
+    "sha256": "4eabb215445f4f2d326ca6f26e7e2dc02d6f6ac50b820cc769ee314b2c211775"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-seek-cpu.pprof",
+    "bytes": 5878,
+    "sha256": "25b1fcea207b4524eab15af9eaf7c68cab663085352ca166b94562ba3e9dd159"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-seek-cpu.raw",
+    "bytes": 248,
+    "sha256": "4f59c98f333f0847dc7639cccf8ce640c2ddee1ee367197e33553133bbd315d7"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-source-after.json",
+    "bytes": 620557,
+    "sha256": "2bd2a27d3e997be28aba891dae86de77cc0f9256a7002e946183c67e1a54406a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/ordinary-source-before.json",
+    "bytes": 620557,
+    "sha256": "2bd2a27d3e997be28aba891dae86de77cc0f9256a7002e946183c67e1a54406a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-block-cum.raw",
+    "bytes": 3546,
+    "sha256": "9c942651f5db0074db489948b8ea912c6f854c983a67263e413776252b3da7f4"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-block.raw",
+    "bytes": 3850,
+    "sha256": "50e22dab6ce8134cfdba6f27e3d4ac1a15554ccdb906ae901db646e4a0d67022"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-diagnostic-cpu-cum.raw",
+    "bytes": 3834,
+    "sha256": "908e14db588e4f75dbc90937532cfd2bf84f5df012804a10cb843c1e2f4af7e2"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-diagnostic-cpu.raw",
+    "bytes": 3690,
+    "sha256": "c8d5f193fbf93bdbd86ae0c775a0d73616f5391645b87b87dfe83f1b33408b5b"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-mutex-cum.raw",
+    "bytes": 3885,
+    "sha256": "08864f6baffe04c098ef49374ccc7534a789f8d4583b569e219b158219115a51"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-mutex.raw",
+    "bytes": 4394,
+    "sha256": "d44916d5c5b3d578fcbac514638b3db75b453c10e2926e9353de079686f98d57"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-prune-cpu-cum.raw",
+    "bytes": 4339,
+    "sha256": "fbb7a0f64af3f7bf87bbcb93fb844af5b0d6f647a2113d452e63354c333d4ba5"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-native-prune-cpu.raw",
+    "bytes": 4399,
+    "sha256": "ee676f4a2d719252985159b7df427a232f215593ec4410ec185f8adf05048a77"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-alloc-objects-cum.raw",
+    "bytes": 4233,
+    "sha256": "e03e7517e0602ceec840198e487757aab3c0bdf0e73c6ac10cbac8c2a726a13d"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-alloc-objects.raw",
+    "bytes": 4696,
+    "sha256": "ba75776e54f25d9ea69519f920cc1e13ef913d2bd1a9c2024676d6ad3e78fa16"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-alloc-space-cum.raw",
+    "bytes": 4170,
+    "sha256": "f0e4d24f6765a8c1aab344ad199c44915f4ca2d166ce38592da5f15cdd882db7"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-alloc-space.raw",
+    "bytes": 4881,
+    "sha256": "bf8fef560486023a9b6a8f675927e2f4562a9e05d76976f8154b04a828368786"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-cpu-cum.raw",
+    "bytes": 3875,
+    "sha256": "2b4a0d132fa34afc5035658ca2ff31ce9309c149fec4605836592ba875caa37e"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-batch-cpu.raw",
+    "bytes": 3659,
+    "sha256": "98d554f4b7de9bc2c5d75782011ef7fbb1fbb9dda725ea9da599cd3e2d5005eb"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-get-cpu-cum.raw",
+    "bytes": 3821,
+    "sha256": "233f3708a2166b1f6817b927b9a851c8c39ee775f1e288e875de6bea86447e04"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-get-cpu.raw",
+    "bytes": 4296,
+    "sha256": "e0e992cf8f0fb4313c15d8090eca3466d153bf5f2b16629df37d3128dce3038a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-seek-cpu-cum.raw",
+    "bytes": 3849,
+    "sha256": "c74ab624e84896bbeeac6f74ba32bb69ba532576088f926b338d2aeb7d1a3885"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/pprof-ordinary-seek-cpu.raw",
+    "bytes": 3952,
+    "sha256": "2e85c2e0a1d7006d2a75aedbecafe73ddbe8df91c38d711522c8be223a5359a8"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/processes-after.txt",
+    "bytes": 28398,
+    "sha256": "5180c2431b99fcb33238583371430d52c70bfa6a2fc9e0b3e3887fba48a64354"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/processes-before.txt",
+    "bytes": 28177,
+    "sha256": "8cac6c269a516f4e76c8f95a701bf517c3e38ab0d6cfc61d2f0f6879e883675a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/receipt.json",
+    "bytes": 926,
+    "sha256": "532eaf8e097fdbc91ebe48d15767efb4d54d5782c13c889c7d8f1db7ac975b05"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/packet/stack-attribution.json",
+    "bytes": 65011,
+    "sha256": "84db48f821863c337f4d5e2dc9dce20c21727a2b35a892914aa85ae26c127bb1"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/report.md",
+    "bytes": 8548,
+    "sha256": "32c41921f1a273b2101b36073c58af66e98ce149efc44b75ad464260bd582f95"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/db/conditional_kv_contract_bench_test.go",
+    "bytes": 7520,
+    "sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/db/root_publication_activation.go",
+    "bytes": 79101,
+    "sha256": "3aa156b6f1aa722b60e66234fbf571399ebfac86459e4e7ba35839716ba64998"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/freelist/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/freelist/generation_v1_format.go",
+    "bytes": 16940,
+    "sha256": "2afc9c54341f53ddaa111ff75ed66487d0da24113a429b142428eb82e7254f2a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/freelist/generation_v1_tree.go",
+    "bytes": 9317,
+    "sha256": "893c69410a8113a3ebdf88543621c8801aa644754e3e3ecd7cc6fceff05e328a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/177fb0c8db1d19c79d3d975126b4b0b64019568e/TreeDB/freelist/generation_v1_txn.go",
+    "bytes": 29116,
+    "sha256": "8821aaaad2413246f8938b5a17a60291213b4667797d4407c07db99d6f7cb900"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/db/conditional_kv_contract_bench_test.go",
+    "bytes": 7520,
+    "sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/db/root_publication_activation.go",
+    "bytes": 56109,
+    "sha256": "76c9e34d2386423346f31ab6b826d127017d1b6ac20b69da9a4295f53e62c9c7"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/freelist/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/freelist/generation_v1_format.go",
+    "bytes": 16940,
+    "sha256": "2afc9c54341f53ddaa111ff75ed66487d0da24113a429b142428eb82e7254f2a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/freelist/generation_v1_tree.go",
+    "bytes": 9317,
+    "sha256": "893c69410a8113a3ebdf88543621c8801aa644754e3e3ecd7cc6fceff05e328a"
+  },
+  {
+    "path": "artifacts/4871/20261015-direct-bottleneck-profiles/source/28aea01e/TreeDB/freelist/generation_v1_txn.go",
+    "bytes": 28890,
+    "sha256": "f6b2584ad301c25f5cb4ca9d6733ce94e9ccfba1a969e69d519eec48d5d188e0"
+  }
+]

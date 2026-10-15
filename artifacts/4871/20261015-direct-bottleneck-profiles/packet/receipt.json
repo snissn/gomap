@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-15T04:30:49.930909+00:00",
+  "status": "CAPTURED_DIAGNOSTIC_NOT_QUALIFICATION",
+  "ordinary_source": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "native_source": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "native_repetitions": {
+    "cpu": 1200,
+    "contention": 150
+  },
+  "ordinary_source_rows": 3735,
+  "commands": 26,
+  "limitations": [
+    "Native explicit unbounded diagnostic; actual bounded production remains ACK0.",
+    "Native CPU profile includes fixture setup; only samples containing public prune frame attribute foreground prune; GC/background cannot be assigned from that filter.",
+    "Three ordinary public micro CPU profiles include setup/teardown, amortized over3s measurement.",
+    "CPU/mutex/block/Rate1allocation observers affect timings; no comparative speedup claims.",
+    "Short focused native diagnostic is not a representative concurrent Dgraph lock workload."
+  ]
+}

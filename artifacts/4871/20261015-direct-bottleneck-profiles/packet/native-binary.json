@@ -1,0 +1,7 @@
+{
+  "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+  "size": 30374758,
+  "sha256": "667990cf2be1cfa1fa1a85317f681e81a144bfc1d0515a33ddff0fc6e6a603d7",
+  "source": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "binding": "Shared-workspace frozen4399sourceinput packet; diagnostic only; native mutable source not compiled"
+}

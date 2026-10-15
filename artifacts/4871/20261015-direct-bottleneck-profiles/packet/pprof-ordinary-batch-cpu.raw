@@ -1,0 +1,49 @@
+File: ordinary-db.test
+Build ID: fd30ba7aa3995a951b8b8626cf10e4de38b5ef68
+Type: cpu
+Time: 2026-10-14 18:30:34 HST
+Duration: 5.32s, Total samples = 5.28s (99.17%)
+Showing nodes accounting for 2.96s, 56.06% of 5.28s total
+Dropped 278 nodes (cum <= 0.03s)
+Showing top 40 nodes out of 270
+      flat  flat%   sum%        cum   cum%
+     0.24s  4.55%  4.55%      0.40s  7.58%  runtime.tryDeferToSpanScan
+     0.18s  3.41%  7.95%      0.27s  5.11%  runtime.scanblock
+     0.16s  3.03% 10.98%      0.16s  3.03%  crypto/internal/fips140/sha256.blockSHANI
+     0.15s  2.84% 13.83%      0.15s  2.84%  runtime.memmove
+     0.15s  2.84% 16.67%      0.18s  3.41%  runtime.typePointers.next
+     0.14s  2.65% 19.32%      0.14s  2.65%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.14s  2.65% 21.97%      0.14s  2.65%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).retiredSummary (inline)
+     0.14s  2.65% 24.62%      0.69s 13.07%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+     0.11s  2.08% 26.70%      0.11s  2.08%  runtime.heapArenaOf (inline)
+     0.08s  1.52% 28.22%      0.17s  3.22%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func6 (inline)
+     0.07s  1.33% 29.55%      0.15s  2.84%  github.com/snissn/gomap/TreeDB/freelist.recomputeStateNode
+     0.07s  1.33% 30.87%      0.09s  1.70%  runtime.(*spanSet).push
+     0.07s  1.33% 32.20%      0.24s  4.55%  runtime.(*sweepLocked).sweep
+     0.07s  1.33% 33.52%      0.07s  1.33%  runtime.memclrNoHeapPointers
+     0.07s  1.33% 34.85%      0.07s  1.33%  time.runtimeNow
+     0.06s  1.14% 35.98%      0.22s  4.17%  internal/runtime/maps.(*Iter).Next
+     0.06s  1.14% 37.12%      0.12s  2.27%  runtime.gcmarknewobject
+     0.06s  1.14% 38.26%      0.31s  5.87%  runtime.scanObject
+     0.05s  0.95% 39.20%         1s 18.94%  github.com/snissn/gomap/TreeDB/freelist.emitStatePages
+     0.05s  0.95% 40.15%      0.09s  1.70%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func4
+     0.05s  0.95% 41.10%      0.05s  0.95%  internal/runtime/atomic.(*Uint32).Add (inline)
+     0.05s  0.95% 42.05%      0.05s  0.95%  internal/runtime/syscall/linux.Syscall6
+     0.05s  0.95% 42.99%      0.05s  0.95%  internal/sync.(*Mutex).Lock
+     0.05s  0.95% 43.94%      0.05s  0.95%  internal/sync.(*Mutex).Unlock
+     0.05s  0.95% 44.89%      0.29s  5.49%  runtime.wbBufFlush1
+     0.04s  0.76% 45.64%      0.14s  2.65%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)
+     0.04s  0.76% 46.40%      0.09s  1.70%  github.com/snissn/gomap/TreeDB/freelist.detachMetadataSiblings
+     0.04s  0.76% 47.16%      0.04s  0.76%  github.com/snissn/gomap/TreeDB/freelist.findFreeLE
+     0.04s  0.76% 47.92%      0.90s 17.05%  github.com/snissn/gomap/TreeDB/freelist.mutateChunk
+     0.04s  0.76% 48.67%      0.04s  0.76%  github.com/snissn/gomap/TreeDB/page.(*PageHeader).Encode (inline)
+     0.04s  0.76% 49.43%      0.05s  0.95%  runtime.(*mspan).writeHeapBitsSmall
+     0.04s  0.76% 50.19%      0.05s  0.95%  runtime.(*pallocBits).summarize
+     0.04s  0.76% 50.95%      0.04s  0.76%  runtime.(*sysMemStat).add
+     0.04s  0.76% 51.70%      0.12s  2.27%  runtime.findObject
+     0.04s  0.76% 52.46%      0.47s  8.90%  runtime.mallocgcSmallScanNoHeader
+     0.04s  0.76% 53.22%      0.04s  0.76%  runtime.nextFreeFast (inline)
+     0.04s  0.76% 53.98%      0.07s  1.33%  runtime.scanObjectsSmall
+     0.04s  0.76% 54.73%      0.04s  0.76%  runtime.step
+     0.04s  0.76% 55.49%      0.04s  0.76%  sync/atomic.(*Int32).Add
+     0.03s  0.57% 56.06%      0.24s  4.55%  github.com/snissn/gomap/TreeDB/freelist.(*ReservationLedger).claimReusedMetadata

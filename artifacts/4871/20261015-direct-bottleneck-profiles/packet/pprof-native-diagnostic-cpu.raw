@@ -1,0 +1,49 @@
+File: after-mvcc.test
+Build ID: fcae18271431156a325a97e4424de336c486980d
+Type: cpu
+Time: 2026-10-14 18:29:56 HST
+Duration: 20.62s, Total samples = 16.05s (77.83%)
+Showing nodes accounting for 9.99s, 62.24% of 16.05s total
+Dropped 1430 nodes (cum <= 0.08s)
+Showing top 40 nodes out of 430
+      flat  flat%   sum%        cum   cum%
+     3.22s 20.06% 20.06%      3.22s 20.06%  internal/runtime/syscall/linux.Syscall6
+     3.01s 18.75% 38.82%      3.01s 18.75%  runtime.memclrNoHeapPointers
+     0.44s  2.74% 41.56%      0.44s  2.74%  crypto/internal/fips140/sha256.blockSHANI
+     0.42s  2.62% 44.17%      0.42s  2.62%  runtime.memmove
+     0.22s  1.37% 45.55%      0.22s  1.37%  runtime.madvise
+     0.20s  1.25% 46.79%      0.20s  1.25%  aeshashbody
+     0.20s  1.25% 48.04%      0.22s  1.37%  runtime.step
+     0.18s  1.12% 49.16%      0.18s  1.12%  internal/sync.(*Mutex).Lock (inline)
+     0.17s  1.06% 50.22%      0.17s  1.06%  internal/sync.(*Mutex).Unlock (inline)
+     0.14s  0.87% 51.09%      0.14s  0.87%  runtime.nextFreeFast (inline)
+     0.13s  0.81% 51.90%      0.13s  0.81%  internal/runtime/atomic.(*Uint32).CompareAndSwap (inline)
+     0.12s  0.75% 52.65%      0.14s  0.87%  github.com/snissn/gomap/TreeDB/node.(*Node).GetInternalEntryRefView
+     0.11s  0.69% 53.33%      0.40s  2.49%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).prepareReadOnlyRecursive
+     0.10s  0.62% 53.96%      0.14s  0.87%  runtime.tryDeferToSpanScan
+     0.09s  0.56% 54.52%      0.13s  0.81%  github.com/snissn/gomap/TreeDB/db.newLeafPageReadCacheWithWriteAdmission (inline)
+     0.09s  0.56% 55.08%      0.15s  0.93%  internal/filepathlite.Clean
+     0.09s  0.56% 55.64%      0.10s  0.62%  runtime.typePointers.next
+     0.08s   0.5% 56.14%      0.10s  0.62%  runtime.scanblock
+     0.07s  0.44% 56.57%      0.09s  0.56%  github.com/snissn/gomap/TreeDB/node.DecodePrimaryDirectory
+     0.07s  0.44% 57.01%      4.02s 25.05%  runtime.mallocgc
+     0.07s  0.44% 57.45%      0.44s  2.74%  runtime.mallocgcSmallNoscan
+     0.07s  0.44% 57.88%      0.34s  2.12%  runtime.pcvalue
+     0.07s  0.44% 58.32%      0.30s  1.87%  runtime.scanObject
+     0.06s  0.37% 58.69%      0.15s  0.93%  fmt.(*pp).doPrintf
+     0.05s  0.31% 59.00%      0.09s  0.56%  github.com/pierrec/lz4/v4/internal/lz4block.(*Compressor).CompressBlock
+     0.05s  0.31% 59.31%      0.11s  0.69%  github.com/snissn/gomap/TreeDB/internal/commitlog.ScanRawKVBatchPayloadWithRevision
+     0.04s  0.25% 59.56%      0.16s     1%  github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).Get
+     0.04s  0.25% 59.81%      0.16s     1%  runtime.(*unwinder).resolveInternal
+     0.04s  0.25% 60.06%      0.14s  0.87%  runtime.concatstrings
+     0.04s  0.25% 60.31%      0.17s  1.06%  runtime.growslice
+     0.04s  0.25% 60.56%      0.35s  2.18%  runtime.mapassign_faststr
+     0.03s  0.19% 60.75%      0.67s  4.17%  github.com/snissn/gomap/TreeDB/caching.(*Batch).Replay
+     0.03s  0.19% 60.93%      0.11s  0.69%  github.com/snissn/gomap/TreeDB/internal/memtable.cowLookupGE
+     0.03s  0.19% 61.12%      0.14s  0.87%  github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).closePhysicalWork
+     0.03s  0.19% 61.31%      0.15s  0.93%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Reader).ReadNextMeta
+     0.03s  0.19% 61.50%      2.59s 16.14%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt
+     0.03s  0.19% 61.68%     13.83s 86.17%  github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1
+     0.03s  0.19% 61.87%      1.08s  6.73%  os.(*File).ReadAt
+     0.03s  0.19% 62.06%      0.25s  1.56%  runtime.mallocgcSmallScanNoHeader
+     0.03s  0.19% 62.24%      0.39s  2.43%  runtime.newobject

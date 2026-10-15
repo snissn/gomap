@@ -1,0 +1,44 @@
+File: ordinary-db.test
+Build ID: fd30ba7aa3995a951b8b8626cf10e4de38b5ef68
+Type: cpu
+Time: 2026-10-14 18:30:34 HST
+Duration: 5.32s, Total samples = 5.28s (99.17%)
+Showing nodes accounting for 0.42s, 7.95% of 5.28s total
+Dropped 278 nodes (cum <= 0.03s)
+Showing top 35 nodes out of 270
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      4.03s 76.33%  testing.(*B).runN
+         0     0%     0%      4.02s 76.14%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0%     0%      4.02s 76.14%  testing.(*B).launch
+         0     0%     0%      3.88s 73.48%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+     0.01s  0.19%  0.19%      3.88s 73.48%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         0     0%  0.19%      3.88s 73.48%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0%  0.19%      3.88s 73.48%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0%  0.19%      3.86s 73.11%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+     0.02s  0.38%  0.57%      2.81s 53.22%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+         0     0%  0.57%      2.78s 52.65%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+         0     0%  0.57%      2.39s 45.27%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1
+     0.01s  0.19%  0.76%      2.26s 42.80%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+     0.01s  0.19%  0.95%      2.07s 39.20%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate
+     0.02s  0.38%  1.33%      1.49s 28.22%  runtime.mallocgc
+     0.01s  0.19%  1.52%      1.46s 27.65%  runtime.systemstack
+     0.05s  0.95%  2.46%         1s 18.94%  github.com/snissn/gomap/TreeDB/freelist.emitStatePages
+         0     0%  2.46%      0.99s 18.75%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany
+     0.01s  0.19%  2.65%      0.94s 17.80%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0%  2.65%      0.92s 17.42%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+     0.04s  0.76%  3.41%      0.90s 17.05%  github.com/snissn/gomap/TreeDB/freelist.mutateChunk
+     0.01s  0.19%  3.60%      0.85s 16.10%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0%  3.60%      0.79s 14.96%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+     0.01s  0.19%  3.79%      0.78s 14.77%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublication
+         0     0%  3.79%      0.77s 14.58%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallV6
+     0.01s  0.19%  3.98%      0.71s 13.45%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata
+     0.14s  2.65%  6.63%      0.69s 13.07%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+     0.01s  0.19%  6.82%      0.63s 11.93%  runtime.makeslice
+         0     0%  6.82%      0.63s 11.93%  runtime.newobject
+     0.02s  0.38%  7.20%      0.60s 11.36%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage
+         0     0%  7.20%      0.59s 11.17%  runtime.(*mcache).nextFree
+     0.01s  0.19%  7.39%      0.56s 10.61%  runtime.(*mcache).refill
+     0.02s  0.38%  7.77%      0.55s 10.42%  runtime.mallocgcSmallNoscan
+         0     0%  7.77%      0.50s  9.47%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate (inline)
+     0.01s  0.19%  7.95%      0.50s  9.47%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)
+         0     0%  7.95%      0.47s  8.90%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany

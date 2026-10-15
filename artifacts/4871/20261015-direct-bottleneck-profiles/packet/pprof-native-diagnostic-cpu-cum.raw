@@ -1,0 +1,44 @@
+File: after-mvcc.test
+Build ID: fcae18271431156a325a97e4424de336c486980d
+Type: cpu
+Time: 2026-10-14 18:29:56 HST
+Duration: 20.62s, Total samples = 16.05s (77.83%)
+Showing nodes accounting for 6.45s, 40.19% of 16.05s total
+Dropped 1430 nodes (cum <= 0.08s)
+Showing top 35 nodes out of 430
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     14.26s 88.85%  testing.tRunner
+     0.03s  0.19%  0.19%     13.83s 86.17%  github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1
+         0     0%  0.19%      6.58s 41.00%  github.com/snissn/gomap/TreeDB.Open
+     0.01s 0.062%  0.25%      6.57s 40.93%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0%  0.25%      4.61s 28.72%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0%  0.25%      4.54s 28.29%  github.com/snissn/gomap/TreeDB/db.openWithLock
+     0.07s  0.44%  0.69%      4.02s 25.05%  runtime.mallocgc
+     3.22s 20.06% 20.75%      3.22s 20.06%  internal/runtime/syscall/linux.Syscall6
+     0.02s  0.12% 20.87%      3.19s 19.88%  syscall.RawSyscall6
+     0.02s  0.12% 21.00%      3.09s 19.25%  runtime.mallocgcLarge
+     3.01s 18.75% 39.75%      3.01s 18.75%  runtime.memclrNoHeapPointers
+     0.01s 0.062% 39.81%      2.95s 18.38%  runtime.makeslice
+     0.01s 0.062% 39.88%      2.89s 18.01%  runtime.memclrNoHeapPointersChunked
+         0     0% 39.88%      2.59s 16.14%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitAt (inline)
+     0.03s  0.19% 40.06%      2.59s 16.14%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt
+         0     0% 40.06%      2.35s 14.64%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).WriteSync
+         0     0% 40.06%      2.35s 14.64%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write
+         0     0% 40.06%      2.35s 14.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 40.06%      2.35s 14.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 40.06%      2.35s 14.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 40.06%      2.24s 13.96%  github.com/snissn/gomap/TreeDB.(*DB).checkpointCachedForPublicCommandWAL
+     0.01s 0.062% 40.12%      2.10s 13.08%  syscall.Syscall6
+         0     0% 40.12%      2.05s 12.77%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeCOWPublication
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*DB).trySoloDurablePublicCommandWAL.func1
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write.func4
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB/db.(*DB).AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode
+         0     0% 40.12%      2.03s 12.65%  github.com/snissn/gomap/TreeDB/db.(*DB).appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized
+     0.01s 0.062% 40.19%      1.92s 11.96%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 40.19%      1.80s 11.21%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+         0     0% 40.19%      1.77s 11.03%  bufio.NewWriterSize (inline)

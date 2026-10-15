@@ -1,0 +1,692 @@
+[
+  {
+    "name": "native-diagnostic-cpu",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticLatency$/^pointertrue$",
+      "-test.count=1200",
+      "-test.timeout=90s",
+      "-test.v",
+      "-test.cpuprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 20.64665569504723,
+    "raw_sha256": "1e0cd0e8e3ddae9e6e498fbbf1bdad2be9a932e9be193a2ca18dbe76fc1c204e",
+    "raw_bytes": 2169626
+  },
+  {
+    "name": "build-ordinary-db",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 1.0154256848618388,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0
+  },
+  {
+    "name": "build-ordinary-treedb",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-treedb.test",
+      "./TreeDB"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 12.433330438099802,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0
+  },
+  {
+    "name": "ordinary-get-cpu",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchtime=3s",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s",
+      "-test.cpuprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-get-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 4.169627424795181,
+    "raw_sha256": "4eabb215445f4f2d326ca6f26e7e2dc02d6f6ac50b820cc769ee314b2c211775",
+    "raw_bytes": 207
+  },
+  {
+    "name": "ordinary-batch-cpu",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=3s",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s",
+      "-test.cpuprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 5.369527478702366,
+    "raw_sha256": "0a0c2c490a28ae9d667e0de0cd16f5e2f7aa2490f71287cf69d1006739633d74",
+    "raw_bytes": 225
+  },
+  {
+    "name": "ordinary-seek-cpu",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-treedb.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$",
+      "-test.benchtime=3s",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s",
+      "-test.cpuprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-seek-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 3.8685414101928473,
+    "raw_sha256": "4f59c98f333f0847dc7639cccf8ce640c2ddee1ee367197e33553133bbd315d7",
+    "raw_bytes": 248
+  },
+  {
+    "name": "ordinary-batch-alloc",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=3000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s",
+      "-test.memprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-alloc.pprof",
+      "-test.memprofilerate=1"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 3.0671672611497343,
+    "raw_sha256": "311446602877d722b2b3bdfaf982de0ba9abd9003c020e5ffe2270d73b0917be",
+    "raw_bytes": 225
+  },
+  {
+    "name": "native-diagnostic-contention",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticLatency$/^pointertrue$",
+      "-test.count=150",
+      "-test.timeout=45s",
+      "-test.mutexprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-mutex.pprof",
+      "-test.mutexprofilefraction=1",
+      "-test.blockprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-block.pprof",
+      "-test.blockprofilerate=1"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 2.066976123023778,
+    "raw_sha256": "c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431",
+    "raw_bytes": 5
+  },
+  {
+    "name": "pprof-native-diagnostic-cpu",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.06347153009846807,
+    "raw_sha256": "c8d5f193fbf93bdbd86ae0c775a0d73616f5391645b87b87dfe83f1b33408b5b",
+    "raw_bytes": 3690
+  },
+  {
+    "name": "pprof-native-diagnostic-cpu-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.06352931121364236,
+    "raw_sha256": "908e14db588e4f75dbc90937532cfd2bf84f5df012804a10cb843c1e2f4af7e2",
+    "raw_bytes": 3834
+  },
+  {
+    "name": "pprof-native-prune-cpu",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "-focus=PruneVersionsUnboundedDiagnosticForTest",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031499512027949095,
+    "raw_sha256": "ee676f4a2d719252985159b7df427a232f215593ec4410ec185f8adf05048a77",
+    "raw_bytes": 4399
+  },
+  {
+    "name": "pprof-native-prune-cpu-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "-focus=PruneVersionsUnboundedDiagnosticForTest",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.03147471323609352,
+    "raw_sha256": "fbb7a0f64af3f7bf87bbcb93fb844af5b0d6f647a2113d452e63354c333d4ba5",
+    "raw_bytes": 4339
+  },
+  {
+    "name": "pprof-native-mutex",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-mutex.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031490752939134836,
+    "raw_sha256": "d44916d5c5b3d578fcbac514638b3db75b453c10e2926e9353de079686f98d57",
+    "raw_bytes": 4394
+  },
+  {
+    "name": "pprof-native-mutex-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-mutex.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.0314642027951777,
+    "raw_sha256": "08864f6baffe04c098ef49374ccc7534a789f8d4583b569e219b158219115a51",
+    "raw_bytes": 3885
+  },
+  {
+    "name": "pprof-native-block",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-block.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031469373032450676,
+    "raw_sha256": "50e22dab6ce8134cfdba6f27e3d4ac1a15554ccdb906ae901db646e4a0d67022",
+    "raw_bytes": 3850
+  },
+  {
+    "name": "pprof-native-block-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/native-diagnostic-block.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.03141300193965435,
+    "raw_sha256": "9c942651f5db0074db489948b8ea912c6f854c983a67263e413776252b3da7f4",
+    "raw_bytes": 3546
+  },
+  {
+    "name": "pprof-ordinary-get-cpu",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-get-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031468062195926905,
+    "raw_sha256": "e0e992cf8f0fb4313c15d8090eca3466d153bf5f2b16629df37d3128dce3038a",
+    "raw_bytes": 4296
+  },
+  {
+    "name": "pprof-ordinary-get-cpu-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-get-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.03144137188792229,
+    "raw_sha256": "233f3708a2166b1f6817b927b9a851c8c39ee775f1e288e875de6bea86447e04",
+    "raw_bytes": 3821
+  },
+  {
+    "name": "pprof-ordinary-batch-cpu",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031470542307943106,
+    "raw_sha256": "98d554f4b7de9bc2c5d75782011ef7fbb1fbb9dda725ea9da599cd3e2d5005eb",
+    "raw_bytes": 3659
+  },
+  {
+    "name": "pprof-ordinary-batch-cpu-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.03145943162962794,
+    "raw_sha256": "2b4a0d132fa34afc5035658ca2ff31ce9309c149fec4605836592ba875caa37e",
+    "raw_bytes": 3875
+  },
+  {
+    "name": "pprof-ordinary-seek-cpu",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-treedb.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-seek-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.031478573102504015,
+    "raw_sha256": "2e85c2e0a1d7006d2a75aedbecafe73ddbe8df91c38d711522c8be223a5359a8",
+    "raw_bytes": 3952
+  },
+  {
+    "name": "pprof-ordinary-seek-cpu-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-treedb.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-seek-cpu.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.03142996318638325,
+    "raw_sha256": "c74ab624e84896bbeeac6f74ba32bb69ba532576088f926b338d2aeb7d1a3885",
+    "raw_bytes": 3849
+  },
+  {
+    "name": "pprof-ordinary-batch-alloc-space",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "-sample_index=alloc_space",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.06353610102087259,
+    "raw_sha256": "bf8fef560486023a9b6a8f675927e2f4562a9e05d76976f8154b04a828368786",
+    "raw_bytes": 4881
+  },
+  {
+    "name": "pprof-ordinary-batch-alloc-space-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "-sample_index=alloc_space",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.11410125717520714,
+    "raw_sha256": "f0e4d24f6765a8c1aab344ad199c44915f4ca2d166ce38592da5f15cdd882db7",
+    "raw_bytes": 4170
+  },
+  {
+    "name": "pprof-ordinary-batch-alloc-objects",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=40",
+      "-sample_index=alloc_objects",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.0637922640889883,
+    "raw_sha256": "ba75776e54f25d9ea69519f920cc1e13ef913d2bd1a9c2024676d6ad3e78fa16",
+    "raw_bytes": 4696
+  },
+  {
+    "name": "pprof-ordinary-batch-alloc-objects-cum",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-cum",
+      "-nodecount=35",
+      "-sample_index=alloc_objects",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-batch-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 0.11365072429180145,
+    "raw_sha256": "e03e7517e0602ceec840198e487757aab3c0bdf0e73c6ac10cbac8c2a726a13d",
+    "raw_bytes": 4233
+  }
+]

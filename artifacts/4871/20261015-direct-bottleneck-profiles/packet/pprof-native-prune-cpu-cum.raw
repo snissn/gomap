@@ -1,0 +1,45 @@
+File: after-mvcc.test
+Build ID: fcae18271431156a325a97e4424de336c486980d
+Type: cpu
+Time: 2026-10-14 18:29:56 HST
+Duration: 20.62s, Total samples = 16.05s (77.83%)
+Active filters:
+   focus=PruneVersionsUnboundedDiagnosticForTest
+Showing nodes accounting for 0.14s, 0.87% of 16.05s total
+Showing top 35 nodes out of 355
+      flat  flat%   sum%        cum   cum%
+     0.01s 0.062% 0.062%      0.92s  5.73%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersionsUnboundedDiagnosticForTest
+         0     0% 0.062%      0.92s  5.73%  github.com/snissn/gomap/TreeDB/mvcc.runNativeProductionCostV6.func1
+         0     0% 0.062%      0.92s  5.73%  testing.tRunner
+         0     0% 0.062%      0.91s  5.67%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).PruneVersions
+         0     0% 0.062%      0.91s  5.67%  github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6
+         0     0% 0.062%      0.87s  5.42%  github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step
+         0     0% 0.062%      0.69s  4.30%  github.com/snissn/gomap/TreeDB.(*DB).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 0.062%      0.69s  4.30%  github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 0.062%      0.63s  3.93%  github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6
+         0     0% 0.062%      0.57s  3.55%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked
+         0     0% 0.062%      0.56s  3.49%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+         0     0% 0.062%      0.55s  3.43%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+         0     0% 0.062%      0.31s  1.93%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1
+         0     0% 0.062%      0.31s  1.93%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithMetadataV1
+         0     0% 0.062%      0.29s  1.81%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1
+         0     0% 0.062%      0.29s  1.81%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateValueLogReferencesWithCountsAndLimitsV1
+         0     0% 0.062%      0.26s  1.62%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan
+         0     0% 0.062%      0.24s  1.50%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func6
+         0     0% 0.062%      0.23s  1.43%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func5
+         0     0% 0.062%      0.23s  1.43%  github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func6.1
+         0     0% 0.062%      0.23s  1.43%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 0.062%      0.20s  1.25%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadLeafLogPageUnsafeToWithState
+         0     0% 0.062%      0.20s  1.25%  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeTo
+     0.01s 0.062%  0.12%      0.20s  1.25%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeTo
+         0     0%  0.12%      0.19s  1.18%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).ReadUnsafeTo
+         0     0%  0.12%      0.19s  1.18%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).readAtWithDictTo
+         0     0%  0.12%      0.19s  1.18%  github.com/snissn/gomap/TreeDB/internal/valuelog.readAtWithDictToScratch
+         0     0%  0.12%      0.19s  1.18%  runtime.mallocgc
+         0     0%  0.12%      0.14s  0.87%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1.func2
+         0     0%  0.12%      0.14s  0.87%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).RunNativeUnboundedDiagnosticV6
+         0     0%  0.12%      0.14s  0.87%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).dispatchPublicationCallPolicyV6
+     0.12s  0.75%  0.87%      0.12s  0.75%  runtime.memclrNoHeapPointers
+         0     0%  0.87%      0.12s  0.75%  runtime.newobject
+         0     0%  0.87%      0.10s  0.62%  runtime.systemstack
+         0     0%  0.87%      0.09s  0.56%  github.com/snissn/gomap/TreeDB.(*DB).StepNativeMVCCUnboundedDiagnosticOutputV6
