@@ -1,0 +1,18 @@
+=== RUN   TestPrimaryFinishWorkRefusalResumesOriginalV6
+--- PASS: TestPrimaryFinishWorkRefusalResumesOriginalV6 (0.00s)
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure
+--- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6 (0.00s)
+    --- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry (0.00s)
+    --- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure (0.00s)
+=== RUN   TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6
+=== RUN   TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6/success
+    resource_set_release_work_v6_test.go:73: Set shared-edge stage only records=7 bytes=1517
+=== RUN   TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6/ordinary-physical-failure
+    resource_set_release_work_v6_test.go:73: Set shared-edge stage only records=7 bytes=1517
+--- PASS: TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6 (0.00s)
+    --- PASS: TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6/success (0.00s)
+    --- PASS: TestNativeSharedSetConsumptionFinishesAfterVisibleSiblingGoneV6/ordinary-physical-failure (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.003s

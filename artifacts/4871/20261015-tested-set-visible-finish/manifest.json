@@ -1,0 +1,102 @@
+[
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/README.md",
+    "bytes": 865,
+    "sha256": "dc385e2ff2ab181e15730b22e0335b999479aeeee052889cdf4b1fd6b216ab68"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/command.json",
+    "bytes": 736,
+    "sha256": "e780035c6e530e755a8ddce6db63d0b5f76ab9cfea9803deae670cd9e5e80367"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/exit.json",
+    "bytes": 218,
+    "sha256": "00c099f1a03d1fcce24bde41644f6026f3f09b16b55d66ae25f7a7a4c0015dee"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/head-preimages/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "bytes": 4206,
+    "sha256": "56230f561c7743b072499833428ed642f85e9b85da6c5b8545223af9e9b532fd"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/head-preimages/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "bytes": 10464,
+    "sha256": "a6c6e3747dcc539524e74a64b092439bb53a2a64d92576f180f2c641c0e1ede4"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/head-preimages/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "bytes": 23121,
+    "sha256": "119d6a2bcfefa95680ed94bf82d460c9c77c7203a0bbd425b7f6f3dc42126bf0"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/normal.raw",
+    "bytes": 1355,
+    "sha256": "f14d89ceda7d5b520aae3c75651afae2029896a31c1f368fb6cfca61dee043dd"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/race-command.json",
+    "bytes": 749,
+    "sha256": "31e01e62e349c24ef4b2e8d69a3a8cf359ac77b3f627d14339603aaaeda2ad23"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/race-exit.json",
+    "bytes": 129,
+    "sha256": "f5443c0657c9709f4b76a6f1e3731916e6634286eb4bbcf6c74b5374869eae4a"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/race-source-after.json",
+    "bytes": 739148,
+    "sha256": "f3cd1ef2f6af32c5c26b380882234d31abbbe79f157f96845093d53d6d3c51d3"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/race-source-before.json",
+    "bytes": 739148,
+    "sha256": "f3cd1ef2f6af32c5c26b380882234d31abbbe79f157f96845093d53d6d3c51d3"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/race.raw",
+    "bytes": 1355,
+    "sha256": "fea06293e92519f5947eb1204cf264c022b8678e8cf091be5164796d1cba43db"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/source-after.json",
+    "bytes": 739148,
+    "sha256": "f3cd1ef2f6af32c5c26b380882234d31abbbe79f157f96845093d53d6d3c51d3"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/source-before.json",
+    "bytes": 739148,
+    "sha256": "f3cd1ef2f6af32c5c26b380882234d31abbbe79f157f96845093d53d6d3c51d3"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-source-receipt.json",
+    "bytes": 2571,
+    "sha256": "31db32223c1258c0bf7dec34e68823bf0a0b5cd06e384b589b40cb27e866dfc3"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-sources/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "bytes": 5859,
+    "sha256": "bfa32a8bf04f1679ea43b438d8f24ce72232dce3158d64a00a524551407aeab4"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-sources/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "bytes": 12134,
+    "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-sources/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "bytes": 23720,
+    "sha256": "54743df49a54922c6b5405a29274ff4ca5240f085cd9ad1e54666b4be5f718ad"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-sources/TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+    "bytes": 7845,
+    "sha256": "57512686a798f5c63f09b26a982b80ed838b20004fbfc8f9cc5c2f67ebb26231"
+  },
+  {
+    "path": "artifacts/4871/20261015-tested-set-visible-finish/packet/tested-sources/TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go",
+    "bytes": 5981,
+    "sha256": "6e80b63d0bc09db7be9e146a80a77f2a32cecf24a1628378b4fdef067c59142e"
+  }
+]

@@ -1,0 +1,53 @@
+{
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "index_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596",
+  "status": " M TreeDB/internal/rootpublication/native_primary_finish_work_v6.go\n M TreeDB/internal/rootpublication/native_publication_v6.go\n M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "tested_paths": {
+    "TreeDB/internal/rootpublication/resource_set_release_work_v6.go": {
+      "bytes": 7845,
+      "sha256": "57512686a798f5c63f09b26a982b80ed838b20004fbfc8f9cc5c2f67ebb26231",
+      "head_bytes": null,
+      "head_sha256": null
+    },
+    "TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go": {
+      "bytes": 5981,
+      "sha256": "6e80b63d0bc09db7be9e146a80a77f2a32cecf24a1628378b4fdef067c59142e",
+      "head_bytes": null,
+      "head_sha256": null
+    },
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": {
+      "bytes": 23720,
+      "sha256": "54743df49a54922c6b5405a29274ff4ca5240f085cd9ad1e54666b4be5f718ad",
+      "head_bytes": 23121,
+      "head_sha256": "119d6a2bcfefa95680ed94bf82d460c9c77c7203a0bbd425b7f6f3dc42126bf0"
+    },
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": {
+      "bytes": 5859,
+      "sha256": "bfa32a8bf04f1679ea43b438d8f24ce72232dce3158d64a00a524551407aeab4",
+      "head_bytes": 4206,
+      "head_sha256": "56230f561c7743b072499833428ed642f85e9b85da6c5b8545223af9e9b532fd"
+    },
+    "TreeDB/internal/rootpublication/native_publication_v6.go": {
+      "bytes": 12134,
+      "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f",
+      "head_bytes": 10464,
+      "head_sha256": "a6c6e3747dcc539524e74a64b092439bb53a2a64d92576f180f2c641c0e1ede4"
+    }
+  },
+  "census_rows": 4401,
+  "normal_exit": {
+    "exit": 0,
+    "wall_seconds": 2.459386110305786,
+    "source_equal": true,
+    "source_rows": 4401,
+    "evidence": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-set-visible-finish-20261015T044856Z"
+  },
+  "race_exit": {
+    "exit": 0,
+    "wall_seconds": 6.69315242767334,
+    "source_equal": true,
+    "normal_source_equal": true,
+    "source_rows": 4401
+  },
+  "qualification": "Component Set/Finish normal/race only; no public production ACK or Q32 credit."
+}

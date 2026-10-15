@@ -1,0 +1,7 @@
+{
+  "exit": 0,
+  "wall_seconds": 2.459386110305786,
+  "source_equal": true,
+  "source_rows": 4401,
+  "evidence": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-set-visible-finish-20261015T044856Z"
+}
