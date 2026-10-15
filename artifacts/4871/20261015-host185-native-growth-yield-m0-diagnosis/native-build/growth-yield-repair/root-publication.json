@@ -1,0 +1,13 @@
+{
+  "at_utc": "2026-10-15T22:40:07.695755+00:00",
+  "head": "3dd8d2d11d129ea93fc6277215d06d7a4ba65650",
+  "parent": "4aa7ebb23fc925a6dcc8d8abee3d2c3bfd6efe35",
+  "tree": "5d91d2a93fc4df488002a1ba4e4e54a5ea8aca04",
+  "branch": "codex/4878-native-185-20261015",
+  "source_count": 10330,
+  "paths": 26,
+  "manifest_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+  "clean": true,
+  "remote_verified": true,
+  "scope": "Recovery/source checkpoint; independent review pending, no native publication or qualification"
+}

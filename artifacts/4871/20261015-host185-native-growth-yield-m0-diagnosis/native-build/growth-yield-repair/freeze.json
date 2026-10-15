@@ -1,0 +1,44 @@
+{
+  "at_utc": "2026-10-15T22:38:45.432753+00:00",
+  "base_head": "4aa7ebb23fc925a6dcc8d8abee3d2c3bfd6efe35",
+  "source_frozen": true,
+  "source_count": 10330,
+  "source_manifest_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+  "changed_paths": 26,
+  "production_paths": 22,
+  "test_paths": 4,
+  "untracked_added": 0,
+  "direct_production_growth_callers": 26,
+  "test_results": {
+    "normal-initial": {
+      "returncode": 0,
+      "elapsed_seconds": 62.2828428032808,
+      "source_equal": true,
+      "child_joined": true,
+      "source_count": 10330
+    },
+    "normal-complete": {
+      "returncode": 0,
+      "elapsed_seconds": 47.59849671740085,
+      "source_equal": true,
+      "child_joined": true,
+      "source_count": 10330
+    },
+    "race-complete": {
+      "returncode": 0,
+      "elapsed_seconds": 143.57976448908448,
+      "source_equal": true,
+      "child_joined": true,
+      "source_count": 10330
+    }
+  },
+  "first_regression_error": "baseline root-bound normal: budget refusal converted into ErrWorkRequired at actual phase15/16 and token limit12",
+  "repair_compile_or_test_errors": [],
+  "git_diff_check_returncode": 0,
+  "runtime_grant": "focused previsibility/cancellation and pure growth normal/race only",
+  "no_native_activation_enqueue_publication_finish_runtime": true,
+  "public_caps_unchanged": true,
+  "Q32": "RED",
+  "ACK": 0,
+  "next_batch_started": false
+}

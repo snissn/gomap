@@ -1,0 +1,184 @@
+[
+  {
+    "path": "TreeDB/pager/primary_read_root_v6.go",
+    "line": 141,
+    "sha256": "1f32f38adcd75751069482363a4e55d6998df1fedb4020136e993caa04100c67",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddWithOrdinalWork(metadata, bankCharge+nodeCharge, w); !ready || err != nil {\n\t\treturn false, err\n\t}\n\t// Everything after aggregate admission is the concrete original\n\t// constructor and nonfallible table install, under unchanged exclusions.\n\towner := constructor.ConstructPrimaryReadRootOwnerV6()\n\tbucket := local % uint64(len(t.heads))"
+  },
+  {
+    "path": "TreeDB/zipper/materialized_write_work.go",
+    "line": 109,
+    "sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\t\treturn nil, false, err\n\t\t}\n\t\t// Both original containing objects are admitted together. No fallible\n\t\t// operation or hidden temporary-owner refund follows the aggregate Add.\n\t\tf := &materializedWriteFrame{oldID: ref.Page, oldRef: ref, ops: ops}\n\t\ts := &MaterializedWriteWork{z: z, owner: owner, charge: charge, head: f, root: f, current: f}"
+  },
+  {
+    "path": "TreeDB/zipper/materialized_write_work.go",
+    "line": 167,
+    "sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); !ready || e != nil {\n\t\treturn nil, false, e\n\t}\n\tf := &materializedWriteFrame{parent: parent, next: s.head, oldID: ref.Page, oldRef: ref, ops: ops}\n\ts.head = f\n\ts.charge += charge\n\treturn f, true, nil"
+  },
+  {
+    "path": "TreeDB/zipper/materialized_write_work.go",
+    "line": 584,
+    "sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\tif ready, e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); !ready || e != nil {\n\t\t\t\treturn false, e\n\t\t\t}\n\t\t\tnext := &materializedWriteFrame{parent: f.parent, next: s.head, splitSegment: true}\n\t\t\ts.head = next\n\t\t\ts.charge += charge\n\t\t\tnext.keySize = copy(next.key[:], f.event.entry.Key)"
+  },
+  {
+    "path": "TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+    "line": 210,
+    "sha256": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(s.metadata, charge, w); !ready || err != nil {\n\t\t\t\t\treturn false, err\n\t\t\t\t}\n\t\t\t\ts.scratchCharge = charge\n\t\t\t}\n\t\t\ts.original = s.entries\n\t\t\ts.scratch = make([]ReservationExtentV1, len(s.entries))"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+    "line": 52,
+    "sha256": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5",
+    "disposition": "error-only transport to typed parent",
+    "source": "\tif ready, growthErr := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || growthErr != nil {\n\t\tif growthErr == nil {\n\t\t\tgrowthErr = retainedalloc.ErrWorkBudget\n\t\t}\n\t\treturn nil, growthErr\n\t}\n\tbacking := &resourcePinnedBacking{owner: owner, charge: charge, registry: registry}"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "line": 99,
+    "sha256": "8aa9f727c83e0973a30d0e13168b4cd0ac08ad750bc6ef8b8d77ca9f60e972f0",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, kindCharge+setCharge, w); !ready || err != nil {\n\t\treturn nil, false, err\n\t}\n\tviews := &resourceKindBacking{allocation: resourceAllocationAdmittedV6(owner, kindCharge)}\n\tset := &StableResourceSet{metadata: resourceAllocationAdmittedV6(owner, setCharge), selected: true, kindViews: views}\n\tset.owner.Store(uint32(ResourceOwnerBuilder))\n\treturn set, true, nil"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+    "line": 860,
+    "sha256": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\t\treturn false, err\n\t\t}\n\t\troot.directory = &DependencyDirectoryReleaseWork{}\n\t\troot.scratchOwner, root.scratchCharge = owner, charge\n\t}\n\tif root.directoryActive {"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "line": 65,
+    "sha256": "eb7f244defc37f13392fd4fdd876b026a1cf49822db7aa7c9ad029293251c5c1",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(a.MetadataOwner(), charge, w); !ready || err != nil {\n\t\treturn nil, false, err\n\t}\n\tt := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, nativeWorkOwned: native, terminalCompletion: &primaryTerminalCompletionV6{owner: a.MetadataOwner(), charge: charge}}}\n\ta.InitializeReleaseQueue(&t.constructionV6.cleanupQueue)\n\tif native {\n\t\tready, err := t.PrepareNativeMVCCConstructionRootV6(w)"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "line": 295,
+    "sha256": "eb7f244defc37f13392fd4fdd876b026a1cf49822db7aa7c9ad029293251c5c1",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\treturn nil, 0, false, err\n\t}\n\treturn &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil\n}\n\n// Fresh promotion selects actual parent/target and acquires independent physical"
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_allocation.go",
+    "line": 43,
+    "sha256": "1e0e3508a3b8dfb3e222eafb6fdffdf32033688dfc1608482a307265d0e39a2b",
+    "disposition": "error-only transport to typed parent",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\tif err == nil {\n\t\t\terr = retainedalloc.ErrWorkBudget\n\t\t}\n\t\treturn nil, err\n\t}\n\treturn resourceAllocationAdmittedV6(owner, charge), nil"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/metadata_work_v6.go",
+    "line": 74,
+    "sha256": "817ea7caba64579932c51685a18be04a71a1c1d4a0942a0300b6af86d7a8da5c",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {\n\t\t\treturn false, err\n\t\t}\n\t\tb.edges = make([]Ref, 0, len(edges))\n\t\tb.metadataCharge += charge\n\t}\n\tvar physical []byte"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/bundle.go",
+    "line": 282,
+    "sha256": "b64b5bd706b3b7275f1cbfedda3e827a2f4d07a7c5796e15627bb83461ecd305",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\t\t\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {\n\t\t\t\t\t\treturn nil, false, err\n\t\t\t\t\t}\n\t\t\t\t\tb.image = make([]byte, len(image))\n\t\t\t\t\tcopy(b.image, image)\n\t\t\t\t\tb.metadataCharge += charge\n\t\t\t\t} else if !bytes.Equal(b.image, image) {"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "line": 321,
+    "sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {\n\t\treturn nil, false, err\n\t}\n\tc := &Claim{native: native, metadataCharge: charge, arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}\n\tif native {\n\t\treturn c, true, nil\n\t}"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "line": 380,
+    "sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{}))), w); !ready || err != nil {\n\t\t\t\treturn Ref{}, false, err\n\t\t\t}\n\t\t\tc.chunk = new(bankChunk)\n\t\t}\n\t\tif c.local == a.next && c.growth == nil {\n\t\t\tg, ready, err := pager.NewGrowthForPager(a.pager, c.local+1, w)"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+    "line": 151,
+    "sha256": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {\n\t\treturn false, err\n\t}\n\tb.readCertificate = &ReadRootCertificateV6{}\n\tb.metadataCharge += charge\n\treturn true, nil\n}"
+  },
+  {
+    "path": "TreeDB/internal/primaryarena/retention.go",
+    "line": 53,
+    "sha256": "cde43d1f6ffb83910c74cb43cc2bded73d8aa39eec3308c68d256b50642f4aa2",
+    "disposition": "error-only transport to typed parent",
+    "source": "\tif ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, bytes, w); !ready || err != nil {\n\t\tif err == nil {\n\t\t\terr = retainedalloc.ErrWorkBudget\n\t\t}\n\t\treturn err\n\t}\n\tb.metadataCharge += bytes"
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+    "line": 135,
+    "sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\t\t\t\treturn false, err\n\t\t\t\t}\n\t\t\t\ts.retired = make([]uint64, s.count)\n\t\t\t\ts.owner, s.charge = owner, charge\n\t\t\t}\n\t\t\tif err := s.preparation.BindRetainedOwnerV6(owner); err != nil {"
+  },
+  {
+    "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+    "line": 254,
+    "sha256": "145275e3a77a6de3196c4ebf1e1fcd883550d025c9a02be0ab9be1072fd48d82",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); !ready || err != nil {\n\t\t\tidx.wrapperMu.Unlock()\n\t\t\tdb.idxMu.Unlock()\n\t\t\treturn false, err\n\t\t}\n\t\ts.snapshot = db.newDurableCandidateStableIndexSnapshotV1(idx)\n\t\ts.snapshot.nativeMVCC = nativeMVCCSnapshotStateV6{workOwned: true, capturePhase: 4}"
+  },
+  {
+    "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+    "line": 288,
+    "sha256": "145275e3a77a6de3196c4ebf1e1fcd883550d025c9a02be0ab9be1072fd48d82",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, fileBytes, w); !ready || err != nil {\n\t\t\t\t\tmutex.Unlock()\n\t\t\t\t\treturn false, err\n\t\t\t\t}\n\t\t\t\tf, err := os.Open(strings.Clone(db.dir))\n\t\t\t\tif err != nil {\n\t\t\t\t\ts.refundOwner, s.refundCharge = metadata, fileBytes"
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "line": 531,
+    "sha256": "eb9093c8816ecde81214a2453bfd40b23390bdced659bccc4185cf4b51f8fe1c",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\treturn false, err\n\t}\n\tprefix := make([]*freelist.PreparedCOWCandidateV1, count)\n\tcopy(prefix, runtime.debt)\n\tprefix[count-1] = member.prepared\n\ts.seal = newPrimaryCapsuleSealDescriptorV6(rootPublicationSealV1{metadata: owner, metadataCharge: charge, latestSequence: member.sequence, groupLength: 1, idx: runtime.idx, next: member.next, resources: s.resources, manifest: s.manifest, prefix: prefix, token: s.indexCaptures[0].token, record: promotion.View.Current().Record, meta: meta, target: s.target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primaryPublicationSealV5{prepared: member.primary, projection: promotion.View.Current().Primary, manifestBanks: s.banks, token: s.indexCaptures[1].token, proofResources: s.proofResources, promotion: promotion})"
+  },
+  {
+    "path": "TreeDB/db/primary_bank_construction_v5.go",
+    "line": 70,
+    "sha256": "667aa341a55f8de6f19545244495af914ab783f4a646189ec3f717ca203f11b8",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); !ready || err != nil {\n\t\treturn nil, false, err\n\t}\n\t_, _ = owner.retainLockedV6() // protected eligibility above makes this infallible\n\treturn &primaryBankConstructionV5{idx: idx, owner: owner, metadata: metadata, charge: charge}, true, nil\n}\n"
+  },
+  {
+    "path": "TreeDB/db/primary_bank_construction_v5.go",
+    "line": 97,
+    "sha256": "667aa341a55f8de6f19545244495af914ab783f4a646189ec3f717ca203f11b8",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(claims.metadata, added, w); !ready || err != nil {\n\t\treturn false, err\n\t}\n\tclaims.refs = make([]primaryarena.Ref, 0, 1)\n\tclaims.charge += added\n\treturn true, nil\n}"
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "line": 109,
+    "sha256": "054804f71e0f0211ba2a1e741187fdb0f62a225c9065a653ea682d66997e3ec5",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {\n\t\t\t\treturn false, err\n\t\t\t}\n\t\t\ts.metadata, s.charge = owner, charge\n\t\t\tinstall := &rootPublicationVisibleInstallV1{metadata: owner, db: db, idx: runtime.idx, next: root.next, oldUserRootID: c.snapshot.state.RootPageID, newUserRootID: root.next.UserRootPageID, conditionalMutation: conditionalCommitMutation{physicalOnly: true}}\n\t\t\tinstall.post.commitSeq, install.post.vlogRefIndexID, install.post.sync = root.next.CommitSeq, runtime.idx.id, true\n\t\t\ts.member = &rootPublicationVisibleMemberV1{sequence: root.next.CommitSeq, next: root.next, prepared: allocator.preparation.PreparedForConstructionV6(), primary: allocator.primary, install: install, allocatorPreparation: &allocator.preparation, allocatorActivation: &allocator.activation, retirementReleaseSet: releasePrimaryResourceSetWithWorkV6}"
+  },
+  {
+    "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+    "line": 38,
+    "sha256": "694e53c10cc493ad2235dddf6877b3dc04760d778bcf5de2ecf7996e890f112c",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); !ready || err != nil {\n\t\t\treturn false, err\n\t\t}\n\t\tseal.commitRuntime = &primaryDurableRuntimeV5{}\n\t\tbindReservedPrimaryRuntimeV5(seal.commitRuntime, arena)\n\t}\n\tif seal.commitRetired == nil {"
+  },
+  {
+    "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+    "line": 50,
+    "sha256": "694e53c10cc493ad2235dddf6877b3dc04760d778bcf5de2ecf7996e890f112c",
+    "disposition": "typed unready/error returned before original allocation/effect",
+    "source": "\t\tif ready, err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); !ready || err != nil {\n\t\t\treturn false, err\n\t\t}\n\t\tseal.commitRetired = make([]*rootPublicationSealV1, 0, count)\n\t\tseal.commitRetiredCharge = charge\n\t}\n\t// A later seal may join while this producer yields. Refuse before the"
+  }
+]

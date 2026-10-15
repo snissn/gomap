@@ -1,0 +1,281 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/README.md",
+    "path": "native-build/growth-yield-repair/README.md",
+    "source_bytes": 6602,
+    "source_sha256": "30ae682f924251dfc66b050a892b46b74ab0e45b3f249c6c91df1f0cab404c8b",
+    "stored_bytes": 6602,
+    "stored_sha256": "30ae682f924251dfc66b050a892b46b74ab0e45b3f249c6c91df1f0cab404c8b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/artifact-manifest.json",
+    "path": "native-build/growth-yield-repair/artifact-manifest.json",
+    "source_bytes": 2236,
+    "source_sha256": "358aa4a7884a8939045d117694ed8abfeae461ec5194e81bdf18ba63c5b399a9",
+    "stored_bytes": 2236,
+    "stored_sha256": "358aa4a7884a8939045d117694ed8abfeae461ec5194e81bdf18ba63c5b399a9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/changed-files.json",
+    "path": "native-build/growth-yield-repair/changed-files.json",
+    "source_bytes": 6552,
+    "source_sha256": "cf7f333987eab9fbb13d66dd4d04e74ef39503119c3d20df026202a360e03972",
+    "stored_bytes": 6552,
+    "stored_sha256": "cf7f333987eab9fbb13d66dd4d04e74ef39503119c3d20df026202a360e03972",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/freeze.json",
+    "path": "native-build/growth-yield-repair/freeze.json",
+    "source_bytes": 1426,
+    "source_sha256": "e2a3902804e04623772be712ae481ea752ee72c95c6f7dfa58ec0d4fa95486f1",
+    "stored_bytes": 1426,
+    "stored_sha256": "e2a3902804e04623772be712ae481ea752ee72c95c6f7dfa58ec0d4fa95486f1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/growth-callers.json",
+    "path": "native-build/growth-yield-repair/growth-callers.json",
+    "source_bytes": 16711,
+    "source_sha256": "c0cb2d8e6c79eeb16605524f513857c5f23e29f3e91ebd543a99f25b951f0b27",
+    "stored_bytes": 16711,
+    "stored_sha256": "c0cb2d8e6c79eeb16605524f513857c5f23e29f3e91ebd543a99f25b951f0b27",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-complete/command.json",
+    "path": "native-build/growth-yield-repair/normal-complete/command.json",
+    "source_bytes": 1427,
+    "source_sha256": "dfea6b1138d25c394e3c6fa02ee4671f0aab773b664021a5cb56b8cd49143ea3",
+    "stored_bytes": 1427,
+    "stored_sha256": "dfea6b1138d25c394e3c6fa02ee4671f0aab773b664021a5cb56b8cd49143ea3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-complete/result.json",
+    "path": "native-build/growth-yield-repair/normal-complete/result.json",
+    "source_bytes": 135,
+    "source_sha256": "576030a571d26fd728686ce875c22fc557d3ac2af7b2d7c61301a235ea0cf4f4",
+    "stored_bytes": 135,
+    "stored_sha256": "576030a571d26fd728686ce875c22fc557d3ac2af7b2d7c61301a235ea0cf4f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-complete/run.log",
+    "path": "native-build/growth-yield-repair/normal-complete/run.log.gz",
+    "source_bytes": 10536,
+    "source_sha256": "9aca0e60d04c5cbd569cb69be21fefd996cf6496612e7b7b052c39832e82e022",
+    "stored_bytes": 2423,
+    "stored_sha256": "7c25426d1cc1fb87d1ac823ed7102077001b625a508a207180cb34347d6727b7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-complete/source-after.json",
+    "path": "native-build/growth-yield-repair/normal-complete/source-after.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+    "stored_bytes": 461415,
+    "stored_sha256": "bf22ecf4d301a236068dc4f27f38e30ce30b5222b0acb67a4a55a47bf4696f3a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-complete/source-before.json",
+    "path": "native-build/growth-yield-repair/normal-complete/source-before.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+    "stored_bytes": 461415,
+    "stored_sha256": "bf22ecf4d301a236068dc4f27f38e30ce30b5222b0acb67a4a55a47bf4696f3a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-initial/command.json",
+    "path": "native-build/growth-yield-repair/normal-initial/command.json",
+    "source_bytes": 1196,
+    "source_sha256": "8b2482b68eedd5f4c086af755d8b4a77eae02dc7961f1ae142fff0f5662b4101",
+    "stored_bytes": 1196,
+    "stored_sha256": "8b2482b68eedd5f4c086af755d8b4a77eae02dc7961f1ae142fff0f5662b4101",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-initial/result.json",
+    "path": "native-build/growth-yield-repair/normal-initial/result.json",
+    "source_bytes": 134,
+    "source_sha256": "1ad7b1df4487694d3f5a8773f9704a1bb038a5a6e66adfa7f66133abf80bfdd3",
+    "stored_bytes": 134,
+    "stored_sha256": "1ad7b1df4487694d3f5a8773f9704a1bb038a5a6e66adfa7f66133abf80bfdd3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-initial/run.log",
+    "path": "native-build/growth-yield-repair/normal-initial/run.log.gz",
+    "source_bytes": 9007,
+    "source_sha256": "ae035a3a1450e6f41732b5f3164e70d6554a28f1175af6966080cdff3683de2d",
+    "stored_bytes": 2210,
+    "stored_sha256": "01d37de911856babc20b3d2459f84938684f936edebee948928e131f4c0f7716",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-initial/source-after.json",
+    "path": "native-build/growth-yield-repair/normal-initial/source-after.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "f64151de4bd5b850325330b7f67e76923050ea1c9427a9b19f66644d44da2644",
+    "stored_bytes": 461416,
+    "stored_sha256": "a005747772ed355c5d826f28b66d7ebcb2b0d67b2be0c3f8182b118c0fc810c1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/normal-initial/source-before.json",
+    "path": "native-build/growth-yield-repair/normal-initial/source-before.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "f64151de4bd5b850325330b7f67e76923050ea1c9427a9b19f66644d44da2644",
+    "stored_bytes": 461416,
+    "stored_sha256": "a005747772ed355c5d826f28b66d7ebcb2b0d67b2be0c3f8182b118c0fc810c1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/race-complete/command.json",
+    "path": "native-build/growth-yield-repair/race-complete/command.json",
+    "source_bytes": 1438,
+    "source_sha256": "16116085c2ba401e19171a6c669e35f0f059a2fae052801c7ebb20496182d48f",
+    "stored_bytes": 1438,
+    "stored_sha256": "16116085c2ba401e19171a6c669e35f0f059a2fae052801c7ebb20496182d48f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/race-complete/result.json",
+    "path": "native-build/growth-yield-repair/race-complete/result.json",
+    "source_bytes": 136,
+    "source_sha256": "d826a24046502b6786884c2848000b58f1fe68c59104fa389b8ad81cd1b6bee8",
+    "stored_bytes": 136,
+    "stored_sha256": "d826a24046502b6786884c2848000b58f1fe68c59104fa389b8ad81cd1b6bee8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/race-complete/run.log",
+    "path": "native-build/growth-yield-repair/race-complete/run.log.gz",
+    "source_bytes": 10647,
+    "source_sha256": "2d61346958843c794d8e3b6aa440413a14042acad5915e014289b5623eef5ee6",
+    "stored_bytes": 2417,
+    "stored_sha256": "c605111952f4065c8d51f722ec710f4b034f0a3bedf91507601ab847535f0f29",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/race-complete/source-after.json",
+    "path": "native-build/growth-yield-repair/race-complete/source-after.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+    "stored_bytes": 461415,
+    "stored_sha256": "bf22ecf4d301a236068dc4f27f38e30ce30b5222b0acb67a4a55a47bf4696f3a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/race-complete/source-before.json",
+    "path": "native-build/growth-yield-repair/race-complete/source-before.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+    "stored_bytes": 461415,
+    "stored_sha256": "bf22ecf4d301a236068dc4f27f38e30ce30b5222b0acb67a4a55a47bf4696f3a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/repair.diff",
+    "path": "native-build/growth-yield-repair/repair.diff.gz",
+    "source_bytes": 33882,
+    "source_sha256": "020d70723905d55d22df46eb56530fc89a3bf2981855a7acf52a99ab85445c08",
+    "stored_bytes": 7277,
+    "stored_sha256": "33a4e0a2fd82611be46b403863a82bc8f7c073992ca57e27bf1f9629a9cd4c20",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/root-publication.json",
+    "path": "native-build/growth-yield-repair/root-publication.json",
+    "source_bytes": 543,
+    "source_sha256": "be7dcea64f4c6d7c0a5df86f98fcba3bd35ad48336fc766d14cb6349c2512f33",
+    "stored_bytes": 543,
+    "stored_sha256": "be7dcea64f4c6d7c0a5df86f98fcba3bd35ad48336fc766d14cb6349c2512f33",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/run.py",
+    "path": "native-build/growth-yield-repair/run.py",
+    "source_bytes": 1736,
+    "source_sha256": "31460dfda06e6b5d250486c35263f00d182b9a6a330bfee0e279aea6c4b717b6",
+    "stored_bytes": 1736,
+    "stored_sha256": "31460dfda06e6b5d250486c35263f00d182b9a6a330bfee0e279aea6c4b717b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/source-baseline.json",
+    "path": "native-build/growth-yield-repair/source-baseline.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "f95832cb74409561aa36dc7ee507c3e56f8e25027fbd808f1c20409fb5f3a101",
+    "stored_bytes": 461393,
+    "stored_sha256": "fe12f069c7b3b4273f709588cff84dc470c2a18eb389507eb8e1f9824ed726a7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/growth-yield-repair/source-final.json",
+    "path": "native-build/growth-yield-repair/source-final.json.gz",
+    "source_bytes": 1583402,
+    "source_sha256": "7dbebe5af05782db629b22a5ec4aa9397992fc481eec11fa702b6671e0a0bbd0",
+    "stored_bytes": 461415,
+    "stored_sha256": "bf22ecf4d301a236068dc4f27f38e30ce30b5222b0acb67a4a55a47bf4696f3a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/growth-yield-boundary-proposal.md",
+    "path": "native-decision/growth-yield-boundary-proposal.md",
+    "source_bytes": 4256,
+    "source_sha256": "84304ab1a0aae748ac5c822685c956ecd651b79cf65a45eb26f326753c2f09cc",
+    "stored_bytes": 4256,
+    "stored_sha256": "84304ab1a0aae748ac5c822685c956ecd651b79cf65a45eb26f326753c2f09cc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/growth-yield-repair.md",
+    "path": "native-decision/growth-yield-repair.md",
+    "source_bytes": 6602,
+    "source_sha256": "30ae682f924251dfc66b050a892b46b74ab0e45b3f249c6c91df1f0cab404c8b",
+    "stored_bytes": 6602,
+    "stored_sha256": "30ae682f924251dfc66b050a892b46b74ab0e45b3f249c6c91df1f0cab404c8b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/m0-2588c-diagnosis.json",
+    "path": "ordinary-review/m0-2588c-diagnosis.json",
+    "source_bytes": 46072,
+    "source_sha256": "549ee8c4e14504a7d77ac923dba1c04f63651b8ae1f95947d54f9dc79aa80ea8",
+    "stored_bytes": 46072,
+    "stored_sha256": "549ee8c4e14504a7d77ac923dba1c04f63651b8ae1f95947d54f9dc79aa80ea8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/m0-2588c-diagnosis.md",
+    "path": "ordinary-review/m0-2588c-diagnosis.md",
+    "source_bytes": 7706,
+    "source_sha256": "3333a3722d94c22dd0c375f79d5664b69c4a2926427081c5dc8525d06e86536b",
+    "stored_bytes": 7706,
+    "stored_sha256": "3333a3722d94c22dd0c375f79d5664b69c4a2926427081c5dc8525d06e86536b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/native-growth-yield-repair.json",
+    "path": "ordinary-review/native-growth-yield-repair.json",
+    "source_bytes": 7680,
+    "source_sha256": "7e0d58aee9547575070d188a073472f474dd780f2a99c2d957ef2362e29d823f",
+    "stored_bytes": 7680,
+    "stored_sha256": "7e0d58aee9547575070d188a073472f474dd780f2a99c2d957ef2362e29d823f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/native-growth-yield-repair.md",
+    "path": "ordinary-review/native-growth-yield-repair.md",
+    "source_bytes": 5485,
+    "source_sha256": "6727c752d3f4d48c34c4f7ffcd0686be3e23467865c161b7e53d55d93f0857fe",
+    "stored_bytes": 5485,
+    "stored_sha256": "6727c752d3f4d48c34c4f7ffcd0686be3e23467865c161b7e53d55d93f0857fe",
+    "encoding": "identity"
+  }
+]
