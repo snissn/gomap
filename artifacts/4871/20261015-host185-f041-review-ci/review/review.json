@@ -1,0 +1,45 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "repository": "snissn/gomap",
+  "pr": 5127,
+  "base_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "head_sha_or_manifest": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "head_tree": "2a482daae31337697dedf42329e2597c344b3226",
+  "disposition": "REJECT",
+  "candidate_edits_by_reviewer": false,
+  "construction_role": false,
+  "reviewer_runtime_campaigns": [],
+  "unavailability_evidence": "Workstream requires exact GPT-6.1 Sol routing. Hosted manual review cannot pin that model and was not requested; no hosted failure or response is claimed.",
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "P1",
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 794,
+      "title": "Certificate cache is published before accepted root custody",
+      "status": "OPEN_COORDINATOR_ACKNOWLEDGED"
+    },
+    {
+      "id": "R2",
+      "priority": "P2",
+      "path": "TreeDB/tree/primary_iterator.go",
+      "line": 241,
+      "title": "Closed PRIMARY iterator retains directory backing and pooled child aliases",
+      "status": "OPEN_COORDINATOR_ACKNOWLEDGED"
+    },
+    {
+      "id": "R3",
+      "priority": "P2",
+      "path": "TreeDB/db/primary_joint_swap_v6.go",
+      "line": 380,
+      "title": "Recovery ReadAll scratch overlap is absent from marker admission",
+      "status": "OPEN_COORDINATOR_ACKNOWLEDGED"
+    }
+  ],
+  "full_review": "review-f0415773.md",
+  "coverage_limit": "Selective deep whole-candidate contract review; not every line of 514 files, no native Q32/final graph qualification, no reviewer tests or benchmarks, no current hosted gate completion claim.",
+  "merge_authorized": false
+}

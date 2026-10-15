@@ -1,0 +1,310 @@
+{
+  "job": "windows-core-3",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676696",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-3.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:51:36.4429563Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock",
+      "Elapsed": 1.85
+    },
+    {
+      "Time": "2026-10-15T16:51:37.9806903Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock",
+      "Elapsed": 1.54
+    },
+    {
+      "Time": "2026-10-15T16:51:37.981121Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+      "Elapsed": 3.38
+    },
+    {
+      "Time": "2026-10-15T16:51:38.6210934Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+      "Elapsed": 0.15
+    },
+    {
+      "Time": "2026-10-15T16:51:39.0720715Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6SuccessfulReplacement",
+      "Elapsed": 0.22
+    },
+    {
+      "Time": "2026-10-15T16:51:39.2794097Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+      "Elapsed": 0.21
+    },
+    {
+      "Time": "2026-10-15T16:51:39.442979Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "Elapsed": 0.16
+    },
+    {
+      "Time": "2026-10-15T16:51:39.5721877Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/physical-completion",
+      "Elapsed": 0.13
+    },
+    {
+      "Time": "2026-10-15T16:51:39.7422574Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal",
+      "Elapsed": 0.17
+    },
+    {
+      "Time": "2026-10-15T16:51:39.7422574Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission",
+      "Elapsed": 0.3
+    },
+    {
+      "Time": "2026-10-15T16:51:46.1966794Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "Elapsed": 2.12
+    },
+    {
+      "Time": "2026-10-15T16:51:49.391744Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Elapsed": 20.954
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:51:34.5968152Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+      "Output": "=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:34.5968152Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock",
+      "Output": "=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:36.4429563Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLocksha3867643540\\001\\LOCK: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:36.4429563Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock",
+      "Output": "--- FAIL: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock (1.85s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:36.4429563Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock",
+      "Output": "=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:37.9806903Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLockcal2992018801\\001\\LOCK: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:37.9806903Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock",
+      "Output": "--- FAIL: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock (1.54s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:37.981121Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+      "Output": "--- FAIL: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock (3.38s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:38.4724478Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+      "Output": "=== RUN   TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:38.6123846Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+      "Output": "    primary_capsule_v6_test.go:272: vacuum online vacuum unsupported on this platform\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:38.6210934Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+      "Output": "--- FAIL: TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6 (0.15s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:38.8552751Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6SuccessfulReplacement",
+      "Output": "=== RUN   TestPrimaryJointVacuumV6SuccessfulReplacement\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.0590741Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6SuccessfulReplacement",
+      "Output": "    primary_joint_vacuum_v6_test.go:35: online vacuum unsupported on this platform\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.0720715Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6SuccessfulReplacement",
+      "Output": "--- FAIL: TestPrimaryJointVacuumV6SuccessfulReplacement (0.22s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.0720715Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+      "Output": "=== RUN   TestPrimaryJointVacuumV6CommandFrontierAndRevisions\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.2536381Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+      "Output": "    primary_joint_vacuum_v6_test.go:544: online vacuum unsupported on this platform\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.2794097Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CommandFrontierAndRevisions",
+      "Output": "--- FAIL: TestPrimaryJointVacuumV6CommandFrontierAndRevisions (0.21s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.2794097Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "Output": "=== RUN   TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.4401752Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "Output": "    primary_offline_pair_v6_test.go:243: replacement accepted: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.442979Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement",
+      "Output": "--- FAIL: TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement (0.16s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.442979Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission",
+      "Output": "=== RUN   TestPrimaryOfflinePairChildProducerAdmission\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.442979Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/physical-completion",
+      "Output": "=== RUN   TestPrimaryOfflinePairChildProducerAdmission/physical-completion\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.5693997Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/physical-completion",
+      "Output": "    primary_offline_pair_v6_test.go:779: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.5721877Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/physical-completion",
+      "Output": "--- FAIL: TestPrimaryOfflinePairChildProducerAdmission/physical-completion (0.13s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.5721877Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal",
+      "Output": "=== RUN   TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.7388703Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal",
+      "Output": "    primary_offline_pair_v6_test.go:779: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.7422574Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal",
+      "Output": "--- FAIL: TestPrimaryOfflinePairChildProducerAdmission/before-create-refusal (0.17s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:39.7422574Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairChildProducerAdmission",
+      "Output": "--- FAIL: TestPrimaryOfflinePairChildProducerAdmission (0.30s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:44.0762662Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "Output": "=== RUN   TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:46.1966794Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSourc3918888675\\001\\LOCK: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:46.1966794Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource",
+      "Output": "--- FAIL: TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource (2.12s)\n"
+    }
+  ],
+  "extra": []
+}

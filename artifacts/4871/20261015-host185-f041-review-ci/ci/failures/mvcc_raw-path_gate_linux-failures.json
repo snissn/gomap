@@ -1,0 +1,8 @@
+{
+  "job": "mvcc raw-path gate (linux)",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676186",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/raw-path.log",
+  "failures": [],
+  "failure_output": [],
+  "extra": []
+}

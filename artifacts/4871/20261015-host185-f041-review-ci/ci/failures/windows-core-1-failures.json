@@ -1,0 +1,72 @@
+{
+  "job": "windows-core-1",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676665",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-1.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:51:34.1625376Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+      "Elapsed": 0.67
+    },
+    {
+      "Time": "2026-10-15T16:51:36.0268015Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestOpen_PersistedProfileCannotChangeContracts",
+      "Elapsed": 0.68
+    },
+    {
+      "Time": "2026-10-15T16:52:29.41597Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 163.765
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:51:33.4913139Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+      "Output": "=== RUN   TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:34.158645Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+      "Output": "    offline_maintenance_template_lookup_test.go:200: VacuumIndexOffline: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:34.1620114Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+      "Output": "--- FAIL: TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup (0.67s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:35.3444168Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestOpen_PersistedProfileCannotChangeContracts",
+      "Output": "=== RUN   TestOpen_PersistedProfileCannotChangeContracts\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:36.0227716Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestOpen_PersistedProfileCannotChangeContracts",
+      "Output": "    profiles_test.go:188: implicit-profile offline vacuum: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:36.0268015Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestOpen_PersistedProfileCannotChangeContracts",
+      "Output": "--- FAIL: TestOpen_PersistedProfileCannotChangeContracts (0.68s)\n"
+    }
+  ],
+  "extra": []
+}

@@ -1,0 +1,1511 @@
+{
+  "job": "race-check (linux)-2",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676856",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/race-check_linux-2.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:45:26.460557842Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Elapsed": 15.26
+    },
+    {
+      "Time": "2026-10-15T16:52:43.002353685Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 469.302
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:45:11.201449567Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "=== RUN   TestNegativeLookupQualificationFixture\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:12.823013878Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "2026/10/15 16:45:12 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=3999 ratio=0.031\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:12.834942226Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "2026/10/15 16:45:12 treedb: value-log dict published class=single_value dict_id=18112090073266034019 k=16 payload_ratio=0.024 total_ratio=0.028\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:14.19275354Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:154: payload=compressible256 enabled=false\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:14.197666214Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0042592c0 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:14.245919908Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0042592c0 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:14.265739179Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0042592c0 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:15.893989374Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "2026/10/15 16:45:15 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=3999 ratio=0.031\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:15.911352861Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "2026/10/15 16:45:15 treedb: value-log dict published class=single_value dict_id=18112090073266034019 k=16 payload_ratio=0.024 total_ratio=0.028\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:17.155630895Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:154: payload=compressible256 enabled=true\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:17.160867898Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc004259680 seq=3 userRoot=18 systemRoot=3 filter=0xc001e60a20 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:17.219848451Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc004259680 seq=4 userRoot=8 systemRoot=3 filter=0xc001e60a20 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:17.240420017Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc004259680 seq=5 userRoot=8 systemRoot=3 filter=0xc001e60a20 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296224495Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "==================\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296259681Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "WARNING: DATA RACE\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296266223Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Write at 0x00c0008e45d0 by goroutine 4502:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296271282Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  runtime.mapdelete_fast32()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296276162Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/internal/runtime/maps/runtime_fast32.go:465 +0x0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296281582Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).releaseNativeMVCCSetStep()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296286741Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/native_mvcc_set_release.go:135 +0x12d2\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29629138Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296296379Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:2610 +0x518\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296301519Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).RefreshValueLogSet()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296306518Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5360 +0x5f7\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296311297Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).runWithBackendMaintenanceOptions()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296315986Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:8031 +0x47b\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296327187Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenanceWithOptions()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296332167Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:23740 +0xa3a9\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296337927Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenance()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296343608Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:21346 +0x298\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296348938Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunPeriodicVlogGenerationMaintenance()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296353176Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19728 +0x26d\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296357534Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296361632Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19695 +0x24c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296366501Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296371661Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19656 +0x2e\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296375808Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296380798Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Previous read at 0x00c0008e45d0 by goroutine 4327:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296385817Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296391277Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/db.go:1795 +0x44b\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296396196Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296405333Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/pools.go:54 +0x9a\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296410503Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296415833Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/api.go:241 +0x78\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296420342Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29642479Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/api.go:250 +0x137\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296429549Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296434118Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:31118 +0x215\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296438135Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296449717Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:1918 +0xc6\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296454305Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.verifyNegativeLookupBenchFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296458764Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:195 +0x347\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296463172Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29646753Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:176 +0xac8\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296471978Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296476437Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296480695Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296485063Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296489311Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296493879Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0x38\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296498248Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296502215Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Goroutine 4502 (running) created at:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296506393Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296510741Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19656 +0x1a4\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296516261Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.Open()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296521722Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:13439 +0x7097\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296527262Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openResolved()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29653164Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:1133 +0x4a24\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296535878Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.Open()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296540086Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:777 +0x84\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296544324Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296548672Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:141 +0xe7\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296553211Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296557619Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296565273Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296569511Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296573699Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296580121Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0x38\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296584329Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296588367Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Goroutine 4327 (running) created at:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296592474Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296596362Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0xb12\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296600329Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.runTests.func1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296604346Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2585 +0x84\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296608124Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296612381Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296618182Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.runTests()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296622611Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2583 +0x9e9\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296626558Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*M).Run()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296630696Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2443 +0xf4b\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296634884Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  go.uber.org/goleak.VerifyTestMain()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296639332Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/go/pkg/mod/go.uber.org/goleak@v1.3.0/testmain.go:53 +0x64\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296644291Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestMain()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296648559Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/leak_test.go:12 +0x125\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296652617Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  main.main()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296656644Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      _testmain.go:1286 +0x171\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296661934Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "==================\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296732356Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "==================\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296739019Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "WARNING: DATA RACE\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296743507Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Read at 0x00c0013c0828 by goroutine 4327:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296748036Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296753256Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:1366 +0x68\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296758165Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296762763Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/value_reader.go:203 +0x24a\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296769015Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*valueReader).ReadUnsafeAppend()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296773764Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      <autogenerated>:1 +0xa4\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296778633Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296783823Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1015 +0x592\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296789564Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296794092Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1064 +0x228\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296797949Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296801616Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1715 +0x64\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296805373Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29680876Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5004 +0x125\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296813969Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296817716Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/api.go:246 +0x10c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296821493Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29682495Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/api.go:250 +0x137\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296829047Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296833255Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:31118 +0x215\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296837082Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.(*DB).Get()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29684085Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:1918 +0xc6\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296844977Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.verifyNegativeLookupBenchFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296849055Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:195 +0x347\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296853083Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29685697Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:176 +0xac8\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296881095Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296896594Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296911131Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296925248Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296947139Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296962077Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0x38\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.296976383Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29699069Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Previous write at 0x00c0013c0828 by goroutine 4502:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297007562Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).releaseNativeMVCCSetStep()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297021528Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/native_mvcc_set_release.go:170 +0x1efa\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297057365Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297078365Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:2610 +0x518\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297093253Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/db.(*DB).RefreshValueLogSet()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297106107Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5360 +0x5f7\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297118971Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).runWithBackendMaintenanceOptions()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297135612Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:8031 +0x47b\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297148536Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenanceWithOptions()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297161601Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:23740 +0xa3a9\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297175326Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenance()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297188231Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:21346 +0x298\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297201846Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunPeriodicVlogGenerationMaintenance()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29721464Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19728 +0x26d\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297233505Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297239186Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19695 +0x24c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297243294Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297247321Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19656 +0x2e\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297250878Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297254545Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Goroutine 4327 (running) created at:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297258162Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297261919Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0xb12\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297265656Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.runTests.func1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297269332Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2585 +0x84\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297274462Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297279151Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297282968Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.runTests()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297286615Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2583 +0x9e9\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297290322Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*M).Run()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297294009Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2443 +0xf4b\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297297826Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  go.uber.org/goleak.VerifyTestMain()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297302535Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/go/pkg/mod/go.uber.org/goleak@v1.3.0/testmain.go:53 +0x64\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297307033Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestMain()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297311041Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/leak_test.go:12 +0x125\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297315128Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  main.main()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297318745Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      _testmain.go:1286 +0x171\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297322272Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297325768Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "Goroutine 4502 (running) created at:\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297329455Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297333242Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19656 +0x1a4\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29733707Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB/caching.Open()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297340806Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:13439 +0x7097\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297344553Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openResolved()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29734836Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:1133 +0x4a24\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297352038Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.Open()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297355674Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/public.go:777 +0x84\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297359411Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297363248Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:141 +0xe7\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297367126Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297371083Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.29737481Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.tRunner()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297378477Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297383436Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "  testing.(*T).Run.gowrap1()\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297387414Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0x38\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:19.297391Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "==================\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:21.81699791Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:154: payload=random4096 enabled=false\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:21.820431093Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0042592c0 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:21.878141529Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0042592c0 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:21.901247624Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0042592c0 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.351952574Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:154: payload=random4096 enabled=true\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.354876251Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xc0003aed20 seq=3 userRoot=18 systemRoot=3 filter=0xc003e0bac0 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.409465571Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xc0003aed20 seq=4 userRoot=8 systemRoot=3 filter=0xc003e0bac0 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.430445016Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc0003aed20 seq=5 userRoot=8 systemRoot=3 filter=0xc003e0bac0 activeBytes=10240\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.460520362Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "    testing.go:1712: race detected during execution of test\n"
+    },
+    {
+      "Time": "2026-10-15T16:45:26.4605512Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestNegativeLookupQualificationFixture",
+      "Output": "--- FAIL: TestNegativeLookupQualificationFixture (15.26s)\n"
+    }
+  ],
+  "extra": [
+    "2026-10-15T16:45:17.2407657Z {\"Time\":\"2026-10-15T16:45:17.240420017Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:180: stage=afterPublicGC idx=0xc004259680 seq=5 userRoot=8 systemRoot=3 filter=0xc001e60a20 activeBytes=10240\\n\"}",
+    "2026-10-15T16:45:19.2966326Z {\"Time\":\"2026-10-15T16:45:19.296224495Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"==================\\n\"}",
+    "2026-10-15T16:45:19.2970099Z {\"Time\":\"2026-10-15T16:45:19.296259681Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"WARNING: DATA RACE\\n\"}",
+    "2026-10-15T16:45:19.2974201Z {\"Time\":\"2026-10-15T16:45:19.296266223Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"Write at 0x00c0008e45d0 by goroutine 4502:\\n\"}",
+    "2026-10-15T16:45:19.2976769Z {\"Time\":\"2026-10-15T16:45:19.296271282Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  runtime.mapdelete_fast32()\\n\"}",
+    "2026-10-15T16:45:19.2978824Z {\"Time\":\"2026-10-15T16:45:19.296276162Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /opt/hostedtoolcache/go/1.26.9/x64/src/internal/runtime/maps/runtime_fast32.go:465 +0x0\\n\"}",
+    "2026-10-15T16:45:19.2981366Z {\"Time\":\"2026-10-15T16:45:19.296281582Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).releaseNativeMVCCSetStep()\\n\"}",
+    "2026-10-15T16:45:19.2983284Z {\"Time\":\"2026-10-15T16:45:19.296286741Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/native_mvcc_set_release.go:135 +0x12d2\\n\"}",
+    "2026-10-15T16:45:19.2985609Z {\"Time\":\"2026-10-15T16:45:19.29629138Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release()\\n\"}",
+    "2026-10-15T16:45:19.2987390Z {\"Time\":\"2026-10-15T16:45:19.296296379Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:2610 +0x518\\n\"}",
+    "2026-10-15T16:45:19.2989635Z {\"Time\":\"2026-10-15T16:45:19.296301519Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).RefreshValueLogSet()\\n\"}",
+    "2026-10-15T16:45:19.2991611Z {\"Time\":\"2026-10-15T16:45:19.296306518Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5360 +0x5f7\\n\"}",
+    "2026-10-15T16:45:19.2994050Z {\"Time\":\"2026-10-15T16:45:19.296311297Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).runWithBackendMaintenanceOptions()\\n\"}",
+    "2026-10-15T16:45:19.2995994Z {\"Time\":\"2026-10-15T16:45:19.296315986Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:8031 +0x47b\\n\"}",
+    "2026-10-15T16:45:19.2998369Z {\"Time\":\"2026-10-15T16:45:19.296327187Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenanceWithOptions()\\n\"}",
+    "2026-10-15T16:45:19.3000173Z {\"Time\":\"2026-10-15T16:45:19.296332167Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:23740 +0xa3a9\\n\"}",
+    "2026-10-15T16:45:19.3002783Z {\"Time\":\"2026-10-15T16:45:19.296337927Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenance()\\n\"}",
+    "2026-10-15T16:45:19.3004573Z {\"Time\":\"2026-10-15T16:45:19.296343608Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:21346 +0x298\\n\"}",
+    "2026-10-15T16:45:19.3007086Z {\"Time\":\"2026-10-15T16:45:19.296348938Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunPeriodicVlogGenerationMaintenance()\\n\"}",
+    "2026-10-15T16:45:19.3008935Z {\"Time\":\"2026-10-15T16:45:19.296353176Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19728 +0x26d\\n\"}",
+    "2026-10-15T16:45:19.3011286Z {\"Time\":\"2026-10-15T16:45:19.296357534Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop()\\n\"}",
+    "2026-10-15T16:45:19.3012978Z {\"Time\":\"2026-10-15T16:45:19.296361632Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19695 +0x24c\\n\"}",
+    "2026-10-15T16:45:19.3015242Z {\"Time\":\"2026-10-15T16:45:19.296366501Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).startVlogGenerationLoop.gowrap1()\\n\"}",
+    "2026-10-15T16:45:19.3017015Z {\"Time\":\"2026-10-15T16:45:19.296371661Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:19656 +0x2e\\n\"}",
+    "2026-10-15T16:45:19.3018924Z {\"Time\":\"2026-10-15T16:45:19.296375808Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"\\n\"}",
+    "2026-10-15T16:45:19.3020556Z {\"Time\":\"2026-10-15T16:45:19.296380798Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"Previous read at 0x00c0008e45d0 by goroutine 4327:\\n\"}",
+    "2026-10-15T16:45:19.3023350Z {\"Time\":\"2026-10-15T16:45:19.296385817Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld()\\n\"}",
+    "2026-10-15T16:45:19.3025675Z {\"Time\":\"2026-10-15T16:45:19.296391277Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/db.go:1795 +0x44b\\n\"}",
+    "2026-10-15T16:45:19.3028045Z {\"Time\":\"2026-10-15T16:45:19.296396196Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr()\\n\"}",
+    "2026-10-15T16:45:19.3030572Z {\"Time\":\"2026-10-15T16:45:19.296405333Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/pools.go:54 +0x9a\\n\"}",
+    "2026-10-15T16:45:19.3032782Z {\"Time\":\"2026-10-15T16:45:19.296410503Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1()\\n\"}",
+    "2026-10-15T16:45:19.3034857Z {\"Time\":\"2026-10-15T16:45:19.296415833Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/api.go:241 +0x78\\n\"}",
+    "2026-10-15T16:45:19.3036878Z {\"Time\":\"2026-10-15T16:45:19.296420342Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3038908Z {\"Time\":\"2026-10-15T16:45:19.29642479Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/api.go:250 +0x137\\n\"}",
+    "2026-10-15T16:45:19.3041359Z {\"Time\":\"2026-10-15T16:45:19.296429549Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3043579Z {\"Time\":\"2026-10-15T16:45:19.296434118Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:31118 +0x215\\n\"}",
+    "2026-10-15T16:45:19.3045696Z {\"Time\":\"2026-10-15T16:45:19.296438135Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3047799Z {\"Time\":\"2026-10-15T16:45:19.296449717Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/public.go:1918 +0xc6\\n\"}",
+    "2026-10-15T16:45:19.3049978Z {\"Time\":\"2026-10-15T16:45:19.296454305Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.verifyNegativeLookupBenchFixture()\\n\"}",
+    "2026-10-15T16:45:19.3052506Z {\"Time\":\"2026-10-15T16:45:19.296458764Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:195 +0x347\\n\"}",
+    "2026-10-15T16:45:19.3054757Z {\"Time\":\"2026-10-15T16:45:19.296463172Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\\n\"}",
+    "2026-10-15T16:45:19.3056996Z {\"Time\":\"2026-10-15T16:45:19.29646753Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:176 +0xac8\\n\"}",
+    "2026-10-15T16:45:19.3059294Z {\"Time\":\"2026-10-15T16:45:19.296471978Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\\n\"}",
+    "2026-10-15T16:45:19.3061699Z {\"Time\":\"2026-10-15T16:45:19.296476437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\\n\"}",
+    "2026-10-15T16:45:19.3063951Z {\"Time\":\"2026-10-15T16:45:19.296480695Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  testing.tRunner()\\n\"}",
+    "2026-10-15T16:45:19.3066202Z {\"Time\":\"2026-10-15T16:45:19.296485063Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\\n\"}",
+    "2026-10-15T16:45:19.3068313Z {\"Time\":\"2026-10-15T16:45:19.296489311Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  testing.(*T).Run.gowrap1()\\n\"}",
+    "2026-10-15T16:45:19.3126469Z {\"Time\":\"2026-10-15T16:45:19.296661934Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"==================\\n\"}",
+    "2026-10-15T16:45:19.3127658Z {\"Time\":\"2026-10-15T16:45:19.296732356Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"==================\\n\"}",
+    "2026-10-15T16:45:19.3128870Z {\"Time\":\"2026-10-15T16:45:19.296739019Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"WARNING: DATA RACE\\n\"}",
+    "2026-10-15T16:45:19.3130146Z {\"Time\":\"2026-10-15T16:45:19.296743507Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"Read at 0x00c0013c0828 by goroutine 4327:\\n\"}",
+    "2026-10-15T16:45:19.3131745Z {\"Time\":\"2026-10-15T16:45:19.296748036Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Set).ReadUnsafeAppend()\\n\"}",
+    "2026-10-15T16:45:19.3133382Z {\"Time\":\"2026-10-15T16:45:19.296753256Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:1366 +0x68\\n\"}",
+    "2026-10-15T16:45:19.3134968Z {\"Time\":\"2026-10-15T16:45:19.296758165Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.valueReader.ReadUnsafeAppend()\\n\"}",
+    "2026-10-15T16:45:19.3136522Z {\"Time\":\"2026-10-15T16:45:19.296762763Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/value_reader.go:203 +0x24a\\n\"}",
+    "2026-10-15T16:45:19.3138075Z {\"Time\":\"2026-10-15T16:45:19.296769015Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*valueReader).ReadUnsafeAppend()\\n\"}",
+    "2026-10-15T16:45:19.3139528Z {\"Time\":\"2026-10-15T16:45:19.296773764Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      \\u003cautogenerated\\u003e:1 +0xa4\\n\"}",
+    "2026-10-15T16:45:19.3141162Z {\"Time\":\"2026-10-15T16:45:19.296778633Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/tree.(*Tree).appendPointerValueForKey()\\n\"}",
+    "2026-10-15T16:45:19.3142782Z {\"Time\":\"2026-10-15T16:45:19.296783823Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1015 +0x592\\n\"}",
+    "2026-10-15T16:45:19.3144279Z {\"Time\":\"2026-10-15T16:45:19.296789564Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend()\\n\"}",
+    "2026-10-15T16:45:19.3145761Z {\"Time\":\"2026-10-15T16:45:19.296794092Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1064 +0x228\\n\"}",
+    "2026-10-15T16:45:19.3147225Z {\"Time\":\"2026-10-15T16:45:19.296797949Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/tree.(*Tree).Get()\\n\"}",
+    "2026-10-15T16:45:19.3148682Z {\"Time\":\"2026-10-15T16:45:19.296801616Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/tree/tree.go:1715 +0x64\\n\"}",
+    "2026-10-15T16:45:19.3150207Z {\"Time\":\"2026-10-15T16:45:19.296805373Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Get()\\n\"}",
+    "2026-10-15T16:45:19.3151842Z {\"Time\":\"2026-10-15T16:45:19.29680876Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5004 +0x125\\n\"}",
+    "2026-10-15T16:45:19.3153290Z {\"Time\":\"2026-10-15T16:45:19.296813969Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).Get.func1()\\n\"}",
+    "2026-10-15T16:45:19.3154752Z {\"Time\":\"2026-10-15T16:45:19.296817716Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/api.go:246 +0x10c\\n\"}",
+    "2026-10-15T16:45:19.3156181Z {\"Time\":\"2026-10-15T16:45:19.296821493Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3157891Z {\"Time\":\"2026-10-15T16:45:19.29682495Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/api.go:250 +0x137\\n\"}",
+    "2026-10-15T16:45:19.3159496Z {\"Time\":\"2026-10-15T16:45:19.296829047Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3162329Z {\"Time\":\"2026-10-15T16:45:19.296833255Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:31118 +0x215\\n\"}",
+    "2026-10-15T16:45:19.3164242Z {\"Time\":\"2026-10-15T16:45:19.296837082Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.(*DB).Get()\\n\"}",
+    "2026-10-15T16:45:19.3165854Z {\"Time\":\"2026-10-15T16:45:19.29684085Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/public.go:1918 +0xc6\\n\"}",
+    "2026-10-15T16:45:19.3167504Z {\"Time\":\"2026-10-15T16:45:19.296844977Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.verifyNegativeLookupBenchFixture()\\n\"}",
+    "2026-10-15T16:45:19.3169195Z {\"Time\":\"2026-10-15T16:45:19.296849055Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:195 +0x347\\n\"}",
+    "2026-10-15T16:45:19.3171051Z {\"Time\":\"2026-10-15T16:45:19.296853083Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.openNegativeLookupBench()\\n\"}",
+    "2026-10-15T16:45:19.3172641Z {\"Time\":\"2026-10-15T16:45:19.29685697Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_bench_test.go:176 +0xac8\\n\"}",
+    "2026-10-15T16:45:19.3174271Z {\"Time\":\"2026-10-15T16:45:19.296881095Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB.TestNegativeLookupQualificationFixture()\\n\"}",
+    "2026-10-15T16:45:19.3175881Z {\"Time\":\"2026-10-15T16:45:19.296896594Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/negative_lookup_test.go:118 +0x1ba\\n\"}",
+    "2026-10-15T16:45:19.3177265Z {\"Time\":\"2026-10-15T16:45:19.296911131Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  testing.tRunner()\\n\"}",
+    "2026-10-15T16:45:19.3178817Z {\"Time\":\"2026-10-15T16:45:19.296925248Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2036 +0x21c\\n\"}",
+    "2026-10-15T16:45:19.3180265Z {\"Time\":\"2026-10-15T16:45:19.296947139Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  testing.(*T).Run.gowrap1()\\n\"}",
+    "2026-10-15T16:45:19.3181933Z {\"Time\":\"2026-10-15T16:45:19.296962077Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /opt/hostedtoolcache/go/1.26.9/x64/src/testing/testing.go:2101 +0x38\\n\"}",
+    "2026-10-15T16:45:19.3183236Z {\"Time\":\"2026-10-15T16:45:19.296976383Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"\\n\"}",
+    "2026-10-15T16:45:19.3184495Z {\"Time\":\"2026-10-15T16:45:19.29699069Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"Previous write at 0x00c0013c0828 by goroutine 4502:\\n\"}",
+    "2026-10-15T16:45:19.3186064Z {\"Time\":\"2026-10-15T16:45:19.297007562Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).releaseNativeMVCCSetStep()\\n\"}",
+    "2026-10-15T16:45:19.3187807Z {\"Time\":\"2026-10-15T16:45:19.297021528Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/native_mvcc_set_release.go:170 +0x1efa\\n\"}",
+    "2026-10-15T16:45:19.3189479Z {\"Time\":\"2026-10-15T16:45:19.297057365Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release()\\n\"}",
+    "2026-10-15T16:45:19.3191351Z {\"Time\":\"2026-10-15T16:45:19.297078365Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/internal/valuelog/manager.go:2610 +0x518\\n\"}",
+    "2026-10-15T16:45:19.3193010Z {\"Time\":\"2026-10-15T16:45:19.297093253Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/db.(*DB).RefreshValueLogSet()\\n\"}",
+    "2026-10-15T16:45:19.3194579Z {\"Time\":\"2026-10-15T16:45:19.297106107Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/db/db.go:5360 +0x5f7\\n\"}",
+    "2026-10-15T16:45:19.3196180Z {\"Time\":\"2026-10-15T16:45:19.297118971Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).runWithBackendMaintenanceOptions()\\n\"}",
+    "2026-10-15T16:45:19.3197767Z {\"Time\":\"2026-10-15T16:45:19.297135612Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"      /home/runner/work/gomap/gomap/TreeDB/caching/db.go:8031 +0x47b\\n\"}",
+    "2026-10-15T16:45:19.3199425Z {\"Time\":\"2026-10-15T16:45:19.297148536Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunVlogGenerationMaintenanceWithOptions()\\n\"}"
+  ]
+}

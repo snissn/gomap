@@ -1,0 +1,268 @@
+{
+  "job": "windows-core-2",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676726",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-2.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:50:37.7358319Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "Elapsed": 1.47
+    },
+    {
+      "Time": "2026-10-15T16:50:45.6100485Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation",
+      "Elapsed": 0.3
+    },
+    {
+      "Time": "2026-10-15T16:50:45.9453987Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules",
+      "Elapsed": 0.34
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2673902Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency",
+      "Elapsed": 0.32
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2673902Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange",
+      "Elapsed": 0.96
+    },
+    {
+      "Time": "2026-10-15T16:50:48.1807158Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "Elapsed": 1.91
+    },
+    {
+      "Time": "2026-10-15T16:50:48.4258599Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "Elapsed": 0.25
+    },
+    {
+      "Time": "2026-10-15T16:50:48.7682303Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "Elapsed": 0.34
+    },
+    {
+      "Time": "2026-10-15T16:51:01.6756416Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "Elapsed": 2.08
+    },
+    {
+      "Time": "2026-10-15T16:51:03.6241202Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Elapsed": 31.512
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:50:36.2634441Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "Output": "=== RUN   TestOriginalStartupCleanupPhysicalRefusalRetainsLock\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:37.7358319Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestOriginalStartupCleanupPhysicalRefusalRetainsLock3244977642\\001\\LOCK: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:37.7358319Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+      "Output": "--- FAIL: TestOriginalStartupCleanupPhysicalRefusalRetainsLock (1.47s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.3114441Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange",
+      "Output": "=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.3121364Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation",
+      "Output": "=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.6083346Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation",
+      "Output": "    primary_joint_completed_v6_test.go:224: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.6100485Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation",
+      "Output": "--- FAIL: TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation (0.30s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.6100485Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules",
+      "Output": "=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.9432236Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules",
+      "Output": "    primary_joint_completed_v6_test.go:224: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.9453987Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules",
+      "Output": "--- FAIL: TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules (0.34s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:45.9453987Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency",
+      "Output": "=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2652113Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency",
+      "Output": "    primary_joint_completed_v6_test.go:224: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2668558Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency",
+      "Output": "--- FAIL: TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency (0.32s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2673902Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointCompletedV6RejectsPhysicalChange",
+      "Output": "--- FAIL: TestPrimaryJointCompletedV6RejectsPhysicalChange (0.96s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:46.2673902Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "Output": "=== RUN   TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:46.5120936Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "Output": "    primary_joint_vacuum_v6_test.go:497: cancel: online vacuum unsupported on this platform\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.1807158Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision3980334017\\001\\index.db: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.1807158Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision",
+      "Output": "--- FAIL: TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision (1.91s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.1807158Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "Output": "=== RUN   TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.4239377Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "Output": "    primary_offline_pair_v6_test.go:193: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.4258599Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit",
+      "Output": "--- FAIL: TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit (0.25s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.4258599Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "Output": "=== RUN   TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.7659251Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "Output": "    primary_offline_pair_v6_test.go:732: namespace persistence unsupported\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:48.7682303Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+      "Output": "--- FAIL: TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody (0.34s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:50:59.5940572Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "Output": "=== RUN   TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:01.6756416Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock2356388727\\001\\LOCK: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:51:01.6756416Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock",
+      "Output": "--- FAIL: TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock (2.08s)\n"
+    }
+  ],
+  "extra": []
+}

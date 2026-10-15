@@ -1,0 +1,79 @@
+{
+  "job": "windows-nativewire",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676636",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-nativewire.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:44:51.4795893Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerColocatedAuditCurrentAuthorityV1",
+      "Elapsed": 136.73
+    },
+    {
+      "Time": "2026-10-15T16:47:08.2430758Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "Elapsed": 10.69
+    },
+    {
+      "Time": "2026-10-15T16:53:10.1770483Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Elapsed": 672.226
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:42:34.7505919Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerColocatedAuditCurrentAuthorityV1",
+      "Output": "=== RUN   TestFixedPeerColocatedAuditCurrentAuthorityV1\n"
+    },
+    {
+      "Time": "2026-10-15T16:44:36.401517Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerColocatedAuditCurrentAuthorityV1",
+      "Output": "    fixed_peer_vector_prepare_v1_test.go:385: context deadline exceeded\n"
+    },
+    {
+      "Time": "2026-10-15T16:44:51.4795893Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerColocatedAuditCurrentAuthorityV1",
+      "Output": "--- FAIL: TestFixedPeerColocatedAuditCurrentAuthorityV1 (136.73s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:57.5535395Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "Output": "=== RUN   TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1\n"
+    },
+    {
+      "Time": "2026-10-15T16:47:07.0616122Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "Output": "    fixed_peer_vector_initialization_v1_test.go:552: raftcluster: commit ambiguous\n"
+    },
+    {
+      "Time": "2026-10-15T16:47:07.0621225Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "Output": "        Post \"https://127.0.0.1:54028/v1/catalog-publish\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)\n"
+    },
+    {
+      "Time": "2026-10-15T16:47:08.2430758Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1",
+      "Output": "--- FAIL: TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1 (10.69s)\n"
+    }
+  ],
+  "extra": []
+}

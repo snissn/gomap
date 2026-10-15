@@ -1,0 +1,78 @@
+{
+  "claim": "NONQUALIFYING_CPU_ATTRIBUTION_ONLY_BUSY_HOST_NO_LATENCY_ACCEPTANCE",
+  "source": "exact hosted Go1.26.9 binaries",
+  "analysis_toolchain": "local Go1.26.3",
+  "environment": {
+    "GOMAXPROCS": "1",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-hosted-profile-01/tmp",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "plan": [
+    {
+      "label": "get-baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/raw-path-artifact/measured-binaries/baseline-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkGetVersioned$",
+        "-test.benchtime=8000000x",
+        "-test.count=1",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-hosted-profile-01/get-baseline.pprof"
+      ],
+      "source": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "binary_sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe"
+    },
+    {
+      "label": "get-candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/raw-path-artifact/measured-binaries/candidate-db.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkGetVersioned$",
+        "-test.benchtime=8000000x",
+        "-test.count=1",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-hosted-profile-01/get-candidate.pprof"
+      ],
+      "source": "f0415773f13a522dea5c1debdaecba09d15585dd",
+      "binary_sha256": "2dbb31dd8d2979d21ea6896a5104852e5ae76c9ca9c82820b144d35ca683d952"
+    },
+    {
+      "label": "seek-baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/raw-path-artifact/measured-binaries/baseline-treedb.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkSnapshotIteratorSeekNext$/^keys=1024$/^snapshot_seek$",
+        "-test.benchtime=4000000x",
+        "-test.count=1",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-hosted-profile-01/seek-baseline.pprof"
+      ],
+      "source": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "binary_sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950"
+    },
+    {
+      "label": "seek-candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/raw-path-artifact/measured-binaries/candidate-treedb.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkSnapshotIteratorSeekNext$/^keys=1024$/^snapshot_seek$",
+        "-test.benchtime=4000000x",
+        "-test.count=1",
+        "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-hosted-profile-01/seek-candidate.pprof"
+      ],
+      "source": "f0415773f13a522dea5c1debdaecba09d15585dd",
+      "binary_sha256": "e517ed2b379a61d75577a5a4f572a3ff551d26036822829dd84e15710887b5ba"
+    }
+  ]
+}

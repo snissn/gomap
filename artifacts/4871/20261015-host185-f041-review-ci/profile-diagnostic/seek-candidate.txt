@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek         	 4000000	       319.4 ns/op	       0 B/op	       0 allocs/op
+PASS
