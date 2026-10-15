@@ -37,15 +37,18 @@ func (db *DB) StepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCC
 	return db.stepNativeMVCCMaterializedOutputV6(prepared, false, w)
 }
 func (db *DB) stepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
-	if db == nil || db.cow == nil || prepared == nil || w == nil {
+	if db == nil || prepared == nil || w == nil {
 		return false, ErrCOWUnsupported
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	c := db.cow
 	if db.closing.Load() {
 		return false, backenddb.ErrClosed
 	}
+	if db.cow == nil {
+		return prepared.StepNativeMVCCBackendMaterializedOutputV6(diagnostic, w)
+	}
+	c := db.cow
 	var private *nativePrivateOutputV6
 	if scope := prepared.NativeMVCCPrivateOutputScopeV6(); scope != nil {
 		var ok bool

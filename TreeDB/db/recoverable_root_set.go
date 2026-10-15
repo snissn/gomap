@@ -56,13 +56,14 @@ type recoverableDurableBasis struct {
 	slotRecord       [2]rootpublication.DurableRootRecordV1
 	primaryProof     [2]rootpublication.DurablePrimaryRootRecordV5
 	primaryReadRoots [4]uint64
+	primaryClosures  [4]primaryarena.Ref
 	dataFloor        [4]uint64
 	pending          *durableRootPublishCandidateV1
 	ambiguous        []*durableRootPublishCandidateV1
 }
 
 func (basis recoverableDurableBasis) equal(other recoverableDurableBasis) bool {
-	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.primaryProof != other.primaryProof || basis.primaryReadRoots != other.primaryReadRoots || basis.dataFloor != other.dataFloor || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
+	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.primaryProof != other.primaryProof || basis.primaryReadRoots != other.primaryReadRoots || basis.primaryClosures != other.primaryClosures || basis.dataFloor != other.dataFloor || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
 		return false
 	}
 	for i := range basis.ambiguous {
@@ -82,6 +83,8 @@ func (db *DB) recoverableDurableBasisLocked() recoverableDurableBasis {
 			for i := 0; i < 2; i++ {
 				basis.primaryReadRoots[i] = primary.records[i].PageID
 				basis.primaryReadRoots[i+2] = primary.proofs[i].PageID
+				basis.primaryClosures[i] = primary.closures[i]
+				basis.primaryClosures[i+2] = primary.proofClosures[i]
 			}
 		}
 	}
@@ -113,7 +116,7 @@ type RecoverableRootSet struct {
 	releaseOnce       sync.Once
 	releaseErr        error
 	resourceStorage   [7]*rootpublication.StableResourceSet
-	primaryRefStorage [4]primaryarena.Ref
+	primaryRefStorage [8]primaryarena.Ref
 	rootResources     [5]recoverableRootResource
 
 	roots               []RecoverableRoot
@@ -374,9 +377,11 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (capability *Recove
 	if cloneErr == nil && db.durableRoot.primary != nil {
 		primaryArena = stable.idx.primary
 		primary := db.durableRoot.primary
-		var refStorage [4]primaryarena.Ref
+		var refStorage [8]primaryarena.Ref
 		refs := append(refStorage[:0], primary.records[:]...)
 		refs = append(refs, primary.proofs[:]...)
+		refs = append(refs, primary.closures[:]...)
+		refs = append(refs, primary.proofClosures[:]...)
 		for _, ref := range refs {
 			if ref.PageID == 0 {
 				continue

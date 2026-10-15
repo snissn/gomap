@@ -68,27 +68,29 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 		}
 		return ready, err
 	}
-	for s.disposalPhase >= 1 && s.disposalPhase <= 3 {
-		var ref *primaryarena.Ref
-		if s.disposalPhase == 3 {
-			ref = &s.proof
-		} else if s.promotion != nil {
-			if s.disposalPhase == 1 {
-				ref = &s.promotion.Root
-			} else {
-				ref = &s.promotion.Parent
-			}
+	for s.disposalPhase == 1 && s.promotion != nil && s.disposalIndex < 4 {
+		refs := [4]*primaryarena.Ref{&s.promotion.Root, &s.promotion.Parent, &s.promotion.Closure, &s.promotion.ParentClosure}
+		ready, err := drop(refs[s.disposalIndex])
+		if err != nil {
+			return fail(err)
 		}
-		if ref != nil {
-			ready, err := drop(ref)
-			if err != nil {
-				return fail(err)
-			}
-			if !ready {
-				return false, nil
-			}
+		if !ready {
+			return false, nil
 		}
-		s.disposalPhase++
+		s.disposalIndex++
+	}
+	if s.disposalPhase == 1 {
+		s.disposalPhase = 3
+	}
+	if s.disposalPhase == 3 {
+		ready, err := drop(&s.proof)
+		if err != nil {
+			return fail(err)
+		}
+		if !ready {
+			return false, nil
+		}
+		s.disposalPhase = 4
 	}
 	if s.disposalPhase == 4 {
 		if s.disposalNative {

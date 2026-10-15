@@ -202,6 +202,12 @@ func (z *Zipper) loadPrimaryOperand(op node.PrimaryOperand, entry *node.PrimaryD
 }
 
 func (z *Zipper) writePrimaryDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
+	return z.writePrimaryDirectoryFromV6(base, baseSeq, entries, metrics, 0, owners...)
+}
+
+// The ordinary producer carries the actual prior root only while its DATA base
+// is unchanged. Consolidation starts a new independently complete baseline.
+func (z *Zipper) writePrimaryDirectoryFromV6(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, previous uint64, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
 	// Compaction removes classes; only that genuine construction reindexes them.
 	var seen [node.PrimaryDirectoryMaxEntries]bool
 	valid := true
@@ -218,7 +224,7 @@ func (z *Zipper) writePrimaryDirectory(base node.PrimaryOperand, baseSeq uint64,
 		}
 	}
 	if z.primaryArena != nil {
-		return z.writePrimaryArenaDirectory(base, baseSeq, entries, metrics, owners...)
+		return z.writePrimaryArenaDirectoryFromV6(base, baseSeq, entries, metrics, previous, owners...)
 	}
 	id, err := z.allocator.Alloc(0)
 	if err != nil {
@@ -406,12 +412,16 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		metrics.PrimaryBankRecords += work.Records
 		metrics.PrimaryBankWorkBytes += work.Bytes
 	}()
+	var previousDirectory uint64
 	if node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
 		d, e := node.DecodePrimaryDirectory(image)
 		if e != nil {
 			return 0, nil, metrics, e
 		}
 		base, baseSeq = d.Base()
+		if z.primaryArena != nil && primaryarena.IsPage(rootID) {
+			previousDirectory = rootID
+		}
 		metrics.PrimaryDirectoryPagesRead++
 		entries = entries[:d.Count()]
 		for i := range entries {
@@ -428,6 +438,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	// the genuine materialized-base path. All consolidation and COW work remains
 	// in returned metrics and in the same allocator/retirement packet.
 	if len(ranges) > 0 || !primaryEntriesFitUnion(entries, ops) {
+		previousDirectory = 0
 		var reclaimed []uint64
 		base, baseSeq, reclaimed, err = z.primaryMaterialize(base, baseSeq, entries, len(entries), cfg, &metrics, scratch)
 		if err != nil {
@@ -580,7 +591,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		metrics.PrimaryBytesWritten += page.PageSize
 	}
 	metrics.ZipperApplyOps = len(ops) + len(ranges)
-	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, constructor)
+	root, err = z.writePrimaryDirectoryFromV6(base, baseSeq, entries, &metrics, previousDirectory, constructor)
 	return root, retired, metrics, err
 }
 func primaryEntriesFitKeys(ops []batch.Entry) bool { return primaryEntriesFitUnion(nil, ops) }
@@ -630,6 +641,10 @@ func (z *Zipper) collectPrimaryBaseOld(ref page.ChildRef, key []byte, cfg applyR
 }
 
 func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
+	return z.writePrimaryArenaDirectoryFromV6(base, baseSeq, entries, metrics, 0, owners...)
+}
+
+func (z *Zipper) writePrimaryArenaDirectoryFromV6(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, previous uint64, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
 	a := z.primaryArena
 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	defer func() { metrics.PrimaryBankRecords += work.Records; metrics.PrimaryBankWorkBytes += work.Bytes }()
@@ -699,7 +714,11 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 	}
 	var groups [1]*primaryarena.Group
 	if len(entries) > 0 {
-		groups[0], ok, e = a.NewGroup(refs, work)
+		if previous != 0 {
+			groups[0], ok, e = a.NewReplacementGroupV6(previous, base, baseSeq, entries, refs, work)
+		} else {
+			groups[0], ok, e = a.NewGroup(refs, work)
+		}
 		if !ok || e != nil {
 			return 0, e
 		}

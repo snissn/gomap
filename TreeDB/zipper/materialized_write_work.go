@@ -502,6 +502,13 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 				if f.segmentNext != nil {
 					return false, ErrMaterializedWriteContinuation
 				}
+				if f.result.IsLeafLog() {
+					// The maintained ensureRootPage policy wraps a sole outer leaf
+					// in one DATA internal page. Keep the completed leaf immutable
+					// while the SAME original encoder/append stages install it.
+					f.phase = 16
+					continue
+				}
 				s.result = node.PrimaryOperand{Ref: f.result, Digest: sha256.Sum256(f.output[:])}
 				s.current = nil
 				s.phase = 1
@@ -513,6 +520,33 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 			parent.phase = 7
 			s.current = parent
 			f.phase = 11
+		case 16:
+			if f.childResult == nil {
+				// newFrame performs the containing admission; its temporary
+				// source ref is cleared before this fresh wrapper can be visited.
+				wrapper, ready, err := s.newFrame(nil, f.oldRef, nil, w)
+				if !ready || err != nil {
+					return false, err
+				}
+				wrapper.oldID, wrapper.oldRef = 0, page.ChildRef{}
+				f.childResult = wrapper
+			}
+			wrapper := f.childResult
+			if wrapper.phase == 0 {
+				ready, err := wrapper.encoder.ResetWithOptionsWithWork(wrapper.output[:], page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: s.z.indexInternalBaseDelta}, w)
+				if !ready || err != nil {
+					return false, err
+				}
+				wrapper.encoder.SetInternalFenceBoundsBorrowed([]byte{}, nil)
+				wrapper.phase = 17 // private wrapper encoder initialized
+			}
+			ready, err := wrapper.encoder.AddInternalChildRefWithWork([]byte{}, f.result, w)
+			if !ready || err != nil {
+				return false, err
+			}
+			wrapper.old = node.NewNodeView(wrapper.output[:])
+			wrapper.phase = 8
+			s.current = wrapper
 		case 14:
 			// The original mergeLeaf persists a full target before creating its
 			// right sibling. Keep that same separator and pending event alive.

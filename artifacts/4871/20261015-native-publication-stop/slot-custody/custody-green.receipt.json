@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-tags=treedb_test",
+    "./TreeDB/db",
+    "-run",
+    "^(TestPrimaryPromotionSharesImmutableLogicalRootV6|TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6|TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6|TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure|TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion|TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6|TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6)$",
+    "-count=1",
+    "-v",
+    "-timeout=90s"
+  ],
+  "exit": 0,
+  "timeout": false,
+  "elapsed_s": 16.361789701972157,
+  "source_unchanged": true,
+  "paths": [
+    "TreeDB/internal/primaryarena/read_root_v6.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "TreeDB/db/durable_primary_runtime_v5.go",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "TreeDB/db/primary_seal_release_work_v6.go",
+    "TreeDB/db/primary_capsule_runtime_v6.go",
+    "TreeDB/db/primary_capsule_recovery_v6.go",
+    "TreeDB/db/durable_primary_rebuild_v5.go",
+    "TreeDB/db/recoverable_root_set.go",
+    "TreeDB/db/physical_snapshot_cut_v1.go",
+    "TreeDB/db/primary_owned_promotion_v6_test.go",
+    "TreeDB/db/primary_slot_custody_v6_test.go"
+  ]
+}

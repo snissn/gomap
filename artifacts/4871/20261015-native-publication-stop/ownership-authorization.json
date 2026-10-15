@@ -1,0 +1,30 @@
+{
+  "authority": "Root coordinator explicit per-task source-owner confirmation, 2026-10-15",
+  "statement": "Source owner confirms all22 non-valuelog deltas in initial-source-delta.json are their authored and owned work, including diagnostic adapter and post-GREEN physical_snapshot_cut fixed[8]Ref scratch. Publish exactly22 plus bound evidence on new non-PR WIP branch; current full tree uncompiled/unqualified.",
+  "owned_paths": [
+    "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/db/durable_primary_rebuild_v5.go",
+    "TreeDB/db/durable_primary_runtime_v5.go",
+    "TreeDB/db/leaf_page_log.go",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "TreeDB/db/physical_snapshot_cut_v1.go",
+    "TreeDB/db/primary_capsule_recovery_v6.go",
+    "TreeDB/db/primary_capsule_runtime_v6.go",
+    "TreeDB/db/primary_owned_promotion_v6_test.go",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "TreeDB/db/primary_seal_release_work_v6.go",
+    "TreeDB/db/primary_slot_custody_v6_test.go",
+    "TreeDB/db/recoverable_root_set.go",
+    "TreeDB/internal/primaryarena/arena.go",
+    "TreeDB/internal/primaryarena/materialized_graft_v6.go",
+    "TreeDB/internal/primaryarena/ordinary_replacement_group_v6.go",
+    "TreeDB/internal/primaryarena/read_root_v6.go",
+    "TreeDB/internal/rootpublication/materialized_graft_v6.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "TreeDB/zipper/materialized_input_work_v6.go",
+    "TreeDB/zipper/materialized_write_work.go",
+    "TreeDB/zipper/primary_directory.go"
+  ],
+  "scope": "Recovery checkpoint only; no source edits, Go, tests, benchmarks, PR, review/CI requests, merge or issue action",
+  "native_ack": 0
+}

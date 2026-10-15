@@ -1,0 +1,6 @@
+=== RUN   TestPrimaryPromotionSharesImmutableLogicalRootV6
+    primary_slot_custody_v6_test.go:28: slot owns duplicate promotion RAM image: slot={PageID:5764607523034234883 Incarnation:1} original={PageID:5764607523034234882 Incarnation:1}
+--- FAIL: TestPrimaryPromotionSharesImmutableLogicalRootV6 (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.011s
+FAIL

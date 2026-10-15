@@ -1,0 +1,12 @@
+[
+  {
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "sha256": "cf597c67db1e6ef26b8eabcaecd9c8c6f67b5524cf7168e8d1ea49f93351b76b",
+    "bytes": 37980
+  },
+  {
+    "path": "TreeDB/zipper/primary_directory.go",
+    "sha256": "8d00d59f43b5465c944bc1b363dad833400aad7393374429c390c7186b72fae6",
+    "bytes": 26276
+  }
+]

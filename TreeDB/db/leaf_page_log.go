@@ -1256,7 +1256,7 @@ func (db *DB) AppendLeafFrameWithWorkV6(writer *valuelog.Writer, body []byte, w 
 	db.leafGenerationRecordLengthMu.Lock()
 	defer db.leafGenerationRecordLengthMu.Unlock()
 	idx := db.leafGenerationRecordLengthByFile[raw]
-	if db.leafGenerationRecordLengthByFile == nil || (idx != nil && (len(idx.offsets) != len(idx.lengths) || (len(idx.offsets) > 0 && uint64(idx.offsets[len(idx.offsets)-1]) >= offset))) {
+	if idx != nil && (len(idx.offsets) != len(idx.lengths) || (len(idx.offsets) > 0 && uint64(idx.offsets[len(idx.offsets)-1]) >= offset)) {
 		return page.ValuePtr{}, false, fmt.Errorf("leaf record-length index identity: %w", valuelog.ErrLeafAppendWorkUnsupported)
 	}
 	n, capacity := 0, 8
@@ -1280,11 +1280,22 @@ func (db *DB) AppendLeafFrameWithWorkV6(writer *valuelog.Writer, body []byte, w 
 		cost += uint64(8*capacity + 8*n + 128)
 		records += 3
 	}
+	// A first leaf append legitimately precedes creation of the ordinary
+	// record-length map. Admit its real map insertion/growth before the
+	// original physical Writer accepts a frame; an absent map is not corrupt.
+	if idx == nil {
+		count := uint64(len(db.leafGenerationRecordLengthByFile))
+		records += 2 + count
+		cost += (count+1)*64 + 128
+	}
 	if records > w.RecordLimit || cost > w.ByteLimit {
 		return page.ValuePtr{}, false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: cost}
 	}
 	if !w.Reserve(records, cost) {
 		return page.ValuePtr{}, false, nil
+	}
+	if db.leafGenerationRecordLengthByFile == nil {
+		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
 	}
 	if grow {
 		offsets, lengths := make([]uint32, n, capacity), make([]uint32, n, capacity)

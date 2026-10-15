@@ -176,8 +176,12 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 				extent = proof.Primary.ArenaHighWater
 			}
 		}
-		refs := append(append([]primaryarena.Ref(nil), current.primary.records[:]...), current.primary.proofs[:]...)
-		cut.primaryPages, err = roots.idx.primary.CapturePhysicalPagesOrdinary(extent, refs)
+		var refs [8]primaryarena.Ref
+		copy(refs[0:2], current.primary.records[:])
+		copy(refs[2:4], current.primary.proofs[:])
+		copy(refs[4:6], current.primary.closures[:])
+		copy(refs[6:8], current.primary.proofClosures[:])
+		cut.primaryPages, err = roots.idx.primary.CapturePhysicalPagesOrdinary(extent, refs[:])
 		if err == nil {
 			err = roots.idx.primary.Pager().WithStableResourceFile(func(source *os.File) error {
 				info, e := source.Stat()

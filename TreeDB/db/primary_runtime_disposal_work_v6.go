@@ -110,19 +110,17 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 	// The finite slot arrays, current root, construction roots and recovery
 	// scratch each retain their own index. No refused edge is visited again after
 	// it was actually consumed.
-	for r.disposalPhase == 1 && r.disposalIndex < len(r.records)*2 {
-		i := r.disposalIndex / 2
-		ref := &r.records[i]
-		if r.disposalIndex%2 != 0 {
-			ref = &r.proofs[i]
-		}
+	for r.disposalPhase == 1 && r.disposalIndex < len(r.records)*4 {
+		i := r.disposalIndex / 4
+		refs := [4]*primaryarena.Ref{&r.records[i], &r.proofs[i], &r.closures[i], &r.proofClosures[i]}
+		ref := refs[r.disposalIndex%4]
 		// The image aliases are scrubbed in the same admitted edge operation, even
 		// if a later original root fails. No immutable reader wrapper is modified.
 		if !admit(1, 2*uint64(unsafe.Sizeof(r.capsuleImages[i]))+2*uint64(unsafe.Sizeof(r.capsuleViews[i]))) {
 			return empty, false, nil
 		}
 		ready, err := drop(ref)
-		if r.records[i] == (primaryarena.Ref{}) && r.proofs[i] == (primaryarena.Ref{}) {
+		if r.records[i] == (primaryarena.Ref{}) && r.proofs[i] == (primaryarena.Ref{}) && r.closures[i] == (primaryarena.Ref{}) && r.proofClosures[i] == (primaryarena.Ref{}) {
 			r.capsuleImages[i] = nil
 			r.capsuleViews[i] = rootpublication.PrimaryCapsuleViewV6{}
 		}

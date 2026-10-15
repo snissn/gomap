@@ -1,0 +1,84 @@
+{
+  "census_scope": {
+    "changed_since_historical_green": [
+      "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+      "TreeDB/db/leaf_page_log.go",
+      "TreeDB/db/native_mvcc_materialized_write_v6.go",
+      "TreeDB/db/physical_snapshot_cut_v1.go",
+      "TreeDB/internal/primaryarena/arena.go",
+      "TreeDB/internal/primaryarena/materialized_graft_v6.go",
+      "TreeDB/internal/primaryarena/ordinary_replacement_group_v6.go",
+      "TreeDB/internal/rootpublication/materialized_graft_v6.go",
+      "TreeDB/zipper/materialized_input_work_v6.go",
+      "TreeDB/zipper/materialized_write_work.go",
+      "TreeDB/zipper/primary_directory.go"
+    ],
+    "current_all_go_module_rows": 4443,
+    "current_runtime_rows_excluding_historical_artifact_copies": 3834,
+    "historical_custody_green_rows": 4440,
+    "qualification": "Historical GREEN source identity only, not validation of later uncompiled drafts; historical artifact contents not republished."
+  },
+  "current_vs_green_delta": [
+    "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/db/leaf_page_log.go",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "TreeDB/db/physical_snapshot_cut_v1.go",
+    "TreeDB/internal/primaryarena/arena.go",
+    "TreeDB/internal/primaryarena/materialized_graft_v6.go",
+    "TreeDB/internal/primaryarena/ordinary_replacement_group_v6.go",
+    "TreeDB/internal/rootpublication/materialized_graft_v6.go",
+    "TreeDB/zipper/materialized_input_work_v6.go",
+    "TreeDB/zipper/materialized_write_work.go",
+    "TreeDB/zipper/primary_directory.go"
+  ],
+  "custody_green_paths": [
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_seal_release_work_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/recoverable_root_set.go"
+    },
+    {
+      "current_matches_custody_green": false,
+      "path": "TreeDB/db/physical_snapshot_cut_v1.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_owned_promotion_v6_test.go"
+    },
+    {
+      "current_matches_custody_green": true,
+      "path": "TreeDB/db/primary_slot_custody_v6_test.go"
+    }
+  ]
+}

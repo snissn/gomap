@@ -447,6 +447,10 @@ func (a *Arena) NewGroup(refs [groupSize]Ref, w *iterator.OrdinalScanWork) (*Gro
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.newGroupFromRefsLockedV6(refs, count, bytes)
+}
+
+func (a *Arena) newGroupFromRefsLockedV6(refs [groupSize]Ref, count, bytes uint64) (*Group, bool, error) {
 	for _, r := range refs {
 		if r == (Ref{}) {
 			continue

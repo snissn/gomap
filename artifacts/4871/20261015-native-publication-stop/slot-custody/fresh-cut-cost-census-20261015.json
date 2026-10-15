@@ -1,0 +1,182 @@
+{
+  "time_utc": "2026-10-15T10:42:30.659089+00:00",
+  "qualification": "SOURCE LOWER BOUND ONLY. No runtime, compile, actual final production path or Q32 fit demonstrated. New ancestry/graft drafts remain uncompiled.",
+  "assumed_geometry": {
+    "union_changed_classes": 1,
+    "actual_changed_components": 1,
+    "sort_comparisons": 0,
+    "activation_vector_spare_capacity": true,
+    "headers_preprepared": true,
+    "reader_pin_transition": false
+  },
+  "lower_bound_records": 58,
+  "stages": [
+    {
+      "stage": "materialized current graft",
+      "records": 12,
+      "basis": "D=U=1; fixed6 + class1 + component1 + group/edge2 + RAM copy/register2"
+    },
+    {
+      "stage": "PreparedPrimary DATA certificate",
+      "records": 10,
+      "basis": "setup2 + pager GetWithWork3 each for base/system + CRC/SHA1 each; membership excluded"
+    },
+    {
+      "stage": "BindPrimaryVisibility",
+      "records": 3,
+      "basis": "transaction1 + arena AcquireAndDetach2"
+    },
+    {
+      "stage": "activation",
+      "records": 10,
+      "basis": "typed dispatch1 + visible member2 + DB install4 + allocator3; headers preprepared, spare capacity, no pin transition"
+    },
+    {
+      "stage": "PreparePrimaryPromotion with parent",
+      "records": 10,
+      "basis": "descriptor1 + Construct capsule5 + AcquirePromotionCustody4"
+    },
+    {
+      "stage": "durable capsule span write/fence",
+      "records": 7,
+      "basis": "pager owned span5 + durable handle/barrier2; platform/namespace/CAS extras excluded"
+    },
+    {
+      "stage": "Consume",
+      "records": 4,
+      "basis": "typed dispatch1 + visible member3"
+    },
+    {
+      "stage": "native turn Begin/Release",
+      "records": 2,
+      "basis": "1 each"
+    }
+  ],
+  "excluded_actual_costs": [
+    "Request and current output physical point/cut validation",
+    "late canonical BODY retirement patches/header/digest",
+    "metadata image installation and ledger adoption",
+    "both candidate membership walks",
+    "Set exact protected consumption or subsequent original release",
+    "dependency/resource capture and namespace stabilization",
+    "coordinator admission/enqueue/frontier bookkeeping",
+    "runtime seal descriptor preparation and commit/debt/slot transfer",
+    "platform mapped sync and companion namespace lookup/CAS retries",
+    "reader-pin and activated-vector actual geometry"
+  ],
+  "outside_final_cut": [
+    "receipt BindNativePublication may happen before yields",
+    "physical Finish remains yieldable after turn release; ACK only afterward"
+  ],
+  "immutable_preparation": [
+    "producer DATA/system bytes witness after actual allocator incorporation",
+    "unsealed canonical BODY and exact retirement patch manifest/root exclusion witness",
+    "captured logical baseline/output refs/capacity/scratch",
+    "original producer witnesses for each immutable current component and parent capsule"
+  ],
+  "fresh_required": [
+    "exact current root/group/generation/ledger and selected physical value under SAME Request/cut",
+    "retirement seq/header/frontier derivation and NEW candidate-bound cert",
+    "current changed-class and current-parent selection",
+    "genuine state/slot/root/dependency edges",
+    "physical capsule write/fence then Consume/turn release"
+  ],
+  "decision": "Literal helper composition cannot fit Q32. Do not enable guards or stage an opaque bundle. Need a shared producer/publisher representation eliminating duplicate fresh operand validation/copies, with a new complete concrete census before deeper wiring.",
+  "sources": [
+    {
+      "path": "TreeDB/internal/primaryarena/materialized_graft_v6.go",
+      "bytes": 6554,
+      "sha256": "7b512e7abb1aff3816e8ed17f76a66b769837e20565d6abc09d0a73b88af580d"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "bytes": 12402,
+      "sha256": "f3cbde81690330ffe0fab31a07472ec9b780d86b7acef79d9eadbfed9d0d5df7"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "bytes": 16825,
+      "sha256": "59b5ed9920e238eef7a0e45ec45caee7323ae6c4cae7cdaa8bf8f60ea8ba1b6d"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/materialized_graft_v6.go",
+      "bytes": 1004,
+      "sha256": "8bde39a8f6b5df4f1b12623a4fc3e2668e6a17845aaf723b84254de3b3fd6a2b"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_data_certificate_v6.go",
+      "bytes": 6607,
+      "sha256": "90f9e24db240428d46fe5486e84ce1c072a8b9806086d9dff7b270b9aba4045e"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "bytes": 24214,
+      "sha256": "e20996e7ca85789c503160350bd590883ccca5552e1fb6b79bf1f72c13e53612"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_capsule_v6.go",
+      "bytes": 16905,
+      "sha256": "ad781a11eb94149b0c225481d9283baf0fd0b69e6103b70677d462a8492ef4c9"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "bytes": 26673,
+      "sha256": "c7121e73fdf5ddb67b3a664e3ba477d360763b51f81fcee355059f41d1c65a02"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+      "bytes": 1749,
+      "sha256": "a7a94d34a2ba83d466c835e31b88240f850db5e03aca75a5987b099d9cc8c551"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "bytes": 12134,
+      "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "bytes": 7845,
+      "sha256": "57512686a798f5c63f09b26a982b80ed838b20004fbfc8f9cc5c2f67ebb26231"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "bytes": 82425,
+      "sha256": "e0d7d3940538173b53e6047140a667724bac60d2a730e75d7ab85b7e71031682"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_member_work_v6.go",
+      "bytes": 4260,
+      "sha256": "460f9d7dad47058651f8dca49ccd04009188b954d9208329107cb15b7711bd95"
+    },
+    {
+      "path": "TreeDB/db/snapshot_publication_work_v6.go",
+      "bytes": 5043,
+      "sha256": "b2643401fe9bc4ddd2edad345576aaeab6af5c131f76576d39c1d4fa51d9dbcf"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "bytes": 10270,
+      "sha256": "d223c9470e4db007be7b026859f5a09e81dce19a9e9b4d937d148864d804dbd2"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "bytes": 33113,
+      "sha256": "c6592e6295912be668451e678d227643f539e463cd71e4841b7d56b6d9601600"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_activation_work.go",
+      "bytes": 4570,
+      "sha256": "b664aad5d78cc47c4e49220677961dc29ca1ca9ba09ccdd916b4574f5433bd70"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "bytes": 45359,
+      "sha256": "855763fa79b7864a135a1532d9a3063ba3ff52b6755ede3bb35c025fb174eee3"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "bytes": 12304,
+      "sha256": "fc548dc9df9ef22dc2ed0ede0e9af2ec847cbcc9a2643cff2a1f8f3086d28894"
+    }
+  ]
+}

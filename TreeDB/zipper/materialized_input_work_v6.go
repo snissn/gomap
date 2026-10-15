@@ -3,7 +3,6 @@ package zipper
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -22,6 +21,7 @@ type MaterializedInputWorkV6 struct {
 	owner                                                      *retainedalloc.Owner
 	charge                                                     uint64
 	reader                                                     MaterializedFrameReaderV6
+	certificate                                                *primaryarena.ReadRootCertificateV6
 	root                                                       uint64
 	prefix                                                     []batch.Entry
 	deletes                                                    []node.LeafEntry
@@ -39,8 +39,8 @@ type MaterializedInputWorkV6 struct {
 	primary                                                    bool
 }
 
-func NewMaterializedInputWorkV6(owner *retainedalloc.Owner, reader MaterializedFrameReaderV6, root uint64, prefix []batch.Entry, deletes []node.LeafEntry, w *iterator.OrdinalScanWork) (*MaterializedInputWorkV6, bool, error) {
-	if owner == nil || reader == nil || root < 2 {
+func NewMaterializedInputWorkV6(owner *retainedalloc.Owner, reader MaterializedFrameReaderV6, root uint64, certificate *primaryarena.ReadRootCertificateV6, prefix []batch.Entry, deletes []node.LeafEntry, w *iterator.OrdinalScanWork) (*MaterializedInputWorkV6, bool, error) {
+	if owner == nil || reader == nil || root < 2 || (certificate != nil && certificate.Reference().PageID != root) {
 		return nil, false, ErrMaterializedWriteContinuation
 	}
 	n := uint64(unsafe.Sizeof(MaterializedInputWorkV6{}))
@@ -51,7 +51,7 @@ func NewMaterializedInputWorkV6(owner *retainedalloc.Owner, reader MaterializedF
 	if e := owner.AddPending(charge); e != nil {
 		return nil, false, e
 	}
-	return &MaterializedInputWorkV6{owner: owner, charge: charge, reader: reader, root: root, prefix: prefix, deletes: deletes}, true, nil
+	return &MaterializedInputWorkV6{owner: owner, charge: charge, reader: reader, root: root, certificate: certificate, prefix: prefix, deletes: deletes}, true, nil
 }
 func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error) {
 	for {
@@ -70,30 +70,25 @@ func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error
 			s.phase = 2
 		case 2:
 			n := node.NewNodeView(s.image[:])
-			count := 0
-			if n.Type() == page.PageTypePrimaryDirectory {
-				count = int(binary.LittleEndian.Uint16(s.image[14:16]))
-				if count > node.PrimaryDirectoryMaxEntries {
-					return false, node.ErrPrimaryDirectory
-				}
-			}
-			// CRC/digest are fixed-page primitives; canonical directory walks are
-			// priced by the actual encoded count, never as one opaque record.
-			if !w.Reserve(uint64(3+3*count), 5*page.PageSize) {
+			// The original retained Snapshot owns the producer's canonical
+			// directory certificate. Validate the complete immutable image
+			// against it; do not reparse all classes as an indivisible unit.
+			if !w.Reserve(3, 7*page.PageSize) {
 				return false, nil
 			}
 			if !page.VerifyChecksumNonMutating(s.image[:]) {
 				return false, node.ErrPrimaryDirectory
 			}
-			s.state.Base = node.PrimaryOperand{Ref: page.PageChildRef(s.root), Digest: sha256.Sum256(s.image[:])}
+			digest := sha256.Sum256(s.image[:])
+			s.state.Base = node.PrimaryOperand{Ref: page.PageChildRef(s.root), Digest: digest}
 			if n.Type() == page.PageTypePrimaryDirectory {
-				d, e := node.DecodePrimaryDirectory(s.image[:])
-				if e != nil {
-					return false, e
+				cert := s.certificate
+				if cert == nil || cert.Reference().PageID != s.root || digest != cert.Digest() || !bytes.Equal(s.image[:], cert.Image()) {
+					return false, node.ErrPrimaryDirectory
 				}
-				s.directory = d
+				s.directory = cert.Directory().WithPhysicalImage(s.image[:])
 				s.primary = true
-				s.state.Base, s.state.Sequence = d.Base()
+				s.state.Base, s.state.Sequence = s.directory.Base()
 			} else if n.Type() != page.PageTypeLeaf && n.Type() != page.PageTypeInternal {
 				return false, node.ErrPrimaryDirectory
 			}

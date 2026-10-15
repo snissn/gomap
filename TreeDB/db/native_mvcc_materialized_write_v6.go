@@ -5,6 +5,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/zipper"
 	"unsafe"
@@ -54,7 +55,11 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedInputV6(basis *Sna
 			records = unsafe.Slice(&c.record, 1)
 		}
 		c.outputReader.Snapshot = basis
-		input, ready, e := zipper.NewMaterializedInputWorkV6(basis.idx.metadata, c.outputReader, basis.treeRoot, prefix, records, w)
+		var certificate *primaryarena.ReadRootCertificateV6
+		if basis.primaryRoot != nil {
+			certificate = basis.primaryRoot.certificate
+		}
+		input, ready, e := zipper.NewMaterializedInputWorkV6(basis.idx.metadata, c.outputReader, basis.treeRoot, certificate, prefix, records, w)
 		if input != nil {
 			c.inputWork = input
 		}
@@ -97,8 +102,23 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputV6(basis *Sn
 
 // A diagnostic choice is fixed before the first output frame is born. Bounded
 // callers never acquire the ordinary unmetered append through this adapter.
+// StepNativeMVCCBackendMaterializedOutputV6 uses the already retained exact
+// backend Snapshot when capture found the maintained empty ordinary cache.
+// There is no frozen cache prefix or additional handoff edge on this route;
+// the SAME constructor owns input, private DATA and cancellation throughout.
+func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendMaterializedOutputV6(diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if c == nil || c.source != nil || c.snapshot == nil || c.outputScope != nil {
+		return false, ErrNativeMVCCSnapshotWork
+	}
+	entries, ready, err := c.StepNativeMVCCMaterializedInputV6(c.snapshot, nil, w)
+	if !ready || err != nil {
+		return false, err
+	}
+	return c.StepNativeMVCCMaterializedOutputPolicyV6(c.snapshot, entries, nil, diagnostic, w)
+}
+
 func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputPolicyV6(basis *Snapshot, entries []batch.Entry, scope NativeMVCCPrivateOutputScopeV6, diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
-	if c == nil || c.phase != 3 || basis == nil || scope == nil || c.snapshot.idx != basis.idx {
+	if c == nil || c.phase != 3 || basis == nil || (scope == nil && c.source != nil) || c.snapshot.idx != basis.idx {
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	if c.outputScope != nil && c.outputScope != scope {

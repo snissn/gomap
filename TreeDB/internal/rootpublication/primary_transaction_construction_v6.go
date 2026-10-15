@@ -39,9 +39,10 @@ type primaryTransactionConstructionV6 struct {
 	setReleaseConsumed bool
 }
 type PrimaryPromotionV6 struct {
-	Image        []byte
-	View         PrimaryCapsuleViewV6
-	Root, Parent primaryarena.Ref
+	Image                  []byte
+	View                   PrimaryCapsuleViewV6
+	Root, Parent           primaryarena.Ref
+	Closure, ParentClosure primaryarena.Ref
 }
 
 func NewPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
@@ -307,30 +308,19 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	if record.Directory.RootPageID != 0 {
 		edge = primaryarena.MetadataEdge{PageID: record.Directory.RootPageID, Class: primaryarena.Dependency}
 	}
-	promotionRoot, ready, err := c.arena.CloneReadRootForPromotionV6(c.root, w)
+	parentRecord := parent.Current().Record
+	parentEdge := primaryarena.MetadataEdge{PageID: parentRecord.Manifest.FirstPageID, Class: primaryarena.Manifest}
+	if parentRecord.Directory.RootPageID != 0 {
+		parentEdge = primaryarena.MetadataEdge{PageID: parentRecord.Directory.RootPageID, Class: primaryarena.Dependency}
+	}
+	closure, parentClosure, ready, err := c.arena.AcquirePromotionCustodyV6(c.root, parentRoot, edge, parentEdge, w)
 	if !ready || err != nil {
 		return nil, ready, err
 	}
-	retained := false
-	defer func() {
-		if !retained {
-			// Ordinary synchronous unwind owns this exact new image and group edges.
-			cleanup := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-			_, dropErr := c.arena.Drop(promotionRoot, cleanup)
-			returnErr = errors.Join(returnErr, dropErr)
-		}
-	}()
-	if ready, err = c.arena.BindReadRootDependencyV6(promotionRoot, edge, w); !ready || err != nil {
-		return nil, ready, err
-	}
-	if ready, err = c.arena.Acquire(parentRoot, w); !ready || err != nil {
-		return nil, ready, err
-	}
-	*promotion = PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
+	*promotion = PrimaryPromotionV6{Image: image, View: view, Root: c.root, Parent: parentRoot, Closure: closure, ParentClosure: parentClosure}
 	c.promotion = promotion
 	c.metadataCharge += charge
 	chargeTransferred = true
-	retained = true
 	return c.promotion, true, nil
 }
 
@@ -524,7 +514,7 @@ func (t *DurableRootTransaction) adoptPrimaryCandidateV6(candidate PreparedRootC
 // TransferPrimaryPromotionImageV6 follows actual slot installation. The slot
 // owns the image and copied view; pending callbacks retain only the descriptor.
 // No new allocation, physical edge, or admission is manufactured here.
-func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() {
+func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
@@ -532,10 +522,10 @@ func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() {
 		panic("promotion transfer lost owner")
 	}
 	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6)
-	c.arena.AdoptPendingRootMetadata(c.promotion.Root, charge)
 	c.metadataCharge -= charge
 	c.promotion.Image = nil
 	c.promotion.View = PrimaryCapsuleViewV6{}
+	return charge
 }
 
 // Recovery prepares the SAME constructor before any resource Set is released.
