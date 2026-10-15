@@ -7,8 +7,8 @@ continues to accept only successful original dependencies. It has no dependency
 on the advisory job, and no execution condition reads a forecast.
 
 The reviewed manifest is `.github/ci/ci_impact.json`; the single authority contract
-is `.github/scripts/ci_impact.py plan` / `validate`. It inventories all 16 source
-workflows, 58 original members, entry command source locations/digests, module and
+is `.github/scripts/ci_impact.py plan` / `validate`. It inventories all 17 source
+workflows, 59 original members, entry command source locations/digests, module and
 checkout contexts, platforms, race variants, and explicit dynamic consumers.
 TreeDB contributes 33 original members: 32 execution members and its required
 aggregate. The independent advisory job makes 34 physical TreeDB jobs. Forecast
