@@ -1,0 +1,32 @@
+{
+  "authority": "user execute-and-merge task; root coordinator explicit bounded premerge diagnostic grant",
+  "at_utc": "2026-10-15T21:49:19.945029+00:00",
+  "harness_head": "25ebe4d8c775a10274c360f2ff80aa49b5601599",
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "product_candidate": "5027dc559f83dee04317910169c48d277fcce72f",
+  "review_sha256": "3dd0525ca417482f2bd83751c73384619fcaa89e0305b8a69a3c144ad5aed44a",
+  "collector_sha256": "156f47bd1e3ed59229d2062a3037cfa4e3ba6cfad8fea96e2d83d589f672ed64",
+  "workflow_sha256": "ac1d426037cab5b83eb32940a24aafd1159d0d603b7f38000f1acdd67a7af0ba",
+  "runtime_authorized": true,
+  "maximum_dispatches": 1,
+  "maximum_benchmark_calls": 14,
+  "schedule": "three AB/BA/AB pairs checkpoint16x; three AB/BA/AB pairs production vacuum1x; candidate cohort8/16 one128x each",
+  "constraints": [
+    "exactreviewedfrozenbytes",
+    "ephemeralubuntu24.04only",
+    "pinnedGo1.26.3hash",
+    "samequiet2pct10spreflight250mssamples",
+    "no retries or accepted subset",
+    "retainallattemptsraw4ELFscompiler/harness/sourcebindings",
+    "rootcostdisposition required; no general qualification"
+  ],
+  "infrastructure": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: no dedicated high-capacity runner available for this task; use isolated ephemeral GitHub-hosted ubuntu24.04",
+    "INFRASTRUCTURE_UNAVAILABLE: cache: no persistent task cache on ephemeral runner; use fresh task cache after verified dependency fetch",
+    "Durable evidence fallback: hosted artifacts retained14days then root downloads to task-owned fastdisk and publishes source/raw/hash packet"
+  ],
+  "superseded_consumed_grant": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-preparation/dependency-fix/root-dispatch-authorization.json",
+  "prior_attempt": 38808351333,
+  "prior_attempt_disposition": "COMPLETE_BOUNDED_DIAGNOSTIC all14calls at72e01; original results retained; checkpoint+40990B/+32obj investigated",
+  "new_dispatch_reason": "reviewed product5027dc defers proven unnecessary PRIMARY allocation; fresh affected cost evidence required after actual source change"
+}

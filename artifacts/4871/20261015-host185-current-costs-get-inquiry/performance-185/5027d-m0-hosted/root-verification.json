@@ -1,0 +1,71 @@
+{
+  "head": "5027dc559f83dee04317910169c48d277fcce72f",
+  "status": "ORIGINAL_M0_GATES_RECOMPUTED_PASS",
+  "summarizer_sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+  "rows": 20,
+  "all_raw_statistics_and_original_gates_equal": true,
+  "arithmetic_tolerance": "Original samples/mean/median exact; CV comparison permits 1e-14 relative / 1e-15 absolute rounding, no gate tolerance change",
+  "cv": {
+    "vacuum-total-ns/op": 0.0045209575640261035,
+    "max-writer-pause-ns": 0.029067807366800813,
+    "foreground-p99-ns/op": 0.028251428903925548
+  },
+  "public_status": "production-index-vacuum-available",
+  "fixture": {
+    "collection_root_span": 1,
+    "fixture": "m0-index-debt",
+    "index_bytes": 917504,
+    "key_count": 512,
+    "leaf_log_bytes": 0,
+    "live_pages": 48,
+    "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+    "offline_index_bytes": 131072,
+    "offline_value_log_bytes": 1207296,
+    "parameters": {
+      "chunk_size": 65536,
+      "collection_documents": 128,
+      "collection_generations": 3,
+      "debt_compactions": 16,
+      "pointer_threshold": 512,
+      "user_generations": 3,
+      "user_keys": 384
+    },
+    "reclaimable_page_percent": 77.88018433179724,
+    "reclaimable_pages": 169,
+    "schema_version": 1,
+    "status": "offline-ceiling",
+    "value_log_bytes": 1207296
+  },
+  "raw_hashes": {
+    "commands.txt": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "fixture.json": "9ac3851e0865956b13f494bb8c1ae49f9a24792e1b55ced8fe5024bed45eb8a6",
+    "legacy-benchstat-input.txt": "a926ec3c9ad90092f30b2e899c37814bffbd662d0a203a499a5d619606f5fd0c",
+    "raw/legacy-1.txt": "bb88fa5d0addcb5fcf173e543b1bf25f99d34f6196117265c9fcc1fb2136b473",
+    "raw/legacy-10.txt": "adc092f6aabe5623ce0b2c7a36088fa4bb314776867908ce8ed91bb7d01a129b",
+    "raw/legacy-2.txt": "2f63a8cf7a9e5d389516dd84ae9ca9ffc6eddb02f94896207f1e7d665faba85b",
+    "raw/legacy-3.txt": "50f0d60546753760b0e72f0da87186788b2d49cc1ef115db9218916668733497",
+    "raw/legacy-4.txt": "15634d9cb42458cca65606e8b77159d225f6b81972fc9324d7e8ffb87afa30d7",
+    "raw/legacy-5.txt": "5c38611e9155d02da6de5fa68cb9c693d5677d0944b8f7d7fc9489c51d16188a",
+    "raw/legacy-6.txt": "2f96f8732b99bd16bcae1e698af1d68690999a870db6aed0d405443fd96ab1d1",
+    "raw/legacy-7.txt": "5052aae9c245ae946daf0f1086b89c61fe99e91c7e57fde7b54a18c95bab7a2a",
+    "raw/legacy-8.txt": "61ac72dd3ec5db3d7dd224e283f45648878c2495d0ecbdfedbc47b57882b65fe",
+    "raw/legacy-9.txt": "382cec7a8bc53c87b45e07d3e85ef8ea22499b34ae472fb3efd9bb728dc77eaa",
+    "raw/public-1.txt": "13effafde4137dba08b1041be2119af217650ab3ef4304645fa9273afd231fb4",
+    "raw/public-10.txt": "dfe6846b143212454e691e40b60a2f5bb0de6e752c678f9b75c0315f0f80cf8f",
+    "raw/public-2.txt": "ef83098b0b9ac455e758ef3982eac523d087ed174fb8e9dc182dd7c941cfea77",
+    "raw/public-3.txt": "9f9647704fd6343fab1c8e56a4eacab802b82170475c2c6f419832e8f56b8206",
+    "raw/public-4.txt": "16b0094a07d1aea5801b7b95d7be29e7e08c6f19143c793c3bc2e07555de5107",
+    "raw/public-5.txt": "9aa4eb48dc3e8e16a20bb62861366cad5f28577aefab89734ba50277276cac70",
+    "raw/public-6.txt": "0e593610d8bfce0a1b341fa750d212ff0d7be761033491e3ab9d9e346ef40504",
+    "raw/public-7.txt": "cd97281ba42dc0846d10fb0a9e999c4a5af6a4d3fbcf3c415f9a4692ee1238c2",
+    "raw/public-8.txt": "5c1d228bc9f9e14d0787b90fc98bb04f22ee10609bec65fb31d69cca2f71eb3c",
+    "raw/public-9.txt": "747ed54399ac1ea1cce77373d5f2b315405acdb0bc701193d0dedfb9fbb4cd53",
+    "results.json": "8ae537b0c4b8294bd2d5a1d06169ffaf92828c308ed3bea3982e82ba925567d1",
+    "summary.md": "26d10d958ab079271efe62e30dc5ffb8f6407f7a3e01e1af1478de70cf40df5e"
+  },
+  "limitations": [
+    "Same-head stability and public exposure only; not matched revision cost qualification",
+    "Public p99 CV is reported but is not an original stability gate",
+    "No sampled host process/CPU interference telemetry in this maintained M0 packet"
+  ]
+}

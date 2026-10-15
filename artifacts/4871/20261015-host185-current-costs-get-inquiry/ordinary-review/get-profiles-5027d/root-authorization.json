@@ -1,0 +1,40 @@
+{
+  "at_utc": "2026-10-15T22:04:46.896424+00:00",
+  "authorization": "Root accepts independent exact-Sol six-profile causal proposal; sole runtime, no qualification or rerun",
+  "order": [
+    "B",
+    "C50",
+    "C72",
+    "C72",
+    "C50",
+    "B"
+  ],
+  "per_process_outer_seconds": 30,
+  "total_outer_seconds": 180,
+  "cpu": 0,
+  "GOMAXPROCS": 1,
+  "GOGC": 100,
+  "GODEBUG": "unset",
+  "GOMEMLIMIT": "unset",
+  "binary_compiler": "Go1.26.9",
+  "purpose": "CPU attribution only; unchanged original benchmark and retained ELFs; profiling overhead and different local host preclude hosted gate disposition",
+  "limitations": [
+    "Original benchmark seeds random key generator with wall clock; no reproducible seed hook",
+    "Whole-process profiles include setup and teardown",
+    "No local timing acceptance or hosted failure waiver"
+  ],
+  "binaries": {
+    "B": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe"
+    },
+    "C50": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/candidate-db.test",
+      "sha256": "f31f04240cd874be28fb1fa22db5449217dd578dddbdbc5507d72af4fc53416d"
+    },
+    "C72": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/candidate-db.test",
+      "sha256": "6ec1c9db444d065992808eee2b5c482263832aa4f71a2940d1ed3a3168ecda13"
+    }
+  }
+}

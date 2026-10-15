@@ -1,0 +1,57 @@
+{
+  "created_utc": "2026-10-15T21:47:50.471697+00:00",
+  "disposition": "ACCEPT",
+  "scope": "frozen six-path hosted diagnostic harness literal refresh only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "harness_parent": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "harness_commit": null,
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "product_candidate": "5027dc559f83dee04317910169c48d277fcce72f",
+  "product_tree": "a7710b6b41ebc62328a5282c959910193ce4cd0f",
+  "product_parent": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "patch_sha256": "8890b04a271d7b2cd3ce2fe0b485fcb1e97a02533b9cbb2cf639509ccf3410fe",
+  "freeze_sha256": "92cbc6cf1de127d5d07b3f4fa880fb53130147ca06226e272626065420e3d961",
+  "retained_controls_sha256": "4f7b318cac1877ec50aed4c5277deb4ea0313592e29b2f8ab06c66e322ca1805",
+  "product_commit_receipt_sha256": "3593de8a5f11fac547c1573c3996e23576fcc9d0e80166854c3d85f91349b698",
+  "changed_files": {
+    ".github/scripts/mvcc_maintenance_README.md": "7d8fc3b6e0433e9f67095dddb6fc5b1f58508a30c7b1d794e44471031226def9",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "6daa138a247fe80f25987a47a139ec04c03335ad75e67c5e93ca0964654a961a",
+    ".github/scripts/mvcc_maintenance_collect.py": "156f47bd1e3ed59229d2062a3037cfa4e3ba6cfad8fea96e2d83d589f672ed64",
+    ".github/scripts/mvcc_maintenance_prepare.py": "038c4f4b1443010ae3a45ad201a2858fd9144987f9a5b3b6256af9a9844fbacb",
+    ".github/scripts/mvcc_maintenance_test.py": "53c3e3d6e63ffda2418f84a0a9b71d4a38a7052510c0227b280252cd463dad18",
+    ".github/workflows/treedb-vacuum-m0.yml": "ac1d426037cab5b83eb32940a24aafd1159d0d603b7f38000f1acdd67a7af0ba"
+  },
+  "all_source_files_independently_verified_before_and_after": 10251,
+  "source_mismatches": [],
+  "inverse_literal_substitutions_reproduce_all_prior_review_hashes": true,
+  "schedule_calls": 14,
+  "pure_controls": {
+    "argv": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "exit": 0,
+    "groups": 7,
+    "parser_positive_and_six_negative": "PASS"
+  },
+  "blocking_findings": [],
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "go_build_testbody_benchmark_network_git_github_operations": false,
+  "runtime_grant": false,
+  "dispatch_grant": false,
+  "qualification_or_merge_claim": false,
+  "hosted_manual_review_unavailability": "Cannot pin required gpt-6.1-sol model; not requested.",
+  "limits": [
+    "Exact harness commit pending root readback",
+    "Fresh affected product costs pending",
+    "Prior measurements retain original identities",
+    "M0 and final ordinary gates independent",
+    "No native/Q32/Dgraph qualification"
+  ],
+  "review_lease": "released; idle",
+  "report_sha256": "22385c2fed7e5aee954f14f6b17717a019d2d6c90428ddd85d8570c19ebe6bd6"
+}

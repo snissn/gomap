@@ -1,0 +1,19 @@
+{
+  "head": "25ebe4d8c775a10274c360f2ff80aa49b5601599",
+  "tree": "de8bae5a9e5f299a1702815b6f3eaf9fcea4936c",
+  "parent": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "product_candidate": "5027dc559f83dee04317910169c48d277fcce72f",
+  "review_sha256": "3dd0525ca417482f2bd83751c73384619fcaa89e0305b8a69a3c144ad5aed44a",
+  "freeze_sha256": "92cbc6cf1de127d5d07b3f4fa880fb53130147ca06226e272626065420e3d961",
+  "changed_paths": [
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/workflows/treedb-vacuum-m0.yml"
+  ],
+  "remote_verified": true,
+  "at_utc": "2026-10-15T21:48:24.225470+00:00"
+}

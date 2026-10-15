@@ -1,0 +1,279 @@
+{
+  "method": "Read-only go version -m / nm / objdump; retain mnemonic+operands, normalize direct internal branch destinations to function offset and RIP-relative relocations only. Instruction-shape equality is not semantic or cost equality. No ELF execution.",
+  "binaries": {
+    "5027-candidate": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/candidate-db.test",
+      "sha256": "f31f04240cd874be28fb1fa22db5449217dd578dddbdbc5507d72af4fc53416d",
+      "buildinfo": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/candidate-db.test: go1.26.9",
+      "functions": 31
+    },
+    "5027-base": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "buildinfo": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/baseline-db.test: go1.26.9",
+      "functions": 22
+    },
+    "72e-candidate": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/candidate-db.test",
+      "sha256": "6ec1c9db444d065992808eee2b5c482263832aa4f71a2940d1ed3a3168ecda13",
+      "buildinfo": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/candidate-db.test: go1.26.9",
+      "functions": 31
+    },
+    "72e-base": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "buildinfo": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/baseline-db.test: go1.26.9",
+      "functions": 22
+    }
+  },
+  "latest_vs_prior": [
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*ConditionalTxn).GetVersionedAppend",
+      "same_instruction_shape": true,
+      "current_instruction_count": 275,
+      "prior_instruction_count": 275,
+      "current_address": "0xaa3e00",
+      "prior_address": "0xaa3e40"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend",
+      "same_instruction_shape": true,
+      "current_instruction_count": 99,
+      "prior_instruction_count": 99,
+      "current_address": "0xa362e0",
+      "prior_address": "0xa36320"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend.func1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 98,
+      "prior_instruction_count": 98,
+      "current_address": "0xa364c0",
+      "prior_address": "0xa36500"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend.func1.deferwrap1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 13,
+      "prior_instruction_count": 13,
+      "current_address": "0xa366c0",
+      "prior_address": "0xa36700"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr",
+      "same_instruction_shape": true,
+      "current_instruction_count": 82,
+      "prior_instruction_count": 82,
+      "current_address": "0xbfba60",
+      "prior_address": "0xbfbaa0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld",
+      "same_instruction_shape": true,
+      "current_instruction_count": 700,
+      "prior_instruction_count": 700,
+      "current_address": "0xaa97e0",
+      "prior_address": "0xaa9820"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.deferwrap1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 18,
+      "prior_instruction_count": 18,
+      "current_address": "0xaaa640",
+      "prior_address": "0xaaa680"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 19,
+      "prior_instruction_count": 19,
+      "current_address": "0xaaa5e0",
+      "prior_address": "0xaaa620"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func2",
+      "same_instruction_shape": true,
+      "current_instruction_count": 18,
+      "prior_instruction_count": 18,
+      "current_address": "0xaaa5a0",
+      "prior_address": "0xaaa5e0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Snapshot).GetVersionedAppend",
+      "same_instruction_shape": true,
+      "current_instruction_count": 116,
+      "prior_instruction_count": 116,
+      "current_address": "0xabff80",
+      "prior_address": "0xabffc0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Snapshot).GetVersionedAppend.deferwrap1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 13,
+      "prior_instruction_count": 13,
+      "current_address": "0xac01c0",
+      "prior_address": "0xac0200"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Snapshot).closeRead",
+      "same_instruction_shape": true,
+      "current_instruction_count": 112,
+      "prior_instruction_count": 112,
+      "current_address": "0xaac260",
+      "prior_address": "0xaac2a0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseRead",
+      "same_instruction_shape": true,
+      "current_instruction_count": 1220,
+      "prior_instruction_count": 1220,
+      "current_address": "0xaac420",
+      "prior_address": "0xaac460"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).putRead",
+      "same_instruction_shape": true,
+      "current_instruction_count": 191,
+      "prior_instruction_count": 191,
+      "current_address": "0xbfbd00",
+      "prior_address": "0xbfbd40"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*indexGen).releaseWrapperBorrow",
+      "same_instruction_shape": true,
+      "current_instruction_count": 25,
+      "prior_instruction_count": 25,
+      "current_address": "0xb34620",
+      "prior_address": "0xb34660"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*indexGen).releaseWrapperBorrowCompletionV6",
+      "same_instruction_shape": true,
+      "current_instruction_count": 178,
+      "prior_instruction_count": 178,
+      "current_address": "0xb34360",
+      "prior_address": "0xb343a0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*oneShotRead).close",
+      "same_instruction_shape": true,
+      "current_instruction_count": 30,
+      "prior_instruction_count": 30,
+      "current_address": "0xbfbbc0",
+      "prior_address": "0xbfbc00"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*oneShotRead).close-fm",
+      "same_instruction_shape": true,
+      "current_instruction_count": 13,
+      "prior_instruction_count": 13,
+      "current_address": "0x1166ee0",
+      "prior_address": "0x1166f20"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned",
+      "same_instruction_shape": true,
+      "current_instruction_count": 114,
+      "prior_instruction_count": 114,
+      "current_address": "0xdd27e0",
+      "prior_address": "0xdd2820"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned.func1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 30,
+      "prior_instruction_count": 30,
+      "current_address": "0xdd2dc0",
+      "prior_address": "0xdd2e00"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned.func2",
+      "same_instruction_shape": true,
+      "current_instruction_count": 177,
+      "prior_instruction_count": 177,
+      "current_address": "0xdd2a60",
+      "prior_address": "0xdd2aa0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint",
+      "same_instruction_shape": true,
+      "current_instruction_count": 184,
+      "prior_instruction_count": 184,
+      "current_address": "0x92bd20",
+      "prior_address": "0x92bd60"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint.deferwrap1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 18,
+      "prior_instruction_count": 18,
+      "current_address": "0x92c060",
+      "prior_address": "0x92c0a0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).Unregister",
+      "same_instruction_shape": true,
+      "current_instruction_count": 134,
+      "prior_instruction_count": 134,
+      "current_address": "0x92c320",
+      "prior_address": "0x92c360"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).Unregister.deferwrap1",
+      "same_instruction_shape": true,
+      "current_instruction_count": 18,
+      "prior_instruction_count": 18,
+      "current_address": "0x92c520",
+      "prior_address": "0x92c560"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).GetVersionedAppend",
+      "same_instruction_shape": true,
+      "current_instruction_count": 170,
+      "prior_instruction_count": 170,
+      "current_address": "0x6db5a0",
+      "prior_address": "0x6db5e0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset",
+      "same_instruction_shape": true,
+      "current_instruction_count": 728,
+      "prior_instruction_count": 728,
+      "current_address": "0x6d5f00",
+      "prior_address": "0x6d5f40"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).findLeafRefForGetMany",
+      "same_instruction_shape": true,
+      "current_instruction_count": 567,
+      "prior_instruction_count": 567,
+      "current_address": "0x6de040",
+      "prior_address": "0x6de080"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).getEntry",
+      "same_instruction_shape": true,
+      "current_instruction_count": 608,
+      "prior_instruction_count": 608,
+      "current_address": "0x6d7f80",
+      "prior_address": "0x6d7fc0"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).getManyAppendFallback",
+      "same_instruction_shape": true,
+      "current_instruction_count": 180,
+      "prior_instruction_count": 180,
+      "current_address": "0x6ddce0",
+      "prior_address": "0x6ddd20"
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/tree.(*Tree).getManyViewFallback",
+      "same_instruction_shape": true,
+      "current_instruction_count": 139,
+      "prior_instruction_count": 139,
+      "current_address": "0x6dda60",
+      "prior_address": "0x6ddaa0"
+    }
+  ]
+}

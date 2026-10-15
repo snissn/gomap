@@ -1,0 +1,26 @@
+{
+  "baseline-db": {
+    "package": "./TreeDB/db",
+    "path": "/home/runner/work/_temp/mvcc-maintenance-5027d/performance-185/maintenance-build-02/baseline-db.test",
+    "sha256": "79ff7b18796d652303c05b6803e6e2b328844592e20f7840dfdd5ad61472055d",
+    "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+  },
+  "baseline-public": {
+    "package": "./TreeDB",
+    "path": "/home/runner/work/_temp/mvcc-maintenance-5027d/performance-185/maintenance-build-02/baseline-public.test",
+    "sha256": "040b20890651d169b42391564e84fb645652da3ecde31040150fddacddd8caa9",
+    "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+  },
+  "candidate-db": {
+    "package": "./TreeDB/db",
+    "path": "/home/runner/work/_temp/mvcc-maintenance-5027d/performance-185/maintenance-build-02/candidate-db.test",
+    "sha256": "ba452ff70e2dd3e9d64e8512a8d50456628fde3cdc4d4e21f7c6cc36060c4482",
+    "source_head": "5027dc559f83dee04317910169c48d277fcce72f"
+  },
+  "candidate-public": {
+    "package": "./TreeDB",
+    "path": "/home/runner/work/_temp/mvcc-maintenance-5027d/performance-185/maintenance-build-02/candidate-public.test",
+    "sha256": "b4cf92beab311d9f8ae226e89a7881e467ea81d8d940534dfb4712f1b8405e06",
+    "source_head": "5027dc559f83dee04317910169c48d277fcce72f"
+  }
+}

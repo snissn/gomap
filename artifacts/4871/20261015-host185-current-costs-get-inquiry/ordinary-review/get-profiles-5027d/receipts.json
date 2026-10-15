@@ -1,0 +1,140 @@
+[
+  {
+    "arm": "B",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/00-B.pprof"
+    ],
+    "pid": 613828,
+    "elapsed_seconds": 11.023272756952792,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "log_sha256": "75c49b995d73435ac65d98e70184bec3a8addf36f64ba0c6573f0189ae3a8ba6",
+    "profile_sha256": "d0cc66dd8d79a3c8857213887247e8b93529c65097dd74d3b7c805304c6a643d"
+  },
+  {
+    "arm": "C50",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/01-C50.pprof"
+    ],
+    "pid": 614001,
+    "elapsed_seconds": 11.02148051187396,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "f31f04240cd874be28fb1fa22db5449217dd578dddbdbc5507d72af4fc53416d",
+    "log_sha256": "4b6411b5438dfca67c370b0204e52e11e58cac2608c70f3c8207cbe59da8e714",
+    "profile_sha256": "351fae33c899b7a40a7837fde4746f134f08387e5a5899ff2feef26b2acb8fe4"
+  },
+  {
+    "arm": "C72",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/02-C72.pprof"
+    ],
+    "pid": 614136,
+    "elapsed_seconds": 11.271769871003926,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "6ec1c9db444d065992808eee2b5c482263832aa4f71a2940d1ed3a3168ecda13",
+    "log_sha256": "331a119da988dff16b293c2ffe65fd48a739d15986a4f973a29687b7875281bf",
+    "profile_sha256": "250db0e02a06ee04626c1772de0a8583a3fec16e6e7b84dce243ce6c0928b92d"
+  },
+  {
+    "arm": "C72",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-hosted/raw-primary/measured-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/03-C72.pprof"
+    ],
+    "pid": 614322,
+    "elapsed_seconds": 10.770822288934141,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "6ec1c9db444d065992808eee2b5c482263832aa4f71a2940d1ed3a3168ecda13",
+    "log_sha256": "7bd7f4dfe88f1ba8683e84877a38138b6e1408bb533799a68441a7257a36f243",
+    "profile_sha256": "9e33f458980e815c4d6381312820dd4526cd50f834c15d71021fae658dd8580c"
+  },
+  {
+    "arm": "C50",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/04-C50.pprof"
+    ],
+    "pid": 614596,
+    "elapsed_seconds": 11.52233621198684,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "f31f04240cd874be28fb1fa22db5449217dd578dddbdbc5507d72af4fc53416d",
+    "log_sha256": "c768706a5e65ca2d859958a7ff32a22e8fe0f346afa85809a2d30d8375d72213",
+    "profile_sha256": "31c18d46f2889de10e63a84f7b6169743ee71792a995f338f93c7acf12be5df9"
+  },
+  {
+    "arm": "B",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5027d-hosted/packet/measured-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchmem",
+      "-test.benchtime=8s",
+      "-test.count=1",
+      "-test.timeout=120s",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/05-B.pprof"
+    ],
+    "pid": 614735,
+    "elapsed_seconds": 10.770588256418705,
+    "exit_code": 0,
+    "timed_out": false,
+    "binary_sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "log_sha256": "f651c0949fcc92cebc2e13a89fab09440f734daaebf3049bd74cd037c66210a4",
+    "profile_sha256": "d42eea2e426590e529f9d49661aa9c4c2f6c1cfcb2a8f8a159434c28ab8e5c41"
+  }
+]

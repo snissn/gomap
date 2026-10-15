@@ -1,0 +1,29 @@
+[
+  {
+    "conclusion": "",
+    "createdAt": "2026-10-15T21:49:21Z",
+    "databaseId": 38812742507,
+    "event": "workflow_dispatch",
+    "headSha": "25ebe4d8c775a10274c360f2ff80aa49b5601599",
+    "status": "in_progress",
+    "url": "https://github.com/snissn/gomap/actions/runs/38812742507"
+  },
+  {
+    "conclusion": "success",
+    "createdAt": "2026-10-15T21:14:35Z",
+    "databaseId": 38808351333,
+    "event": "workflow_dispatch",
+    "headSha": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+    "status": "completed",
+    "url": "https://github.com/snissn/gomap/actions/runs/38808351333"
+  },
+  {
+    "conclusion": "failure",
+    "createdAt": "2026-10-15T21:00:52Z",
+    "databaseId": 38806554344,
+    "event": "workflow_dispatch",
+    "headSha": "a9682385caca9d86cf0bf0144f0de4e0fd1311a2",
+    "status": "completed",
+    "url": "https://github.com/snissn/gomap/actions/runs/38806554344"
+  }
+]

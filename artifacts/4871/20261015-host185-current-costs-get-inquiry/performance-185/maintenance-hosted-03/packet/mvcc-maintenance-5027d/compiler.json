@@ -1,0 +1,9 @@
+{
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot": "/opt/hostedtoolcache/go/1.26.3/x64",
+  "retained": {
+    "compile": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "go": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "link": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3"
+  }
+}

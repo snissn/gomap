@@ -1,0 +1,20 @@
+{
+  "created_utc": "2026-10-15T22:10:45.474326+00:00",
+  "candidate": "5027dc559f83dee04317910169c48d277fcce72f",
+  "tree": "a7710b6b41ebc62328a5282c959910193ce4cd0f",
+  "inventory_unique_paths": 539,
+  "candidate_blobs_sha256_verified": 539,
+  "allocation_groups": 19,
+  "direct_source_inspections": 123,
+  "source_findings": 0,
+  "binding_method": "Immutable exact candidate Git blobs and their SHA256 match review inventory; no claim about parent-owned later worktree mutations.",
+  "artifacts": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/full-source-5027d.md": "3785a7fe685435eafd752a91bfc74038bc0d0593372b2f7a8f997e26573890ef",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/full-source-5027d.json": "0ff75492c80a09c72fc72520eaf73a61f23f932cb70bbceeb06916ced78c2d39",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/static-get-5027d/causal-inquiry.md": "605052722d85982a8d4f466a24a8ad3b67a9bbe26fb02235b144d321f07db92e",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/static-get-5027d/proposal.json": "6d1d8e6d445c91ef5bc7d4f00e7bde0ecdfc95a43ccb8d602fbe46ff22522f8a",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/static-get-5027d/static-comparison.json": "f0421bbcffce87599f4d018c0ef788089608dfe32e832af780bf5b3f4efbf83f",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/partitioned-flat.json": "e01fa23df9688ab84fc66a51b81acc95c8e9e0e0f9ef32cf768406687bdd01a5",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/get-profiles-5027d/partition-profile.py": "06e279ceff40b3e6d1de69b65332d1461795ee49931a67011ccaa3d7aaf120bd"
+  }
+}
