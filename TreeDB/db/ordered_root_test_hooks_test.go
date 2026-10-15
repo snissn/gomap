@@ -32,6 +32,6 @@ func (db *DB) SetOrderedRootStaleBuildHooksForTest(hooks OrderedRootStaleBuildHo
 
 // CreateSavedPrimaryFormatV5ForTest binds the retained META witness to the
 // complete production V5 initializer; it is absent from production builds.
-func CreateSavedPrimaryFormatV5ForTest(t *testing.T, dir string) {
-	createSavedPrimaryFormatV5(t, dir, false)
+func CreateSavedPrimaryFormatV5ForTest(t *testing.T, dir string, opts Options) {
+	createSavedPrimaryFormatV5(t, dir, false, opts)
 }

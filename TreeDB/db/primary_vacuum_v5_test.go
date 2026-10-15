@@ -22,8 +22,21 @@ import (
 // createSavedPrimaryFormatV5 writes a complete genuine V5 initial root using
 // the production initializer. Fresh public databases select V6; these fixtures
 // keep qualifying the retained V5 shared-arena path without changing defaults.
-func createSavedPrimaryFormatV5(t *testing.T, dir string, directory bool) {
+func createSavedPrimaryFormatV5(t *testing.T, dir string, directory bool, formatOptions ...Options) {
 	t.Helper()
+	// Select the maintained physical format before creating a nonempty index.
+	// The V5 fixture changes the PRIMARY representation, not the freelist format.
+	opts := Options{ResolvedProfile: ProfileNoWALFast}
+	if len(formatOptions) != 0 {
+		opts = formatOptions[0]
+	}
+	cfg := formatConfigFromOptions(opts)
+	if directory {
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureDependencyDirectoryV2)
+	}
+	if err := SaveFormatConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
 	p, err := pager.Open(filepath.Join(dir, indexFileName), 64*1024)
 	if err != nil {
 		t.Fatal(err)

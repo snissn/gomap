@@ -109,6 +109,10 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	}
 	clear(s.rootTrees)
 	s.rootTrees = nil
+	// Overflow may have moved the active cache away from its first inline
+	// entry; scrub that original alias too before cleanup completion.
+	s.rootTreeFirst[0].tree.Reset(nil, nil, 0)
+	s.rootTreeFirst[0].root = 0
 	s.db = nil
 	s.idx = nil
 	s.state = nil

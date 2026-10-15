@@ -9,6 +9,13 @@ func (db *DB) RunBackendMaintenance(fn func() error) error {
 	return db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{skipCheckpoint: true}, fn)
 }
 
+// RunBackendMaintenanceWithPostRefresh completes caller-owned retirement after
+// the old COW basis drains, under the SAME maintenance writer fence. A failed
+// operation or basis refresh never grants permission to run the settle callback.
+func (db *DB) RunBackendMaintenanceWithPostRefresh(fn, settle func() error) error {
+	return db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{skipCheckpoint: true, afterCOWRefresh: settle}, fn)
+}
+
 func (db *DB) refreshCOWBackendBasis() error {
 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err != nil {

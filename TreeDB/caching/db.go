@@ -7981,6 +7981,7 @@ func (db *DB) checkpointForBackendMaintenance() error {
 type backendMaintenanceOptions struct {
 	skipCheckpoint        bool
 	skipRetainedPruneWait bool
+	afterCOWRefresh       func() error
 }
 
 func (db *DB) runWithBackendMaintenance(fn func() error) error {
@@ -8040,7 +8041,15 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	}
 	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
 	if db.cow != nil {
-		return db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr))
+		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
+			return err
+		}
+		if opts.afterCOWRefresh == nil {
+			return nil
+		}
+		// Settlement may publish a manifest even when it reports a later error.
+		// Reconcile that accepted state before releasing the existing writer fence.
+		return db.finishCOWBackendMaintenance(opts.afterCOWRefresh())
 	}
 	if fnErr != nil {
 		if reconcileErr != nil {

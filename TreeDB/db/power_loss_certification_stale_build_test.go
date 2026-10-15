@@ -47,13 +47,21 @@ func TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6(t *tes
 
 func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 	if !capsule {
 		// Construct the separately versioned saved V5 format. The original DATA V1
 		// witness and generation8 evidence are archived with zero current coverage.
 		// Public Open admits this real preexisting V5 arena and uses DATA META.
-		dbpkg.CreateSavedPrimaryFormatV5ForTest(t, dir)
+		dbpkg.CreateSavedPrimaryFormatV5ForTest(t, dir, dbpkg.Options{
+			ResolvedProfile:            dbpkg.ProfileNoWALFast,
+			IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
+			LeafPrefixCompression:      opts.LeafPrefixCompression,
+			IndexColumnarLeaves:        opts.IndexColumnarLeaves,
+			IndexPackedValuePtr:        opts.IndexPackedValuePtr,
+			IndexInternalBaseDelta:     opts.IndexInternalBaseDelta,
+			IndexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
+		})
 	}
-	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1

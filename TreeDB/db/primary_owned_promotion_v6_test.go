@@ -154,7 +154,7 @@ func TestPrimaryOwnedPromotionV6RoutingEmission(t *testing.T) {
 }
 
 // A relaxed reader owns its immutable logical closure. Later coalesced durable
-// publication must attach its dependency banks to a separately owned slot root.
+// publication must retain dependency banks through the slot's separate closure.
 func TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, ValueLog: ValueLogOptions{PointerThreshold: 1}, DisableBackgroundPrune: true})
 	if err != nil {
@@ -227,10 +227,15 @@ func TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure(t *testing.T) {
 	if count(before) != count(after) {
 		t.Fatalf("admitted reader acquired promotion dependencies: before=%d after=%d", count(before), count(after))
 	}
-	if db.durableRoot.primary.records[db.durableRoot.slot] == db.State().primaryRoot.ref {
-		t.Fatal("promotion reused visible logical root")
+	slot := db.durableRoot.slot
+	slotRoot, slotClosure := db.durableRoot.primary.records[slot], db.durableRoot.primary.closures[slot]
+	if slotRoot != latestRef || latest.primaryRoot.ref != latestRef {
+		t.Fatal("promotion replaced the admitted immutable logical root")
 	}
-	slotPages, err := a.CapturePhysicalPagesOrdinary(a.Pager().PageCount(), []primaryarena.Ref{db.durableRoot.primary.records[db.durableRoot.slot]})
+	if slotClosure == (primaryarena.Ref{}) || slotClosure == latestRef {
+		t.Fatal("promotion has no separately owned dependency closure")
+	}
+	slotPages, err := a.CapturePhysicalPagesOrdinary(a.Pager().PageCount(), []primaryarena.Ref{slotRoot, slotClosure})
 	if err != nil {
 		t.Fatal(err)
 	}

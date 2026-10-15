@@ -314,6 +314,12 @@ concrete backend registration of a rotated leaf segment already transfers its
 registration and manifest identity to that backend; COW does not retain duplicate
 pending registration debt across an empty checkpoint. Unreferenced empty leaf
 segments can therefore be reclaimed without later trying to reopen them.
+After backend compaction refreshes the COW basis, the same maintenance writer
+fence covers one ordinary leaf-GC settle pass for generations held retiring by
+the old basis. Independent old cuts and every recoverable slot/parent retain
+their existing protections. The returned usage/debt audit follows that settle
+pass; errors or canceled operations do not authorize it. This pin retirement
+adds no checkpoint or durable-root publication.
 Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -217,7 +218,10 @@ func TestCOWMaintenanceAcceptedRefreshPressureLifetime(t *testing.T) {
 					if route == "central-index-compaction" {
 						maintenance = backend.compactIndexWithAcceptedReport
 					}
-					err = cached.RunBackendMaintenance(maintenance)
+					err = cached.RunBackendMaintenanceWithPostRefresh(maintenance, func() error {
+						t.Error("settlement ran after operation/refresh refusal")
+						return nil
+					})
 				} else {
 					err = cached.Checkpoint()
 				}
@@ -394,6 +398,66 @@ func testCOWMaintenanceUnsupportedVacuumPreservesLifetime(t *testing.T) {
 			}
 			if got, err := old.Get([]byte("a")); err != nil || !bytes.Equal(got, beforeValue) {
 				t.Fatalf("old cut after later checkpoint len%d error%v", len(got), err)
+			}
+		})
+	}
+}
+
+func TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut(t *testing.T) {
+	for _, failSettle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("settle-error-%t", failSettle), func(t *testing.T) {
+			cached, backend := cowMaintenanceLifetimeFixture(t)
+			value := bytes.Repeat([]byte("retained-basis"), 512)
+			if err := cached.Set([]byte("a"), value); err != nil {
+				t.Fatal(err)
+			}
+			if err := cached.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			old, err := cached.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			oldBasis := cached.cow.cut.basis
+			before, ok := backend.DB.StateToken()
+			if !ok {
+				t.Fatal("missing native state")
+			}
+			checkpointRuns := cached.checkpointRuns.Load()
+			called := false
+			settleError := errors.New("settlement canceled")
+			err = cached.RunBackendMaintenanceWithPostRefresh(nil, func() error {
+				called = true
+				if !cached.maintenanceActive.Load() || cached.cow.cut.basis == oldBasis || cached.cow.refreshRequired.Load() {
+					t.Fatal("settlement did not follow basis refresh under the same writer fence")
+				}
+				if oldBasis.completed || oldBasis.snapshot == nil {
+					t.Fatal("held cut lost its original basis")
+				}
+				if got, err := old.Get([]byte("a")); err != nil || !bytes.Equal(got, value) {
+					t.Fatalf("held value %d %v", len(got), err)
+				}
+				if failSettle {
+					return settleError
+				}
+				return nil
+			})
+			if !called || (failSettle && !errors.Is(err, settleError)) || (!failSettle && err != nil) {
+				t.Fatalf("settlement called=%t err=%v", called, err)
+			}
+			after, _ := backend.DB.StateToken()
+			if before != after || cached.checkpointRuns.Load() != checkpointRuns {
+				t.Fatal("read-pin settlement published or checkpointed a root")
+			}
+			if cached.maintenanceActive.Load() || cached.cow.refreshRequired.Load() {
+				t.Fatal("settlement left maintenance admission active")
+			}
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !oldBasis.completed {
+				t.Fatal("old basis did not drain with its actual last cut")
 			}
 		})
 	}
