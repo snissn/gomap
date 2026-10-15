@@ -1,0 +1,9 @@
+{
+  "exit": 1,
+  "elapsed_seconds": 2.7403448577970266,
+  "terminated_process_group": false,
+  "source_equal": true,
+  "source_files": 10330,
+  "log_sha256": "814ddab10ba67da430773955417a340c233a9a83bc3d6d22ccdc470c822cd99d",
+  "native_publication_qualification": false
+}

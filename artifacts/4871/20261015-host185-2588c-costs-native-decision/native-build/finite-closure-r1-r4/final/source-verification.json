@@ -1,0 +1,13 @@
+{
+  "verified_at_utc": "2026-10-15T22:13:33.165422+00:00",
+  "files_verified_current": 10330,
+  "before_equals_after": true,
+  "current_equals_after": true,
+  "changed_paths": 67,
+  "tracked_changed": 59,
+  "untracked": 8,
+  "operation_source_files": 102,
+  "operation_rows": 516,
+  "caller_rows": 3400,
+  "layout_rows": 34
+}

@@ -1,0 +1,193 @@
+{
+  "affinity": [
+    0,
+    1
+  ],
+  "authorization": {
+    "grant_source": "manual workflow_dispatch of reviewed diagnostic branch",
+    "harness_head": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+    "maximum_benchmark_calls": 14,
+    "maximum_benchmark_child_seconds": 2100,
+    "note": "not an independent review verdict or permission to retry",
+    "run_attempt": "1",
+    "run_id": "38817132263",
+    "runner_sha256": "39f37c2e3816091e28ff57dfe8a2b7496b089350e6ef7bf31e087d7bfb25aa58",
+    "runtime_authorized": true,
+    "schedule": [
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 0,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 0,
+        "revision": "candidate"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 1,
+        "revision": "candidate"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 1,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 2,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 2,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 0,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 0,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 1,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 1,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 2,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 2,
+        "revision": "candidate"
+      },
+      {
+        "count": 128,
+        "kind": "cohort",
+        "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=8",
+        "package": "db",
+        "pair": null,
+        "revision": "candidate",
+        "size": 8
+      },
+      {
+        "count": 128,
+        "kind": "cohort",
+        "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=16",
+        "package": "db",
+        "pair": null,
+        "revision": "candidate",
+        "size": 16
+      }
+    ]
+  },
+  "authorization_sha256": "22220c38780bdbcaddef4d6849b777e795155af7c36611bf90ae6d91067bb258",
+  "binaries": {
+    "baseline-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-2588c/performance-185/maintenance-build-02/baseline-db.test",
+      "sha256": "ddd825ac730901c3d1ad17a2997df134bda6b135461be873c6c28fd001d74541",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "baseline-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-2588c/performance-185/maintenance-build-02/baseline-public.test",
+      "sha256": "69485e91f8747e1ced3d6ed7a6cfe0e9a0167c2e61e1b4106ef4894341d78238",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-2588c/performance-185/maintenance-build-02/candidate-db.test",
+      "sha256": "5eecce1bca146f7d5f95dda24cb8aa30f4b8a766b4036fd49fd4d74f172d3f2e",
+      "source_head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"
+    },
+    "candidate-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-2588c/performance-185/maintenance-build-02/candidate-public.test",
+      "sha256": "ab766c5234ba303c1c1e7ed893b2e11505a109be61f38ad7922639cc1b6545de",
+      "source_head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"
+    }
+  },
+  "build_freeze_sha256": "e8ba125995915aafb31cd02856217b1b4a593b5e3edfaac54db23c1561170245",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOAMD64": "v1",
+    "GOCACHE": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-work/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/home/runner/work/_temp/mvcc-maintenance-2588c/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/home/runner/work/_temp/mvcc-maintenance-2588c/performance-185/maintenance-bounded-02/tmp"
+  },
+  "observer_sha256": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+  "runner_sha256": "39f37c2e3816091e28ff57dfe8a2b7496b089350e6ef7bf31e087d7bfb25aa58",
+  "scope": "Bounded premerge diagnostics only; not sustained/universal or native qualification",
+  "sources": {
+    "baseline": {
+      "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "tree": "e448be5924b4a8e66a4894090460fb559f241354"
+    },
+    "candidate": {
+      "head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+      "tree": "e4e2e241722d0f7afc9364eb23e729beef7e2165"
+    }
+  },
+  "started_utc": "2026-10-15T22:31:56.093861+00:00"
+}

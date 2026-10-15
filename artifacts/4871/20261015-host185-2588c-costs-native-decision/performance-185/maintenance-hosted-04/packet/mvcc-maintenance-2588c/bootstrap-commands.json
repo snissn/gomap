@@ -1,0 +1,503 @@
+[
+  {
+    "argv": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.0017831659999956173,
+    "exit": 0,
+    "interrupted": null,
+    "label": "harness-head",
+    "log": "harness-head.log",
+    "log_sha256": "f5097d0ed80eed992fe87abb90d9a6cf64fb0178c2beb879bf9f80725312bb3c",
+    "started_utc": "2026-10-15T22:27:17.173232+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 1.1195057479999946,
+    "exit": 0,
+    "interrupted": null,
+    "label": "harness-clean",
+    "log": "harness-clean.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:17.175264+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "which",
+      "go"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.001961936000000719,
+    "exit": 0,
+    "interrupted": null,
+    "label": "go-path",
+    "log": "go-path.log",
+    "log_sha256": "589b4500a68ffedacfaa8a61e7c8d04a6ba557d6931652c97161974d73df0a3b",
+    "started_utc": "2026-10-15T22:27:18.296673+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "env",
+      "GOROOT"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.00417222800000161,
+    "exit": 0,
+    "interrupted": null,
+    "label": "go-root",
+    "log": "go-root.log",
+    "log_sha256": "9baa05df5e982ecb17e43044f24c3f4f6d20dacde7f765626394ad5be874c354",
+    "started_utc": "2026-10-15T22:27:18.315534+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "version"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.004189037000003282,
+    "exit": 0,
+    "interrupted": null,
+    "label": "go-version",
+    "log": "go-version.log",
+    "log_sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7",
+    "started_utc": "2026-10-15T22:27:18.428628+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "env",
+      "-json"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.008139171999999917,
+    "exit": 0,
+    "interrupted": null,
+    "label": "go-environment",
+    "log": "go-environment.log",
+    "log_sha256": "33329e71fb54043e1c67ddca2269bd2307ced97837dcd2c66d0409899047777d",
+    "started_utc": "2026-10-15T22:27:18.433366+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "gcc",
+      "--version"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.0019347009999961529,
+    "exit": 0,
+    "interrupted": null,
+    "label": "c-compiler",
+    "log": "c-compiler.log",
+    "log_sha256": "8497f84b2b8334c413d9c6166bd39d009ba55d2ff60a8f23e66dfa5819c2b048",
+    "started_utc": "2026-10-15T22:27:18.442350+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "ld",
+      "--version"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.0018522909999916237,
+    "exit": 0,
+    "interrupted": null,
+    "label": "system-linker",
+    "log": "system-linker.log",
+    "log_sha256": "cbb0374a4d23f91537f8588348c460085a38ba5af336bed511060b72a1e76bf7",
+    "started_utc": "2026-10-15T22:27:18.444623+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "tar",
+      "-czf",
+      "/home/runner/work/_temp/mvcc-maintenance-2588c/go1.26.3-linux-amd64.tar.gz",
+      "-C",
+      "/opt/hostedtoolcache/go/1.26.3/x64",
+      "."
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 8.239728067000001,
+    "exit": 0,
+    "interrupted": null,
+    "label": "toolchain-archive",
+    "log": "toolchain-archive.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:18.446776+00:00",
+    "timeout_s": 300
+  },
+  {
+    "argv": [
+      "uname",
+      "-a"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.002017858000002093,
+    "exit": 0,
+    "interrupted": null,
+    "label": "host",
+    "log": "host.log",
+    "log_sha256": "cd8e31ad3f05d597238a1403bb5c2d25c975d53959c3d48af034216515712dc5",
+    "started_utc": "2026-10-15T22:27:26.757095+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "lscpu"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.006408171000003904,
+    "exit": 0,
+    "interrupted": null,
+    "label": "cpu",
+    "log": "cpu.log",
+    "log_sha256": "e01243bd15adc39950d08233bf507efcadc84e86b56749c13526b123fb62ea39",
+    "started_utc": "2026-10-15T22:27:26.759484+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "df",
+      "-PT",
+      "/home/runner/work/_temp/mvcc-maintenance-2588c"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.021178069000001187,
+    "exit": 0,
+    "interrupted": null,
+    "label": "disk",
+    "log": "disk.log",
+    "log_sha256": "a8ffaed843c9a8c1b1bfd71a8e4ed3a465d2d47bc1e1194abc293fc62c3f9f2f",
+    "started_utc": "2026-10-15T22:27:26.766476+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "free",
+      "-b"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.004013664999988009,
+    "exit": 0,
+    "interrupted": null,
+    "label": "memory",
+    "log": "memory.log",
+    "log_sha256": "f30b22e6ed1a311f5015fcc09a633fef5f9d69c32ad96601342d6ba15e3d8715",
+    "started_utc": "2026-10-15T22:27:26.788213+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "ps",
+      "-eo",
+      "pid,ppid,etime,pcpu,args"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 0.008341285000000198,
+    "exit": 0,
+    "interrupted": null,
+    "label": "setup-processes",
+    "log": "setup-processes.log",
+    "log_sha256": "af083b724f2ea33a065897f5d9c4a3b3a170511fd4318b2aaea76d42d7991cb2",
+    "started_utc": "2026-10-15T22:27:26.792632+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "worktree",
+      "add",
+      "--detach",
+      "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+      "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.4705520060000055,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-worktree",
+    "log": "baseline-worktree.log",
+    "log_sha256": "d3a7bfd362a4039342843fe6e60330e7e078d737a276e1b73605c48181c7e698",
+    "started_utc": "2026-10-15T22:27:26.801875+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 0.002264987000003771,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-head",
+    "log": "baseline-head.log",
+    "log_sha256": "0bcfb70faf06d680e9625ad1d29da5cc6e4b961b2ee0a0f35bb4b50d7c74eb47",
+    "started_utc": "2026-10-15T22:27:29.273233+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 0.367046344000002,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-clean-before-deps",
+    "log": "baseline-clean-before-deps.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:29.276145+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "worktree",
+      "add",
+      "--detach",
+      "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+      "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"
+    ],
+    "cwd": "/home/runner/work/gomap/gomap",
+    "elapsed_s": 2.622343013999995,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-worktree",
+    "log": "candidate-worktree.log",
+    "log_sha256": "88e38a8d60568eb9292235bb0853a73c4b1a142dee1ce46eed7545f2876cd889",
+    "started_utc": "2026-10-15T22:27:29.643902+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.004599052000003212,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-head",
+    "log": "candidate-head.log",
+    "log_sha256": "b26eedf8dece400101da356673b7febdcd5cbfb4684e6495b18f7088e721acfc",
+    "started_utc": "2026-10-15T22:27:32.312762+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.4181266650000026,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-clean-before-deps",
+    "log": "candidate-clean-before-deps.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:32.318024+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "mod",
+      "download"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 8.790350094000004,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-download",
+    "log": "baseline-download.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:35.897585+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 0.6081229029999946,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-packages-prefill",
+    "log": "baseline-packages-prefill.log",
+    "log_sha256": "84ab038db25e791a241ee36449e6893bebce5db5f0a0163506e90eb6ae68809f",
+    "started_utc": "2026-10-15T22:27:44.877233+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "mod",
+      "verify"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 2.01996497399999,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-verify",
+    "log": "baseline-verify.log",
+    "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd",
+    "started_utc": "2026-10-15T22:27:45.488016+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 0.36519049000000336,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-packages-offline",
+    "log": "baseline-packages-offline.log",
+    "log_sha256": "84ab038db25e791a241ee36449e6893bebce5db5f0a0163506e90eb6ae68809f",
+    "started_utc": "2026-10-15T22:27:47.508933+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/coordinator",
+    "elapsed_s": 0.032623866999998086,
+    "exit": 0,
+    "interrupted": null,
+    "label": "baseline-clean-after-deps",
+    "log": "baseline-clean-after-deps.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:47.876832+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "mod",
+      "download"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.8197952040000018,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-download",
+    "log": "candidate-download.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:47.910135+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.41569995700000106,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-packages-prefill",
+    "log": "candidate-packages-prefill.log",
+    "log_sha256": "2304b725f689286147d81cd00a176d78997b509dcdc53f9dc98d4c686071ba68",
+    "started_utc": "2026-10-15T22:27:48.730660+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "mod",
+      "verify"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 2.020032882999999,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-verify",
+    "log": "candidate-verify.log",
+    "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd",
+    "started_utc": "2026-10-15T22:27:49.149088+00:00",
+    "timeout_s": 120
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/go/1.26.3/x64/bin/go",
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.3674023020000021,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-packages-offline",
+    "log": "candidate-packages-offline.log",
+    "log_sha256": "2304b725f689286147d81cd00a176d78997b509dcdc53f9dc98d4c686071ba68",
+    "started_utc": "2026-10-15T22:27:51.278000+00:00",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-repair",
+    "elapsed_s": 0.036578547000004846,
+    "exit": 0,
+    "interrupted": null,
+    "label": "candidate-clean-after-deps",
+    "log": "candidate-clean-after-deps.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "started_utc": "2026-10-15T22:27:51.662620+00:00",
+    "timeout_s": 120
+  }
+]

@@ -1,0 +1,76 @@
+{
+  "head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "status": "ORIGINAL_M0_GATES_RECOMPUTED_FAIL",
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": false,
+    "public_status_explicit": true
+  },
+  "summarizer_sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+  "rows": 20,
+  "all_raw_statistics_and_original_gates_equal": true,
+  "arithmetic_tolerance": "Original samples/mean/median exact; CV comparison permits 1e-14 relative / 1e-15 absolute rounding, no gate tolerance change",
+  "cv": {
+    "vacuum-total-ns/op": 0.13154629448299002,
+    "max-writer-pause-ns": 0.5529793845108739,
+    "foreground-p99-ns/op": 0.2301985111100485
+  },
+  "public_status": "production-index-vacuum-available",
+  "fixture": {
+    "collection_root_span": 1,
+    "fixture": "m0-index-debt",
+    "index_bytes": 917504,
+    "key_count": 512,
+    "leaf_log_bytes": 0,
+    "live_pages": 48,
+    "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+    "offline_index_bytes": 131072,
+    "offline_value_log_bytes": 1207296,
+    "parameters": {
+      "chunk_size": 65536,
+      "collection_documents": 128,
+      "collection_generations": 3,
+      "debt_compactions": 16,
+      "pointer_threshold": 512,
+      "user_generations": 3,
+      "user_keys": 384
+    },
+    "reclaimable_page_percent": 77.88018433179724,
+    "reclaimable_pages": 169,
+    "schema_version": 1,
+    "status": "offline-ceiling",
+    "value_log_bytes": 1207296
+  },
+  "raw_hashes": {
+    "commands.txt": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "fixture.json": "35be1cac063a5d396149df269559eafffc4b2168e21abcd0290c0f99ae9e83b7",
+    "legacy-benchstat-input.txt": "dbdcb5dc0f3bc0302c14d79139d9a9cf57ac1fbea8357f4c34449efdf1825177",
+    "raw/legacy-1.txt": "e210f2d4efac05ca0f0be34aa3536a17d867f25145ae7ee9e483377ecffac225",
+    "raw/legacy-10.txt": "98471d34c10dbc281e93716ea1b50dd3a19dadec949777c54a3ca44af3c81272",
+    "raw/legacy-2.txt": "07fb61a3cba76d5c92141a353bfc1321163141d9b29aa6da31e04a803c15fb5f",
+    "raw/legacy-3.txt": "7052090151e7f9c5ac4ed04b90e08eeff8dfe531c52ff4abbad38a350fd662b1",
+    "raw/legacy-4.txt": "7ac20035d7f6e4c499305c30da91185472e01152c347c3fd8cc86598a33fa67b",
+    "raw/legacy-5.txt": "25266426c64517fd0803bb7f510421235b352fe5c7f866f7974d64b736913d72",
+    "raw/legacy-6.txt": "e1d84519e27cabd026e6083e6b2f46d77b5d7c29cd0db6a3103467f85fe86b13",
+    "raw/legacy-7.txt": "08c6842b98d646b3a2e802720995aa23180194415471b085a5fc169202c999e7",
+    "raw/legacy-8.txt": "50387c13e81661b621693b4dca88e14ec14bda429c06a7200a2c867df81e0637",
+    "raw/legacy-9.txt": "2e57c11d0778af4a660f4c909640e1da18ac51cad4efbc89753695bf551d700b",
+    "raw/public-1.txt": "ce9c89fde88df0f167f860499439dcf18d4e61ff89114a1383b5828308c98da1",
+    "raw/public-10.txt": "68b91b768c3b0b646bbb1215371482b4a7669481732005ffc7c666c3dc3133fa",
+    "raw/public-2.txt": "07e9da46a3d7d58bec0d4f83077edc04115ce3323a122287d5ee63a0d91edf1e",
+    "raw/public-3.txt": "3eba1e2e875ca9bb3b9b736e19c88bb227cd29e3c72bdcd63ed883f4c5437560",
+    "raw/public-4.txt": "088fa379aaf41f20d893d1f9d81fca675252bf3f5f08c1241bc099d0f8e8ee79",
+    "raw/public-5.txt": "49abd6f74a00d7deab6a7fbda2db0fa609c628dc6e620251b204e3e757fbf1e0",
+    "raw/public-6.txt": "eedbe43ddbbaf6faf1fe8ce656df89cdd34bc0675cb80760959670ab6e6440b6",
+    "raw/public-7.txt": "b59a1cfb630a2a16bf0973ba9082a70c9f0806e2b81f9bdc62018093bc2fd1e6",
+    "raw/public-8.txt": "145b766b879fedec839c9a271b5f3ad045b206550f031075cd13ac1a528891f7",
+    "raw/public-9.txt": "96c24f3728daeb88edc9957b43208c9e6c5559cd697460640965b8855fad3c96",
+    "results.json": "811fb8ad46cdd5d78b28037c8265fb47ec9718c31679d14dc796a0a4bbaf5f23",
+    "summary.md": "64355d33b310b4f5b6ce7c2653bed99e90232357201273dcec477d245a51619a"
+  },
+  "limitations": [
+    "Same-head stability and public exposure only; not matched revision cost qualification",
+    "Public p99 CV is reported but is not an original stability gate",
+    "No sampled host process/CPU interference telemetry in this maintained M0 packet"
+  ]
+}

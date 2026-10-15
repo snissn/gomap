@@ -1,0 +1,31 @@
+{
+  "elf_sha256": "316f859511334951e0a4d428786c16612ee49ad9b542555b291f7d33d48cc47b",
+  "symbols": [
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld",
+      "deferprocStack": 0,
+      "deferreturn": 1,
+      "lines": 716
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1",
+      "deferprocStack": 0,
+      "deferreturn": 1,
+      "lines": 68
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.1",
+      "deferprocStack": 0,
+      "deferreturn": 0,
+      "lines": 22
+    },
+    {
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.deferwrap1",
+      "deferprocStack": 0,
+      "deferreturn": 0,
+      "lines": 19
+    }
+  ],
+  "no_stack_defer": true,
+  "assembly_sha256": "b15b5e9fa892e33343dbd382f03c949fd3d708ea3cd51ebcaf62ea2e28261c46"
+}

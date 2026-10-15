@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-c",
+    "-o",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost-pager/candidate-db.test",
+    "./TreeDB/db"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "env": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost-pager/tmp",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOAMD64": "v1",
+    "GOMEMLIMIT": "8GiB",
+    "GOGC": "100",
+    "GODEBUG": ""
+  },
+  "outer_timeout_seconds": 180,
+  "started_utc": "2026-10-15T22:19:20.792693+00:00"
+}

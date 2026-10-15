@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "wall_seconds": 76.76063752174377,
+  "source_files": 10330,
+  "source_unchanged": true,
+  "scope": "compile and named pure pricing/refusal/in-memory control tests only; no actual DB or publication runtime"
+}

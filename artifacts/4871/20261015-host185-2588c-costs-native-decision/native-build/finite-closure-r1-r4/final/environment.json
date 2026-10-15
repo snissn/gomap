@@ -1,0 +1,12 @@
+{
+  "workdir": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+  "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "GOPROXY": "off",
+  "GOMAXPROCS": "2",
+  "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+  "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+  "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/tmp",
+  "note": "Known execution settings from authorized final compile/pure invocation; command.json preserves exact argv. No assertion about unrecorded inherited environment variables."
+}

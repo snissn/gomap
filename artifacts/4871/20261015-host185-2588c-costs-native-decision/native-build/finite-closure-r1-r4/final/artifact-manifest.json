@@ -1,0 +1,77 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 1122,
+    "sha256": "ba943505204a7b252b21e32c3792a69ccd4cff9672d3d725d8b19a78f1edd640"
+  },
+  {
+    "path": "all-source-after-pure.json",
+    "bytes": 2110267,
+    "sha256": "9747c79ef85806178e62bc3e21bd99681ff834937745e35c96735aa729c6bf2e"
+  },
+  {
+    "path": "all-source-before-pure.json",
+    "bytes": 2110267,
+    "sha256": "9747c79ef85806178e62bc3e21bd99681ff834937745e35c96735aa729c6bf2e"
+  },
+  {
+    "path": "caller-inventory.json",
+    "bytes": 1825257,
+    "sha256": "01578265090de7861d5b5f9f8f8dfdfbecdf224ac37eacbd964f76b6b0cab8c3"
+  },
+  {
+    "path": "changed-before-pure.json",
+    "bytes": 6122,
+    "sha256": "846e8c2ba8b7c1f7c6f660ec1fba3cc7c5aa7f7fa3424bf19d8c7317445105dd"
+  },
+  {
+    "path": "changed-final.json",
+    "bytes": 6122,
+    "sha256": "846e8c2ba8b7c1f7c6f660ec1fba3cc7c5aa7f7fa3424bf19d8c7317445105dd"
+  },
+  {
+    "path": "command.json",
+    "bytes": 971,
+    "sha256": "479efd1125e7263fc5a7ae8387f158d169eb857c05cfcf9e2da63fd723e18eca"
+  },
+  {
+    "path": "containing-layouts.json",
+    "bytes": 9510,
+    "sha256": "1d2f6ea5fc4ae10be39ceb510e261e89d7bf062813ec291dca9df8d6b316704f"
+  },
+  {
+    "path": "environment.json",
+    "bytes": 629,
+    "sha256": "d3035d0a5d7154929aece1ac34b8f27c0e121fcaf2f609c8fbc4d68eff8dc9ef"
+  },
+  {
+    "path": "finite-closure-r1-r4-disposition.md",
+    "bytes": 22569,
+    "sha256": "4c22e05301bd86623ce82911377c2f45b1edc3146768907991d8c258644a04d4"
+  },
+  {
+    "path": "finite-closure-r1-r4-observer-proposal.md",
+    "bytes": 4729,
+    "sha256": "55b9d79f928c66703e8c79720abd717fc76020c1113290de915c79940d039c3c"
+  },
+  {
+    "path": "operation-expressions.json",
+    "bytes": 244140,
+    "sha256": "983d8af6bc5a4c582f66d765a1b342ee207dcee82b24ff4e45ecd318bb9cbe5e"
+  },
+  {
+    "path": "pure-final.log",
+    "bytes": 7786,
+    "sha256": "9a2d71de1d5fa60df99aca124f0a90c9bcf96429253e89bce85ee6a2604f858c"
+  },
+  {
+    "path": "pure-receipt.json",
+    "bytes": 230,
+    "sha256": "701307ef1a7a0ec272815712bc08fd81a1c9c617acfbb5292bb09d8402b3fa23"
+  },
+  {
+    "path": "source-verification.json",
+    "bytes": 326,
+    "sha256": "d5a5cf7cf7094cfc405b4b681d615edcc1b58eec2e68d25ccd51a61246d902ec"
+  }
+]

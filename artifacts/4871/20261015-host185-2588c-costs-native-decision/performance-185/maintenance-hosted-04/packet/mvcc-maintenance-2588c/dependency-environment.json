@@ -1,0 +1,18 @@
+{
+  "CGO_ENABLED": "1",
+  "GOAMD64": "v1",
+  "GOCACHE": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-work/cache",
+  "GODEBUG": "",
+  "GOENV": "off",
+  "GOFLAGS": "",
+  "GOGC": "100",
+  "GOMAXPROCS": "2",
+  "GOMEMLIMIT": "8GiB",
+  "GOMODCACHE": "/home/runner/work/_temp/mvcc-maintenance-2588c/ordinary-work/modcache",
+  "GOPROXY": "https://proxy.golang.org,direct",
+  "GOROOT": "/opt/hostedtoolcache/go/1.26.3/x64",
+  "GOSUMDB": "sum.golang.org",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "TMPDIR": "/home/runner/work/_temp/mvcc-maintenance-2588c/tmp"
+}

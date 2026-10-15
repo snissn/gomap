@@ -1,0 +1,79 @@
+{
+  "at_utc": "2026-10-15T22:18:44.371921+00:00",
+  "reviewer": "ordinary_deep_review exact gpt-6.1-sol, independent no construction role/no children",
+  "predecessor": "5027dc559f83dee04317910169c48d277fcce72f",
+  "source_disposition": "SOURCE ACCEPT for exact inspected three-production-file plus generated CI hash delta",
+  "overall_disposition": "HOLD qualification/performance pending; no new exact-head hosted CI accepted here",
+  "files_sha256": {
+    ".github/ci/ci_impact.json": "0c5ed04af507bc4c4da7d12378ba2b7f63cb7f4f2c2a027444b74d96129357fa",
+    "TreeDB/db/db.go": "74e56bf28efe2806352ee1f205db6de5199ca5377ee7ee6595955fcf5ae7ae82",
+    "TreeDB/internal/rootpublication/resource_entry_view.go": "26199d705cbadd33c03c20a4548bbb072e20d3c3e9714ffc05047a73a9a2a9ca",
+    "TreeDB/pager/pager.go": "a48823560451bc2355c2aff35d3d9ec2b19a8a65f6513e712bc0e9176f27a2db"
+  },
+  "full_diff_sha256": "622bd6c91cea4a6fe7f8eaa61c20fef7e0cb99f0a7b2942ebe7dbfe1ffd7f718",
+  "full_diff_matches_root_frozen_source_patch": true,
+  "root_freeze_before_sha256": "7545d5343be12f12daa62dcd7a24eac6f6795046b4de3561fa8afa56422117e9",
+  "findings": [],
+  "mechanisms": [
+    {
+      "path": "TreeDB/db/db.go:1768",
+      "result": "preserves original Manager rollback -> acquisition epoch-before-inflight-decrement -> rootReuse unlock; nested defers retain remainder on rollback panic; early-return flag starts only after increments; Manager adopted only at original seam; index wrapper/Set/PRIMARY/leaf physical custody unchanged"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_entry_view.go:607",
+      "result": "empty/singleton backing visits same authoritative logical index in canonical order; callback false propagation preserved; multiple generic kinds still sorted; both storage forms exclusively cells; no token/owner/diagnostic state change"
+    },
+    {
+      "path": "TreeDB/pager/pager.go:528",
+      "result": "nil retention calls shared defer-free body; retained helper holds same lock over entire unchanged verification body, including recursive public companion/fallback dispatch; no ordering, namespace arithmetic, bounds, verified atomic or missing root semantics changed",
+      "canonical_body_byte_equal": true,
+      "canonical_body_sha256": "bc24d45eb603433bc4f851515470aedc495edee605e820208c8a55609bb88455"
+    },
+    {
+      "path": ".github/ci/ci_impact.json:13",
+      "result": "only discovery_source_sha256 changes; same policy/check selection, no threshold or test exclusion edits"
+    }
+  ],
+  "validation_evidence": {
+    "firstbatch": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost/validation.json",
+    "firstbatch_all7_pass": true,
+    "firstbatch_source_patch_limit": "earlier source.patch was unstaged-only; source before/after full manifests establish validation binding; reviewer full explicit-base v1 diff preserved",
+    "rootpublication_current_manifest_unchanged_files": 151,
+    "normal_and_race_each": {
+      "db_top_pass": 56,
+      "db_sub_pass": 14,
+      "rootpublication_top_pass": 352,
+      "rootpublication_sub_pass": 243,
+      "failures": 0,
+      "skips": 0
+    },
+    "reviewer_independently_parsed_rootpublication_logs": true,
+    "first_compiler_evidence": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost/compiler-review.json",
+    "first_local_compiler": "go1.26.3 as actual embedded build info, not hosted ELF go1.26.9",
+    "first_capture_no_deferprocStack": true,
+    "first_capture_deferreturn_exceptional_landing_pads_present": true,
+    "first_elf_and_assembly_hash_independently_rechecked": true,
+    "active_pager_batch": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost-pager/run-validation.py",
+    "active_pager_plan": "DB selected normal/race, entire pager normal/race, db build/buildinfo/compiler; frozen full source before/after; no reviewer execution",
+    "current_pager_results": "pending at receipt creation"
+  },
+  "reviewer_controls": {
+    "coverage": "Existing full pager normal/race plus selected db suite and unchanged full rootpublication normal/race cover proposed minimum; no duplicated run requested.",
+    "focus": [
+      "ordinary verified mark/write invalidation",
+      "overlay/fallback physical routing",
+      "actual PRIMARY snapshot/rebind reads using companion and immutable roots",
+      "one-shot live value-log concurrent DB close",
+      "failed capture Manager/Set rollback",
+      "exact in-flight epoch/cohort visibility",
+      "released immutable singleton manifest/union parity and concurrent diagnostics"
+    ],
+    "compiler_requirement": "new actual successor ELF must show no runtime.deferprocStack in capture outer/nested helpers and no defer handling on nil-retention IsVerified route; exceptional deferreturn landing pads alone do not refute open-coded normal exit",
+    "performance_requirement": "bounded source-bound Get measurement by root before any fresh hosted qualification; original hosted5027 gate failure remains binding for5027"
+  },
+  "limitations": [
+    "Source-only disposition; not hosted AI/final fallback/mergeability or merge authorization.",
+    "No source changes/build/tests/benchmarks/ELF execution by reviewer. Existing root-owned validation artifacts inspected offline.",
+    "No additional optimization proposed or approved beyond inspected concrete delta."
+  ]
+}

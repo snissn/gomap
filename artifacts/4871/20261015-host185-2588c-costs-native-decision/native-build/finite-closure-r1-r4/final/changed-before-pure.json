@@ -1,0 +1,270 @@
+[
+  {
+    "status": " M",
+    "path": "TreeDB/db/db.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/durable_primary_runtime_v5.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/durable_root_runtime.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_finite_closure_pricing_v6_test.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_mvcc_current_delete_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_mvcc_materialized_write_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/native_stable_pager_capture_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_arena_owner_v5.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_authority_scope_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_bank_construction_v5.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_bank_release_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_member_retirement_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_offline_pair_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_runtime_disposal_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_seal_commit_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_seal_release_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/primary_visible_abort_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/root_publication_activation.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/db/vacuum_online.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/freelist/allocator_activation_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/freelist/allocator_cow.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/freelist/allocator_preparation_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/freelist/generation_v1_reservation_inventory_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/memtable/native_retention_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/arena.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/bundle.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/directory_seal_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/metadata.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/native_mvcc_group_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/physical_close_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/read_root_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/release_queue.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/primaryarena/retention.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/retainedalloc/owner_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/retainedalloc/owner_work_test.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6_test.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/dependency_directory_release_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/durable_format_v1.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/native_publication_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_allocation.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_set_allocation.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_token_allocation.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/mvcc/prune_cursor_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/pager/primary_read_root_v6.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/pager/write_work.go"
+  },
+  {
+    "status": " M",
+    "path": "TreeDB/zipper/materialized_write_work.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/db/native_mvcc_published_terminal_v6.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/db/primary_storage_operations_v6.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/freelist/allocator_failure_work_v6.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/freelist/allocator_failure_work_v6_test.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/internal/primaryarena/metadata_work_v6.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/internal/retainedalloc/owner_growth_work.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/internal/retainedalloc/owner_growth_work_test.go"
+  },
+  {
+    "status": "??",
+    "path": "TreeDB/pager/primary_read_root_construction_work_v6_test.go"
+  }
+]

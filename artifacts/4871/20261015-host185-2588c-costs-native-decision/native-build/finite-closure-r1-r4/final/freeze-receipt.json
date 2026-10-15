@@ -1,0 +1,27 @@
+{
+  "frozen_at_utc": "2026-10-15T22:14:42.978950+00:00",
+  "base_head": "c128d119e7e7ae97570a342519142e25f3f93370",
+  "base_tree": "108b02fa5eaab4d706dd652e8d28910069cd7372",
+  "source_files": 10330,
+  "changed_paths": 67,
+  "tracked_modifications": 59,
+  "untracked_additions": 8,
+  "before_after_current_identical": true,
+  "pure_exit": 0,
+  "first_final_batch_errors": [],
+  "runtime_children_active": false,
+  "source_frozen": true,
+  "source_runtime_lease": "returned to root for decision and recovery",
+  "actual_db_publication_runtime_executed": false,
+  "numeric_diagnostic_allowance": null,
+  "q32_status": "RED",
+  "ack": 0,
+  "complete_F_and_Finish_bound": false,
+  "complete_disjoint_retained_total": false,
+  "remaining_decisions": [
+    "original pending/waiter/attempt/demand atomic completion mechanism or explicit controlled-schedule diagnostic boundary",
+    "unexecuted scalar canonical-ledger observer",
+    "complete same-turn driver and residual error/control pricing before any activation runtime"
+  ],
+  "artifact_manifest_sha256": "330aa95bd52a1480b1ec1c2fd097a1215e9a04243f24eed3a43d4a26deab7f59"
+}

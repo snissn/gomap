@@ -1,0 +1,154 @@
+{
+  "reviewer": "ordinary_deep_review, independent Sol6.1, no source mutation/runtime",
+  "disposition": "SOURCE ACCEPT; performance/current CI qualification HOLD",
+  "candidate": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "tree": "e4e2e241722d0f7afc9364eb23e729beef7e2165",
+  "predecessor": "5027dc559f83dee04317910169c48d277fcce72f",
+  "patch_sha256": "622bd6c91cea4a6fe7f8eaa61c20fef7e0cb99f0a7b2942ebe7dbfe1ffd7f718",
+  "source_clean": true,
+  "frozen_source_files": 10246,
+  "all_frozen_bytes_equal_committed_candidate": true,
+  "checks": [
+    {
+      "name": "db-normal",
+      "exit": 0,
+      "top_pass": 56,
+      "sub_pass": 14,
+      "fail_skip_race": 0,
+      "stdout_sha256": "af75c4ac80260b96bdcd61e8626cb29fbf7b4f483a3414a11c251def06fe9c65",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "pager-normal",
+      "exit": 0,
+      "top_pass": 36,
+      "sub_pass": 8,
+      "fail_skip_race": 0,
+      "stdout_sha256": "13f8a0a8a26f14abf7d536440df63660c5434710a316da94101d2b8486b78413",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "db-race",
+      "exit": 0,
+      "top_pass": 56,
+      "sub_pass": 14,
+      "fail_skip_race": 0,
+      "stdout_sha256": "27e7a2205385a377869f450dca36c71595fe0def4e351c80568842baeba406fd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "pager-race",
+      "exit": 0,
+      "top_pass": 36,
+      "sub_pass": 8,
+      "fail_skip_race": 0,
+      "stdout_sha256": "a964c536efd0a8561d90ccc3e203c7cae96f5b44564231d901258b7e789f0ae7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "db-build",
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "db-buildinfo",
+      "exit": 0,
+      "stdout_sha256": "e28704be71de233c63c1625067afd8d7399260f6bce5b72c1d65df0d5509e565",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "compiler-version",
+      "exit": 0,
+      "stdout_sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "original_rootpublication_controls": "Previously independently verified normal/race352top+243sub each,151 rootpublication source hashes unchanged in successor freeze. No repeat execution.",
+  "compiler": "Go1.26.3, local build; hosted predecessor Go1.26.9 is separate",
+  "elf_sha256": "ee4d7a8c4892292c796c351a9878613abc59292fc602ab2ce9597c65c540545d",
+  "compiled_mechanism": [
+    {
+      "part": "capture",
+      "assembly_sha256": "aacee9b24493d4ae245b87d64c69b9f0873c309cf01bef6e68dca56998807aed",
+      "symbols": [
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.deferwrap1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0
+        }
+      ]
+    },
+    {
+      "part": "pager",
+      "assembly_sha256": "203c5b18b873d0e68dbdf69bc9a4e852f67a4f356f1c3102547c90763bc85e0b",
+      "symbols": [
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedRetained",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedRetained.deferwrap1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedPage",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0
+        }
+      ]
+    }
+  ],
+  "get_diagnostic": {
+    "status": "REFUSED_BEFORE_ANY_SAMPLE",
+    "preflight_seconds": 5.015699910931289,
+    "unchanged_quiet_threshold_percent": 2,
+    "busy": [
+      {
+        "pid": 1949,
+        "comm": "pulseaudio",
+        "ticks": 7641250,
+        "cpu_pct": 2.1931136621683525
+      },
+      {
+        "pid": 6357,
+        "comm": "clickhouse-serv",
+        "ticks": 17629270,
+        "cpu_pct": 8.373706710097347
+      }
+    ],
+    "plan_sha256": "239c655c914ebb1bbb1040384627b3ab850e8784181111c2522c93791b9371f8",
+    "preflight_sha256": "c928facfe6452194cea0f387477ec511ea1a523732541f2daaaacfabfb2f5694",
+    "samples": 0,
+    "timing_claim": false,
+    "retry": false
+  },
+  "source_review": "delta-5027d-cost-minimization-v2.md/.json; exact committed bytes match reviewed full patch",
+  "limitations": [
+    "All Go execution was root-owned; reviewer reparsed frozen original logs and source/ELF/assembly hashes only.",
+    "No current successor performance improvement is established. Old5027d Get failure remains valid for that head; new candidate requires its own applicable gates.",
+    "No hosted CI, final AI gate, native producer qualification, cost acceptance, mergeability or merge claim."
+  ]
+}

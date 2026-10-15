@@ -1,0 +1,41 @@
+{
+  "at_utc": "2026-10-15T22:20:42.484952+00:00",
+  "scope": "one bounded local direction diagnostic; no qualification or hosted failure waiver",
+  "source_head": "5027dc559f83dee04317910169c48d277fcce72f",
+  "source_patch_sha256": "622bd6c91cea4a6fe7f8eaa61c20fef7e0cb99f0a7b2942ebe7dbfe1ffd7f718",
+  "compiler": "go1.26.3",
+  "pairs": [
+    [
+      "B",
+      "C"
+    ],
+    [
+      "C",
+      "B"
+    ],
+    [
+      "B",
+      "C"
+    ]
+  ],
+  "original_benchmark": "BenchmarkGetVersioned",
+  "benchtime": "2s",
+  "cpu": 0,
+  "GOMAXPROCS": 1,
+  "GOGC": 100,
+  "quiet_threshold_percent": 2,
+  "preflight_seconds": 5,
+  "per_call_timeout_seconds": 20,
+  "total_timeout_seconds": 120,
+  "all_samples_retained": true,
+  "binaries": {
+    "B": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/baseline-db.test",
+      "sha256": "fa655eef121154e0f0b55235594c240842ec3acbe67d0e3a4f223297d8f6aa0b"
+    },
+    "C": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost-pager/candidate-db.test",
+      "sha256": "ee4d7a8c4892292c796c351a9878613abc59292fc602ab2ce9597c65c540545d"
+    }
+  }
+}

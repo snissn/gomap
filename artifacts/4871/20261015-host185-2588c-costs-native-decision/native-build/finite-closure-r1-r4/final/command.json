@@ -1,0 +1,18 @@
+[
+  "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "test",
+  "-p=1",
+  "./TreeDB/freelist",
+  "./TreeDB/zipper",
+  "./TreeDB/internal/retainedalloc",
+  "./TreeDB/internal/rootpublication",
+  "./TreeDB/db",
+  "./TreeDB/internal/primaryarena",
+  "./TreeDB/pager",
+  "./TreeDB/mvcc",
+  "-run",
+  "^(TestNativeAtomicOwnerGrowthAdmitsBeforeEffects|TestNativeAtomicOwnerGrowthPricesOriginalRollback|TestNativeRemovalCompletionRetainsExactDeltaOnRefusal|TestNativeFinitePublicationPricingRefusalV6|TestNativeFiniteOriginalClosureSizesV6|TestNativeFiniteCursorAdmissionSizesV6|TestPrimaryReadRootRetirementLookupRefusesBeforeLinkV6|TestPrimaryReadRootConstructionRefusesBeforeAllocationV6|TestNativeCOWFailureMembershipV6|TestNativeCOWFailureAdmissionRefusesBeforeEffectsV6|TestNativeInstalledAppendValidationRetainsRollbackV6|TestNativeFiniteResourceContainingSizesV6|TestNativeFiniteAllocatorContainingSizesV6)$",
+  "-count=1",
+  "-v",
+  "-timeout=3m"
+]

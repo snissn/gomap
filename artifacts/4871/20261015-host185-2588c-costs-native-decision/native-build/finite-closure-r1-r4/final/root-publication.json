@@ -1,0 +1,10 @@
+{
+  "head": "4aa7ebb23fc925a6dcc8d8abee3d2c3bfd6efe35",
+  "tree": "90f754483a80b54140112d537ae413630d627920",
+  "branch": "codex/4878-native-185-20261015",
+  "remote_verified": true,
+  "source_files": 10330,
+  "changed_paths": 67,
+  "source_frozen_identical_to_pure_batch": true,
+  "claim": "recoverable WIP only; final driver/atomic completion/ledger incomplete; no runtime/qualification,Q32REDACK0"
+}

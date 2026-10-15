@@ -1,0 +1,138 @@
+{
+  "elf_sha256": "ee4d7a8c4892292c796c351a9878613abc59292fc602ab2ce9597c65c540545d",
+  "parts": [
+    {
+      "part": "capture",
+      "assembly_sha256": "aacee9b24493d4ae245b87d64c69b9f0873c309cf01bef6e68dca56998807aed",
+      "symbols": [
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1,
+          "calls": [
+            "sync.runtime_SemacquireRWMutexR(SB)",
+            "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).RetainSnapshotWrapper(SB)",
+            "AX",
+            "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint(SB)",
+            "github.com/snissn/gomap/TreeDB/db.(*Snapshot).acquirePrimaryRoot(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "github.com/snissn/gomap/TreeDB/db.(*leafGenerationPinSet).retain(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "runtime.gcWriteBarrier1(SB)",
+            "runtime.growslice(SB)",
+            "runtime.typedslicecopy(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "github.com/snissn/gomap/TreeDB/db.(*leafGenerationPinTracker).pin(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "runtime.gcWriteBarrier3(SB)",
+            "github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).Unregister(SB)",
+            "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release(SB)",
+            "AX",
+            "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release(SB)",
+            "AX",
+            "AX",
+            "AX",
+            "AX",
+            "AX",
+            "runtime.gcWriteBarrier8(SB)",
+            "runtime.gcWriteBarrier3(SB)",
+            "runtime.gcWriteBarrier4(SB)",
+            "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset(SB)",
+            "runtime.gcWriteBarrier1(SB)",
+            "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "internal/sync.(*Mutex).lockSlow(SB)",
+            "internal/sync.(*Mutex).unlockSlow(SB)",
+            "AX",
+            "runtime.panicBounds(SB)",
+            "runtime.panicBounds(SB)",
+            "runtime.gopanic(SB)",
+            "runtime.gcWriteBarrier2(SB)",
+            "runtime.deferreturn(SB)",
+            "runtime.morestack_noctxt.abi0(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1,
+          "calls": [
+            "github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerWrapperReleaseWork).ReleaseOriginal(SB)",
+            "AX",
+            "AX",
+            "runtime.deferreturn(SB)",
+            "runtime.morestack.abi0(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0,
+          "calls": [
+            "runtime.panicBounds(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1.deferwrap1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0,
+          "calls": [
+            "sync.(*RWMutex).rUnlockSlow(SB)",
+            "runtime.morestack.abi0(SB)"
+          ]
+        }
+      ]
+    },
+    {
+      "part": "pager",
+      "assembly_sha256": "203c5b18b873d0e68dbdf69bc9a4e852f67a4f356f1c3102547c90763bc85e0b",
+      "symbols": [
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0,
+          "calls": [
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedRetained(SB)",
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedPage(SB)",
+            "runtime.morestack_noctxt.abi0(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedRetained",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 1,
+          "calls": [
+            "sync.runtime_SemacquireRWMutexR(SB)",
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedPage(SB)",
+            "CX",
+            "runtime.deferreturn(SB)",
+            "runtime.morestack_noctxt.abi0(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedRetained.deferwrap1",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0,
+          "calls": [
+            "sync.(*RWMutex).rUnlockSlow(SB)",
+            "runtime.morestack.abi0(SB)"
+          ]
+        },
+        {
+          "symbol": "github.com/snissn/gomap/TreeDB/pager.(*Pager).isVerifiedPage",
+          "stack_defer_calls": 0,
+          "deferreturn_calls": 0,
+          "calls": [
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified(SB)",
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified(SB)",
+            "github.com/snissn/gomap/TreeDB/pager.(*Pager).primaryReadRootImageV6(SB)",
+            "runtime.panicBounds(SB)",
+            "runtime.morestack_noctxt.abi0(SB)"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "at_utc": "2026-10-15T22:26:36.456835+00:00",
+  "harness_head": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+  "branch": "codex/4871-maintenance-diagnostic-185-20261015",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "authorization": "Root grants one unchanged fixed14-call public cost diagnostic on updated exact candidate; reviewed literals only, prior25ebe algorithms/gates unchanged. No retries or qualification. Ordinary owned builds/benchmarks remain on isolated GitHub hosted runner.",
+  "review_sha256": "9cb31244b80eb97e8eb83f11c2bd550641e5f4683bc598e9844814c35c998761",
+  "freeze_sha256": "9d69c01d8d500f8a7d68bf33e35b7ead009b30f934905ba82bd3c8b7f710a403",
+  "product_source_unchanged": true
+}

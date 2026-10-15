@@ -1,0 +1,110 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/compiler/compile",
+    "bytes": 25774723,
+    "sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/compiler/go",
+    "bytes": 15434598,
+    "sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/compiler/link",
+    "bytes": 6680481,
+    "sha256": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/go1.26.3-linux-amd64.tar.gz",
+    "bytes": 67703289,
+    "sha256": "f34d7a18cbacc930117f01f3f5f60c8cfcc1993034434188254e7a9d661a925d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/performance-185/maintenance-build-02/baseline-db.test",
+    "bytes": 55570104,
+    "sha256": "ddd825ac730901c3d1ad17a2997df134bda6b135461be873c6c28fd001d74541",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/performance-185/maintenance-build-02/baseline-public.test",
+    "bytes": 52475063,
+    "sha256": "69485e91f8747e1ced3d6ed7a6cfe0e9a0167c2e61e1b4106ef4894341d78238",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/performance-185/maintenance-build-02/candidate-db.test",
+    "bytes": 61447148,
+    "sha256": "5eecce1bca146f7d5f95dda24cb8aa30f4b8a766b4036fd49fd4d74f172d3f2e",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-04/packet/mvcc-maintenance-2588c/performance-185/maintenance-build-02/candidate-public.test",
+    "bytes": 56929253,
+    "sha256": "ab766c5234ba303c1c1e7ed893b2e11505a109be61f38ad7922639cc1b6545de",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/baseline-caching.test",
+    "bytes": 32696518,
+    "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/baseline-db.test",
+    "bytes": 55518772,
+    "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/baseline-treedb.test",
+    "bytes": 52438387,
+    "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/candidate-caching.test",
+    "bytes": 36986329,
+    "sha256": "8109dccf62e611075743851e13beccbf774227a21dc123485ad7f2db78341974",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/candidate-db.test",
+    "bytes": 61397048,
+    "sha256": "4ded26c902590d1202496e386ad8214affd0eb49ffcf03e4ca3ba8bb62369942",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/measured-binaries/candidate-treedb.test",
+    "bytes": 56904521,
+    "sha256": "f46e163cfad00e34ca93401adfeb28d94e6aa0a51a9c2640c6bfafa645823779",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/primary/baseline-primary.test",
+    "bytes": 25225278,
+    "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/2588c-hosted/packet/primary/candidate-primary.test",
+    "bytes": 29169576,
+    "sha256": "722af98b7211574d737de170d1fde980c9c5f6b2877f24175bae44690ac7589d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost/candidate-db.test",
+    "bytes": 61426142,
+    "sha256": "316f859511334951e0a4d428786c16612ee49ad9b542555b291f7d33d48cc47b",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost-pager/candidate-db.test",
+    "bytes": 61429596,
+    "sha256": "ee4d7a8c4892292c796c351a9878613abc59292fc602ab2ce9597c65c540545d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  }
+]

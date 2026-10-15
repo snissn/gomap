@@ -1,0 +1,58 @@
+{
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "raw_checker_exit": 0,
+  "raw_summary_equal": true,
+  "raw_binaries_verified": 6,
+  "primary_samples_reparsed": 16,
+  "primary_summary_equal": true,
+  "primary_binaries_verified": 2,
+  "primary_runner_and_harness_verified": true,
+  "primary_quiet_observation": true,
+  "scope": "Exact hosted matrix only; raw matrix passes unchanged +5pct gate; no causal attribution or final qualification",
+  "raw_paired_deltas": {
+    "BenchmarkGetVersioned": -3.2638604023023987,
+    "BenchmarkConditionalTxnBaselineBatchWrite": 3.2786734205960455,
+    "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek": 1.6436687368004965,
+    "BenchmarkRepeatedIterator": 0.13725515656659582,
+    "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1": 0.785795167915404
+  },
+  "primary": {
+    "accepted": true,
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+    "gates": {
+      "allocations": true,
+      "bytes": true,
+      "candidate_primary_activation": true,
+      "timing": true
+    },
+    "measurement_pass": true,
+    "median_paired_delta_percent": -50.203336375165236,
+    "medians": {
+      "baseline": {
+        "B/op": 280183.0,
+        "allocs/op": 476.0,
+        "generation_advances/op": 2.0,
+        "ns/op": 14989936.5
+      },
+      "candidate": {
+        "B/op": 228297.0,
+        "allocs/op": 391.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 7457169.5
+      }
+    },
+    "paired_deltas_percent": [
+      -50.06942609479908,
+      -44.15460143090931,
+      -50.216278256251634,
+      -50.19039449407884,
+      -87.5609289186692,
+      -58.10572071192126,
+      -50.00732676031028,
+      -50.30986384410028
+    ],
+    "quiet": true
+  }
+}

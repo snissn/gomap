@@ -1,0 +1,11 @@
+{
+  "at_utc": "2026-10-15T22:22:38.966277+00:00",
+  "head": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "remote_head_verified": true,
+  "source_tree": "e4e2e241722d0f7afc9364eb23e729beef7e2165",
+  "worktree_clean": true,
+  "validation": "ordinary-capture-cost-pager/validation.json",
+  "review": "ordinary-review/delta-5027d-cost-minimization-v2.json",
+  "local_measurement": "quietness refused before samples; hosted measurement pending",
+  "initial_pr_readback": "old cached PR head immediately after successful push; refreshed API and git ls-remote both agree"
+}

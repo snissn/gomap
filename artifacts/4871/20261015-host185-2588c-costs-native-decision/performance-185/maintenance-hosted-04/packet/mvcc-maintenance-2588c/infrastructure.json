@@ -1,0 +1,33 @@
+{
+  "actions_cache_used": false,
+  "affinity_required": [
+    0,
+    1
+  ],
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "fresh_task_build_and_module_caches": true,
+  "local_host185_collection": "REFUSED before any benchmark; external processes exceeded2%; executed0",
+  "persistent_runner_available": false,
+  "persistent_task_cache_available": false,
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "review_and_root_grant": "external prerequisites to manual dispatch; this receipt does not assert review acceptance",
+  "runner": {
+    "GITHUB_EVENT_NAME": "workflow_dispatch",
+    "GITHUB_REF": "refs/heads/codex/4871-maintenance-diagnostic-185-20261015",
+    "GITHUB_REPOSITORY": "snissn/gomap",
+    "GITHUB_RUN_ATTEMPT": "1",
+    "GITHUB_RUN_ID": "38817132263",
+    "GITHUB_SHA": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+    "GITHUB_WORKFLOW_REF": "snissn/gomap/.github/workflows/treedb-vacuum-m0.yml@refs/heads/codex/4871-maintenance-diagnostic-185-20261015",
+    "GITHUB_WORKFLOW_SHA": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20261012.334.1",
+    "RUNNER_ARCH": "X64",
+    "RUNNER_NAME": "GitHub Actions 1000547472",
+    "RUNNER_OS": "Linux"
+  },
+  "runner_temp": "/home/runner/work/_temp/mvcc-maintenance-2588c",
+  "scope": "separately granted bounded premerge diagnostic; no qualification claim",
+  "toolchain_origin": "pinned setup-go action/tool cache on ephemeral hosted image; exact executable hash enforced"
+}

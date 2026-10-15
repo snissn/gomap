@@ -1,0 +1,243 @@
+{
+  "status": "Pinned Go1.26.3 layout evidence, NOT a complete retained ledger; containing allocations counted once.",
+  "rows": [
+    {
+      "symbol": "PreparedCOWCandidateV1",
+      "sizeof": 136,
+      "allocationCharge": 256,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "COWPreparationWorkV6",
+      "sizeof": 21136,
+      "allocationCharge": 32768,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "AppendWork",
+      "sizeof": 2288,
+      "allocationCharge": 4096,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "allocatorCOWStateV1",
+      "sizeof": 80,
+      "allocationCharge": 128,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "DurableRootTransaction",
+      "sizeof": 744,
+      "allocationCharge": 1024,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryTransactionConstructionV6",
+      "sizeof": 1192,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryTerminalCompletionV6",
+      "sizeof": 24,
+      "allocationCharge": 32,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "PrimaryPromotionV6",
+      "sizeof": 1016,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "StableResourceSet",
+      "sizeof": 144,
+      "allocationCharge": 256,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "StableResourceToken",
+      "sizeof": 920,
+      "allocationCharge": 1024,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "resourceAllocation",
+      "sizeof": 304,
+      "allocationCharge": 512,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "resourcePinnedBacking",
+      "sizeof": 384,
+      "allocationCharge": 512,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "resourceKindBacking",
+      "sizeof": 32,
+      "allocationCharge": 32,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "resourceReleaseFrameV6",
+      "sizeof": 224,
+      "allocationCharge": 256,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "StableIndexTokenConstructionWorkV6",
+      "sizeof": 400,
+      "allocationCharge": 512,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "PrimaryConstructionReleaseWork",
+      "sizeof": 104,
+      "allocationCharge": 128,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "NativeMVCCCurrentDeleteV6",
+      "sizeof": 68624,
+      "allocationCharge": 73728,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "NativePublicationV6",
+      "sizeof": 304,
+      "allocationCharge": 512,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "rootPublicationVisibleMemberV1",
+      "sizeof": 520,
+      "allocationCharge": 1024,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "rootPublicationVisibleInstallV1",
+      "sizeof": 1712,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "rootPublicationSealV1",
+      "sizeof": 1704,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryPublicationSealV5",
+      "sizeof": 552,
+      "allocationCharge": 1024,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryDurableRuntimeV5",
+      "sizeof": 3840,
+      "allocationCharge": 4096,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "rootPublicationRuntimeV1",
+      "sizeof": 352,
+      "allocationCharge": 512,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "nativeStablePagerCaptureV6",
+      "sizeof": 1424,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "stablePagerOwnedOperations",
+      "sizeof": 192,
+      "allocationCharge": 256,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "nativeMVCCAllocatorPreparationV6",
+      "sizeof": 24264,
+      "allocationCharge": 32768,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryRuntimeDisposalCompletionV6",
+      "sizeof": 16,
+      "allocationCharge": 16,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "Snapshot",
+      "sizeof": 1472,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "DBState",
+      "sizeof": 72,
+      "allocationCharge": 128,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "finalizeCommitPost",
+      "sizeof": 1280,
+      "allocationCharge": 2048,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryVisibilityCallbackEnvironmentV6",
+      "sizeof": 40,
+      "allocationCharge": 64,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "primaryarena.ReleaseQueue",
+      "sizeof": 104,
+      "allocationCharge": 128,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    },
+    {
+      "symbol": "nativeAuthorityScopeV6",
+      "sizeof": 88,
+      "allocationCharge": 128,
+      "evidence": "pure-final.log",
+      "classification": "layout only; embedded versus distinct ownership must be resolved by canonical ledger, never sum all rows"
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "scope": "independent pre-run source and pure Python controls only; no dispatch or cost qualification",
+  "disposition": "SOURCE ACCEPT / READY FOR ROOT FINAL HARNESS COMMIT BINDING",
+  "harness_base_head": "25ebe4d8c775a10274c360f2ff80aa49b5601599",
+  "harness_base_tree": "de8bae5a9e5f299a1702815b6f3eaf9fcea4936c",
+  "product_candidate": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "full_manifest_file_count": 10251,
+  "full_manifest_matches_root_freeze": true,
+  "changed_paths": [
+    {
+      "path": ".github/scripts/mvcc_maintenance_README.md",
+      "before_sha256": "7d8fc3b6e0433e9f67095dddb6fc5b1f58508a30c7b1d794e44471031226def9",
+      "after_sha256": "72e14335475deddaf66c402dba5115b5ba2f05e68feb6a70cdf9f52b75996eb1",
+      "literal_reverse_equals_base": true
+    },
+    {
+      "path": ".github/scripts/mvcc_maintenance_bootstrap.py",
+      "before_sha256": "6daa138a247fe80f25987a47a139ec04c03335ad75e67c5e93ca0964654a961a",
+      "after_sha256": "dab94ad306188b076d7e7ef5343cdd3f035b993e5f7767f396335babbe36893a",
+      "literal_reverse_equals_base": true
+    },
+    {
+      "path": ".github/scripts/mvcc_maintenance_collect.py",
+      "before_sha256": "156f47bd1e3ed59229d2062a3037cfa4e3ba6cfad8fea96e2d83d589f672ed64",
+      "after_sha256": "39f37c2e3816091e28ff57dfe8a2b7496b089350e6ef7bf31e087d7bfb25aa58",
+      "literal_reverse_equals_base": true
+    },
+    {
+      "path": ".github/scripts/mvcc_maintenance_prepare.py",
+      "before_sha256": "038c4f4b1443010ae3a45ad201a2858fd9144987f9a5b3b6256af9a9844fbacb",
+      "after_sha256": "1aa9d1567300a7f021328773fc4e914a055bce1e3f2815f5cec886c06d91e8a7",
+      "literal_reverse_equals_base": true
+    },
+    {
+      "path": ".github/scripts/mvcc_maintenance_test.py",
+      "before_sha256": "53c3e3d6e63ffda2418f84a0a9b71d4a38a7052510c0227b280252cd463dad18",
+      "after_sha256": "5116da8e90d1f329a47332acda74b80d241951fbe7232ae2097015bfe2b3f27c",
+      "literal_reverse_equals_base": true
+    },
+    {
+      "path": ".github/workflows/treedb-vacuum-m0.yml",
+      "before_sha256": "ac1d426037cab5b83eb32940a24aafd1159d0d603b7f38000f1acdd67a7af0ba",
+      "after_sha256": "92f1a4281c4f7c27aa93822bdcac74503c5f6d7bbf0d0ebf1fa53e8dffe0d756",
+      "literal_reverse_equals_base": true
+    }
+  ],
+  "patch_sha256": "96d45cffa19065da472da0e2cd8689ff356b2d77be941060cc1137af9e865987",
+  "all_other_tracked_bytes_unchanged": true,
+  "pure_controls": {
+    "argv": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+    "started_utc": "2026-10-15T22:25:46.430470+00:00",
+    "exit": 0,
+    "stdout_sha256": "5e8cac09ef4d388e8fb84a028d781a9454f1c96811f4ca518af2c83271f83a85",
+    "stderr_sha256": "86c967a00f06ad033ecab8fdfd48f0dfe4f7c54ecd2a5af426df39e10af79aa8",
+    "source_before_sha256": "7288b9db7b8624a6f1485b81c91ed21d7a2bb8ed02a189e45c70385a2e239fc4",
+    "source_after_sha256": "7288b9db7b8624a6f1485b81c91ed21d7a2bb8ed02a189e45c70385a2e239fc4",
+    "source_unchanged": true,
+    "tests": 7,
+    "log_directory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/harness-2588c-pure-controls"
+  },
+  "preserved": [
+    "14 calls: checkpoint16x three AB/BA pairs; vacuum1x three AB/BA pairs; candidate cohort8/16 each128x",
+    "original selectors, complete metric parsing, fixed work and error receipts",
+    "Go1.26.3 executable hash, offline frozen compilation environment, four retained original benchmark ELFs",
+    "CPU0,1 GOMAXPROCS2, strict2% observer,250ms samples,10s preflight",
+    "120s Go timeout/150s child cap; build600s cap; interruption killpg and process wait",
+    "manual-only reviewed branch, pinned actions, ephemeral ubuntu24.04; always artifact upload",
+    "source/binary before-after verification; no retries, discarded samples or source overlays"
+  ],
+  "limitations": [
+    "Working six-file patch is bound here; root must bind final committed harness bytes before dispatch.",
+    "No runtime or dispatch by reviewer.",
+    "New 2588c product needs new results; 5027d maintenance evidence cannot be relabeled.",
+    "No successor Get timing exists: local diagnostic refused preflight."
+  ]
+}

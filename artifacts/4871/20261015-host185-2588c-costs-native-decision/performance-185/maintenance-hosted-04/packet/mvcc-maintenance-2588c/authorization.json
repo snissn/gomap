@@ -1,0 +1,127 @@
+{
+  "grant_source": "manual workflow_dispatch of reviewed diagnostic branch",
+  "harness_head": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+  "maximum_benchmark_calls": 14,
+  "maximum_benchmark_child_seconds": 2100,
+  "note": "not an independent review verdict or permission to retry",
+  "run_attempt": "1",
+  "run_id": "38817132263",
+  "runner_sha256": "39f37c2e3816091e28ff57dfe8a2b7496b089350e6ef7bf31e087d7bfb25aa58",
+  "runtime_authorized": true,
+  "schedule": [
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 0,
+      "revision": "baseline"
+    },
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 0,
+      "revision": "candidate"
+    },
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 1,
+      "revision": "candidate"
+    },
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 1,
+      "revision": "baseline"
+    },
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 2,
+      "revision": "baseline"
+    },
+    {
+      "count": 16,
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "package": "public",
+      "pair": 2,
+      "revision": "candidate"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 0,
+      "revision": "baseline"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 0,
+      "revision": "candidate"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 1,
+      "revision": "candidate"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 1,
+      "revision": "baseline"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 2,
+      "revision": "baseline"
+    },
+    {
+      "count": 1,
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "package": "db",
+      "pair": 2,
+      "revision": "candidate"
+    },
+    {
+      "count": 128,
+      "kind": "cohort",
+      "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=8",
+      "package": "db",
+      "pair": null,
+      "revision": "candidate",
+      "size": 8
+    },
+    {
+      "count": 128,
+      "kind": "cohort",
+      "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=16",
+      "package": "db",
+      "pair": null,
+      "revision": "candidate",
+      "size": 16
+    }
+  ]
+}

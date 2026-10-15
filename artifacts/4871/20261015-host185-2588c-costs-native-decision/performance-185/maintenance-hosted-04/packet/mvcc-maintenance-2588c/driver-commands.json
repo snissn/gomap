@@ -1,0 +1,20 @@
+[
+  {
+    "elapsed_s": 239.628535269,
+    "exit": 0,
+    "log": "prepare.log",
+    "log_sha256": "c1bc8643a5c4c08e11e008fbef92fab886ed43ac4f56b3fd58b9b21acf2c8a9d",
+    "phase": "prepare",
+    "script": "/home/runner/work/gomap/gomap/.github/scripts/mvcc_maintenance_prepare.py",
+    "sha256": "1aa9d1567300a7f021328773fc4e914a055bce1e3f2815f5cec886c06d91e8a7"
+  },
+  {
+    "elapsed_s": 38.47117871699999,
+    "exit": 0,
+    "log": "collect.log",
+    "log_sha256": "acac42e9bc22e9595e5c141e4c67623176fe3a571ff6270403ded571e33a5368",
+    "phase": "collect",
+    "script": "/home/runner/work/gomap/gomap/.github/scripts/mvcc_maintenance_collect.py",
+    "sha256": "39f37c2e3816091e28ff57dfe8a2b7496b089350e6ef7bf31e087d7bfb25aa58"
+  }
+]

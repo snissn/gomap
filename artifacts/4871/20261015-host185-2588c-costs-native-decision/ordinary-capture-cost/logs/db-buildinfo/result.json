@@ -1,0 +1,43 @@
+{
+  "name": "db-buildinfo",
+  "exit": 0,
+  "elapsed_seconds": 0.8424485214054585,
+  "terminated_group": false,
+  "source_equal": true,
+  "top_pass": [],
+  "sub_pass": 0,
+  "skips": [],
+  "failures": [],
+  "data_race_reports": 0,
+  "stdout_sha256": "631c120c2db195d7c4d1496f7e24d9e2515717b2eeddfa479f49d730fff4e804",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "version",
+      "-m",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost/candidate-db.test"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "env": {
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "2",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-capture-cost/tmp",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOSUMDB": "off",
+      "CGO_ENABLED": "1",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOAMD64": "v1",
+      "GOMEMLIMIT": "8GiB",
+      "GOGC": "100",
+      "GODEBUG": ""
+    },
+    "outer_timeout_seconds": 30,
+    "started_utc": "2026-10-15T22:15:52.546593+00:00"
+  }
+}
