@@ -4119,6 +4119,21 @@ discarded exact-key routing census bounds at the shared emission point. Actual
 recursive reads and touched counts agree, and the plan remains non-exact for
 physical span execution.
 
+TestPrimaryPromotionSharesImmutableLogicalRootV6 checks that promotion
+acquires the original logical root while owning a separate dependency closure.
+TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6 exercises both slots,
+retained old readers, overwrite and recovery with that custody. The original
+TestPrimarySharedTransactionV6SinglePublicationOwner still checks live
+transaction identity and rejects a second publication owner; its borrowed
+candidate expires after successful Finish clears the original construction.
+
+TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6 covers selected
+imports and same-owner clones whose actual physical callback inspects the
+released Set. The callback runs without its Set mutex; public views reject the
+consumed wrapper, concurrent continuation preserves the active original
+release, and duplicate release does not replay the callback. Original physical
+failure and recovery-selector controls retain their sticky cleanup receipt.
+
 These focused normal/race witnesses also retain the existing exact older-slot
 fallback and post-install uncertainty/overwrite-refusal gates. They do not prove
 a complete native 32-record/1MiB return, private Accepted transfer, typed ordinary

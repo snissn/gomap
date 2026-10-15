@@ -4201,13 +4201,14 @@ migration scaffold is introduced.
 Conditional collection WAL payload v2 is specified in `user-command-wal.md`.
 Old binaries reject this pre-alpha extension; rebuild experimental directories.
 
-V6 ordinary promotion copies the logical read directory into a separately owned
-immutable RAM root before attaching coalesced dependency-bank custody. This extra
-image and its independent component-group references belong to the existing
-publication transaction and transfer to the selected slot on successful report.
-Logical reader roots do not acquire those later metadata edges. Recovery still
-copies both eligible capsule directories and their embedded parents by value;
-RAM root addresses are never physical file offsets or recovery eligibility.
+V6 ordinary promotion acquires the existing immutable logical read root.
+The selected slot separately owns its dependency-bank closure and capsule image
+charge, including independent current and parent closure edges. Promotion does
+not add dependencies to logical reader roots or allocate a duplicate logical RAM
+image. Recovery reconstructs both eligible capsule directories and embedded
+parents with the same separate closure custody. The physical three-page capsule
+encoding and eligibility rules are unchanged; RAM root addresses are never
+physical file offsets or recovery eligibility.
 
 Every queued ordinary PRIMARY publication constructs an independently owned
 logical directory before dependency capture. A system-only publication copies

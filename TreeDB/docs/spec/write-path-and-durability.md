@@ -749,6 +749,11 @@ establish the durable command-prefix boundary before the sealed capsule frontier
 advances; they do not promise a per-write Checkpoint or full memtable flush.
 
 Promotion freshly selects the alternate capsule and actual current parent.
+The slot acquires the original immutable logical root and independently owns
+the dependency closure and capsule image charge. It does not enlarge any
+already-admitted reader root's closure. Capture and physical-cut enumeration
+include both slot closures and their parent-proof closures; overwrite and
+terminal disposal consume each original edge once.
 DATA and external/PRIMARY dependency obligations remain durable before capsule
 installation, followed by the PRIMARY fence. Constructor reuse does not make
 those syncs redundant. Post-install uncertainty preserves actual prior custody,

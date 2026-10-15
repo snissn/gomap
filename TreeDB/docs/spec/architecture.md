@@ -228,9 +228,12 @@ extra owner of its former mutable publication projection.
 The published V6 logical root has no backpointer to mutable publication work.
 Private constructor discovery ends at successful Bind before visibility; the
 runtime and coordinator retain the same transaction until its once-only Finish.
-Promotion owns an additional immutable 4096-byte RAM directory and genuine
-component-group references. Coalesced dependency banks attach only to that
-promotion/slot root, so an admitted relaxed reader's immutable closure cannot grow
-when later durable publication selects the physical slot. The capsule codec
-continues to validate the original constructor's exact logical operand; the
-separate RAM address is slot custody, never an extra durable selector.
+Promotion acquires the original immutable logical root and its actual parent.
+The existing slot separately owns the coalesced dependency closure and capsule
+image charge; it does not clone the logical RAM directory or attach new
+dependencies to a reader's root. Current and parent slot closures remain
+independent edges and are included in resource capture, physical cuts, recovery
+and overwrite disposal. The capsule codec copies and validates the original
+logical operand when encoding its physical slot image. Successful Finish expires
+borrowed candidate views after clearing their constructor storage; independently
+owned state, slot and reader references remain valid.

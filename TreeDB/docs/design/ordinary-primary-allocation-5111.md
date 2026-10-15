@@ -319,6 +319,43 @@ successful abort or ordered activation consumes outgoing aliases before refund.
 This does not qualify the remaining child-file/name, value/leaf, arbitrary parent
 Close, completed-COMMIT recovery, or required platform closure items.
 
+### Shared ordinary slot custody and release completion
+
+The ordinary promotion producer acquires the original immutable logical root
+and its actual parent. The selected slot separately retains current and parent
+dependency closures and the capsule image charge. Reader roots remain immutable;
+no promotion RAM-directory clone or new dependency edge is attached to them.
+Resource capture, physical cuts, recovery, rebuild and both-slot overwrite
+enumerate those independent closures. The physical capsule format is unchanged.
+
+These retained edges use their existing arena, metadata owner and containing
+transaction or slot storage. They outlive an individual batch and may be shared
+by current state, slots and readers, so transient batch-arena reset is not a
+valid lifetime boundary. Persistent value-log reachability and physical cleanup
+authority remain with their original producers.
+
+Selected Set release uses the original allocation graph and first physical
+outcome. It marks the public wrapper consumed before invoking physical callbacks,
+then releases its Set mutex around those callbacks. An embedded active-release
+marker serializes continuation; public inspection cannot traverse detached
+selected views and a duplicate release cannot replay a physical action.
+Imported source edges follow their original source authority. Ordinary Finish
+still drains that same graph synchronously and preserves unresolved cleanup debt.
+
+PublicationCandidateV6 is a borrowed view of pending constructor storage. Its
+identity is stable while publication is active, and a second publication owner
+is rejected. Successful Finish or recovery clears that storage; callers needing
+a durable root afterward retain their genuine state, slot or reader edge rather
+than the expired candidate view.
+
+The nineteen groups below remain the ordinary allocation/lifetime census.
+Historical native continuation items in the status column are separate #4878
+obligations, not prerequisites for ordinary #5111 completion. Ordinary completion
+still requires integrated normal/race, actual producer/physical failure and
+both-slot recovery coverage, format/shrink/output checks, supported-platform
+CI, matched public cost and independent review. Focused GREEN or compile-only
+evidence cannot close those gates.
+
 ### Prepared closure status and real nineteen-group gate
 
 Prepared manifest and pack closures now admit their whole original containing
