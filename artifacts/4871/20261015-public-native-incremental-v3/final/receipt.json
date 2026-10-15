@@ -1,0 +1,179 @@
+{
+  "at_utc": "2026-10-15T00:47:47.881599+00:00",
+  "head": "8c54df03c67e4b2f757c58460752d6f4abe4dff8",
+  "claim": "single forced-pointer multileaf genuine public unbounded incremental captured-prefix/materialized-DATA diagnostic GREEN,36of37 original children preserved; full native/Q32/latency/performance acceptance OPEN",
+  "owned_count": 4,
+  "source_rows": 4343,
+  "foreign": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "head_index_unchanged_during_freeze": true,
+  "source_unchanged_since_v3_test": true,
+  "binding_limit": "post-run actual freeze census; v3 pre-run retained exact4 copies; other4339 current rows equal prior verified full source census, not a contemporaneous full pre-run census",
+  "inputs": [
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-path-red-v1/command.json",
+      "bytes": 550,
+      "sha256": "652ea95c4aea997d096f7c77a4ab36c555da2a0d176baab99eb5f009c6c8ff66"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-path-red-v1/exit.json",
+      "bytes": 52,
+      "sha256": "43b2f7d405a989a055a91eea2046b583b11ef1f698c48c6e3003a19b5a4437ea"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-path-red-v1/raw.jsonl",
+      "bytes": 3570,
+      "sha256": "53b66fbcd6a6e0dd56b43d9fa00e7c00e2664e659c8c651ad5b9f29d7209b9bc"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-path-red-v1/test.go",
+      "bytes": 9459,
+      "sha256": "7f33fdec77dcc1f738df15963e32098a90ddc186548369ad7348e0a8d742a348"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-path-red-v1/test.sha256",
+      "bytes": 64,
+      "sha256": "8eca8e9181d037bb7f47410acfcd9ac54a4d3e32e100485a9ac581a19fcfc0c5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/command.json",
+      "bytes": 550,
+      "sha256": "652ea95c4aea997d096f7c77a4ab36c555da2a0d176baab99eb5f009c6c8ff66"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/exit.json",
+      "bytes": 46,
+      "sha256": "9b6163a75eebd96a3f453bf67a048dabb69263b8c8abad579e0984d8bfd5e44a"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/raw.jsonl",
+      "bytes": 3657,
+      "sha256": "1ed9b4dbe479d7151ee7573537e35f09878590017e2006e31a7cceb215d02e9a"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/source.json",
+      "bytes": 694,
+      "sha256": "594f043ac338ed631ab94ac77edbadb6cef3a2cc1ba9c59bd5c0f0a1580cc3ad"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/sources/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 5318,
+      "sha256": "0b849e63a956526347346eefb839c226f5faa53460d5c3a66df9d8224284a645"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/sources/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 4634,
+      "sha256": "6afc872bddfe1e700a073ac07e75cf50c04e991e3702251222fb8790aa99e202"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 9459,
+      "sha256": "7f33fdec77dcc1f738df15963e32098a90ddc186548369ad7348e0a8d742a348"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v2/sources/TreeDB/zipper/native_materialized_delta_v6.go",
+      "bytes": 2564,
+      "sha256": "e413f2b2899776f71c78a8c400e9c63ce24229d94741da95368bfcadfe8989f5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/command.json",
+      "bytes": 550,
+      "sha256": "652ea95c4aea997d096f7c77a4ab36c555da2a0d176baab99eb5f009c6c8ff66"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/exit.json",
+      "bytes": 46,
+      "sha256": "49ecb9fae7f86f71c2d080a2d36af38d0a4d79890e7198460db832c41d4c6712"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/raw.jsonl",
+      "bytes": 3274,
+      "sha256": "21d70d4048c643e0c74421aa84415b82355dc4e78248163ce47dff75a2f8a4a7"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/source.json",
+      "bytes": 694,
+      "sha256": "0f6109bf873411631cc6edc21563e84324edfe3f9010b7292ec55817464230a5"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/sources/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 5318,
+      "sha256": "0b849e63a956526347346eefb839c226f5faa53460d5c3a66df9d8224284a645"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/sources/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 4984,
+      "sha256": "ea59ac8691bb978ea3921b27c582d98ecc4ccf9a89782501dfb1e5d786d02a17"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 9457,
+      "sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-v3/sources/TreeDB/zipper/native_materialized_delta_v6.go",
+      "bytes": 2695,
+      "sha256": "fdd60d430c4d765bb512d4b714b70a4f5ccc19a769e56e427f6a1c79743f08c2"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-final-v3/source.json",
+      "bytes": 2097,
+      "sha256": "410fb916827c22c9142cfe13d917bd15c9a39a0b3f70fc83c3603ee6f960a14c"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-final-v3/full-source-at-freeze.json",
+      "bytes": 781033,
+      "sha256": "78350efdcada066ccfed53d411c2a314960c6a6c66b6d0deaed8fde6d2990f78"
+    },
+    {
+      "path": "evidence/native-public-bridge-20261015/incremental-zipper-final-v3/tracked.patch",
+      "bytes": 14707,
+      "sha256": "e6354731a5ae96940db692ca22dd071d97aa47105fab8fc277cea84ccfd45ddc"
+    }
+  ],
+  "before": {
+    "public_ns": 5420881,
+    "alloc_bytes": 1990048,
+    "alloc_count": 3479,
+    "ACK": 1,
+    "writes": 2276,
+    "nativePrepared": 1,
+    "nativeCut": 0,
+    "before_children": 37,
+    "after_children": 22,
+    "shared_children": 0,
+    "exit": 1,
+    "intended_failure": "only unrelated ChildRef reuse oracle; public outputs/oldcut/postACK/reopen passed"
+  },
+  "after": {
+    "public_ns": 5299492,
+    "alloc_bytes": 2405640,
+    "alloc_count": 3418,
+    "ACK": 1,
+    "writes": 2276,
+    "nativePrepared": 1,
+    "nativeCut": 0,
+    "before_children": 37,
+    "after_children": 38,
+    "shared_children": 36,
+    "exit": 0
+  },
+  "cost_scope": "single functional samples, summed entire public prune calls including synchronous native transaction/fence/Consume/Finish; excludes fixture and ordinary interleaved writes, process-wide allocation deltas; no statistical/latency ceiling/Q32 claim",
+  "per_call_phase_observables": "not retained; original aggregate writes/prepared/cut present in raw",
+  "remaining": "unbounded synchronous delta normalization/materialized zipper/producer publication; original bounded phase16 still refuses; no viable performance claim"
+}

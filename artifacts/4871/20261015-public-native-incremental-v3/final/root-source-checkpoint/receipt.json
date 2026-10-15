@@ -1,0 +1,81 @@
+{
+  "at_utc": "2026-10-15T00:49:29.507408+00:00",
+  "parent": "8c54df03c67e4b2f757c58460752d6f4abe4dff8",
+  "packet_receipt_sha256": "a209bfdf3dacb4cf8191943a9134c4748546ce1d78fc14d2ae0193a01d96bc8d",
+  "source": [
+    {
+      "path": "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 5318,
+      "sha256": "0b849e63a956526347346eefb839c226f5faa53460d5c3a66df9d8224284a645",
+      "head_preimage_sha256": "2fba7f52eda7c94f84bf5cd8d8cfd3262018a67c5f5982e962ddda81ae185096"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 4984,
+      "sha256": "ea59ac8691bb978ea3921b27c582d98ecc4ccf9a89782501dfb1e5d786d02a17",
+      "head_preimage_sha256": "7facd850d390f8c144828a1984dfce5cbf21b81179f967a86b2d7302c3554eea"
+    },
+    {
+      "path": "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 9457,
+      "sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387",
+      "head_preimage_sha256": "bfaca162e360e12aa9f806c27c001faeaf5773b71302ed3594a2f1164ca0cb9d"
+    },
+    {
+      "path": "TreeDB/zipper/native_materialized_delta_v6.go",
+      "bytes": 2695,
+      "sha256": "fdd60d430c4d765bb512d4b714b70a4f5ccc19a769e56e427f6a1c79743f08c2"
+    }
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "go_source_rows_verified": 4343,
+  "protected_fixture_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "source_binding_limit": "post-run actual freeze census; v3 pre-run retained exact4 copies; other4339 current rows equal prior verified full source census, not a contemporaneous full pre-run census",
+  "merged": false,
+  "qualification": "PUBLIC_INCREMENTAL_UNBOUNDED_DIAGNOSTIC_ONLY; same multileaf persistent-pointer public fixture GREEN, actual selected absence, retained old cut, post-ACK writer, reopen and 36/37 original childrefs retained. Single total timing ~-2.2%; allocation bytes ~+20.9%, NOT a viability/latency/Q32 or production qualification.",
+  "before": {
+    "public_ns": 5420881,
+    "alloc_bytes": 1990048,
+    "alloc_count": 3479,
+    "ACK": 1,
+    "writes": 2276,
+    "nativePrepared": 1,
+    "nativeCut": 0,
+    "before_children": 37,
+    "after_children": 22,
+    "shared_children": 0,
+    "exit": 1,
+    "intended_failure": "only unrelated ChildRef reuse oracle; public outputs/oldcut/postACK/reopen passed"
+  },
+  "after": {
+    "public_ns": 5299492,
+    "alloc_bytes": 2405640,
+    "alloc_count": 3418,
+    "ACK": 1,
+    "writes": 2276,
+    "nativePrepared": 1,
+    "nativeCut": 0,
+    "before_children": 37,
+    "after_children": 38,
+    "shared_children": 36,
+    "exit": 0
+  },
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "7df5c8277ace70d8551417d92e8fe4a84842f472",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "all_working_source_preserved": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}

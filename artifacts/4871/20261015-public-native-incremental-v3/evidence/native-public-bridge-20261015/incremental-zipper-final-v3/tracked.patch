@@ -1,0 +1,348 @@
+diff --git a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+index cae6e250f..aad8a0199 100644
+--- a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+@@ -1,7 +1,9 @@
+ package caching
+ 
+ import (
++	"bytes"
+ 	"errors"
++	"github.com/snissn/gomap/TreeDB/batch"
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+@@ -90,8 +92,42 @@ func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeM
+ 		lease.Close()
+ 		return errors.Join(ErrCOWUnsupported, merged.Close(), c.releaseCut(cut))
+ 	}
++	// Exactly the original frozen prefix, oldest to newest. The batch copies
++	// borrowed entry payloads before iterator advance; its final duplicate-key
++	// normalization preserves the canonical winner without reading untouched DATA.
++	delta := batch.New(nil, int(^uint(0)>>1))
++	defer delta.Close()
++	for _, root := range cut.frozen {
++		it := root.NewIterator(nil, nil)
++		metadata, ok := it.(iterator.RevisionUnsafeIterator)
++		raw, rawOK := it.(iterator.UnsafeIterator)
++		if !ok || !rawOK {
++			err = errors.Join(ErrCOWUnsupported, it.Close())
++			break
++		}
++		for it.Valid() {
++			v, p, f, r := metadata.UnsafeEntryWithRevision()
++			op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
++			if f&node.FlagTombstone != 0 {
++				op.Type = batch.OpDelete
++				op.Value = nil
++			}
++			if err = delta.SetOps([]batch.Entry{op}); err != nil {
++				break
++			}
++			it.Next()
++		}
++		err = errors.Join(err, it.Error(), it.Close())
++		if err != nil {
++			break
++		}
++	}
++	if err != nil {
++		lease.Close()
++		return errors.Join(err, merged.Close(), c.releaseCut(cut))
++	}
+ 	raw := &nativeDiagnosticMergeV6{Iterator: owner.Iterator}
+-	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(cut.basis.snapshot, raw)
++	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(cut.basis.snapshot, raw, delta)
+ 	closeErr := merged.Close()
+ 	if accepted {
+ 		handoff.accepted = true
+diff --git a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+index 16ad41a43..9af58e6bc 100644
+--- a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+@@ -3,15 +3,15 @@ package db
+ import (
+ 	"bytes"
+ 	"context"
+-	"crypto/sha256"
+ 	"errors"
+ 
+-	"github.com/snissn/gomap/TreeDB/internal/bulk"
++	"github.com/snissn/gomap/TreeDB/batch"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/zipper"
+ )
+ 
+ // NativeMVCCDiagnosticAwaitV6 drains only already-visible publication debt.
+@@ -25,10 +25,10 @@ func (db *DB) NativeMVCCDiagnosticAwaitV6() error {
+ 
+ // PublishNativeMVCCUnboundedDiagnosticV6 transfers the SAME native constructor
+ // into the original BuildGroup/candidate/publisher. It is a synchronous,
+-// explicitly unmetered O(current tree) reconstruction diagnostic, not an
++// explicitly unmetered captured-prefix/materialized-DATA diagnostic, not an
+ // implementation or cost prediction of the bounded prepared-output ABI.
+-func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis *Snapshot, input iterator.UnsafeIterator) (accepted bool, retErr error) {
+-	if c == nil || c.phase != 3 || c.transaction == nil || c.db == nil || input == nil {
++func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis *Snapshot, input iterator.UnsafeIterator, delta *batch.Batch) (accepted bool, retErr error) {
++	if c == nil || c.phase != 3 || c.transaction == nil || c.db == nil || input == nil || delta == nil {
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+ 	txn := c.transaction
+@@ -56,24 +56,43 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 	if !ready || err != nil {
+ 		return false, err
+ 	}
+-	filtered := nativeDiagnosticSurvivorsV6{UnsafeIterator: input, selected: c.record}
+-	filtered.skip()
+-	root, err := bulk.BuildWithOptions(&filtered, group.tracker, group.idx.pager, bulk.BuildOptions{EntryRevisions: true, LeafPrefixCompression: true, PackedValuePtr: true})
+-	if err != nil {
++	// Validate against the SAME retained composite winner immediately before
++	// applying its physical delete. Do not omit the overlay row and resurrect
++	// an older disk incarnation.
++	input.Seek(c.record.Key)
++	if !input.Valid() || !bytes.Equal(input.UnsafeKey(), c.record.Key) {
++		return false, rootpublication.ErrDurableRootOwnership
++	}
++	v, p, f, r := iterator.UnsafeEntryWithRevision(input)
++	if r != c.record.Revision || p != c.record.ValuePtr || f != c.record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, c.record.Value)) {
++		return false, rootpublication.ErrDurableRootOwnership
++	}
++	if err = input.Error(); err != nil {
+ 		return false, err
+ 	}
+-	if err = filtered.Error(); err != nil {
++	if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(c.record.Key), Revision: c.record.Revision}}); err != nil {
+ 		return false, err
+ 	}
+-	if !filtered.removed {
+-		return false, rootpublication.ErrDurableRootOwnership
++	group.pinBatchValueLogSegmentsLocked(delta)
++	z := group.idx.zipper.CloneWithAllocator(group.tracker)
++	var oldPointerRefs zipper.PointerRefCounts
++	var oldEntriesRemoved uint64
++	base, sequence, retired, metrics, err := z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
++	if err != nil {
++		return false, err
+ 	}
+-	image, err := group.idx.pager.Get(root)
++	entries, ranges := delta.ApplyPlan()
++	refs, err := c.db.buildValueLogRefDelta(group.idx.pager, group.currentRoot, group.baseSeq, entries, ranges, &oldPointerRefs, oldEntriesRemoved, true)
+ 	if err != nil {
+ 		return false, err
+ 	}
++	group.mergeValueLogRefDeltaLocked(refs)
++	releaseValueLogRefDelta(refs)
++	group.retired = append(group.retired, retired...)
++	mergeOrderedRootPublishMetrics(&group.metrics, metrics)
++	group.recordVacuumMutationLocked(entries, ranges)
+ 	directory := make([]byte, page.PageSize)
+-	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, group.baseSeq+1, node.PrimaryOperand{Ref: page.PageChildRef(root), Digest: sha256.Sum256(image)}, nil); err != nil {
++	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, sequence, base, nil); err != nil {
+ 		return false, err
+ 	}
+ 	ready, err = txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
+@@ -81,9 +100,17 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 		return false, err
+ 	}
+ 	group.currentRoot = txn.PrimaryConstructionReferenceV6().PageID
++	if coverage := group.negativeCoverage; coverage != nil {
++		for i := range entries {
++			coverage.filter.Add(entries[i].Key)
++		}
++		coverage.nextRoot = group.currentRoot
++	}
+ 	group.maxEntryRevision = page.EntryRevision(c.db.meta.MaxEntryRevision)
+-	if filtered.maxRevision > group.maxEntryRevision {
+-		group.maxEntryRevision = filtered.maxRevision
++	for _, entry := range entries {
++		if entry.Revision > group.maxEntryRevision {
++			group.maxEntryRevision = entry.Revision
++		}
+ 	}
+ 	retErr = group.finalizeLocked(&Batch{db: c.db, physicalOnly: true}, true)
+ 	accepted = group.accepted
+@@ -102,39 +129,3 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 	}
+ 	return accepted, retErr
+ }
+-
+-type nativeDiagnosticSurvivorsV6 struct {
+-	iterator.UnsafeIterator
+-	selected    node.LeafEntry
+-	removed     bool
+-	failure     error
+-	maxRevision page.EntryRevision
+-}
+-
+-func (it *nativeDiagnosticSurvivorsV6) skip() {
+-	for it.UnsafeIterator.Valid() {
+-		v, p, f, r := iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
+-		if r > it.maxRevision {
+-			it.maxRevision = r
+-		}
+-		if !bytes.Equal(it.UnsafeIterator.UnsafeKey(), it.selected.Key) {
+-			return
+-		}
+-		if it.removed || r != it.selected.Revision || p != it.selected.ValuePtr || f != it.selected.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, it.selected.Value)) {
+-			it.failure = rootpublication.ErrDurableRootOwnership
+-			return
+-		}
+-		it.removed = true
+-		it.UnsafeIterator.Next()
+-	}
+-}
+-func (it *nativeDiagnosticSurvivorsV6) Next() { it.UnsafeIterator.Next(); it.skip() }
+-func (it *nativeDiagnosticSurvivorsV6) Valid() bool {
+-	return it.failure == nil && it.UnsafeIterator.Valid()
+-}
+-func (it *nativeDiagnosticSurvivorsV6) Error() error {
+-	return errors.Join(it.failure, it.UnsafeIterator.Error())
+-}
+-func (it *nativeDiagnosticSurvivorsV6) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+-	return iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
+-}
+diff --git a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+index b9770d3a7..00d265aba 100644
+--- a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
++++ b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+@@ -7,6 +7,8 @@ import (
+ 	"fmt"
+ 	treedb "github.com/snissn/gomap/TreeDB"
+ 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
+ 	"runtime"
+ 	"strconv"
+ 	"testing"
+@@ -16,7 +18,21 @@ import (
+ // Positive target-profile control: the same physical key exists in the backend
+ // and a newer overlay incarnation. Backend-only deletion would resurrect it.
+ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
+-	for _, pointers := range []bool{false, true} {
++	runNativePruneCOWDiagnostic(t, false)
++}
++
++// The public lifecycle may be correct while a whole-tree rebuild silently
++// discards every unrelated immutable DATA child. This is the path oracle.
++func TestNativePruneCOWIncrementalPublication(t *testing.T) {
++	runNativePruneCOWDiagnostic(t, true)
++}
++
++func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
++	layouts := []bool{false, true}
++	if multileaf {
++		layouts = []bool{true}
++	}
++	for _, pointers := range layouts {
+ 		t.Run(fmt.Sprintf("pointer%t", pointers), func(t *testing.T) {
+ 			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+ 			opts.MemtableMode = "cow_btree"
+@@ -43,9 +59,25 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
+ 			if err = s.CommitAt(1, []Mutation{{Key: selected, Value: []byte("disk-original")}}, CommitDurable); err != nil {
+ 				t.Fatal(err)
+ 			}
++			if multileaf {
++				seed := make([]Mutation, 1024)
++				for i := range seed {
++					seed[i] = Mutation{Key: []byte(fmt.Sprintf("z%04d-unchanged-backend-long-key-to-form-real-leaves", i)), Value: []byte("unchanged-backend-value")}
++				}
++				if err = s.CommitAt(100, seed, CommitDurable); err != nil {
++					t.Fatal(err)
++				}
++			}
+ 			if err = d.Checkpoint(); err != nil {
+ 				t.Fatal(err)
+ 			}
++			var beforeChildren map[page.ChildRef]bool
++			if multileaf {
++				beforeChildren = nativeDiagnosticDATAChildren(t, d)
++				if len(beforeChildren) < 3 {
++					t.Fatal("fixture needs actual multileaf DATA", len(beforeChildren))
++				}
++			}
+ 			// No checkpoint/drain follows: these are genuine C1 overlay publications.
+ 			if err = s.CommitAt(1, []Mutation{{Key: selected, Value: []byte("overlay-replacement")}}, CommitDurable); err != nil {
+ 				t.Fatal(err)
+@@ -140,7 +172,7 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
+ 					t.Error("checked native cursor Close", e)
+ 				}
+ 			}
+-			t.Logf("UNBOUNDED_FULL_CURRENT_RECONSTRUCTION public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
++			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
+ 			t.Logf("COW_NATIVE_UNBOUNDED_DIAGNOSTIC pointers=%t overlayBytes=%d ACK=%d writes=%d nativePrepared=%d nativeCut=%d error=%v", pointers, mutable, ack, writes, prepared, cut, pruneErr)
+ 			if ack == 1 {
+ 				got, e := d.Get(selectedKey)
+@@ -170,6 +202,16 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
+ 					t.Fatal("current post-ACK writer", e, got)
+ 				}
+ 			}
++			sharedChildren := 0
++			if multileaf {
++				afterChildren := nativeDiagnosticDATAChildren(t, d)
++				for ref := range afterChildren {
++					if beforeChildren[ref] {
++						sharedChildren++
++					}
++				}
++				t.Logf("INCREMENTAL_DATA_PATH before_children=%d after_children=%d shared_children=%d", len(beforeChildren), len(afterChildren), sharedChildren)
++			}
+ 			if e = old.Close(); e != nil {
+ 				t.Fatal(e)
+ 			}
+@@ -199,9 +241,52 @@ func TestNativePruneCOWUnboundedDiagnosticPublication(t *testing.T) {
+ 			if e = reopened.Close(); e != nil {
+ 				t.Fatal(e)
+ 			}
++			if multileaf && sharedChildren == 0 {
++				t.Fatal("incremental publication replaced every unrelated backend ChildRef")
++			}
+ 			if pruneErr != nil || ack != 1 || prepared == 0 || writes == 0 {
+ 				t.Fatalf("positive composite publication: error=%v ACK=%d writes=%d prepared=%d cut=%d", pruneErr, ack, writes, prepared, cut)
+ 			}
+ 		})
+ 	}
+ }
++
++// Scoped scalar copies only: the certificate/image never outlive its original
++// backend Snapshot. The child references are observations, not retained owners.
++func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]bool {
++	t.Helper()
++	snapshot := d.NativeMembershipSnapshotForTest()
++	if snapshot == nil {
++		t.Fatal("backend snapshot")
++	}
++	defer func() {
++		if e := snapshot.Close(); e != nil {
++			t.Error(e)
++		}
++	}()
++	cert, e := snapshot.PrimaryReadRootCertificateV6()
++	if e != nil || cert == nil {
++		t.Fatal("primary certificate", e)
++	}
++	base, _ := cert.Directory().Base()
++	if base.Ref.Kind != page.ChildRefPage {
++		t.Fatal("DATA page", base.Ref)
++	}
++	image, e := snapshot.Pager().Get(base.Ref.Page)
++	if e != nil {
++		t.Fatal(e)
++	}
++	n := node.NewNode(image)
++	if n.Type() != page.PageTypeInternal {
++		t.Fatal("DATA root must be internal", n.Type())
++	}
++	refs := make(map[page.ChildRef]bool, int(n.Count()))
++	for i := uint16(0); i < n.Count(); i++ {
++		_, ref, e := n.GetInternalEntryRefView(i)
++		if e != nil {
++			t.Fatal(e)
++		}
++		refs[ref] = true
++	}
++	return refs
++}
