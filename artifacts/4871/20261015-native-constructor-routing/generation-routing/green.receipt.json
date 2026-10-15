@@ -1,0 +1,45 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/freelist",
+        "-run",
+        "^TestCOWGenerationRequirementDistinguishesInheritedMetadataV1$",
+        "-count=1",
+        "-timeout=55s",
+        "-v"
+      ],
+      "exit": 0,
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags=treedb_test",
+        "./TreeDB/mvcc",
+        "-run",
+        "^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$",
+        "-count=1",
+        "-timeout=55s",
+        "-v"
+      ],
+      "exit": 0,
+      "timeout": false
+    }
+  ],
+  "elapsed": 8.559196000918746,
+  "census_rows": 4439,
+  "unchanged": true,
+  "source_paths": [
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+    "TreeDB/freelist/generation_v1_routing_test.go",
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+    "TreeDB/freelist/generation_v1_prune_work.go"
+  ]
+}

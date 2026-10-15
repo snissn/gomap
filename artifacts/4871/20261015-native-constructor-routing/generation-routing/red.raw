@@ -1,0 +1,4 @@
+=== RUN   TestCommitAtPrimaryOnlyRetainsActualDataGeneration
+--- PASS: TestCommitAtPrimaryOnlyRetainsActualDataGeneration (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	0.033s

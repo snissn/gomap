@@ -745,7 +745,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		return nil, false, errors.New("missing actual DATA generation")
 	}
 	profile := runtime.idx.allocator.COWPrepareProfileV1()
-	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || profile.AllocatedPages != 0 || profile.ChangedChunks != 0
+	// Only inherited BeginCandidate metadata bookkeeping may stay deferred.
+	// Actual allocator edits and explicit output retirement/allocation obligations
+	// always take the original COW producer path.
+	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
+		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
 	if dataChanged {
 		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
 		if err != nil {

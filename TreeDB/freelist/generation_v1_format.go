@@ -243,6 +243,12 @@ func encodeIndexPageInto(b []byte, id, generationID uint64, n *stateNode, _ int)
 }
 
 func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []byte {
+	return encodeGenerationPageWithPendingCountV1(id, g, rootCRC, g.record.pendingMetadataCount())
+}
+
+// Construction has already visited each normalized extent. Reuse that exact
+// accumulated count instead of expanding or rescanning retirement ranges.
+func encodeGenerationPageWithPendingCountV1(id uint64, g *FreelistGenerationV1, rootCRC uint32, pendingCount uint64) []byte {
 	b := make([]byte, page.PageSize)
 	encodePageHeader(b, id, page.PageTypeFreelistGeneration, 1)
 	copy(b[16:24], generationMagic[:])
@@ -260,7 +266,7 @@ func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []
 	binary.LittleEndian.PutUint64(b[88:96], g.root.retiredCount)
 	binary.LittleEndian.PutUint64(b[96:104], g.record.pageID)
 	binary.LittleEndian.PutUint32(b[104:108], uint32(len(g.metadataPages)))
-	binary.LittleEndian.PutUint32(b[108:112], uint32(len(g.record.pendingMetadata())))
+	binary.LittleEndian.PutUint32(b[108:112], uint32(pendingCount))
 	binary.LittleEndian.PutUint32(b[112:116], rootCRC)
 	copy(b[120:152], g.record.digest[:])
 	digest := generationDigest(b)
@@ -316,7 +322,7 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 		return nil, ErrGenerationDigest
 	}
 	g.record = record
-	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(len(record.pendingMetadata())) != binary.LittleEndian.Uint32(b[108:112]) {
+	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(record.pendingMetadataCount()) != binary.LittleEndian.Uint32(b[108:112]) {
 		return nil, ErrGenerationFormat
 	}
 	var target ReservationExtentV1

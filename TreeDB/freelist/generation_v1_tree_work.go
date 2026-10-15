@@ -2,6 +2,7 @@ package freelist
 
 import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"math/bits"
 	"unsafe"
 )
 
@@ -182,19 +183,24 @@ type stateMutationFrameV1 struct {
 // supplying work must supply an actually resumable callback; an opaque ordinary
 // callback is never invoked with a finite allowance.
 type stateMutationWorkV1 struct {
-	frames         [chunkTrieDepth + 2]stateMutationFrameV1
-	depth          int
-	key            uint64
-	private        bool
-	stats          *FreelistTxnStats
-	ordinary       func(*stateChunk)
-	apply          func(*stateChunk, *iterator.OrdinalScanWork) (bool, error)
-	detach         stateDetachWorkV1
-	result         *stateNode
-	done           bool
-	callbackErr    error
-	pending        pendingRetirementCursorV1
-	pendingEnabled bool
+	frames                          [chunkTrieDepth + 2]stateMutationFrameV1
+	depth                           int
+	key                             uint64
+	private                         bool
+	stats                           *FreelistTxnStats
+	ordinary                        func(*stateChunk)
+	apply                           func(*stateChunk, *iterator.OrdinalScanWork) (bool, error)
+	detach                          stateDetachWorkV1
+	result                          *stateNode
+	done                            bool
+	callbackErr                     error
+	pending                         pendingRetirementCursorV1
+	pendingEnabled                  bool
+	freeRangeEnabled                bool
+	freeStart, freeCount, freeIndex uint64
+	pruneEnabled                    bool
+	pruneMask                       [4]uint64
+	pruneWord                       int
 }
 
 func (s *stateMutationWorkV1) begin(n *stateNode, key uint64, private bool, stats *FreelistTxnStats, ordinary func(*stateChunk), apply func(*stateChunk, *iterator.OrdinalScanWork) (bool, error)) {
@@ -224,7 +230,7 @@ func (s *stateMutationWorkV1) step(w *iterator.OrdinalScanWork) (bool, error) {
 	if s.callbackErr != nil {
 		return false, s.callbackErr
 	}
-	if w != nil && s.apply == nil && !s.pendingEnabled {
+	if w != nil && s.apply == nil && !s.pendingEnabled && !s.freeRangeEnabled && !s.pruneEnabled {
 		return false, ErrGenerationFormat
 	}
 	for !s.done {
@@ -316,7 +322,33 @@ func (s *stateMutationWorkV1) step(w *iterator.OrdinalScanWork) (bool, error) {
 				return false, e
 			}
 		case 5:
-			if s.pendingEnabled {
+			if s.pruneEnabled {
+				for s.pruneWord < len(s.pruneMask) {
+					if s.pruneMask[s.pruneWord] == 0 {
+						s.pruneWord++
+						continue
+					}
+					if ok, e := appendReserve(w, 1, 24); !ok || e != nil {
+						return false, e
+					}
+					offset := uint64(s.pruneWord*64 + bits.TrailingZeros64(s.pruneMask[s.pruneWord]))
+					f.out.chunk.retired[offset] = 0
+					f.out.chunk.setFree(offset, true)
+					s.pruneMask[s.pruneWord] &= s.pruneMask[s.pruneWord] - 1
+				}
+			} else if s.freeRangeEnabled {
+				for s.freeIndex < s.freeCount {
+					if ok, e := appendReserve(w, 1, 16); !ok || e != nil {
+						return false, e
+					}
+					id := s.freeStart + s.freeIndex
+					if id>>freelistChunkShift != s.key {
+						return false, ErrGenerationFormat
+					}
+					f.out.chunk.setFree(id&(freelistChunkSize-1), false)
+					s.freeIndex++
+				}
+			} else if s.pendingEnabled {
 				ready, e := s.pending.applyRetired(f.out.chunk, w)
 				if e != nil {
 					s.callbackErr = e

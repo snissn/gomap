@@ -1,0 +1,4 @@
+=== RUN   TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut
+--- PASS: TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	0.026s

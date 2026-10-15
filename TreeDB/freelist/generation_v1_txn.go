@@ -2,12 +2,9 @@ package freelist
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
-
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type FreelistGenerationV1 struct {
@@ -194,6 +191,12 @@ type FreelistTxn struct {
 	allocated        []allocatedPage
 	abandonedAppends []ReservationExtentV1
 	consumed         bool
+	// requiresGeneration records actual edits after BeginCandidate's inherited
+	// pending-metadata retirement. Those inherited edits can remain deferred while
+	// a PRIMARY-only publication retains the exact immutable DATA generation.
+	// Every allocation/reuse/retirement/prune below sets this before it can be
+	// observed by the original allocator publication producer.
+	requiresGeneration bool
 	// Granted only after detaching pre-existing dirty aliases. New dirty
 	// nodes remain exclusively owned until clone or materialization revokes it.
 	privatePreparation bool
@@ -292,6 +295,7 @@ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
 }
 
 func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
+	t.requiresGeneration = true
 	t.markReplacedPath(chunkNo)
 	if t.privatePreparation {
 		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
@@ -352,6 +356,7 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 // installAppend records an already selected append in the SAME transaction.
 // Work-bearing callers prove capacity and guard the original ledger first.
 func (t *FreelistTxn) installAppend(id uint64) {
+	t.requiresGeneration = true
 	t.highWater = id + 1
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
 	t.stats.AppendAllocations++
@@ -401,6 +406,7 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 			ids[i] = candidate + uint64(i)
 			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
 		}
+		t.requiresGeneration = true
 		t.highWater = candidate + width
 		t.stats.AppendAllocations += width
 		return ids, nil
@@ -667,24 +673,9 @@ func countUnmaterializedStatePages(n *stateNode, _ int) uint64 {
 }
 
 func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
-	var reused, appended []uint64
-	for _, allocation := range t.allocated {
-		if allocation.kind == ReservationReusedData {
-			reused = append(reused, allocation.id)
-		} else {
-			appended = append(appended, allocation.id)
-		}
-	}
-	var extents []ReservationExtentV1
-	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
-	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
-	extents = append(extents, t.abandonedAppends...)
-	replaced := make([]uint64, 0, len(t.replacedMetadata))
-	for id := range t.replacedMetadata {
-		replaced = append(replaced, id)
-	}
-	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
-	return normalizeExtents(extents)
+	var work reservationInventoryWorkV1
+	_, err := work.advance(t, nil)
+	return work.normalized.out, err
 }
 
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
@@ -755,91 +746,10 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 			return nil, err
 		}
 	}
-	if metadataStart > minimumMetadataStart {
-		extents = appendReservationRange(extents, minimumMetadataStart, metadataStart-minimumMetadataStart, ReservationAbandonedAppend, 0)
-	}
-	extents = append(extents, ReservationExtentV1{StartPageID: metadataStart, Count: 1, Kind: ReservationTargetMetadata})
-	pageCount := reservationPagesForEntries(uint64(len(extents)))
-	if pageCount > uint64(^uint16(0)) || statePageCount+pageCount+1 != reservedMetadataCount {
-		return nil, ErrGenerationFormat
-	}
-	next := metadataStart
-	recorded := &recordingSink{
-		sink:        sink,
-		ledger:      t.ledger,
-		candidateID: candidateID,
-	}
-	if t.root.freeCount+t.root.retiredCount == 0 {
-		// An empty tree still has one immutable exact-generation root page.
-		t.root.pageID = next
-		next++
-		b, err := encodeIndexPage(t.root.pageID, generationID, t.root, 0)
-		if err != nil {
-			return nil, err
-		}
-		t.root.checksum = binary.LittleEndian.Uint32(b[8:12])
-		if err := recorded.write(t.root.pageID, b); err != nil {
-			return nil, err
-		}
-	} else if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {
-		return nil, err
-	}
-	reservationID := next
-	headerID := reservationID + pageCount
-	next = headerID + 1
-	for i := range extents {
-		if extents[i].Kind == ReservationTargetMetadata {
-			metadataCount := next - metadataStart
-			if metadataCount > uint64(^uint32(0)) {
-				return nil, ErrGenerationFormat
-			}
-			extents[i].Count = uint32(metadataCount)
-			break
-		}
-	}
-	extents, err = normalizeExtents(extents)
-	if err != nil {
-		return nil, err
-	}
-	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
-	recordPages, record, err := encodeNormalizedReservationPages(reservationID, record)
-	if err != nil {
-		return nil, err
-	}
-	for i, recordPage := range recordPages {
-		if err := recorded.write(reservationID+uint64(i), recordPage); err != nil {
-			return nil, err
-		}
-	}
-	g := &FreelistGenerationV1{generationID: generationID, commitSeq: commitSeq, parentGenerationID: t.base.generationID, parentCommitSeq: t.base.commitSeq, highWater: max(t.highWater, next), root: t.root, record: record}
-	g.metadataPages = make([]uint64, 0, next-metadataStart)
-	for id := metadataStart; id < next; id++ {
-		g.metadataPages = append(g.metadataPages, id)
-	}
-	header := encodeGenerationPage(headerID, g, g.root.checksum)
-	if err := recorded.write(headerID, header); err != nil {
-		return nil, err
-	}
-	copy(g.ref.Digest[:], header[152:184])
-	g.ref = GenerationRefV1{HeaderPageID: headerID, GenerationID: generationID, CommitSeq: commitSeq, HighWater: g.highWater, Digest: g.ref.Digest}
-	t.stats.LogicalDelta = uint64(len(t.changedChunks))
-	t.stats.COWChunks = uint64(len(t.changedChunks))
-	t.stats.COWPages = uint64(len(recorded.pages))
-	t.stats.COWBytes = t.stats.COWPages * page.PageSize
-	if _, ownsCandidateBytes := sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
-		t.stats.CandidatePageIsolationCopies = t.stats.COWPages
-		t.stats.CandidatePageIsolationBytes = t.stats.COWBytes
-	}
-	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
-	t.stats.GenerationID = generationID
-	t.stats.ReservationRecords = uint64(len(record.pageIDs))
-	t.stats.Reservations = uint64(len(t.allocated)) + (next - metadataStart)
-	t.stats.PendingMetadataRetirements = uint64(len(record.pendingMetadata()))
-	dirty := make([]uint64, len(recorded.pages))
-	for i := range recorded.pages {
-		dirty[i] = recorded.pages[i].PageID
-	}
-	return &FreelistCandidateV1{generation: g, pages: recorded.pages, dirtyIDs: dirty}, nil
+	recorded := &recordingSink{sink: sink, ledger: t.ledger, candidateID: candidateID}
+	var output candidateOutputWorkV1
+	_, err = output.advance(t, generationID, commitSeq, metadataStart, reservedMetadataCount, statePageCount, extents, recorded, nil)
+	return output.result, err
 }
 
 func candidateIDFromString(value string) CandidateIDV1 {

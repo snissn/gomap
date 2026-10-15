@@ -138,6 +138,10 @@ func clearReservedChunkRange(free *[4]uint64, base, start, count uint64) {
 func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.claimReusedMetadataLocked(candidate, start, count, highWater, data, abandoned)
+}
+
+func (l *ReservationLedger) claimReusedMetadataLocked(candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1) bool {
 	// A failed physical tail write may be ahead of this transaction. Let the
 	// existing tail reservation encode and discharge that abandoned coverage.
 	// Check under the claim lock, not merely during speculative placement.
@@ -180,18 +184,17 @@ func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, 
 }
 
 func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64, []ReservationExtentV1, bool) {
+	// Keep the original synchronous loop's borrowed stack controls. The finite
+	// controller uses the same search, sizing, inventory and original claim,
+	// without letting persistent operand bindings escape this ordinary driver.
 	search := t.metadataChunkSearch()
 	success := false
 	defer func() { search.finish(t, success) }()
 	for chunk := search.next(t); chunk != nil; chunk = search.next(t) {
 		start, run := t.reusableChunkRun(chunk)
-		// Keep the chunk alive throughout sizing and final mutation.
 		if run < 3 || chunk.freeCount() < 4 {
 			continue
 		}
-		// Count the exact additional dirty path without cloning it for sizing.
-		// The selected chunk stays nonempty, so the eventual mutation neither
-		// creates nor removes a node; already dirty nodes are counted once.
 		statePages := countUnmaterializedStatePages(t.root, 0)
 		for n := t.root; n != nil; {
 			if n.pageID != 0 {
@@ -202,13 +205,9 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			}
 			n = n.child[chunkNibble(chunk.chunkNo, int(n.depth))]
 		}
-		// Even one reservation page plus the header cannot fit. Reject before
-		// allocating a private plan or constructing its reservation extents.
 		if minimum := statePages + 2; minimum > run || minimum >= chunk.freeCount() {
 			continue
 		}
-		// Sizing mutates only the replacement set. Keep all other transaction
-		// state read-only until the atomic claim succeeds.
 		planned := *t
 		planned.replacedMetadata = maps.Clone(t.replacedMetadata)
 		planned.markReplacedPath(chunk.chunkNo)

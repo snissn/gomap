@@ -1,0 +1,74 @@
+{
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "index_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596",
+  "index_bytes": 1827592,
+  "source_paths": {
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "sha256": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+      "bytes": 25344,
+      "preimage": {
+        "sha256": "920d4ccd51419fa75f0dab6ebc02d6a7c6f9addeea16af1a3ad94d2254d168c7",
+        "bytes": 24859
+      }
+    },
+    "TreeDB/freelist/allocator_cow.go": {
+      "sha256": "84bf1b9bf22f1826ddf28687bdd6df1f621e0b8139f619a82979dae3a71be985",
+      "bytes": 24512,
+      "preimage": {
+        "sha256": "a9aca033cbce7c9a2a567eb48e5489c74e8dc425e80c91412cfcedd58d213ee4",
+        "bytes": 24140
+      }
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "sha256": "e0d7d3940538173b53e6047140a667724bac60d2a730e75d7ab85b7e71031682",
+      "bytes": 82425,
+      "preimage": {
+        "sha256": "37e6370147714e128e7aa36271d41dcd76c83aabe5b69c646474e453f1247970",
+        "bytes": 82163
+      }
+    },
+    "TreeDB/freelist/generation_v1_metadata_reuse_work.go": {
+      "sha256": "4479d2237384ee8e4f4e5a0af5e09e4c2e6c111019ea3cea8888d102f23d1819",
+      "bytes": 8760,
+      "preimage": {
+        "sha256": "baacfa357baa0e0083b77e2034fd455d486549881da2a0223078132c5fea1658",
+        "bytes": 8729
+      }
+    },
+    "TreeDB/freelist/generation_v1_prune_work.go": {
+      "sha256": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b",
+      "bytes": 4399,
+      "preimage": {
+        "sha256": "44cef34cb284a6347588ce3d6c0f61827d3db35241e7aa8604b7319324aede82",
+        "bytes": 4368
+      }
+    },
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11",
+      "bytes": 5608,
+      "preimage": null
+    },
+    "TreeDB/freelist/generation_v1_routing_test.go": {
+      "sha256": "ebe7a1ae9a78dca9b063fa145823b9a4b885f9499bfb6e76f929cb6a5b7a7714",
+      "bytes": 2313,
+      "preimage": null
+    }
+  },
+  "protected": {
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+      "bytes": 6429
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+      "bytes": 7036
+    },
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7",
+      "bytes": 6899
+    }
+  },
+  "census_rows": 4439,
+  "patch_sha256": "1bd418a00470c82f054d087114051fcc3c161cf43e55642aee9909026ccf3d97",
+  "benchmark": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration: SOURCE ONLY / NOT RUN; added after GREEN, no production source changes after GREEN"
+}

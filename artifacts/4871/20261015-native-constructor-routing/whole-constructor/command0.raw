@@ -1,0 +1,14 @@
+=== RUN   TestCanonicalStateEmissionSynchronousControlsStayCallerOwnedV1
+--- PASS: TestCanonicalStateEmissionSynchronousControlsStayCallerOwnedV1 (0.00s)
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/tail
+    generation_v1_materialize_work_test.go:83: whole constructor reuse=false calls=54 pages=6
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/reuse
+    generation_v1_materialize_work_test.go:83: whole constructor reuse=true calls=27 pages=3
+--- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1 (0.00s)
+    --- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/tail (0.00s)
+    --- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/reuse (0.00s)
+=== RUN   TestCanonicalMaterializationRefusalPreservesOriginalClaimV1
+--- PASS: TestCanonicalMaterializationRefusalPreservesOriginalClaimV1 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.002s

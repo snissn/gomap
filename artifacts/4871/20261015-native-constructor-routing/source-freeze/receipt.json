@@ -1,0 +1,50 @@
+{
+  "boundaries": {
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "bytes": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    },
+    "cmd/treedb_column_graph_demo/main.go": {
+      "bytes": 15130,
+      "sha256": "176e418116243bfc126641b4270c89a27bfdb12dad1f210dfde09c77ef4187ad"
+    }
+  },
+  "census": {
+    "bytes": 570797,
+    "sha256": "058ce4d01d7c7452d0ee972bd8acbd5f6f5bfb5b2f35c96b70d7aa81509ea761"
+  },
+  "excluded_dirty": [
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+    "cmd/treedb_column_graph_demo/main.go"
+  ],
+  "foreign": [
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+    "cmd/treedb_column_graph_demo/main.go"
+  ],
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "index": {
+    "bytes": 1827592,
+    "sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596"
+  },
+  "manifest": {
+    "bytes": 24737,
+    "sha256": "7f74644ca3643f17b3638f600fbf9309387658f41f072f3cdea9c171370dfccd"
+  },
+  "matches_last_routing_census": true,
+  "owned_count": 94,
+  "protected": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+  "qualification": "WIP source recovery; original9 constructor focused PASS and routing public GREEN receipts retained separately; production bounded ACK=0; no fresh-BODY edits; no Go run for this capture",
+  "recommended_parent_prefix_from_root": "669ca",
+  "source_census_count": 4439,
+  "source_status_head_index_unchanged": true
+}

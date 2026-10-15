@@ -1,0 +1,97 @@
+ M TreeDB/collections/command_wal_bench_test.go
+ M TreeDB/collections/command_wal_test.go
+ M TreeDB/collections/document_ingestion_test.go
+ M TreeDB/collections/source_atomic_column_test.go
+ M TreeDB/collections/vector_index_persist_test.go
+ M TreeDB/db/command_wal_feature_gate_test.go
+ M TreeDB/db/command_wal_recovery_test.go
+ M TreeDB/db/db.go
+ M TreeDB/db/durable_primary_runtime_v5.go
+ M TreeDB/db/durable_root_metadata_reuse_test.go
+ M TreeDB/db/durable_root_runtime.go
+ M TreeDB/db/format_config.go
+ M TreeDB/db/format_config_test.go
+ M TreeDB/db/leaf_generation_runtime.go
+ M TreeDB/db/open_readonly.go
+ M TreeDB/db/original_primary_runtime_cleanup.go
+ M TreeDB/db/physical_snapshot_cut_v1.go
+ M TreeDB/db/physical_snapshot_cut_v1_test.go
+ M TreeDB/db/primary_bank_construction_v5.go
+ M TreeDB/db/root_publication_activation.go
+ M TreeDB/db/stable_pager_owned_operations.go
+ M TreeDB/docs/spec/recovery.md
+ M TreeDB/docs/spec/storage-format.md
+ M TreeDB/freelist/allocator_cow.go
+ M TreeDB/freelist/generation_snapshot_v1.go
+ M TreeDB/freelist/generation_snapshot_v1_test.go
+ M TreeDB/freelist/generation_v1_format.go
+ M TreeDB/freelist/generation_v1_metadata_cursor_test.go
+ M TreeDB/freelist/generation_v1_metadata_reuse.go
+ M TreeDB/freelist/generation_v1_metadata_reuse_test.go
+ M TreeDB/freelist/generation_v1_reservation.go
+ M TreeDB/freelist/generation_v1_test.go
+ M TreeDB/freelist/generation_v1_tree.go
+ M TreeDB/freelist/generation_v1_txn.go
+ M TreeDB/internal/rootpublication/durable_root_transaction.go
+ M TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go
+ M TreeDB/internal/rootpublication/native_primary_finish_work_v6.go
+ M TreeDB/internal/rootpublication/native_publication_v6.go
+ M TreeDB/internal/rootpublication/pin_registry.go
+ M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+ M TreeDB/internal/rootpublication/resource_allocation.go
+ M TreeDB/internal/rootpublication/resource_entry_allocation.go
+ M TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go
+ M TreeDB/internal/rootpublication/resource_field_allocation.go
+ M TreeDB/internal/rootpublication/resource_kind_allocation.go
+ M TreeDB/internal/rootpublication/resource_logical_allocation.go
+ M TreeDB/internal/rootpublication/resource_manifest_allocation.go
+ M TreeDB/internal/rootpublication/resource_obligation_allocation.go
+ M TreeDB/internal/rootpublication/resource_original_cleanup.go
+ M TreeDB/internal/rootpublication/resource_physical_allocation.go
+ M TreeDB/internal/rootpublication/resource_rope_allocation.go
+ M TreeDB/internal/rootpublication/resource_set.go
+ M TreeDB/internal/rootpublication/resource_token.go
+ M TreeDB/internal/rootpublication/resource_token_allocation.go
+ M TreeDB/internal/valuelog/native_zstd_rank_census_test.go
+ M cmd/treedb_column_graph_demo/main.go
+?? TreeDB/db/freelist_patricia_feature_v2_test.go
+?? TreeDB/db/leaf_generation_stale_work_v6_test.go
+?? TreeDB/db/primary_bank_release_work_v6.go
+?? TreeDB/db/primary_member_retirement_work_v6.go
+?? TreeDB/db/primary_runtime_disposal_work_v6.go
+?? TreeDB/db/primary_runtime_disposal_work_v6_test.go
+?? TreeDB/db/primary_seal_release_work_v6.go
+?? TreeDB/db/primary_visible_member_work_v6.go
+?? TreeDB/db/snapshot_publication_work_v6.go
+?? TreeDB/db/stable_pager_release_work_v6.go
+?? TreeDB/db/stable_pager_release_work_v6_test.go
+?? TreeDB/freelist/allocator_activation_work.go
+?? TreeDB/freelist/generation_topology_5131_test.go
+?? TreeDB/freelist/generation_v1_begin_work.go
+?? TreeDB/freelist/generation_v1_emit_work.go
+?? TreeDB/freelist/generation_v1_emit_work_test.go
+?? TreeDB/freelist/generation_v1_encode_work.go
+?? TreeDB/freelist/generation_v1_materialize_output_work.go
+?? TreeDB/freelist/generation_v1_materialize_work.go
+?? TreeDB/freelist/generation_v1_materialize_work_test.go
+?? TreeDB/freelist/generation_v1_metadata_claim_work.go
+?? TreeDB/freelist/generation_v1_metadata_reuse_work.go
+?? TreeDB/freelist/generation_v1_private_test.go
+?? TreeDB/freelist/generation_v1_prune_work.go
+?? TreeDB/freelist/generation_v1_reservation_finalize_work.go
+?? TreeDB/freelist/generation_v1_reservation_inventory_work.go
+?? TreeDB/freelist/generation_v1_reservation_work.go
+?? TreeDB/freelist/generation_v1_reservation_work_test.go
+?? TreeDB/freelist/generation_v1_routing_test.go
+?? TreeDB/freelist/generation_v1_tree_work.go
+?? TreeDB/freelist/generation_v1_tree_work_test.go
+?? TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go
+?? TreeDB/internal/rootpublication/resource_graph_release_work_v6.go
+?? TreeDB/internal/rootpublication/resource_graph_release_work_v6_test.go
+?? TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go
+?? TreeDB/internal/rootpublication/resource_set_release_work_v6.go
+?? TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go
+?? TreeDB/internal/rootpublication/resource_token_release_work_v6.go
+?? TreeDB/internal/rootpublication/resource_token_release_work_v6_test.go
+?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go
+?? TreeDB/mvcc/primary_generation_routing_v6_test.go

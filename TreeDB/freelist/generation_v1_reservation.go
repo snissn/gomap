@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -50,39 +49,22 @@ func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 }
 
 func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, error) {
-	out := append([]ReservationExtentV1(nil), extents...)
-	slices.SortFunc(out, func(a, b ReservationExtentV1) int {
-		if a.StartPageID != b.StartPageID {
-			return cmp.Compare(a.StartPageID, b.StartPageID)
-		}
-		if a.Kind != b.Kind {
-			return cmp.Compare(a.Kind, b.Kind)
-		}
-		return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
-	})
-	merged := out[:0]
-	for _, extent := range out {
-		if extent.StartPageID < 2 || extent.Count == 0 || extent.Kind < ReservationReusedData || extent.Kind > ReservationAbandonedAppend {
-			return nil, ErrGenerationFormat
-		}
-		end := extent.StartPageID + uint64(extent.Count)
-		if end < extent.StartPageID {
-			return nil, ErrGenerationFormat
-		}
-		if len(merged) > 0 {
-			last := &merged[len(merged)-1]
-			lastEnd := last.StartPageID + uint64(last.Count)
-			if lastEnd > extent.StartPageID {
-				return nil, ErrGenerationFormat
-			}
-			if last.Kind == extent.Kind && last.LastReachableCommitSeq == extent.LastReachableCommitSeq && lastEnd == extent.StartPageID && uint64(last.Count)+uint64(extent.Count) <= uint64(^uint32(0)) {
-				last.Count += extent.Count
-				continue
-			}
-		}
-		merged = append(merged, extent)
+	var work reservationNormalizeWorkV1
+	_, err := work.advance(extents, nil)
+	if err != nil {
+		return nil, err
 	}
-	return merged, nil
+	return work.out, nil
+}
+
+func compareReservationExtentsV1(a, b ReservationExtentV1) int {
+	if a.StartPageID != b.StartPageID {
+		return cmp.Compare(a.StartPageID, b.StartPageID)
+	}
+	if a.Kind != b.Kind {
+		return cmp.Compare(a.Kind, b.Kind)
+	}
+	return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
 }
 
 const reservationEntriesPerPage = (page.PageSize - reservationHeaderSize) / reservationEntrySize
@@ -97,57 +79,12 @@ func encodeReservationPages(id uint64, record ReservationRecordV1) ([][]byte, Re
 }
 
 func encodeNormalizedReservationPages(id uint64, record ReservationRecordV1) ([][]byte, ReservationRecordV1, error) {
-	extents := record.Extents
-	pageCount := (len(extents) + reservationEntriesPerPage - 1) / reservationEntriesPerPage
-	if pageCount == 0 {
-		pageCount = 1
+	var work reservationPageEncodeWorkV1
+	_, err := work.advance(id, &record, nil)
+	if err != nil {
+		return nil, ReservationRecordV1{}, err
 	}
-	if pageCount > int(^uint16(0)) || id > ^uint64(0)-uint64(pageCount) {
-		return nil, ReservationRecordV1{}, fmt.Errorf("%w: reservation record page count %d", ErrGenerationFormat, pageCount)
-	}
-	record.pageID = id
-	record.pageIDs = make([]uint64, pageCount)
-	pages := make([][]byte, pageCount)
-	for pageIndex := range pages {
-		pageID := id + uint64(pageIndex)
-		record.pageIDs[pageIndex] = pageID
-		start := pageIndex * reservationEntriesPerPage
-		end := min(start+reservationEntriesPerPage, len(extents))
-		entries := extents[start:end]
-		b := make([]byte, page.PageSize)
-		encodePageHeader(b, pageID, page.PageTypeFreelistReservation, uint16(len(entries)))
-		copy(b[16:24], reservationMagic[:])
-		binary.LittleEndian.PutUint16(b[24:26], 1)
-		binary.LittleEndian.PutUint16(b[26:28], reservationHeaderSize)
-		binary.LittleEndian.PutUint16(b[28:30], reservationEntrySize)
-		copy(b[32:48], record.CandidateID[:])
-		binary.LittleEndian.PutUint64(b[48:56], record.GenerationID)
-		binary.LittleEndian.PutUint64(b[56:64], record.BaseID)
-		if pageIndex+1 < pageCount {
-			binary.LittleEndian.PutUint64(b[64:72], pageID+1)
-		}
-		binary.LittleEndian.PutUint32(b[72:76], uint32(len(entries)))
-		binary.LittleEndian.PutUint16(b[76:78], 1)
-		binary.LittleEndian.PutUint16(b[78:80], uint16(pageCount))
-		copy(b[80:112], record.BaseDigest[:])
-		binary.LittleEndian.PutUint32(b[144:148], uint32(pageIndex))
-		binary.LittleEndian.PutUint32(b[148:152], uint32(len(extents)))
-		o := reservationHeaderSize
-		for _, extent := range entries {
-			binary.LittleEndian.PutUint64(b[o:o+8], extent.StartPageID)
-			binary.LittleEndian.PutUint32(b[o+8:o+12], extent.Count)
-			b[o+12] = byte(extent.Kind)
-			binary.LittleEndian.PutUint64(b[o+16:o+24], extent.LastReachableCommitSeq)
-			o += reservationEntrySize
-		}
-		pages[pageIndex] = b
-	}
-	record.digest = reservationDigest(pages)
-	for _, b := range pages {
-		copy(b[112:144], record.digest[:])
-		finishPage(b)
-	}
-	return pages, record, nil
+	return work.pages, record, nil
 }
 
 func reservationDigest(pages [][]byte) [32]byte {
@@ -234,6 +171,19 @@ func loadReservationRecord(src PageSource, id, highWater uint64) (ReservationRec
 		}
 	}
 	return record, nil
+}
+
+// pendingMetadataCount counts the original normalized ranges without expanding
+// them into one retiredPage per ID. The expanded form remains available to
+// callers which actually require individual retirement records.
+func (r ReservationRecordV1) pendingMetadataCount() uint64 {
+	var count uint64
+	for _, extent := range r.Extents {
+		if extent.Kind == ReservationPendingMetadataRetirement {
+			count += uint64(extent.Count)
+		}
+	}
+	return count
 }
 
 func (r ReservationRecordV1) pendingMetadata() []retiredPage {
@@ -363,17 +313,50 @@ func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64) error
 	return nil
 }
 
+// firstConflictingOwnerLocked retains the original first-conflict result without
+// expanding a metadata interval into individual page probes. Interval arithmetic
+// uses subtraction, matching reservedLocked even for an overflowing stored end.
 func (l *ReservationLedger) firstConflictingOwnerLocked(start, count uint64) (uint64, bool, bool) {
+	id, _, found, valid := l.firstConflictingRangeLocked(start, count)
+	return id, found, valid
+}
+
+// firstConflictingRangeLocked also returns the end of the earliest conflicting
+// owned interval. No valid placement can start inside that interval, so the
+// original repeated one-page retry may advance directly to its end.
+func (l *ReservationLedger) firstConflictingRangeLocked(start, count uint64) (uint64, uint64, bool, bool) {
 	if count == 0 || start > ^uint64(0)-count {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	end := start + count
-	for id := start; id < end; id++ {
-		if l.reservedLocked(id) {
-			return id, true, true
+	end, first, after, found := start+count, uint64(0), uint64(0), false
+	consider := func(id, n uint64) {
+		if n == 0 || id >= end {
+			return
+		}
+		at := max(id, start)
+		if at-id >= n {
+			return
+		}
+		next := ^uint64(0)
+		if n <= ^uint64(0)-id {
+			next = id + n
+		}
+		if !found || at < first || at == first && next > after {
+			first, after, found = at, next, true
 		}
 	}
-	return 0, false, true
+	for id := range l.owners {
+		consider(id, 1)
+	}
+	for _, burned := range l.burnedTails {
+		consider(burned.start, burned.count)
+	}
+	for _, candidate := range l.candidates {
+		if candidate.tailReserved {
+			consider(candidate.tailStart, candidate.tailCount)
+		}
+	}
+	return first, after, found, true
 }
 
 func reservationPagesForEntries(entries uint64) uint64 {
@@ -390,6 +373,10 @@ func reservationPagesForEntries(entries uint64) uint64 {
 func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1) (uint64, uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.reserveTailLockedV1(candidate, minimumStart, statePageCount, dataIDs, baseExtents)
+}
+
+func (l *ReservationLedger) reserveTailLockedV1(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1) (uint64, uint64, error) {
 	if candidate == (CandidateIDV1{}) || minimumStart < 2 {
 		return 0, 0, ErrGenerationFormat
 	}
@@ -434,7 +421,7 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		if count > uint64(^uint32(0)) {
 			return 0, 0, ErrGenerationFormat
 		}
-		conflictID, conflict, valid := l.firstConflictingOwnerLocked(start, count)
+		conflictID, conflictEnd, conflict, valid := l.firstConflictingRangeLocked(start, count)
 		if !valid {
 			return 0, 0, ErrNoAllocatablePage
 		}
@@ -444,7 +431,7 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		if conflictID == ^uint64(0) {
 			return 0, 0, ErrNoAllocatablePage
 		}
-		start = conflictID + 1
+		start = conflictEnd
 	}
 	if r == nil {
 		r = &reservation{state: CandidatePreVisible, ids: make([]uint64, 0, len(dataIDs))}

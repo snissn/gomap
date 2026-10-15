@@ -1,0 +1,6 @@
+=== RUN   TestCommitAtPrimaryOnlyRetainsActualDataGeneration
+    primary_generation_routing_v6_test.go:76: bookkeeping-only PRIMARY replacement rebuilt DATA generation: before=3 after=4 replacement=0
+--- FAIL: TestCommitAtPrimaryOnlyRetainsActualDataGeneration (0.02s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/mvcc	0.026s
+FAIL
