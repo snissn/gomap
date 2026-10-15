@@ -1,0 +1,5 @@
+{
+  "ref": "codex/5130-allocator-repair-evidence-20261015",
+  "matching_pr_heads": [],
+  "reason": "Artifact-only non-PR ref; no production CI or native acceptance replaced."
+}

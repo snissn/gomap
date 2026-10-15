@@ -1,0 +1,2566 @@
+--- a/TreeDB/collections/command_wal_bench_test.go
++++ b/TreeDB/collections/command_wal_bench_test.go
+@@ -174,7 +174,7 @@
+ 		if err := setup.Close(); err != nil {
+ 			b.Fatalf("close setup DB: %v", err)
+ 		}
+-		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++		if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 			b.Fatalf("save command WAL format: %v", err)
+ 		}
+ 	} else {
+--- a/TreeDB/collections/command_wal_test.go
++++ b/TreeDB/collections/command_wal_test.go
+@@ -603,7 +603,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("Close setup DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{
+@@ -999,7 +999,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("Close setup DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{
+@@ -2548,7 +2548,7 @@
+ 
+ func TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	d := openCollectionCommandWALDB(t, dir)
+@@ -3317,7 +3317,7 @@
+ 
+ func TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	d := openCollectionCommandWALDB(t, dir)
+@@ -3388,7 +3388,7 @@
+ 	if err := seed.Close(); err != nil {
+ 		t.Fatalf("Close seed DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 
+@@ -3472,7 +3472,7 @@
+ 
+ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	d := openCollectionCommandWALDB(t, dir)
+@@ -3550,7 +3550,7 @@
+ 
+ func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	d := openCollectionCommandWALDB(t, dir)
+@@ -3638,7 +3638,7 @@
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			dir := t.TempDir()
+-			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++			if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 				t.Fatalf("SaveFormatConfig: %v", err)
+ 			}
+ 			d := openCollectionCommandWALDB(t, dir)
+@@ -3669,7 +3669,7 @@
+ 
+ func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	meta := CollectionMeta{
+@@ -3824,7 +3824,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("Close setup DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, meta))
+@@ -4012,7 +4012,7 @@
+ 
+ func TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN(t *testing.T) {
+ 	dir := t.TempDir()
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	rawPayload, err := commitlog.EncodeRawKVBatchPayload(nil)
+@@ -4147,7 +4147,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("Close setup DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	return dir, baseLSN
+@@ -4187,7 +4187,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("Close setup DB: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	return dir
+@@ -4654,3 +4654,16 @@
+ 		t.Fatalf("reopened covered prefix applied=%d next=%d, want 2,3", applied, next)
+ 	}
+ }
++
++// Activation updates preserve the physical format and ordinary options of the
++// seeded store. SaveFormatConfig intentionally rejects removing its V2 marker.
++func saveCollectionCommandWALFormat(dir string) error {
++	cfg, _, err := backenddb.LoadFormatConfig(dir)
++	if err != nil {
++		return err
++	}
++	if !cfg.RequiresCommandWALV1() {
++		cfg.RequiredFeatures = append(cfg.RequiredFeatures, backenddb.RequiredFeatureCommandWALV1)
++	}
++	return backenddb.SaveFormatConfig(dir, cfg)
++}
+--- a/TreeDB/collections/document_ingestion_test.go
++++ b/TreeDB/collections/document_ingestion_test.go
+@@ -109,7 +109,7 @@
+ 	if err := setup.Close(); err != nil {
+ 		t.Fatalf("Close setup: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+--- a/TreeDB/collections/source_atomic_column_test.go
++++ b/TreeDB/collections/source_atomic_column_test.go
+@@ -116,7 +116,7 @@
+ 	if err := setup.Close(); err != nil {
+ 		t.Fatalf("Close setup: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ 
+--- a/TreeDB/collections/vector_index_persist_test.go
++++ b/TreeDB/collections/vector_index_persist_test.go
+@@ -268,7 +268,7 @@
+ 	if err := d.Close(); err != nil {
+ 		t.Fatalf("close setup db: %v", err)
+ 	}
+-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
++	if err := saveCollectionCommandWALFormat(dir); err != nil {
+ 		t.Fatalf("enable command WAL: %v", err)
+ 	}
+ 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("docs", []commitlog.CollectionDocument{{
+--- a/TreeDB/db/command_wal_feature_gate_test.go
++++ b/TreeDB/db/command_wal_feature_gate_test.go
+@@ -342,6 +342,18 @@
+ 			if err := db.Close(); err != nil {
+ 				t.Fatalf("Close: %v", err)
+ 			}
++			cfg, ok, err := LoadFormatConfig(dir)
++			if err != nil || !ok || !cfg.RequiresFreelistPatriciaV2() {
++				t.Fatalf("fresh format marker: %+v %v %v", cfg, ok, err)
++			}
++			reopened, err := Open(Options{Dir: dir})
++			if err != nil {
++				t.Fatalf("reopen repaired format: %v", err)
++			}
++			if err := reopened.Close(); err != nil {
++				t.Fatal(err)
++			}
++
+ 		})
+ 	}
+ }
+--- a/TreeDB/db/command_wal_recovery_test.go
++++ b/TreeDB/db/command_wal_recovery_test.go
+@@ -2933,7 +2933,12 @@
+ 	if err := os.MkdirAll(dir, 0o755); err != nil {
+ 		t.Fatalf("MkdirAll: %v", err)
+ 	}
+-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
++	cfg, _, err := LoadFormatConfig(dir)
++	if err != nil {
++		t.Fatalf("LoadFormatConfig: %v", err)
++	}
++	cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
++	if err := SaveFormatConfig(dir, cfg); err != nil {
+ 		t.Fatalf("SaveFormatConfig: %v", err)
+ 	}
+ }
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -2440,6 +2440,10 @@
+ 	if err := validateOptions(opts); err != nil {
+ 		return nil, err
+ 	}
++	patriciaFeature, err := validateFreelistTopologyGateV2(opts.Dir)
++	if err != nil {
++		return nil, err
++	}
+ 	warnInsecureDir(opts.Dir, opts.NotifyError)
+ 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+ 		return nil, err
+@@ -2456,6 +2460,18 @@
+ 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
+ 	if err != nil {
+ 		return nil, err
++	}
++	if !patriciaFeature {
++		// Recheck under the store lock before persisting a fresh-store marker.
++		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
++			_ = lock.Close()
++			return nil, gateErr
++		}
++		configErr := saveFreshFreelistFormatConfig(opts)
++		if configErr != nil {
++			_ = lock.Close()
++			return nil, configErr
++		}
+ 	}
+ 	db, err := openWithLock(opts, lock)
+ 	if err != nil {
+--- a/TreeDB/db/durable_root_metadata_reuse_test.go
++++ b/TreeDB/db/durable_root_metadata_reuse_test.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -288,3 +289,85 @@
+ 		})
+ 	}
+ }
++
++// Both selectable slots still own their lineage until the replacement seal.
++// Inspect the real publication path after candidate pages have been written,
++// when premature retirement can overwrite the older slot's parent record.
++func TestDurableRootMetadataReuseRetainsBothSlotParents5135(t *testing.T) {
++	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer database.Close()
++	if err := database.SetSync([]byte("retained"), []byte("old")); err != nil {
++		t.Fatal(err)
++	}
++	for i := 0; i < 64; i++ {
++		publishNeutralMetadata4627(t, database)
++	}
++	current := database.durableRoot
++	older := uint64(1) - current.slot
++	if current.record.ParentRecordPageID != current.slotMeta[older].RootRecordPageID || current.slotRecord[older].ParentRecordPageID == 0 {
++		t.Fatal("fixture does not contain both overwritten-slot and parent aliases")
++	}
++	cut := errors.New("stop before replacement seal")
++	reached := false
++	var lineageErr error
++	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
++		if event.Point != durabilitycut.BeforePublicationSealWrite {
++			return nil
++		}
++		reached = true
++		for slot, record := range current.slotRecord {
++			if err := validateDurableRootLineageV1(database.idx.Load().pager, record); err != nil {
++				lineageErr = errors.Join(lineageErr, fmt.Errorf("slot%d commit%d: %w", slot, record.CommitSeq, err))
++			}
++		}
++		return cut
++	})
++	defer restore()
++	if err := database.SetSync([]byte("retained"), []byte("new")); !errors.Is(err, cut) {
++		t.Fatalf("publication error=%v", err)
++	}
++	if !reached {
++		t.Fatal("replacement seal cut not reached")
++	}
++	if lineageErr != nil {
++		t.Fatal(lineageErr)
++	}
++}
++
++func TestDurableRootSlotRetirementsUseSuccessorCommit5135(t *testing.T) {
++	for _, directory := range []bool{false, true} {
++		t.Run(fmt.Sprintf("directory=%v", directory), func(t *testing.T) {
++			meta := page.DurableMetaV1{CommitSeq: 7, RootRecordPageID: 20}
++			record := rootpublication.DurableRootRecordV1{CommitSeq: 7, TotalPages: 40,
++				Manifest: rootpublication.DependencyManifestRefV1{FirstPageID: 30, PageCount: 2}}
++			if directory {
++				record.Manifest = rootpublication.DependencyManifestRefV1{}
++				record.Directory.RootPageID = 30
++			}
++			successor := rootpublication.DurableRootRecordV1{CommitSeq: 42, ParentRecordPageID: 20}
++			var storage [2]freelist.COWRetirementV1
++			retirements, err := appendDurableRootSlotRetirementsV1(storage[:0], meta, record, successor)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if len(retirements) != 2 && !directory || len(retirements) != 1 && directory {
++				t.Fatalf("retirements=%+v", retirements)
++			}
++			root := retirements[len(retirements)-1]
++			if len(root.PageIDs) != 1 || root.PageIDs[0] != 20 || root.LastReachableCommitSeq != 42 {
++				t.Fatalf("parent retirement=%+v", root)
++			}
++			if !directory && (len(retirements[0].PageIDs) != 2 || retirements[0].PageIDs[0] != 30 || retirements[0].LastReachableCommitSeq != 7) {
++				t.Fatalf("manifest retirement=%+v", retirements[0])
++			}
++			successor.ParentRecordPageID = 19
++			retirements, err = appendDurableRootSlotRetirementsV1(storage[:0], meta, record, successor)
++			if err != nil || retirements[len(retirements)-1].LastReachableCommitSeq != 7 {
++				t.Fatalf("unrelated successor extends lifetime: %+v %v", retirements, err)
++			}
++		})
++	}
++}
+--- a/TreeDB/db/durable_root_runtime.go
++++ b/TreeDB/db/durable_root_runtime.go
+@@ -420,6 +420,25 @@
+ 	}
+ 	pages = append(pages, meta.RootRecordPageID)
+ 	return pages, nil
++}
++
++// appendDurableRootSlotRetirementsV1 separates a slot's manifest from its
++// root record. Recovery validates the immediate parent of each selectable slot,
++// so the record remains reachable through its surviving successor's actual
++// commit sequence, which may skip logical commits between durable seals.
++func appendDurableRootSlotRetirementsV1(retirements []freelist.COWRetirementV1, meta page.DurableMetaV1, record, successor rootpublication.DurableRootRecordV1) ([]freelist.COWRetirementV1, error) {
++	pages, err := durableRootSlotAuxiliaryPagesV1(meta, record)
++	if err != nil || len(pages) == 0 {
++		return retirements, err
++	}
++	if manifest := pages[:len(pages)-1]; len(manifest) != 0 {
++		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: manifest, LastReachableCommitSeq: meta.CommitSeq})
++	}
++	lastReachable := meta.CommitSeq
++	if successor.ParentRecordPageID == meta.RootRecordPageID {
++		lastReachable = max(lastReachable, successor.CommitSeq)
++	}
++	return append(retirements, freelist.COWRetirementV1{PageIDs: pages[len(pages)-1:], LastReachableCommitSeq: lastReachable}), nil
+ }
+ 
+ func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (_ map[uint32]struct{}, _ bool, retErr error) {
+@@ -1779,7 +1798,8 @@
+ 	if current.slot == MetaPage0ID {
+ 		target = MetaPage1ID
+ 	}
+-	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(current.slotMeta[target], current.slotRecord[target])
++	var retirementStorage [3]freelist.COWRetirementV1
++	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], current.slotMeta[target], current.slotRecord[target], current.record)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -1792,10 +1812,7 @@
+ 		next.CommitSeq,
+ 		durableRootCandidateIDV1(current, next),
+ 		capability,
+-		[]freelist.COWRetirementV1{
+-			{PageIDs: overwrittenPages, LastReachableCommitSeq: current.slotCommit[target]},
+-			{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq},
+-		},
++		append(retirements, freelist.COWRetirementV1{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq}),
+ 		auxiliaryCount,
+ 		freelist.NewCandidatePageSinkV1(),
+ 	)
+--- a/TreeDB/db/format_config.go
++++ b/TreeDB/db/format_config.go
+@@ -21,6 +21,7 @@
+ const (
+ 	RequiredFeatureCommandWALV2          = "command_wal_v2"
+ 	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
++	RequiredFeatureFreelistPatriciaV2    = "freelist_patricia_v2"
+ 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
+ 	// during the pre-alpha cutover. Newly persisted configs always require V2.
+ 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
+@@ -30,10 +31,11 @@
+ // FormatConfig captures the format-affecting knobs that maintenance tooling
+ // should preserve when rewriting index/value-log state.
+ //
+-// This file is best-effort and pre-alpha; callers should tolerate it being
+-// absent. Versioned files written by SaveFormatConfig are expected to be fully
+-// populated; if new fields are added in the future, the version should be
+-// bumped so older binaries do not accidentally apply zero-values.
++// Ordinary options are best-effort and pre-alpha. Required features describe
++// physical storage contracts: a nonempty index requires its persisted freelist
++// marker even when ordinary format options are ignored. Versioned files written
++// by SaveFormatConfig are expected to be fully populated; new ordinary fields
++// require a version bump so older binaries do not apply zero-values.
+ type FormatConfig struct {
+ 	Version int `json:"version"`
+ 
+@@ -73,6 +75,15 @@
+ 	return false
+ }
+ 
++func (cfg FormatConfig) RequiresFreelistPatriciaV2() bool {
++	for _, feature := range cfg.RequiredFeatures {
++		if normalizeFormatConfigMode(feature) == RequiredFeatureFreelistPatriciaV2 {
++			return true
++		}
++	}
++	return false
++}
++
+ func formatConfigPath(dir string) string {
+ 	if dir == "" {
+ 		return ""
+@@ -107,6 +118,8 @@
+ 	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
+ 		cfg.IndexInternalBaseDelta = false
+ 	}
++	cfg.Version = formatConfigRequiredFeaturesVersion
++	cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureFreelistPatriciaV2)
+ 	if opts.CommandWAL {
+ 		cfg.Version = formatConfigRequiredFeaturesVersion
+ 		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
+@@ -405,6 +418,9 @@
+ // that already requires command_wal_v2 does not re-run activation validation
+ // because command-WAL segments are expected after activation. The incremental
+ // dependency directory is a new-store opt-in and cannot be removed once saved.
++// This replaces the configuration; callers updating an existing store must load
++// its config first and preserve required features. In particular, the persisted
++// freelist_patricia_v2 physical-format requirement cannot be removed.
+ func SaveFormatConfig(dir string, cfg FormatConfig) error {
+ 	existing, ok, err := LoadFormatConfig(dir)
+ 	if err != nil {
+@@ -448,6 +464,18 @@
+ 			return err
+ 		}
+ 	}
++	if ok && existing.RequiresFreelistPatriciaV2() && !cfg.RequiresFreelistPatriciaV2() {
++		return fmt.Errorf("%w: cannot remove freelist_patricia_v2", ErrLegacyFormatRebuildRequired)
++	}
++	if cfg.RequiresFreelistPatriciaV2() && (!ok || !existing.RequiresFreelistPatriciaV2()) {
++		if info, statErr := os.Stat(filepath.Join(dir, indexFileName)); statErr == nil {
++			if info.Size() != 0 {
++				return fmt.Errorf("%w: freelist_patricia_v2 requires a new store", ErrLegacyFormatRebuildRequired)
++			}
++		} else if !os.IsNotExist(statErr) {
++			return statErr
++		}
++	}
+ 	return writeFormatConfig(dir, cfg)
+ }
+ 
+@@ -484,6 +512,48 @@
+ 		return false, err
+ 	}
+ 	return !requiresCommandWAL, nil
++}
++
++// saveFreshFreelistFormatConfig runs under the store lock, before creating the
++// first index page. IgnoreFormatConfig may replace malformed ordinary options,
++// but never bypass a required-feature or durability contract.
++func saveFreshFreelistFormatConfig(opts Options) error {
++	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
++	if err == nil {
++		return SaveFormatConfig(opts.Dir, cfg)
++	}
++	if !opts.IgnoreFormatConfig {
++		return err
++	}
++	if gateErr := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); gateErr != nil {
++		return gateErr
++	}
++	if gateErr := ValidateFormatRequiredFeatureGate(opts.Dir); gateErr != nil {
++		return gateErr
++	}
++	if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
++		return gateErr
++	}
++	raw, readErr := os.ReadFile(formatConfigPath(opts.Dir))
++	if readErr != nil {
++		return readErr
++	}
++	var gate struct {
++		RequiredFeatures []string `json:"required_features"`
++	}
++	if decodeErr := json.Unmarshal(raw, &gate); decodeErr != nil && bytes.Contains(raw, []byte("required_features")) {
++		return err
++	}
++	cfg = formatConfigFromOptions(opts)
++	for _, feature := range gate.RequiredFeatures {
++		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, feature)
++	}
++	if cfg.RequiresCommandWALV1() {
++		if activationErr := ValidateCommandWALActivationClean(opts.Dir); activationErr != nil {
++			return activationErr
++		}
++	}
++	return writeFormatConfig(opts.Dir, cfg)
+ }
+ 
+ // saveOpenFormatConfig is an openWithLock post-open refresh hook. It must not
+@@ -641,7 +711,7 @@
+ 		}
+ 		seen[feature] = struct{}{}
+ 		switch feature {
+-		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2:
++		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2:
+ 			// Current command WAL and incremental dependency directory.
+ 		case legacyRequiredFeatureCommandWALV1:
+ 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
+@@ -651,3 +721,23 @@
+ 	}
+ 	return nil
+ }
++
++// validateFreelistTopologyGateV2 runs before index decode or storage cleanup.
++// A nonempty index cannot acquire the marker through open or slot fallback.
++func validateFreelistTopologyGateV2(dir string) (bool, error) {
++	enabled, err := requiredFormatFeatureEnabled(dir, RequiredFeatureFreelistPatriciaV2)
++	if err != nil || enabled {
++		return enabled, err
++	}
++	info, err := os.Stat(filepath.Join(dir, indexFileName))
++	if errors.Is(err, os.ErrNotExist) {
++		return false, nil
++	}
++	if err != nil {
++		return false, err
++	}
++	if info.Size() != 0 {
++		return false, fmt.Errorf("%w: freelist_patricia_v2 marker missing on nonempty index; rebuild required", ErrLegacyFormatRebuildRequired)
++	}
++	return false, nil
++}
+--- a/TreeDB/db/format_config_test.go
++++ b/TreeDB/db/format_config_test.go
+@@ -39,8 +39,8 @@
+ 	if !ok {
+ 		t.Fatalf("expected format config to exist")
+ 	}
+-	if loaded.Version != formatConfigVersion {
+-		t.Fatalf("loaded version=%d, want %d", loaded.Version, formatConfigVersion)
++	if loaded.Version != formatConfigRequiredFeaturesVersion {
++		t.Fatalf("loaded version=%d, want %d", loaded.Version, formatConfigRequiredFeaturesVersion)
+ 	}
+ 
+ 	applied := Options{
+@@ -198,7 +198,7 @@
+ 	if err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {
+ 		t.Fatalf("SaveFormatConfig initial: %v", err)
+ 	}
+-	if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true}); err != nil {
++	if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true, RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); err != nil {
+ 		t.Fatalf("SaveFormatConfig preserving profile: %v", err)
+ 	}
+ 	loaded, ok, err := LoadFormatConfig(dir)
+--- /dev/null
++++ b/TreeDB/db/freelist_patricia_feature_v2_test.go
+@@ -0,0 +1,171 @@
++package db
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++func TestFreelistPatriciaV2FreshFeatureBeforeIndexAndReopen5131(t *testing.T) {
++	for _, emptyFile := range []bool{false, true} {
++		for _, ignore := range []bool{false, true} {
++			dir := t.TempDir()
++			if emptyFile {
++				if err := os.WriteFile(filepath.Join(dir, indexFileName), nil, 0600); err != nil {
++					t.Fatal(err)
++				}
++			}
++			database, err := Open(Options{Dir: dir, IgnoreFormatConfig: ignore, DisableBackgroundPrune: true})
++			if err != nil {
++				t.Fatal(err)
++			}
++			cfg, ok, err := LoadFormatConfig(dir)
++			if err != nil || !ok || !cfg.RequiresFreelistPatriciaV2() {
++				t.Fatalf("fresh required feature: %+v %t %v", cfg, ok, err)
++			}
++			batch := database.NewBatch()
++			if err = batch.Set([]byte("key"), []byte("value")); err != nil {
++				t.Fatal(err)
++			}
++			if err = batch.WriteSync(); err != nil {
++				t.Fatal(err)
++			}
++			if err = batch.Close(); err != nil {
++				t.Fatal(err)
++			}
++			if err = database.Close(); err != nil {
++				t.Fatal(err)
++			}
++			for _, opener := range []func(Options) (*DB, error){Open, openReadOnlyNoLock} {
++				reopened, err := opener(Options{Dir: dir, ReadOnly: true, IgnoreFormatConfig: ignore})
++				if err != nil {
++					t.Fatal(err)
++				}
++				got, err := reopened.Get([]byte("key"))
++				if err != nil || !bytes.Equal(got, []byte("value")) {
++					t.Fatalf("read %q %v", got, err)
++				}
++				if err = reopened.Close(); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if err = SaveFormatConfig(dir, FormatConfig{}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
++				t.Fatalf("removed marker: %v", err)
++			}
++		}
++	}
++}
++
++func TestFreelistPatriciaV2MissingMarkerBeforeStorageDecode5131(t *testing.T) {
++	for _, ignore := range []bool{false, true} {
++		dir := t.TempDir()
++		before := bytes.Repeat([]byte{0xa5}, page.PageSize)
++		if err := os.WriteFile(filepath.Join(dir, indexFileName), before, 0600); err != nil {
++			t.Fatal(err)
++		}
++		for _, opener := range []func(Options) (*DB, error){Open, openReadOnlyNoLock} {
++			if database, err := opener(Options{Dir: dir, IgnoreFormatConfig: ignore}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
++				if database != nil {
++					_ = database.Close()
++				}
++				t.Fatalf("old index accepted or decoded: %v", err)
++			}
++		}
++		if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureFreelistPatriciaV2}}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
++			t.Fatalf("retroactive marker: %v", err)
++		}
++		after, err := os.ReadFile(filepath.Join(dir, indexFileName))
++		if err != nil || !bytes.Equal(before, after) {
++			t.Fatal("refused index changed")
++		}
++	}
++}
++
++func TestFreelistPatriciaV2OldPagesCannotBecomeFallback5131(t *testing.T) {
++	for _, mode := range []string{"both-old", "old-fallback-corrupt-newest", "valid-fallback-corrupt-newest"} {
++		t.Run(mode, func(t *testing.T) {
++			dir := t.TempDir()
++			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
++			if err != nil {
++				t.Fatal(err)
++			}
++			for i := 0; i < 3; i++ {
++				batch := database.NewBatch()
++				if err = batch.Set([]byte("key"), []byte{byte(i)}); err != nil {
++					t.Fatal(err)
++				}
++				if err = batch.WriteSync(); err != nil {
++					t.Fatal(err)
++				}
++				if err = batch.Close(); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if err = database.Close(); err != nil {
++				t.Fatal(err)
++			}
++			indexPath := filepath.Join(dir, indexFileName)
++			image, err := os.ReadFile(indexPath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			type slotInfo struct{ commit, header uint64 }
++			var slots [2]slotInfo
++			for slot := 0; slot < 2; slot++ {
++				meta, err := page.DecodeDurableMetaV1(image[slot*page.PageSize+page.PageHeaderSize : (slot+1)*page.PageSize])
++				if err != nil {
++					t.Fatal(err)
++				}
++				offset := int(meta.RootRecordPageID) * page.PageSize
++				record, err := rootpublication.DecodeDurableRootRecordV1(image[offset:offset+page.PageSize], meta.RootRecordPageID, meta.RootRecordDigest)
++				if err != nil {
++					t.Fatal(err)
++				}
++				slots[slot] = slotInfo{meta.CommitSeq, record.Freelist.HeaderPageID}
++			}
++			newer, older := 0, 1
++			if slots[1].commit > slots[0].commit {
++				newer, older = 1, 0
++			}
++			if slots[newer].commit == slots[older].commit || slots[newer].header == slots[older].header {
++				t.Fatal("fixture lacks two separate recoverable generations")
++			}
++			for slot, info := range slots {
++				offset := int(info.header) * page.PageSize
++				header := image[offset : offset+page.PageSize]
++				if mode == "both-old" || mode == "old-fallback-corrupt-newest" && slot == older {
++					copy(header[16:24], []byte("FLGENV1\x00"))
++					binary.LittleEndian.PutUint16(header[24:26], 1)
++					page.UpdateChecksum(header)
++				} else if slot == newer {
++					header[8] ^= 1
++				}
++			}
++			if err = os.WriteFile(indexPath, image, 0600); err != nil {
++				t.Fatal(err)
++			}
++			reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
++			if mode == "valid-fallback-corrupt-newest" {
++				if err != nil {
++					t.Fatalf("valid V2 fallback refused: %v", err)
++				}
++				if err = reopened.Close(); err != nil {
++					t.Fatal(err)
++				}
++			} else {
++				if reopened != nil {
++					_ = reopened.Close()
++				}
++				if !errors.Is(err, ErrNoRecoverableMeta) {
++					t.Fatalf("old physical fallback accepted: %v", err)
++				}
++			}
++		})
++	}
++}
+--- a/TreeDB/db/open_readonly.go
++++ b/TreeDB/db/open_readonly.go
+@@ -23,6 +23,9 @@
+ }
+ 
+ func openReadOnly(opts Options) (result *DB, retErr error) {
++	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
++		return nil, err
++	}
+ 	if err := applyReadOnlyDefaults(&opts); err != nil {
+ 		return nil, err
+ 	}
+@@ -241,6 +244,9 @@
+ 		}
+ 	}()
+ 
++	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
++		return nil, err
++	}
+ 	if err := applyReadOnlyDefaults(&opts); err != nil {
+ 		return nil, err
+ 	}
+--- a/TreeDB/db/physical_snapshot_cut_v1.go
++++ b/TreeDB/db/physical_snapshot_cut_v1.go
+@@ -25,7 +25,9 @@
+ // The separately opened index handle remains readable through DB.Close. A retained
+ // directory lock prevents a new writer from reusing pages after the source closes. The
+ // caller must also capture the exact external dependency files before releasing
+-// its higher-level storage barrier; this object exports only index.db.
++// its higher-level storage barrier; this object exports only index.db. A complete
++// store export must also retain format.json, including its required physical
++// format features, as the production archive capture does.
+ type PhysicalSnapshotCutV1 struct {
+ 	mu              sync.Mutex
+ 	file            *os.File
+--- a/TreeDB/db/physical_snapshot_cut_v1_test.go
++++ b/TreeDB/db/physical_snapshot_cut_v1_test.go
+@@ -84,8 +84,24 @@
+ 					t.Fatal(err)
+ 				}
+ 				t.Logf("slot=%d commit=%d parentPage=%d parentCommit=%d oldest=%d classifiedUnused=%v free=%v", slot, record.CommitSeq, record.ParentRecordPageID, record.ParentCommitSeq, cut.oldest, unused, cut.generation.Allocatable(record.ParentRecordPageID))
+-				if uint64(slot) != active && !unused {
+-					t.Fatal("fixture did not exercise reusable older-slot parent")
++				if unused {
++					t.Fatalf("slot %d parent reclaimable at captured oldest %d", slot, cut.oldest)
++				}
++				if uint64(slot) != active {
++					// This retired parent remains reachable through its surviving
++					// successor record, even after its own slot was overwritten.
++					// It becomes reusable only beyond that successor's actual commit.
++					atSuccessor, err := cut.generation.SnapshotPageUnusedV1(record.ParentRecordPageID, record.CommitSeq)
++					if err != nil {
++						t.Fatal(err)
++					}
++					afterSuccessor, err := cut.generation.SnapshotPageUnusedV1(record.ParentRecordPageID, record.CommitSeq+1)
++					if err != nil {
++						t.Fatal(err)
++					}
++					if atSuccessor || !afterSuccessor {
++						t.Fatalf("older-slot parent retirement boundary: commit=%d at=%v after=%v", record.CommitSeq, atSuccessor, afterSuccessor)
++					}
+ 				}
+ 			}
+ 			destination := t.TempDir()
+@@ -303,6 +319,14 @@
+ 		t.Fatalf("cut lost shared directory lock: %v", err)
+ 	}
+ 	destination := t.TempDir()
++	format, err := os.ReadFile(filepath.Join(dir, formatConfigFileName))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(destination, formatConfigFileName), format, 0600); err != nil {
++		t.Fatal(err)
++	}
++
+ 	output, err := os.Create(filepath.Join(destination, indexFileName))
+ 	if err != nil {
+ 		t.Fatal(err)
+--- a/TreeDB/db/root_publication_activation.go
++++ b/TreeDB/db/root_publication_activation.go
+@@ -1496,15 +1496,10 @@
+ 	if base.slot == MetaPage0ID {
+ 		target = MetaPage1ID
+ 	}
+-	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(base.slotMeta[target], base.slotRecord[target])
++	var retirementStorage [3]freelist.COWRetirementV1
++	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], base.slotMeta[target], base.slotRecord[target], base.record)
+ 	if err != nil {
+ 		return err
+-	}
+-	retirements := make([]freelist.COWRetirementV1, 0, 2)
+-	if len(overwrittenPages) != 0 {
+-		retirements = append(retirements, freelist.COWRetirementV1{
+-			PageIDs: overwrittenPages, LastReachableCommitSeq: base.slotCommit[target],
+-		})
+ 	}
+ 	if previous := runtime.activeSeal; previous != nil {
+ 		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {
+--- a/TreeDB/docs/spec/recovery.md
++++ b/TreeDB/docs/spec/recovery.md
+@@ -839,3 +839,23 @@
+ custody with the exact generation through teardown. Reopen rolls forward
+ the committed pair. Process-exit cutpoint tests do not constitute device or
+ power-loss persistence qualification.
++
++
++## Compressed allocator format gate
++
++The active allocator uses physical generation/index/chunk version 2 and the
++required freelist_patricia_v2 store feature. Open checks this marker before
++index recovery or storage cleanup, even for read-only and IgnoreFormatConfig
++opens. Only a new or zero-length index may receive the marker. Both durable-meta
++candidates independently validate version 2; a version-1 allocator cannot become
++a fallback when the newest candidate is corrupt. A valid version-2 older
++candidate remains eligible for normal recovery. Pre-alpha version-1 stores
++require rebuilding, not in-place migration.
++
++Durable-root record retirement includes immediate recovery lineage. When a meta
++slot is replaced, its dependency manifest is retired at that slot's own commit.
++Its root record remains reachable through the actual commit of a surviving
++successor that names it as parent. Commit sequences may jump between durable
++seals; the boundary is the successor's recorded commit, not the old commit plus
++one. The strict reuse boundary must preserve both selectable slots and their
++immediate parent records until the replacement seal is durable.
+--- a/TreeDB/docs/spec/storage-format.md
++++ b/TreeDB/docs/spec/storage-format.md
+@@ -3569,16 +3569,35 @@
+ chunk, and candidate reservation record. `DurableRootRecordV1` binds the exact
+ generation header identity, counts, high-water boundary, and digest.
+ 
+-The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
+-index page contains up to 16 ordered child summaries: page identity, child CRC,
+-free and retired counts, and the minimum `lastReachableCommitSeq`. A chunk
+-contains a 256-bit free bitmap and 256 retirement sequences. Free means bitmap
+-bit 1 and sequence 0; retired means bit 0 and sequence non-zero; live or
+-reserved means both zero. A one-chunk mutation therefore emits one chunk, one
+-immutable index path, one or more reservation pages, and one generation header.
+-Reservation pages form a contiguous, ordered chain so fragmented transactions
+-are not bounded by one page. Unchanged paths retain their existing page
+-identities and bytes.
++The current physical allocator format is **version 2**, while exported Go API
++names retain their V1 suffix. Fresh stores require the freelist_patricia_v2
++feature in format.json before index creation. A nonempty index without that
++marker is refused before storage recovery or cleanup, including read-only and
++ignored-format-config opens. The marker cannot be removed or retroactively
++added to a nonempty store. Physical version-1 generations are not accepted as
++either durable-slot candidate; rebuild pre-alpha directories instead of migrating.
++
++The sparse state tree is a canonical compressed Patricia tree over 56-bit
++chunk numbers (256 page IDs per chunk). Mutable and physical branches use the
++same topology. A branch stores its first differing nibble depth (0..13), its
++right-aligned shared prefix, and at least two ordered child edges; each child
++is another branch or a direct state chunk. Unary branches and leaf index
++wrappers do not exist. An empty tree uses one depth-zero empty branch sentinel.
++A single chunk is the root itself, so a one-chunk mutation emits one chunk,
++only the actual changed branching ancestors, one or more reservation pages,
++and one generation header. Unchanged subtrees retain page identities and bytes.
++
++Index version 2 uses an 80-byte header: nibble depth at byte 28, empty-root
++sentinel flag at byte 29, 32-byte entry size at bytes 30:32, generation ID at
++32:40, free/retired/minimum-retirement summaries at 40:64, shared prefix at
++64:72, and zero reserved bytes at 72:80. Entries retain child identity, CRC,
++summaries, and a kind byte (0 branch, 1 chunk). Generation header byte 29
++selects the root kind. Generation, index, and chunk version fields are 2;
++reservation-chain version remains 1 with unchanged digest semantics.
++A chunk contains a 256-bit free bitmap and 256 retirement sequences. Free means
++bitmap bit 1 and sequence 0; retired means bit 0 and sequence nonzero; live or
++reserved means both zero. Reservation pages form a contiguous ordered chain so
++fragmented transactions are not bounded by one page.
+ 
+ The generation header binds its exact root page identity and CRC; every index
+ entry recursively binds its child page CRC. The header also binds the
+--- a/TreeDB/freelist/allocator_cow.go
++++ b/TreeDB/freelist/allocator_cow.go
+@@ -410,7 +410,7 @@
+ 	}
+ 	rollbackTxn := a.cow.txn
+ 	rollbackStats := a.stats
+-	staged, err := rollbackTxn.cloneForAllocatorPrepare()
++	staged, err := rollbackTxn.cloneForPrivateAllocatorPrepare()
+ 	if err != nil {
+ 		return nil, err
+ 	}
+--- /dev/null
++++ b/TreeDB/freelist/generation_topology_5131_test.go
+@@ -0,0 +1,235 @@
++package freelist
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++// This representation optimization preserves observable allocation semantics.
++// The regression discriminator is physical amplification, alongside behavioral
++// controls: one chunk must not require fourteen unary index pages.
++func TestGenerationTopology5131PublicCandidatePageAmplification(t *testing.T) {
++	store := NewMemoryPageStoreV1()
++	base := MustNewFreelistGenerationV1(1, 1024, []uint64{300, 301, 302}, nil)
++	txn := NewFreelistTxn(base, nil)
++	if id, err := txn.Allocate(300); err != nil || id != 302 {
++		t.Fatalf("allocate = %d, %v", id, err)
++	}
++	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("patricia-public"), store)
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Exactly one direct chunk, one reservation page, and one header.
++	if got := len(candidate.DirtyPageIDs()); got != 3 {
++		t.Fatalf("single-chunk candidate emitted %d pages; want 3", got)
++	}
++	for _, id := range candidate.DirtyPageIDs() {
++		found := false
++		for _, owned := range candidate.ReservationRecord().metadataPages() {
++			if owned == id {
++				found = true
++			}
++		}
++		if !found {
++			t.Fatalf("emitted page %d is outside candidate", id)
++		}
++	}
++	loaded, err := LoadGenerationV1(store, candidate.Generation().GenerationRef())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !loaded.Allocatable(300) || !loaded.Allocatable(301) || loaded.Allocatable(302) || !base.Allocatable(302) {
++		t.Fatal("allocation or held generation changed across reopen")
++	}
++}
++
++func TestGenerationTopology5131SplitCollapseSparseHighBits(t *testing.T) {
++	keys := []uint64{0, 1, 15, 16, 0x123456789abc, 1 << 55, (1 << 56) - 1}
++	var root *stateNode
++	for _, key := range keys {
++		key := key
++		prior := root
++		root = mutateChunk(root, key, 0, func(c *stateChunk) { c.setFree(7, true) })
++		if err := validateCanonicalStateV2(root, true); err != nil {
++			t.Fatalf("insert %x: %v", key, err)
++		}
++		if prior != nil && lookupChunk(prior, key) != nil {
++			t.Fatalf("old root gained %x", key)
++		}
++		for _, want := range keys {
++			if want == key {
++				break
++			}
++			if c := lookupChunk(root, want); c == nil || !c.isFree(7) {
++				t.Fatalf("lost %x", want)
++			}
++		}
++	}
++	for _, key := range keys {
++		root = mutateChunk(root, key, 0, func(c *stateChunk) { c.setFree(7, false) })
++		if err := validateCanonicalStateV2(root, true); err != nil {
++			t.Fatalf("delete %x: %v", key, err)
++		}
++		if lookupChunk(root, key) != nil {
++			t.Fatalf("retained empty chunk %x", key)
++		}
++	}
++	if root.freeCount != 0 || root.chunk != nil {
++		t.Fatal("empty root is not canonical sentinel")
++	}
++}
++
++func TestGenerationTopology5131PrivateAndPersistentUseSameShape(t *testing.T) {
++	keys := []uint64{1, 2, 0x12345, 1 << 55}
++	var persistent, private *stateNode
++	for _, key := range keys {
++		persistent = mutateChunk(persistent, key, 0, func(c *stateChunk) { c.retired[9] = 4 })
++		private = mutatePrivateChunk(private, key, 0, func(c *stateChunk) { c.retired[9] = 4 })
++	}
++	for _, key := range keys {
++		persistent = mutateChunk(persistent, key, 0, func(c *stateChunk) { c.retired[9] = 0; c.setFree(10, true) })
++		private = mutatePrivateChunk(private, key, 0, func(c *stateChunk) { c.retired[9] = 0; c.setFree(10, true) })
++	}
++	var same func(*stateNode, *stateNode)
++	same = func(a, b *stateNode) {
++		if a == nil || b == nil {
++			if a != b {
++				t.Fatal("different shape")
++			}
++			return
++		}
++		if a.depth != b.depth || a.prefix != b.prefix || a.freeCount != b.freeCount || a.retiredCount != b.retiredCount ||
++			a.minChunk != b.minChunk || a.maxChunk != b.maxChunk || (a.chunk == nil) != (b.chunk == nil) {
++			t.Fatal("different shape/summary")
++		}
++		for i := range a.child {
++			same(a.child[i], b.child[i])
++		}
++	}
++	same(persistent, private)
++	if err := validateCanonicalStateV2(private, true); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed(t *testing.T) {
++	var root *stateNode
++	for _, key := range []uint64{0x12340, 0x1234f} {
++		root = mutateChunk(root, key, 0, func(c *stateChunk) { c.setFree(3, true) })
++	}
++	store := NewMemoryPageStoreV1()
++	next := uint64(2)
++	var emit func(*stateNode)
++	emit = func(n *stateNode) {
++		for _, child := range n.child {
++			if child != nil {
++				emit(child)
++			}
++		}
++		n.pageID = next
++		next++
++		dst := bytes.Repeat([]byte{0x7f}, page.PageSize)
++		if n.chunk != nil {
++			n.chunk.pageID = n.pageID
++			if err := encodeChunkPageInto(dst, n.pageID, 1, n.chunk); err != nil {
++				t.Fatal(err)
++			}
++			if !bytes.Equal(dst, encodeChunkPage(n.pageID, 1, n.chunk)) {
++				t.Fatal("chunk encoder retains destination contents")
++			}
++		} else {
++			if err := encodeIndexPageInto(dst, n.pageID, 1, n, 0); err != nil {
++				t.Fatal(err)
++			}
++			want, err := encodeIndexPage(n.pageID, 1, n, 0)
++			if err != nil || !bytes.Equal(dst, want) {
++				t.Fatal("index encoder retains destination contents")
++			}
++		}
++		n.checksum = binary.LittleEndian.Uint32(dst[8:12])
++		if n.chunk != nil {
++			n.chunk.checksum = n.checksum
++		}
++		store.Pages[n.pageID] = dst
++	}
++	emit(root)
++	loaded, err := loadStateRefV2(store, root.pageID, 0, 1, true, true, next, make(map[uint64]struct{}), -1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := validateCanonicalStateV2(loaded, true); err != nil {
++		t.Fatal(err)
++	}
++	original := append([]byte(nil), store.Pages[root.pageID]...)
++	for name, mutate := range map[string]func([]byte){
++		"old-version":  func(b []byte) { binary.LittleEndian.PutUint16(b[24:26], 1) },
++		"unary":        func(b []byte) { binary.LittleEndian.PutUint16(b[14:16], 1) },
++		"wrong-prefix": func(b []byte) { b[64] ^= 1 },
++		"invalid-kind": func(b []byte) { b[indexHeaderSize+1] = 2 },
++		"nonzero-tail": func(b []byte) { b[len(b)-1] = 1 },
++	} {
++		t.Run(name, func(t *testing.T) {
++			b := append([]byte(nil), original...)
++			mutate(b)
++			page.UpdateChecksum(b)
++			store.Pages[root.pageID] = b
++			_, err := loadStateRefV2(store, root.pageID, 0, 1, true, true, next, make(map[uint64]struct{}), -1)
++			if !errors.Is(err, ErrGenerationFormat) {
++				t.Fatalf("corruption accepted: %v", err)
++			}
++		})
++	}
++}
++
++func TestGenerationTopology5131ReservationDigestMatchesCanonicalCopy(t *testing.T) {
++	record := ReservationRecordV1{GenerationID: 2, BaseID: 1, CandidateID: candidateIDFromString("digest")}
++	for i := uint64(2); i < 400; i += 2 {
++		record.Extents = append(record.Extents, ReservationExtentV1{StartPageID: i, Count: 1, Kind: ReservationReusedData})
++	}
++	pages, _, err := encodeReservationPages(1000, record)
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Perturbing stored CRC/digest is ignored; changing a semantic byte is not.
++	want := reservationDigest(pages)
++	for _, b := range pages {
++		b[8] ^= 1
++		b[112] ^= 1
++	}
++	if reservationDigest(pages) != want {
++		t.Fatal("digest includes canonical zero fields")
++	}
++	pages[0][176] ^= 1
++	if reservationDigest(pages) == want {
++		t.Fatal("digest omitted semantic entries")
++	}
++}
++
++// Main's public snapshot classifier routes through the canonical lookup helper.
++// A direct root leaf must distinguish its own key from another chunk key.
++func TestGenerationTopology5131SnapshotDirectLeafClassification(t *testing.T) {
++	g := MustNewFreelistGenerationV1(1, 1024, []uint64{2}, nil)
++	for _, tc := range []struct {
++		name   string
++		id     uint64
++		unused bool
++	}{
++		{name: "wrong-key", id: 300},
++		{name: "matching-free", id: 2, unused: true},
++		{name: "matching-live", id: 3},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			unused, err := g.SnapshotPageUnusedV1(tc.id, 1)
++			if err != nil || unused != tc.unused {
++				t.Fatalf("classification=(%t,%v), want (%t,nil)", unused, err, tc.unused)
++			}
++			if err := g.Validate(); err != nil || !g.Allocatable(2) {
++				t.Fatalf("classification changed generation: %v", err)
++			}
++		})
++	}
++}
+--- a/TreeDB/freelist/generation_v1_format.go
++++ b/TreeDB/freelist/generation_v1_format.go
+@@ -13,7 +13,7 @@
+ 
+ const (
+ 	generationHeaderSize  = 192
+-	indexHeaderSize       = 64
++	indexHeaderSize       = 80
+ 	indexEntrySize        = 32
+ 	chunkHeaderSize       = 96
+ 	reservationHeaderSize = 176
+@@ -184,9 +184,20 @@
+ 
+ func encodeChunkPage(id, generationID uint64, chunk *stateChunk) []byte {
+ 	b := make([]byte, page.PageSize)
++	if err := encodeChunkPageInto(b, id, generationID, chunk); err != nil {
++		panic(err)
++	}
++	return b
++}
++
++func encodeChunkPageInto(b []byte, id, generationID uint64, chunk *stateChunk) error {
++	if len(b) != page.PageSize || chunk == nil || generationID == 0 || chunk.chunkNo >= 1<<56 {
++		return ErrGenerationFormat
++	}
++	clear(b)
+ 	encodePageHeader(b, id, page.PageTypeFreelistChunk, freelistChunkSize)
+ 	copy(b[16:24], chunkMagic[:])
+-	binary.LittleEndian.PutUint16(b[24:26], 1)
++	binary.LittleEndian.PutUint16(b[24:26], 2)
+ 	binary.LittleEndian.PutUint16(b[26:28], chunkHeaderSize)
+ 	binary.LittleEndian.PutUint64(b[32:40], generationID)
+ 	binary.LittleEndian.PutUint64(b[40:48], chunk.chunkNo)
+@@ -201,19 +212,22 @@
+ 		binary.LittleEndian.PutUint64(b[chunkHeaderSize+i*8:], seq)
+ 	}
+ 	finishPage(b)
+-	return b
++	return nil
+ }
+ 
+ func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk, error) {
+ 	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
+-	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || pageGeneration == 0 || pageGeneration > maxGeneration {
++	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || pageGeneration == 0 || pageGeneration > maxGeneration {
+ 		return nil, ErrGenerationFormat
+ 	}
+ 	chunkNo := binary.LittleEndian.Uint64(b[40:48])
+-	if chunkNo != expectedChunk || !zeroTail(b, chunkHeaderSize+freelistChunkSize*8) {
++	if chunkNo >= 1<<56 || chunkNo != expectedChunk || !zeroTail(b, chunkHeaderSize+freelistChunkSize*8) {
+ 		return nil, ErrGenerationFormat
+ 	}
+ 	h := page.DecodeHeader(b)
++	if h.Count != freelistChunkSize {
++		return nil, ErrGenerationFormat
++	}
+ 	c := &stateChunk{pageID: h.PageID, checksum: h.Checksum, chunkNo: chunkNo}
+ 	for i := range c.free {
+ 		c.free[i] = binary.LittleEndian.Uint64(b[64+i*8:])
+@@ -233,71 +247,74 @@
+ 
+ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, error) {
+ 	b := make([]byte, page.PageSize)
++	if err := encodeIndexPageInto(b, id, generationID, n, depth); err != nil {
++		return nil, err
++	}
++	return b, nil
++}
++
++// encodeIndexPageInto overwrites the complete destination, including reserved
++// bytes and unused entries, so a reused buffer encodes the same canonical page.
++func encodeIndexPageInto(b []byte, id, generationID uint64, n *stateNode, _ int) error {
++	if len(b) != page.PageSize || n == nil || n.chunk != nil || int(n.depth) >= chunkTrieDepth || generationID == 0 {
++		return ErrGenerationFormat
++	}
++	clear(b)
+ 	count := 0
+-	if depth == chunkTrieDepth {
+-		if n.chunk == nil || n.chunk.pageID == 0 {
+-			return nil, ErrGenerationFormat
+-		}
+-		count = 1
+-	} else {
+-		for _, child := range n.child {
+-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
+-				if child.pageID == 0 {
+-					return nil, ErrGenerationFormat
+-				}
+-				count++
+-			}
+-		}
++	for _, child := range n.child {
++		if child == nil {
++			continue
++		}
++		if child.pageID == 0 || child.freeCount+child.retiredCount == 0 {
++			return ErrGenerationFormat
++		}
++		count++
++	}
++	if count == 1 || (count == 0 && (n.depth != 0 || n.prefix != 0 || n.freeCount+n.retiredCount != 0)) {
++		return ErrGenerationFormat
+ 	}
+ 	encodePageHeader(b, id, page.PageTypeFreelistIndex, uint16(count))
+ 	copy(b[16:24], indexMagic[:])
+-	binary.LittleEndian.PutUint16(b[24:26], 1)
++	binary.LittleEndian.PutUint16(b[24:26], 2)
+ 	binary.LittleEndian.PutUint16(b[26:28], indexHeaderSize)
+-	b[28] = byte(depth)
++	b[28] = n.depth
++	if count == 0 {
++		b[29] = 1
++	} // sole empty exact-generation root sentinel
+ 	binary.LittleEndian.PutUint16(b[30:32], indexEntrySize)
+ 	binary.LittleEndian.PutUint64(b[32:40], generationID)
+ 	binary.LittleEndian.PutUint64(b[40:48], n.freeCount)
+ 	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
+ 	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
++	binary.LittleEndian.PutUint64(b[64:72], n.prefix)
+ 	o := indexHeaderSize
+-	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) error {
+-		if freeCount > uint64(^uint32(0)) || retiredCount > uint64(^uint32(0)) {
++	for slot, child := range n.child {
++		if child == nil {
++			continue
++		}
++		if child.freeCount > uint64(^uint32(0)) || child.retiredCount > uint64(^uint32(0)) {
+ 			return ErrGenerationFormat
+ 		}
+-		b[o], b[o+1] = slot, kind
+-		binary.LittleEndian.PutUint32(b[o+2:o+6], childChecksum)
+-		binary.LittleEndian.PutUint64(b[o+8:o+16], childID)
+-		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(freeCount))
+-		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(retiredCount))
+-		binary.LittleEndian.PutUint64(b[o+24:o+32], minSeq)
++		b[o], b[o+1] = byte(slot), stateNodeKindV2(child)
++		binary.LittleEndian.PutUint32(b[o+2:o+6], child.checksum)
++		binary.LittleEndian.PutUint64(b[o+8:o+16], child.pageID)
++		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(child.freeCount))
++		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(child.retiredCount))
++		binary.LittleEndian.PutUint64(b[o+24:o+32], child.minRetiredSeq)
+ 		o += indexEntrySize
+-		return nil
+-	}
+-	if depth == chunkTrieDepth {
+-		retiredCount, minSeq := n.chunk.retiredSummary()
+-		if err := write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq); err != nil {
+-			return nil, err
+-		}
+-	} else {
+-		for slot, child := range n.child {
+-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
+-				if err := write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq); err != nil {
+-					return nil, err
+-				}
+-			}
+-		}
+ 	}
+ 	finishPage(b)
+-	return b, nil
++	return nil
+ }
+ 
+ func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []byte {
+ 	b := make([]byte, page.PageSize)
+ 	encodePageHeader(b, id, page.PageTypeFreelistGeneration, 1)
+ 	copy(b[16:24], generationMagic[:])
+-	binary.LittleEndian.PutUint16(b[24:26], 1)
++	binary.LittleEndian.PutUint16(b[24:26], 2)
+ 	binary.LittleEndian.PutUint16(b[26:28], generationHeaderSize)
+ 	b[28] = freelistChunkShift
++	b[29] = stateNodeKindV2(g.root)
+ 	binary.LittleEndian.PutUint64(b[32:40], g.generationID)
+ 	binary.LittleEndian.PutUint64(b[40:48], g.commitSeq)
+ 	binary.LittleEndian.PutUint64(b[48:56], g.parentGenerationID)
+@@ -318,7 +335,9 @@
+ }
+ 
+ func generationDigest(b []byte) [32]byte {
+-	canonical := append([]byte(nil), b[:generationHeaderSize]...)
++	var scratch [generationHeaderSize]byte
++	copy(scratch[:], b[:generationHeaderSize])
++	canonical := scratch[:]
+ 	for i := 8; i < 12; i++ {
+ 		canonical[i] = 0
+ 	}
+@@ -336,7 +355,7 @@
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if !bytes.Equal(b[16:24], generationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != generationHeaderSize || b[28] != freelistChunkShift || !zeroTail(b[29:32], 0) || !zeroTail(b[116:120], 0) || !zeroTail(b[184:192], 0) || !zeroTail(b, generationHeaderSize) {
++	if !bytes.Equal(b[16:24], generationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 || binary.LittleEndian.Uint16(b[26:28]) != generationHeaderSize || b[28] != freelistChunkShift || (b[29] > 1 || !zeroTail(b[30:32], 0)) || !zeroTail(b[116:120], 0) || !zeroTail(b[184:192], 0) || !zeroTail(b, generationHeaderSize) {
+ 		return nil, ErrGenerationFormat
+ 	}
+ 	digest := generationDigest(b)
+@@ -365,11 +384,38 @@
+ 	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(len(record.pendingMetadata())) != binary.LittleEndian.Uint32(b[108:112]) {
+ 		return nil, ErrGenerationFormat
+ 	}
++	var target ReservationExtentV1
++	targets := 0
++	for _, extent := range record.Extents {
++		if extent.Kind == ReservationTargetMetadata {
++			target = extent
++			targets++
++		}
++	}
++	if targets != 1 || target.Count == 0 {
++		return nil, ErrGenerationFormat
++	}
++	ownership := &metadataOwnershipV2{generation: g.generationID, start: target.StartPageID, end: target.StartPageID + uint64(target.Count)}
++	if !ownership.contains(ref.HeaderPageID) {
++		return nil, ErrGenerationFormat
++	}
++	ownership.pages = 1
+ 	seen := make(map[uint64]struct{})
+ 	rootID := binary.LittleEndian.Uint64(b[64:72])
+-	g.root, err = loadStateNode(src, rootID, 0, 0, g.generationID, true, g.highWater, seen)
++	seen[ref.HeaderPageID] = struct{}{}
++	for _, id := range record.pageIDs {
++		if !ownership.contains(id) {
++			return nil, ErrGenerationFormat
++		}
++		ownership.pages++
++		seen[id] = struct{}{}
++	}
++	g.root, err = loadStateRefV2(src, rootID, b[29], g.generationID, true, true, g.highWater, seen, -1, ownership)
+ 	if err != nil {
+ 		return nil, err
++	}
++	if ownership.pages != uint64(target.Count) {
++		return nil, ErrGenerationFormat
+ 	}
+ 	rootPage, err := src.ReadPage(rootID)
+ 	if err != nil || len(rootPage) != page.PageSize || binary.LittleEndian.Uint32(rootPage[8:12]) != binary.LittleEndian.Uint32(b[112:116]) {
+@@ -386,84 +432,109 @@
+ 	return g, nil
+ }
+ 
+-func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration uint64, exactGeneration bool, highWater uint64, seen map[uint64]struct{}) (*stateNode, error) {
+-	if depth > chunkTrieDepth {
+-		return nil, ErrGenerationFormat
++func stateNodeKindV2(n *stateNode) byte {
++	if n != nil && n.chunk != nil {
++		return 1
++	}
++	return 0
++}
++
++// metadataOwnershipV2 accounts for the pre-reserved current-generation interval
++// without a second inventory. Shared ancestors belong to older generations.
++type metadataOwnershipV2 struct{ generation, start, end, pages uint64 }
++
++func (m *metadataOwnershipV2) contains(id uint64) bool { return id >= m.start && id < m.end }
++
++func loadStateRefV2(src PageSource, id uint64, kind byte, maxGeneration uint64, exactGeneration, root bool, highWater uint64, seen map[uint64]struct{}, parentDepth int, ownershipArgs ...*metadataOwnershipV2) (*stateNode, error) {
++	fail := func() (*stateNode, error) { return nil, ErrGenerationFormat }
++	if kind > 1 {
++		return fail()
+ 	}
+ 	if _, duplicate := seen[id]; duplicate {
+-		return nil, fmt.Errorf("%w: duplicate or cyclic page %d", ErrGenerationFormat, id)
++		return fail()
+ 	}
+ 	seen[id] = struct{}{}
+-	b, err := readTypedPage(src, id, page.PageTypeFreelistIndex, highWater)
++	typ := page.PageTypeFreelistIndex
++	if kind == 1 {
++		typ = page.PageTypeFreelistChunk
++	}
++	b, err := readTypedPage(src, id, typ, highWater)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	generation := binary.LittleEndian.Uint64(b[32:40])
++	if generation == 0 || generation > maxGeneration || exactGeneration && generation != maxGeneration {
++		return fail()
++	}
++	var ownership *metadataOwnershipV2
++	if len(ownershipArgs) != 0 {
++		ownership = ownershipArgs[0]
++	}
++	if ownership != nil {
++		current := generation == ownership.generation
++		if current != ownership.contains(id) {
++			return fail()
++		}
++		if current {
++			ownership.pages++
++		}
++	}
++	if kind == 1 {
++		c, err := decodeChunkPage(b, maxGeneration, binary.LittleEndian.Uint64(b[40:48]))
++		if err != nil {
++			return nil, err
++		}
++		retired, _ := c.retiredSummary()
++		if c.freeCount()+retired == 0 {
++			return fail()
++		}
++		n := &stateNode{pageID: c.pageID, checksum: c.checksum, chunk: c}
++		recomputeStateNode(n, 0)
++		return n, nil
++	}
+ 	h := page.DecodeHeader(b)
+-	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
+-	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || int(b[28]) != depth || b[29] != 0 || binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || pageGeneration == 0 || pageGeneration > maxGeneration || (exactGeneration && pageGeneration != maxGeneration) || int(h.Count) > 16 || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) {
+-		return nil, ErrGenerationFormat
+-	}
+-	n := &stateNode{pageID: id, checksum: h.Checksum}
+-	lastSlot := -1
++	depth := int(b[28])
++	prefix := binary.LittleEndian.Uint64(b[64:72])
++	empty := h.Count == 0
++	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 2 ||
++		binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || depth >= chunkTrieDepth || depth <= parentDepth ||
++		binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || h.Count > 16 || h.Count == 1 ||
++		!zeroTail(b[72:80], 0) || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) ||
++		prefix>>uint(4*depth) != 0 || (empty && (!root || depth != 0 || prefix != 0 || b[29] != 1)) ||
++		(!empty && b[29] != 0) {
++		return fail()
++	}
++	n := &stateNode{pageID: id, checksum: h.Checksum, depth: uint8(depth), prefix: prefix}
++	last := -1
+ 	for i := 0; i < int(h.Count); i++ {
+ 		o := indexHeaderSize + i*indexEntrySize
+-		slot, kind := int(b[o]), b[o+1]
+-		if slot <= lastSlot || slot > 15 {
+-			return nil, ErrGenerationFormat
+-		}
+-		lastSlot = slot
+-		entryChecksum := binary.LittleEndian.Uint32(b[o+2 : o+6])
+-		if !zeroTail(b[o+6:o+8], 0) {
+-			return nil, ErrGenerationFormat
+-		}
+-		childID := binary.LittleEndian.Uint64(b[o+8 : o+16])
+-		entryFree := uint64(binary.LittleEndian.Uint32(b[o+16 : o+20]))
+-		entryRetired := uint64(binary.LittleEndian.Uint32(b[o+20 : o+24]))
+-		entryMinSeq := binary.LittleEndian.Uint64(b[o+24 : o+32])
+-		childPrefix := (prefix << 4) | uint64(slot)
+-		if depth == chunkTrieDepth {
+-			if h.Count != 1 || kind != 1 || slot != 0 {
+-				return nil, ErrGenerationFormat
+-			}
+-			chunkPage, err := readTypedPage(src, childID, page.PageTypeFreelistChunk, highWater)
+-			if err != nil {
+-				return nil, err
+-			}
+-			if _, duplicate := seen[childID]; duplicate {
+-				return nil, ErrGenerationFormat
+-			}
+-			seen[childID] = struct{}{}
+-			if page.DecodeHeader(chunkPage).Checksum != entryChecksum {
+-				return nil, ErrGenerationDigest
+-			}
+-			n.chunk, err = decodeChunkPage(chunkPage, pageGeneration, prefix)
+-			if err != nil {
+-				return nil, err
+-			}
+-			retiredCount, minSeq := n.chunk.retiredSummary()
+-			if n.chunk.freeCount() != entryFree || retiredCount != entryRetired || minSeq != entryMinSeq {
+-				return nil, ErrGenerationFormat
+-			}
+-		} else {
+-			if kind != 0 {
+-				return nil, ErrGenerationFormat
+-			}
+-			child, err := loadStateNode(src, childID, depth+1, childPrefix, pageGeneration, false, highWater, seen)
+-			if err != nil {
+-				return nil, err
+-			}
+-			n.child[slot] = child
+-			if child.checksum != entryChecksum {
+-				return nil, ErrGenerationDigest
+-			}
+-			if child.freeCount != entryFree || child.retiredCount != entryRetired || child.minRetiredSeq != entryMinSeq {
+-				return nil, ErrGenerationFormat
+-			}
++		slot := int(b[o])
++		if slot <= last || slot > 15 || !zeroTail(b[o+6:o+8], 0) {
++			return fail()
++		}
++		last = slot
++		child, err := loadStateRefV2(src, binary.LittleEndian.Uint64(b[o+8:o+16]), b[o+1], generation, false, false, highWater, seen, depth, ownership)
++		if err != nil {
++			return nil, err
++		}
++		n.child[slot] = child
++		if child.checksum != binary.LittleEndian.Uint32(b[o+2:o+6]) {
++			return nil, ErrGenerationDigest
++		}
++		if child.freeCount != uint64(binary.LittleEndian.Uint32(b[o+16:o+20])) ||
++			child.retiredCount != uint64(binary.LittleEndian.Uint32(b[o+20:o+24])) ||
++			child.minRetiredSeq != binary.LittleEndian.Uint64(b[o+24:o+32]) ||
++			chunkPrefixV1(child.minChunk, depth) != prefix || chunkPrefixV1(child.maxChunk, depth) != prefix ||
++			chunkNibble(child.minChunk, depth) != slot || chunkNibble(child.maxChunk, depth) != slot ||
++			child.chunk == nil && int(child.depth) <= depth {
++			return fail()
+ 		}
+ 	}
+ 	recomputeStateNode(n, depth)
+-	if n.freeCount != binary.LittleEndian.Uint64(b[40:48]) || n.retiredCount != binary.LittleEndian.Uint64(b[48:56]) || n.minRetiredSeq != binary.LittleEndian.Uint64(b[56:64]) {
+-		return nil, ErrGenerationFormat
++	if n.freeCount != binary.LittleEndian.Uint64(b[40:48]) || n.retiredCount != binary.LittleEndian.Uint64(b[48:56]) ||
++		n.minRetiredSeq != binary.LittleEndian.Uint64(b[56:64]) ||
++		!empty && firstDifferingDepthV1(n.minChunk, n.maxChunk) != depth {
++		return fail()
+ 	}
+ 	return n, nil
+ }
+--- a/TreeDB/freelist/generation_v1_metadata_cursor_test.go
++++ b/TreeDB/freelist/generation_v1_metadata_cursor_test.go
+@@ -121,12 +121,12 @@
+ 
+ func TestMetadataImpossibleRunDoesNotAllocate4627(t *testing.T) {
+ 	ledger := NewReservationLedger()
+-	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5}, nil), ledger)
++	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4}, nil), ledger)
+ 	root := txn.root
+ 	id := candidateIDFromString("too-small")
+ 	allocs := testing.AllocsPerRun(100, func() {
+ 		if _, _, _, ok := txn.tryReusedMetadata(id); ok {
+-			t.Fatal("four pages cannot hold this dirty state plus reservation and header")
++			t.Fatal("three pages cannot hold metadata while keeping the selected chunk nonempty")
+ 		}
+ 	})
+ 	if allocs != 0 {
+--- a/TreeDB/freelist/generation_v1_metadata_reuse.go
++++ b/TreeDB/freelist/generation_v1_metadata_reuse.go
+@@ -4,16 +4,16 @@
+ 
+ // detachMetadataSiblings is called immediately after successful metadata
+ // mutation copied the selected path. Other dirty branches still need isolation.
+-func detachMetadataSiblings(n *stateNode, depth int, chunkNo uint64) *stateNode {
+-	if depth == chunkTrieDepth {
+-		return n // The selected leaf and chunk were both copied by mutateChunk.
+-	}
+-	selected := chunkNibble(chunkNo, depth)
++func detachMetadataSiblings(n *stateNode, _ int, chunkNo uint64) *stateNode {
++	if n == nil || n.chunk != nil {
++		return n
++	}
++	selected := chunkNibble(chunkNo, int(n.depth))
+ 	for i, child := range n.child {
+ 		if i == selected {
+-			n.child[i] = detachMetadataSiblings(child, depth+1, chunkNo)
++			n.child[i] = detachMetadataSiblings(child, 0, chunkNo)
+ 		} else {
+-			n.child[i] = detachUnmaterialized(child, depth+1)
++			n.child[i] = detachUnmaterialized(child, 0)
+ 		}
+ 	}
+ 	return n
+@@ -193,17 +193,14 @@
+ 		// The selected chunk stays nonempty, so the eventual mutation neither
+ 		// creates nor removes a node; already dirty nodes are counted once.
+ 		statePages := countUnmaterializedStatePages(t.root, 0)
+-		for n, depth := t.root, 0; n != nil; depth++ {
++		for n := t.root; n != nil; {
+ 			if n.pageID != 0 {
+ 				statePages++
+ 			}
+-			if depth == chunkTrieDepth {
+-				if n.chunk.pageID != 0 {
+-					statePages++
+-				}
++			if n.chunk != nil {
+ 				break
+ 			}
+-			n = n.child[chunkNibble(chunk.chunkNo, depth)]
++			n = n.child[chunkNibble(chunk.chunkNo, int(n.depth))]
+ 		}
+ 		// Even one reservation page plus the header cannot fit. Reject before
+ 		// allocating a private plan or constructing its reservation extents.
+--- a/TreeDB/freelist/generation_v1_metadata_reuse_test.go
++++ b/TreeDB/freelist/generation_v1_metadata_reuse_test.go
+@@ -28,16 +28,21 @@
+ 					t.Fatal(err)
+ 				}
+ 			}
+-			// A rollback snapshot can retain both unmaterialized branches.
+-			held := txn.root
++			// Sharing through the rollback boundary revokes private edit
++			// permission before either transaction retains the dirty branches.
++			rollback, err := txn.cloneForAllocatorPrepare()
++			if err != nil {
++				t.Fatal(err)
++			}
++			held := rollback.root
+ 			before := detachUnmaterialized(held, 0)
+ 			var sink AppendPageSink = store
+ 			if fail {
+-				// The selected chunk and leaf write first; fail while emitting
+-				// the sibling after its identity/checksum have been assigned.
++				// Direct chunk pages write first; fail while emitting the
++				// parent after both child identities/checksums were assigned.
+ 				sink = &overwritingMetadataSink4627{store: store, remaining: 2}
+ 			}
+-			_, err := txn.MaterializeCandidate(3, 3, candidateIDFromString(name), sink)
++			_, err = txn.MaterializeCandidate(3, 3, candidateIDFromString(name), sink)
+ 			if (err != nil) != fail {
+ 				t.Fatalf("materialize error=%v want failure=%v", err, fail)
+ 			}
+--- /dev/null
++++ b/TreeDB/freelist/generation_v1_private_test.go
+@@ -0,0 +1,176 @@
++package freelist
++
++import (
++	"bytes"
++	"errors"
++	"testing"
++)
++
++// This representation regression intentionally inspects identity: externally
++// observable allocation/recovery behavior must remain equivalent.
++func TestFreelistTxnPrivateRepeatedMutationReusesChunk(t *testing.T) {
++	base := MustNewFreelistGenerationV1(1, 1024, nil, nil)
++	txn := NewFreelistTxn(base, NewReservationLedger())
++	txn.Retire(260, 1)
++	first := lookupChunk(txn.root, 1)
++	txn.Retire(261, 1)
++	if got := lookupChunk(txn.root, 1); got != first {
++		t.Fatal("repeated mutation copied a transaction-private chunk")
++	}
++	if stats := txn.Stats(); stats.PrivateMutationPaths != 2 || stats.PrivateChunkReuses != 1 {
++		t.Fatalf("private activation stats=%+v", stats)
++	}
++	if base.RetiredCount() != 0 {
++		t.Fatal("private mutation changed the immutable base")
++	}
++	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("private-repeated"), NewMemoryPageStoreV1())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := candidate.Generation().Validate(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestFreelistTxnCloneRevokesPrivateAliases(t *testing.T) {
++	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, nil, nil), NewReservationLedger())
++	txn.Retire(260, 1)
++	clone, err := txn.cloneForAllocatorPrepare()
++	if err != nil {
++		t.Fatal(err)
++	}
++	shared := lookupChunk(clone.root, 1)
++	txn.Retire(261, 1)
++	if shared.retired[5] != 0 {
++		t.Fatal("original modified rollback clone")
++	}
++	clone.Retire(262, 1)
++	if lookupChunk(txn.root, 1).retired[6] != 0 {
++		t.Fatal("clone modified original")
++	}
++	if shared.retired[4] != 1 || shared.retired[5] != 0 || shared.retired[6] != 0 {
++		t.Fatal("retained rollback alias changed")
++	}
++}
++
++func TestFreelistTxnPrivateMaterializationFreezesRetainedGeneration(t *testing.T) {
++	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, nil, nil), NewReservationLedger())
++	txn.Retire(260, 1)
++	store := NewMemoryPageStoreV1()
++	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("private-retained"), store)
++	if err != nil {
++		t.Fatal(err)
++	}
++	before := candidate.Pages()
++	next := NewFreelistTxn(candidate.Generation(), NewReservationLedger())
++	next.Retire(261, 2)
++	next.Retire(262, 2)
++	if lookupChunk(candidate.Generation().root, 1).retired[5] != 0 {
++		t.Fatal("next transaction changed retained generation")
++	}
++	if _, err := next.MaterializeCandidate(3, 3, candidateIDFromString("private-next"), store); err != nil {
++		t.Fatal(err)
++	}
++	after := candidate.Pages()
++	for i := range before {
++		if before[i].PageID != after[i].PageID || !bytes.Equal(before[i].Data, after[i].Data) {
++			t.Fatal("retained candidate page changed")
++		}
++	}
++	reopened, err := LoadGenerationV1(store, candidate.GenerationRef())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if reopened.RetiredCount() != 1 {
++		t.Fatalf("retained reopened count=%d", reopened.RetiredCount())
++	}
++	txn.Retire(263, 2)
++	if _, err := txn.Allocate(0); !errors.Is(err, ErrCandidateConsumed) {
++		t.Fatalf("consumed allocate error=%v", err)
++	}
++}
++
++func TestFreelistTxnPrivatePrepareDetachesRollbackState(t *testing.T) {
++	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, nil, nil), NewReservationLedger())
++	txn.Retire(260, 1)
++	before := lookupChunk(txn.root, 1)
++	staged, err := txn.cloneForPrivateAllocatorPrepare()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if lookupChunk(staged.root, 1) == before {
++		t.Fatal("staging did not detach dirty rollback state")
++	}
++	staged.Retire(261, 1)
++	retained := lookupChunk(staged.root, 1)
++	staged.Retire(262, 1)
++	if retained != lookupChunk(staged.root, 1) {
++		t.Fatal("staging did not reuse private copy")
++	}
++	if _, err := staged.MaterializeCandidate(2, 2, candidateIDFromString("private-staged"), NewMemoryPageStoreV1()); err != nil {
++		t.Fatal(err)
++	}
++	if before.pageID != 0 || before.retired[5] != 0 || before.retired[6] != 0 {
++		t.Fatal("materialization changed rollback state")
++	}
++	txn.Retire(263, 1)
++	if retained.retired[7] != 0 {
++		t.Fatal("rollback continuation changed retained candidate")
++	}
++}
++
++func TestFreelistTxnPrivateFirstCopyIsolatesDirtyChildren(t *testing.T) {
++	base := MustNewFreelistGenerationV1(1, 1024, nil, map[uint64]uint64{260: 1, 516: 1})
++	// Synthetic materialized parents may still contain unmaterialized child
++	// aliases. Acquiring the parent does not confer ownership of those aliases.
++	base.root.pageID = 900
++	beforeLeft, beforeRight := lookupChunk(base.root, 1), lookupChunk(base.root, 2)
++	txn := NewFreelistTxn(base, NewReservationLedger())
++	txn.Retire(261, 1)
++	txn.Retire(517, 1)
++	txn.Retire(518, 1)
++	if beforeLeft.retired[5] != 0 || beforeRight.retired[5] != 0 || beforeRight.retired[6] != 0 {
++		t.Fatal("first durable copy granted private access to shared dirty children")
++	}
++	if stats := txn.Stats(); stats.PrivateChunkReuses == 0 {
++		t.Fatal("first-copy path never reused its detached chunk")
++	}
++}
++
++func TestFreelistTxnMaterializeValidationRevokesPrivateAuthority(t *testing.T) {
++	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, nil, nil), NewReservationLedger())
++	txn.Retire(260, 1)
++	before := lookupChunk(txn.root, 1)
++	if _, err := txn.MaterializeCandidate(0, 0, CandidateIDV1{}, nil); !errors.Is(err, ErrGenerationFormat) {
++		t.Fatalf("validation error=%v", err)
++	}
++	if txn.privatePreparation {
++		t.Fatal("validation error retained private permission")
++	}
++	txn.Retire(261, 1)
++	if lookupChunk(txn.root, 1) == before || before.retired[5] != 0 {
++		t.Fatal("post-error mutation changed retained dirty alias")
++	}
++	if _, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("private-validation-retry"), NewMemoryPageStoreV1()); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestFreelistTxnPrivateSinkFailureConsumesAndRevokes(t *testing.T) {
++	base := MustNewFreelistGenerationV1(1, 1024, nil, map[uint64]uint64{260: 1})
++	original := lookupChunk(base.root, 1)
++	txn := NewFreelistTxn(base, NewReservationLedger())
++	txn.Retire(261, 1)
++	if _, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("private-sink-failure"), failingPageSinkV1{}); err == nil {
++		t.Fatal("sink failure unexpectedly succeeded")
++	}
++	if !txn.consumed || txn.privatePreparation {
++		t.Fatal("sink failure retained mutation authority")
++	}
++	if original.pageID != 0 || original.retired[5] != 0 {
++		t.Fatal("sink failure annotated or changed immutable base")
++	}
++	if _, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("private-failed-retry"), NewMemoryPageStoreV1()); !errors.Is(err, ErrCandidateConsumed) {
++		t.Fatalf("retry error=%v", err)
++	}
++}
+--- a/TreeDB/freelist/generation_v1_reservation.go
++++ b/TreeDB/freelist/generation_v1_reservation.go
+@@ -152,18 +152,16 @@
+ 
+ func reservationDigest(pages [][]byte) [32]byte {
+ 	h := sha256.New()
++	var zeros [32]byte
+ 	for _, b := range pages {
+-		canonical := append([]byte(nil), b...)
+-		for i := 8; i < 12; i++ {
+-			canonical[i] = 0
+-		}
+-		for i := 112; i < 144; i++ {
+-			canonical[i] = 0
+-		}
+-		_, _ = h.Write(canonical)
++		_, _ = h.Write(b[:8])
++		_, _ = h.Write(zeros[:4])
++		_, _ = h.Write(b[12:112])
++		_, _ = h.Write(zeros[:])
++		_, _ = h.Write(b[144:])
+ 	}
+ 	var digest [32]byte
+-	copy(digest[:], h.Sum(nil))
++	h.Sum(digest[:0])
+ 	return digest
+ }
+ 
+--- a/TreeDB/freelist/generation_v1_test.go
++++ b/TreeDB/freelist/generation_v1_test.go
+@@ -525,7 +525,7 @@
+ 
+ func TestFreelistGenerationV1_PageCodecRoundTripAndCorruption(t *testing.T) {
+ 	store := NewMemoryPageStoreV1()
+-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
++	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 999, []uint64{2, 5, 8, 300}, map[uint64]uint64{11: 7}), 2, store)
+ 	loaded, err := LoadGenerationV1(store, g.GenerationRef())
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -553,7 +553,7 @@
+ 
+ func TestFreelistGenerationV1_EveryPageKindRejectsCorruption(t *testing.T) {
+ 	store := NewMemoryPageStoreV1()
+-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
++	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 999, []uint64{2, 5, 8, 300}, map[uint64]uint64{11: 7}), 2, store)
+ 	seen := map[uint16]bool{}
+ 	for corruptID, original := range store.Pages {
+ 		typ := uint16(original[12])
+@@ -576,8 +576,8 @@
+ 
+ func TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC(t *testing.T) {
+ 	store := NewMemoryPageStoreV1()
+-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
+-	reservedOffset := map[uint16]int{5: 29, 6: 29, 7: 28, 8: 30}
++	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 999, []uint64{2, 5, 8, 300}, map[uint64]uint64{11: 7}), 2, store)
++	reservedOffset := map[uint16]int{5: 30, 6: 29, 7: 28, 8: 30}
+ 	for corruptID, original := range store.Pages {
+ 		typ := uint16(original[12])
+ 		offset, ok := reservedOffset[typ]
+@@ -607,7 +607,7 @@
+ 		for id, data := range store.Pages {
+ 			corrupt.Pages[id] = append([]byte(nil), data...)
+ 		}
+-		corrupt.Pages[corruptID][80] ^= 1 // first child free-count summary
++		corrupt.Pages[corruptID][indexHeaderSize+16] ^= 1 // first child free-count summary
+ 		finishPage(corrupt.Pages[corruptID])
+ 		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) && !errors.Is(err, ErrGenerationDigest) {
+ 			t.Fatalf("forged child summary err=%v", err)
+@@ -902,14 +902,14 @@
+ 
+ func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
+ 	store := NewMemoryPageStoreV1()
+-	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, []uint64{2, 300}, nil), 2, store)
++	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, []uint64{2, 300, 301}, nil), 2, store)
+ 	txn := NewFreelistTxn(base, NewReservationLedger())
+ 	allocated, err := txn.Allocate(300)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if allocated != 300 {
+-		t.Fatalf("allocated=%d want 300", allocated)
++	if allocated != 301 {
++		t.Fatalf("allocated=%d want 301", allocated)
+ 	}
+ 	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("shared-ancestor-pages"), store)
+ 	if err != nil {
+@@ -922,7 +922,7 @@
+ 	if !loaded.Allocatable(2) {
+ 		t.Fatal("shared ancestor chunk lost its free page after reopen")
+ 	}
+-	if loaded.Allocatable(300) {
++	if loaded.Allocatable(301) {
+ 		t.Fatal("changed chunk returned the allocated page after reopen")
+ 	}
+ 
+@@ -944,7 +944,7 @@
+ 	if !foundSharedChunk {
+ 		t.Fatal("shared ancestor chunk page not found")
+ 	}
+-	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationDigest) {
++	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationDigest) && !errors.Is(err, ErrGenerationFormat) {
+ 		t.Fatalf("newer child under ancestor page error=%v want %v", err, ErrGenerationDigest)
+ 	}
+ }
+@@ -1062,15 +1062,9 @@
+ 	}
+ 	chunk.pageID = 2
+ 	chunk.checksum = 0
+-	root := &stateNode{pageID: 3, chunk: chunk, freeCount: chunk.freeCount()}
+-	rootPage, err := encodeIndexPage(root.pageID, 1, root, chunkTrieDepth)
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+ 	store := NewMemoryPageStoreV1()
+ 	store.Pages[chunk.pageID] = chunkPage
+-	store.Pages[root.pageID] = rootPage
+-	loaded, err := loadStateNode(store, root.pageID, chunkTrieDepth, 0, 1, true, 128, make(map[uint64]struct{}))
++	loaded, err := loadStateRefV2(store, chunk.pageID, 1, 1, true, true, 128, make(map[uint64]struct{}), -1)
+ 	if err != nil {
+ 		t.Fatalf("load zero-checksum child: %v", err)
+ 	}
+--- a/TreeDB/freelist/generation_v1_tree.go
++++ b/TreeDB/freelist/generation_v1_tree.go
+@@ -115,6 +115,8 @@
+ type stateNode struct {
+ 	pageID                            uint64
+ 	checksum                          uint32
++	depth                             uint8
++	prefix                            uint64 // first depth nibbles, right aligned
+ 	child                             [16]*stateNode
+ 	chunk                             *stateChunk
+ 	freeCount, retiredCount           uint64
+@@ -133,20 +135,20 @@
+ 
+ // detachUnmaterialized clones only nodes that do not yet have durable page
+ // identities. Nodes with identities are immutable and safe to share.
+-func detachUnmaterialized(n *stateNode, depth int) *stateNode {
++func detachUnmaterialized(n *stateNode, _ int) *stateNode {
+ 	if n == nil || n.pageID != 0 {
+ 		return n
+ 	}
+ 	out := *n
+-	if depth == chunkTrieDepth {
+-		if n.chunk != nil && n.chunk.pageID == 0 {
++	if n.chunk != nil {
++		if n.chunk.pageID == 0 {
+ 			chunk := *n.chunk
+ 			out.chunk = &chunk
+ 		}
+-		return &out
+-	}
+-	for i, child := range n.child {
+-		out.child[i] = detachUnmaterialized(child, depth+1)
++	} else {
++		for i, child := range n.child {
++			out.child[i] = detachUnmaterialized(child, 0)
++		}
+ 	}
+ 	return &out
+ }
+@@ -154,14 +156,18 @@
+ func chunkNibble(chunkNo uint64, depth int) int {
+ 	return int((chunkNo >> uint((chunkTrieDepth-1-depth)*4)) & 0xf)
+ }
+-
+-func recomputeStateNode(n *stateNode, depth int) {
+-	n.freeCount, n.retiredCount, n.minRetiredSeq = 0, 0, 0
+-	n.minChunk, n.maxChunk = 0, 0
+-	if depth == chunkTrieDepth {
+-		if n.chunk == nil {
+-			return
+-		}
++func chunkPrefixV1(key uint64, depth int) uint64 {
++	return key >> uint(4*(chunkTrieDepth-depth))
++}
++func firstDifferingDepthV1(a, b uint64) int {
++	if a == b {
++		return chunkTrieDepth
++	}
++	return chunkTrieDepth - (bits.Len64(a^b)+3)/4
++}
++func recomputeStateNode(n *stateNode, _ int) {
++	n.freeCount, n.retiredCount, n.minRetiredSeq, n.minChunk, n.maxChunk = 0, 0, 0, 0, 0
++	if n.chunk != nil {
+ 		n.freeCount = n.chunk.freeCount()
+ 		n.retiredCount, n.minRetiredSeq = n.chunk.retiredSummary()
+ 		n.minChunk, n.maxChunk = n.chunk.chunkNo, n.chunk.chunkNo
+@@ -169,13 +175,13 @@
+ 	}
+ 	first := true
+ 	for _, child := range n.child {
+-		if child == nil || child.freeCount+child.retiredCount == 0 {
++		if child == nil {
+ 			continue
+ 		}
+ 		n.freeCount += child.freeCount
+ 		n.retiredCount += child.retiredCount
+-		if child.minRetiredSeq != 0 && (n.minRetiredSeq == 0 || child.minRetiredSeq < n.minRetiredSeq) {
+-			n.minRetiredSeq = child.minRetiredSeq
++		if seq := child.minRetiredSeq; seq != 0 && (n.minRetiredSeq == 0 || seq < n.minRetiredSeq) {
++			n.minRetiredSeq = seq
+ 		}
+ 		if first || child.minChunk < n.minChunk {
+ 			n.minChunk = child.minChunk
+@@ -187,38 +193,158 @@
+ 	}
+ }
+ 
+-func mutateChunk(n *stateNode, chunkNo uint64, depth int, f func(*stateChunk)) *stateNode {
+-	out := cloneStateNode(n)
+-	if depth == chunkTrieDepth {
+-		chunk := out.chunk.clone()
+-		chunk.chunkNo = chunkNo
++func mutateChunk(n *stateNode, key uint64, depth int, f func(*stateChunk)) *stateNode {
++	return mutateChunkMode(n, key, depth, f, false, nil)
++}
++
++// mutatePrivateChunk may reuse unpublished nodes only when the caller owns
++// the complete dirty graph exclusively. PageID zero alone grants no permission.
++func mutatePrivateChunk(n *stateNode, key uint64, depth int, f func(*stateChunk)) *stateNode {
++	return mutateChunkMode(n, key, depth, f, true, nil)
++}
++func mutatePrivateChunkWithStats(n *stateNode, key uint64, depth int, f func(*stateChunk), stats *FreelistTxnStats) *stateNode {
++	return mutateChunkMode(n, key, depth, f, true, stats)
++}
++func mutateChunkMode(n *stateNode, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats) *stateNode {
++	if n == nil || n.freeCount+n.retiredCount == 0 {
++		chunk := &stateChunk{chunkNo: key}
+ 		f(chunk)
+-		if chunk.freeCount() == 0 {
+-			retired, _ := chunk.retiredSummary()
+-			if retired == 0 {
+-				out.chunk = nil
+-				recomputeStateNode(out, depth)
+-				return out
+-			}
+-		}
+-		out.chunk = chunk
+-		recomputeStateNode(out, depth)
++		out := &stateNode{chunk: chunk}
++		recomputeStateNode(out, 0)
++		if out.freeCount+out.retiredCount == 0 {
++			return &stateNode{}
++		}
+ 		return out
+ 	}
+-	i := chunkNibble(chunkNo, depth)
+-	out.child[i] = mutateChunk(out.child[i], chunkNo, depth+1, f)
+-	recomputeStateNode(out, depth)
++	// Split at the first differing nibble, including prefixes skipped by an
++	// existing branch. There is no unary physical or mutable index path.
++	split := firstDifferingDepthV1(n.minChunk, key)
++	if split < chunkTrieDepth && (n.chunk != nil || split < int(n.depth)) {
++		leaf := mutateChunkMode(nil, key, 0, f, private, stats)
++		if leaf.freeCount+leaf.retiredCount == 0 {
++			return n
++		}
++		out := &stateNode{depth: uint8(split), prefix: chunkPrefixV1(key, split)}
++		out.child[chunkNibble(n.minChunk, split)] = n
++		out.child[chunkNibble(key, split)] = leaf
++		recomputeStateNode(out, 0)
++		return out
++	}
++	out := n
++	if !private || n.pageID != 0 {
++		out = cloneStateNode(n)
++		// A durable synthetic parent can still contain unpublished children.
++		// Acquiring private permission for this copy must detach those children.
++		if private {
++			for i, child := range out.child {
++				out.child[i] = detachUnmaterialized(child, 0)
++			}
++		}
++	}
++	if n.chunk != nil {
++		if !private || n.pageID != 0 || n.chunk.pageID != 0 {
++			out.chunk = n.chunk.clone()
++		} else if stats != nil {
++			stats.PrivateChunkReuses++
++		}
++		f(out.chunk)
++		recomputeStateNode(out, 0)
++		if out.freeCount+out.retiredCount == 0 {
++			return &stateNode{}
++		}
++		return out
++	}
++	slot := chunkNibble(key, int(out.depth))
++	out.child[slot] = mutateChunkMode(out.child[slot], key, 0, f, private, stats)
++	if child := out.child[slot]; child.freeCount+child.retiredCount == 0 {
++		out.child[slot] = nil
++	}
++	count := 0
++	var only *stateNode
++	for _, child := range out.child {
++		if child != nil {
++			count++
++			only = child
++		}
++	}
++	if count == 0 {
++		return &stateNode{}
++	}
++	if count == 1 {
++		return only
++	}
++	recomputeStateNode(out, 0)
+ 	return out
+ }
+ 
+-func lookupChunk(n *stateNode, chunkNo uint64) *stateChunk {
+-	for depth := 0; n != nil && depth < chunkTrieDepth; depth++ {
+-		n = n.child[chunkNibble(chunkNo, depth)]
+-	}
++func lookupChunk(n *stateNode, key uint64) *stateChunk {
++	for n != nil {
++		if n.chunk != nil {
++			if n.chunk.chunkNo == key {
++				return n.chunk
++			}
++			return nil
++		}
++		if n.freeCount+n.retiredCount == 0 || chunkPrefixV1(key, int(n.depth)) != n.prefix {
++			return nil
++		}
++		n = n.child[chunkNibble(key, int(n.depth))]
++	}
++	return nil
++}
++
++// validateCanonicalStateV2 independently checks shape and cached summaries.
++func validateCanonicalStateV2(n *stateNode, root bool) error {
+ 	if n == nil {
+-		return nil
+-	}
+-	return n.chunk
++		return ErrGenerationFormat
++	}
++	if n.chunk != nil {
++		if n.chunk.chunkNo >= 1<<56 || n.pageID != n.chunk.pageID || n.checksum != n.chunk.checksum {
++			return ErrGenerationFormat
++		}
++		for _, child := range n.child {
++			if child != nil {
++				return ErrGenerationFormat
++			}
++		}
++		if n.freeCount+n.retiredCount == 0 {
++			return ErrGenerationFormat
++		}
++	} else {
++		depth := int(n.depth)
++		if depth >= chunkTrieDepth || n.prefix>>uint(4*depth) != 0 {
++			return ErrGenerationFormat
++		}
++		count := 0
++		for slot, child := range n.child {
++			if child == nil {
++				continue
++			}
++			count++
++			if err := validateCanonicalStateV2(child, false); err != nil {
++				return err
++			}
++			if chunkPrefixV1(child.minChunk, depth) != n.prefix || chunkPrefixV1(child.maxChunk, depth) != n.prefix ||
++				chunkNibble(child.minChunk, depth) != slot || chunkNibble(child.maxChunk, depth) != slot ||
++				child.chunk == nil && int(child.depth) <= depth {
++				return ErrGenerationFormat
++			}
++		}
++		if count == 0 {
++			if !root || depth != 0 || n.prefix != 0 {
++				return ErrGenerationFormat
++			}
++		} else if count < 2 || firstDifferingDepthV1(n.minChunk, n.maxChunk) != depth {
++			return ErrGenerationFormat
++		}
++	}
++	summary := *n
++	recomputeStateNode(&summary, 0)
++	if summary.freeCount != n.freeCount || summary.retiredCount != n.retiredCount ||
++		summary.minRetiredSeq != n.minRetiredSeq || summary.minChunk != n.minChunk || summary.maxChunk != n.maxChunk {
++		return ErrGenerationFormat
++	}
++	return nil
+ }
+ 
+ func rightmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
+@@ -226,7 +352,7 @@
+ 		return nil
+ 	}
+ 	*visits++
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		return n.chunk
+ 	}
+ 	for i := len(n.child) - 1; i >= 0; i-- {
+@@ -242,7 +368,7 @@
+ 		return nil
+ 	}
+ 	*visits++
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		return n.chunk
+ 	}
+ 	for i := 0; i < len(n.child); i++ {
+@@ -261,7 +387,7 @@
+ 	if n.maxChunk <= target {
+ 		return rightmostFree(n, depth, visits)
+ 	}
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		return n.chunk
+ 	}
+ 	for i := len(n.child) - 1; i >= 0; i-- {
+@@ -280,7 +406,7 @@
+ 	if n.minChunk >= target {
+ 		return leftmostFree(n, depth, visits)
+ 	}
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		return n.chunk
+ 	}
+ 	for i := 0; i < len(n.child); i++ {
+@@ -342,7 +468,7 @@
+ 	if n == nil {
+ 		return nil
+ 	}
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		if n.chunk != nil {
+ 			return f(n.chunk)
+ 		}
+--- a/TreeDB/freelist/generation_v1_txn.go
++++ b/TreeDB/freelist/generation_v1_txn.go
+@@ -111,6 +111,9 @@
+ 	if g == nil || g.generationID == 0 || g.highWater < 2 || g.root == nil {
+ 		return ErrGenerationFormat
+ 	}
++	if err := validateCanonicalStateV2(g.root, true); err != nil {
++		return err
++	}
+ 	var freeCount, retiredCount uint64
+ 	err := walkState(g.root, 0, func(c *stateChunk) error {
+ 		for offset := uint64(0); offset < freelistChunkSize; offset++ {
+@@ -168,6 +171,7 @@
+ type FreelistTxnStats struct {
+ 	COWChunks, COWPages, COWBytes, LogicalDelta               uint64
+ 	StateMutationPaths, StateMutationItems                    uint64
++	PrivateMutationPaths, PrivateChunkReuses                  uint64
+ 	AppendAllocations, ReuseAllocations, Reservations         uint64
+ 	FreeIDs, RetiredIDs, ReuseLag, PageVisits                 uint64
+ 	GenerationID, ReservationRecords                          uint64
+@@ -190,9 +194,12 @@
+ 	allocated        []allocatedPage
+ 	abandonedAppends []ReservationExtentV1
+ 	consumed         bool
+-	changedChunks    map[uint64]struct{}
+-	replacedMetadata map[uint64]struct{}
+-	stats            FreelistTxnStats
++	// Granted only after detaching pre-existing dirty aliases. New dirty
++	// nodes remain exclusively owned until clone or materialization revokes it.
++	privatePreparation bool
++	changedChunks      map[uint64]struct{}
++	replacedMetadata   map[uint64]struct{}
++	stats              FreelistTxnStats
+ }
+ 
+ // cloneForAllocatorPrepare creates an isolated staging transaction. Tree nodes
+@@ -203,6 +210,9 @@
+ 	if err := t.valid(); err != nil {
+ 		return nil, err
+ 	}
++	// Revoke before publishing a root alias. Both transactions use persistent
++	// edits until a private staging clone explicitly detaches dirty state.
++	t.privatePreparation = false
+ 	clone := *t
+ 	clone.allocated = append([]allocatedPage(nil), t.allocated...)
+ 	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
+@@ -217,6 +227,19 @@
+ 	return &clone, nil
+ }
+ 
++// cloneForPrivateAllocatorPrepare preserves the live transaction for rollback
++// while exclusively owning every dirty node that staging may mutate or seal.
++// The copy replaces the isolation formerly deferred until materialization.
++func (t *FreelistTxn) cloneForPrivateAllocatorPrepare() (*FreelistTxn, error) {
++	clone, err := t.cloneForAllocatorPrepare()
++	if err != nil {
++		return nil, err
++	}
++	clone.root = detachUnmaterialized(clone.root, 0)
++	clone.privatePreparation = true
++	return clone, nil
++}
++
+ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger) (*FreelistTxn, error) {
+ 	if base == nil || base.root == nil {
+ 		return nil, ErrGenerationFormat
+@@ -228,6 +251,10 @@
+ 		ledger = NewReservationLedger()
+ 	}
+ 	t := &FreelistTxn{base: base, ledger: ledger, root: base.root, highWater: base.highWater, changedChunks: map[uint64]struct{}{}, replacedMetadata: map[uint64]struct{}{}}
++	// The base can itself be an unmaterialized model. Zero page identities
++	// carry no ownership authority until this explicit detachment boundary.
++	t.root = detachUnmaterialized(t.root, 0)
++	t.privatePreparation = true
+ 	if base.ref.HeaderPageID != 0 {
+ 		t.replacedMetadata[base.ref.HeaderPageID] = struct{}{}
+ 	}
+@@ -259,24 +286,38 @@
+ }
+ 
+ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
+-	n := t.root
+-	for depth := 0; n != nil && depth <= chunkTrieDepth; depth++ {
++	// An empty durable sentinel is replaced outright by the first chunk.
++	if t.root != nil && t.root.freeCount+t.root.retiredCount == 0 {
++		if t.root.pageID != 0 {
++			t.replacedMetadata[t.root.pageID] = struct{}{}
++		}
++		return
++	}
++	for n := t.root; n != nil; {
++		if n.chunk != nil {
++			if n.chunk.chunkNo == chunkNo && n.chunk.pageID != 0 {
++				t.replacedMetadata[n.chunk.pageID] = struct{}{}
++			}
++			return
++		}
++		if chunkPrefixV1(chunkNo, int(n.depth)) != n.prefix {
++			return
++		}
+ 		if n.pageID != 0 {
+ 			t.replacedMetadata[n.pageID] = struct{}{}
+ 		}
+-		if depth == chunkTrieDepth {
+-			if n.chunk != nil && n.chunk.pageID != 0 {
+-				t.replacedMetadata[n.chunk.pageID] = struct{}{}
+-			}
+-			break
+-		}
+-		n = n.child[chunkNibble(chunkNo, depth)]
++		n = n.child[chunkNibble(chunkNo, int(n.depth))]
+ 	}
+ }
+ 
+ func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
+ 	t.markReplacedPath(chunkNo)
+-	t.root = mutateChunk(t.root, chunkNo, 0, f)
++	if t.privatePreparation {
++		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
++		t.stats.PrivateMutationPaths++
++	} else {
++		t.root = mutateChunk(t.root, chunkNo, 0, f)
++	}
+ 	t.changedChunks[chunkNo] = struct{}{}
+ 	t.stats.StateMutationPaths++
+ 	t.stats.StateMutationItems += items
+@@ -482,7 +523,7 @@
+ 		return
+ 	}
+ 	*visits++
+-	if depth == chunkTrieDepth {
++	if n.chunk != nil {
+ 		for offset, seq := range n.chunk.retired {
+ 			if seq != 0 && cap.permits(seq) {
+ 				*out = append(*out, retiredPage{n.chunk.chunkNo<<freelistChunkShift | uint64(offset), seq})
+@@ -625,33 +666,26 @@
+ 	return nil
+ }
+ 
+-func emitStatePages(n *stateNode, depth int, generationID uint64, next *uint64, sink *recordingSink) error {
++func emitStatePages(n *stateNode, _ int, generationID uint64, next *uint64, sink *recordingSink) error {
+ 	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
+ 		return nil
+ 	}
+-	if depth == chunkTrieDepth {
+-		if n.chunk == nil {
+-			return ErrGenerationFormat
+-		}
+-		if n.chunk.pageID == 0 {
+-			n.chunk.pageID = *next
+-			*next++
+-			b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
+-			n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
+-			if err := sink.write(n.chunk.pageID, b); err != nil {
+-				return err
+-			}
+-		}
+-	} else {
+-		for _, child := range n.child {
+-			if err := emitStatePages(child, depth+1, generationID, next, sink); err != nil {
+-				return err
+-			}
++	if n.chunk != nil {
++		n.chunk.pageID = *next
++		*next++
++		b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
++		n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
++		n.pageID, n.checksum = n.chunk.pageID, n.chunk.checksum
++		return sink.write(n.pageID, b)
++	}
++	for _, child := range n.child {
++		if err := emitStatePages(child, 0, generationID, next, sink); err != nil {
++			return err
+ 		}
+ 	}
+ 	n.pageID = *next
+ 	*next++
+-	b, err := encodeIndexPage(n.pageID, generationID, n, depth)
++	b, err := encodeIndexPage(n.pageID, generationID, n, int(n.depth))
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -676,19 +710,15 @@
+ 	return extents
+ }
+ 
+-func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
++func countUnmaterializedStatePages(n *stateNode, _ int) uint64 {
+ 	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
+ 		return 0
+ 	}
+-	count := uint64(1) // This index page.
+-	if depth == chunkTrieDepth {
+-		if n.chunk != nil && n.chunk.pageID == 0 {
+-			count++
+-		}
+-		return count
+-	}
+-	for _, child := range n.child {
+-		count += countUnmaterializedStatePages(child, depth+1)
++	count := uint64(1)
++	if n.chunk == nil {
++		for _, child := range n.child {
++			count += countUnmaterializedStatePages(child, 0)
++		}
+ 	}
+ 	return count
+ }
+@@ -715,6 +745,11 @@
+ }
+ 
+ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
++	// Even a validation error revokes mutable authority. A retry remains safe
++	// through persistent edits and the ordinary materialization detach path.
++	if t != nil {
++		defer func() { t.privatePreparation = false }()
++	}
+ 	if err := t.valid(); err != nil {
+ 		return nil, err
+ 	}
+@@ -732,19 +767,25 @@
+ 	// or failure consumes this transaction; retry must begin from the immutable
+ 	// base so a partial sink failure cannot retain unwritten page identities.
+ 	t.consumed = true
+-	if reusedMetadata {
+-		// tryReusedMetadata just copied this complete, nonempty path. Isolate
+-		// only its dirty siblings before emission assigns page identities.
+-		t.root = detachMetadataSiblings(t.root, 0, metadataStart>>freelistChunkShift)
+-	} else {
+-		t.root = detachUnmaterialized(t.root, 0)
+-	}
++	if !t.privatePreparation {
++		if reusedMetadata {
++			t.root = detachMetadataSiblings(t.root, 0, metadataStart>>freelistChunkShift)
++		} else {
++			t.root = detachUnmaterialized(t.root, 0)
++		}
++	}
++	// Freeze before the first sink callback; consumed rejects every later edit.
++	t.privatePreparation = false
+ 	if t.root.pageID != 0 {
+ 		t.replacedMetadata[t.root.pageID] = struct{}{}
+-		// The selected generation's root is exact-generation authority. A
+-		// no-COW transaction may share descendants, but must publish a new root.
+ 		t.root = cloneStateNode(t.root)
+-	}
++		// A one-chunk root is itself the selected generation's root page.
++		// It needs a fresh chunk identity, not a redundant leaf index wrapper.
++		if t.root.chunk != nil {
++			t.root.chunk = t.root.chunk.clone()
++		}
++	}
++
+ 	// The target metadata extent includes the COW pages, the reservation chain,
+ 	// and the generation header. Its count does not change the number of
+ 	// normalized reservation extents, so compute the chain length first.
+--- a/cmd/treedb_column_graph_demo/main.go
++++ b/cmd/treedb_column_graph_demo/main.go
+@@ -107,9 +107,14 @@
+ 		cfg.TopK = len(rows)
+ 	}
+ 
+-	if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{
+-		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+-	}); err != nil {
++	format, _, err := backenddb.LoadFormatConfig(cfg.Dir)
++	if err != nil {
++		return err
++	}
++	if !format.RequiresCommandWALV1() {
++		format.RequiredFeatures = append(format.RequiredFeatures, backenddb.RequiredFeatureCommandWALV1)
++	}
++	if err := backenddb.SaveFormatConfig(cfg.Dir, format); err != nil {
+ 		return err
+ 	}
+ 	db, err := backenddb.Open(backenddb.Options{Dir: cfg.Dir, DisableBackgroundPrune: true})

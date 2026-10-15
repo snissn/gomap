@@ -1,0 +1,4355 @@
+{
+  "advertised_refs": {
+    "refs/heads/codex/4871-allocation-integration-20261015": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+    "refs/heads/codex/5130-allocator-evidence-20261015": "71d6bbd802bba83e4bad9d3eb87123f2da84e975",
+    "refs/heads/codex/5130-main-allocator-evidence-20261015": "5936ecf934248b7956a3030196be0208051b68a9",
+    "refs/heads/main": "9029eb4e06fb99913c08dd2b3d7424f310445469"
+  },
+  "candidates": [
+    {
+      "allocated_bytes_estimate": 934273024,
+      "changed_file_preservation": [],
+      "head": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+      "ignored": [],
+      "logical_bytes": 907459112,
+      "members": 11170,
+      "mounts_under_path": [],
+      "nested_worktree_or_git": [],
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+      "scan_seconds": 0.9426402109675109,
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-integration-20261015-snapshot.json",
+        "sha256": "c2def84470e93f24898197b06669703a5bff83c0898ba4042cdd4219b8e24787"
+      },
+      "status": ""
+    },
+    {
+      "allocated_bytes_estimate": 934281216,
+      "changed_file_preservation": [
+        {
+          "bytes": 210465,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/db.go"
+            }
+          ],
+          "path": "TreeDB/db/db.go",
+          "sha256": "035c99c4238b382e1e5603e79d6273649a65918f929e97ccc4ef66759bad672e"
+        },
+        {
+          "bytes": 23893,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/format_config.go"
+            }
+          ],
+          "path": "TreeDB/db/format_config.go",
+          "sha256": "1a3ad3f7eb5dd79a8d5e0d2582af515f08d0fdc43395a73801a232ac562ecd6f"
+        },
+        {
+          "bytes": 9498,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/format_config_test.go"
+            }
+          ],
+          "path": "TreeDB/db/format_config_test.go",
+          "sha256": "3874e4eaa5d359dc182e32da6cc6f82278730dca7b093d36d4cbf64b83a1eb36"
+        },
+        {
+          "bytes": 5419,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/freelist_patricia_feature_v2_test.go"
+            }
+          ],
+          "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+          "sha256": "5e727ec94fe053c2d403698cd9d2af4eb4a1fdcea61a4b1ec62ecc0082933055"
+        },
+        {
+          "bytes": 17636,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/open_readonly.go"
+            }
+          ],
+          "path": "TreeDB/db/open_readonly.go",
+          "sha256": "a3be4240eba7060a7b50932cbdd8adf814cdd36cc53cd519215c3922a9f4ba17"
+        },
+        {
+          "bytes": 47051,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/docs/spec/recovery.md"
+            }
+          ],
+          "path": "TreeDB/docs/spec/recovery.md",
+          "sha256": "55ef4e4826aa32560d384006d7c244a4bf31b005aae6f7c96b88b4249fe94082"
+        },
+        {
+          "bytes": 231656,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/docs/spec/storage-format.md"
+            }
+          ],
+          "path": "TreeDB/docs/spec/storage-format.md",
+          "sha256": "30ff8cabc8f6657dcffad4b21029ff334d845a9eb5e5aa6e578684afd007f850"
+        },
+        {
+          "bytes": 4156,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_snapshot_v1.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_snapshot_v1.go",
+          "sha256": "1d8ddb3d5093d54aee4be51fe01de8b2fba9c8496390dc16f86909b1d742a669"
+        },
+        {
+          "bytes": 8817,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_topology_5131_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_topology_5131_test.go",
+          "sha256": "0d33c7a5a70f2b0e2eb52e8797b61500356cc5ecbbaee29bca06e1ea16a27c74"
+        },
+        {
+          "bytes": 18951,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_format.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_format.go",
+          "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+        },
+        {
+          "bytes": 21889,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_reservation.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_reservation.go",
+          "sha256": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7"
+        },
+        {
+          "bytes": 42810,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_test.go",
+          "sha256": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417"
+        },
+        {
+          "bytes": 13327,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_tree.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_tree.go",
+          "sha256": "f770cca08be51fb80c417c50c11873eda5c843c296b8fab51d9f36d7de328e91"
+        }
+      ],
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "ignored": [],
+      "logical_bytes": 907450923,
+      "members": 11169,
+      "mounts_under_path": [],
+      "nested_worktree_or_git": [],
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+      "scan_seconds": 1.8026793571189046,
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-topology-20261015-snapshot.json",
+        "sha256": "ef2e8ba4b96d93a905c2e43696ebb28bd654ca0dafdfcbae798ee12c4b665f08"
+      },
+      "status": " M TreeDB/db/db.go\n M TreeDB/db/format_config.go\n M TreeDB/db/format_config_test.go\n M TreeDB/db/open_readonly.go\n M TreeDB/docs/spec/recovery.md\n M TreeDB/docs/spec/storage-format.md\n M TreeDB/freelist/generation_snapshot_v1.go\n M TreeDB/freelist/generation_v1_format.go\n M TreeDB/freelist/generation_v1_reservation.go\n M TreeDB/freelist/generation_v1_test.go\n M TreeDB/freelist/generation_v1_tree.go\n?? TreeDB/db/freelist_patricia_feature_v2_test.go\n?? TreeDB/freelist/generation_topology_5131_test.go\n"
+    },
+    {
+      "allocated_bytes_estimate": 934248448,
+      "changed_file_preservation": [
+        {
+          "bytes": 24925,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/allocator_cow.go"
+            }
+          ],
+          "path": "TreeDB/freelist/allocator_cow.go",
+          "sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685"
+        },
+        {
+          "bytes": 11211,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+          "sha256": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+        },
+        {
+          "bytes": 8092,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_reuse.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_reuse.go",
+          "sha256": "4a93f586219e126e51e4ef05f72ccddf6063b08839033d1156aa5e2db2e0dc63"
+        },
+        {
+          "bytes": 21535,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+          "sha256": "7fae09ed8b51d49b6ae5a9aa9498022d38f0bbd4ab42f3d4b195ec9a90b7c95b"
+        },
+        {
+          "bytes": 6462,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_private_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_private_test.go",
+          "sha256": "ef8082b3eed1ce843a5c0287500b370ebc7f87b768efa087a22e0b20a2679812"
+        },
+        {
+          "bytes": 30812,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_txn.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_txn.go",
+          "sha256": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3"
+        }
+      ],
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "ignored": [],
+      "logical_bytes": 907434234,
+      "members": 11168,
+      "mounts_under_path": [],
+      "nested_worktree_or_git": [],
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+      "scan_seconds": 1.8128636162728071,
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-private-20261015-snapshot.json",
+        "sha256": "7703d6a4d7f577ae860aad9b5a8f6aa3f4202efdd5355a9600b2bc2297c1b901"
+      },
+      "status": " M TreeDB/freelist/allocator_cow.go\n M TreeDB/freelist/generation_v1_metadata_cursor_test.go\n M TreeDB/freelist/generation_v1_metadata_reuse.go\n M TreeDB/freelist/generation_v1_metadata_reuse_test.go\n M TreeDB/freelist/generation_v1_txn.go\n?? TreeDB/freelist/generation_v1_private_test.go\n"
+    },
+    {
+      "allocated_bytes_estimate": 934256640,
+      "changed_file_preservation": [
+        {
+          "bytes": 1900,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/clone_scratch_public_test.go"
+            }
+          ],
+          "path": "TreeDB/zipper/clone_scratch_public_test.go",
+          "sha256": "0daf133c32b65e5e224e65cdcf43bcf0616b36951cb4fc4ce619095be56ba210"
+        },
+        {
+          "bytes": 5778,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/clone_scratch_test.go"
+            }
+          ],
+          "path": "TreeDB/zipper/clone_scratch_test.go",
+          "sha256": "9b96e1912daeba1659cd9d7ff71e525e0aab1724add0162a8a35e952147926a2"
+        },
+        {
+          "bytes": 2299,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/scratch-reuse.md"
+            }
+          ],
+          "path": "TreeDB/zipper/scratch-reuse.md",
+          "sha256": "e1161c7e6d52948f6bcebd23b431bcffbf0f9f4675fb039c51231c162ced8a66"
+        },
+        {
+          "bytes": 136362,
+          "matching_durable_source": [],
+          "path": "TreeDB/zipper/zipper.go",
+          "sha256": "37a21c56eac789c09cab08492f7fcea7c7e67a155f7f5bf209ce68a359e115de"
+        }
+      ],
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "ignored": [],
+      "logical_bytes": 907437423,
+      "members": 11170,
+      "mounts_under_path": [],
+      "nested_worktree_or_git": [],
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+      "scan_seconds": 1.8015581970103085,
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-zipper-20261015-snapshot.json",
+        "sha256": "67165d87ccd8b567daae746ed456809dd0a5cb5f7da3729968bfaced0b982bff"
+      },
+      "status": " M TreeDB/zipper/zipper.go\n?? TreeDB/zipper/clone_scratch_public_test.go\n?? TreeDB/zipper/clone_scratch_test.go\n?? TreeDB/zipper/scratch-reuse.md\n"
+    }
+  ],
+  "commands": [
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "ls-remote",
+        "origin",
+        "refs/heads/codex/4871-allocation-integration-20261015",
+        "refs/heads/codex/5130-allocator-evidence-20261015",
+        "refs/heads/codex/5133-zipper-scratch-reuse",
+        "refs/heads/codex/5130-main-allocator-evidence-20261015",
+        "refs/heads/main"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "rev-parse",
+        "7a6fd35^{commit}"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "rev-parse",
+        "71d6bbd^{commit}"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "rev-parse",
+        "3744b999^{commit}"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+        "rev-parse",
+        "5936ecf^{commit}"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "diff",
+        "--name-only",
+        "-z",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+        "rev-parse",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "diff",
+        "--name-only",
+        "-z",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+        "rev-parse",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "diff",
+        "--name-only",
+        "-z",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+        "rev-parse",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "diff",
+        "--name-only",
+        "-z",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "args": [
+        "git",
+        "-C",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+        "rev-parse",
+        "HEAD"
+      ],
+      "rc": 0,
+      "stderr": ""
+    }
+  ],
+  "deletion_performed": false,
+  "finished_utc": "2026-10-15T06:23:56.779163+00:00",
+  "free_bytes": 272723763200,
+  "host": "mikers@192.168.0.111",
+  "protected_after": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015": {
+      "device": 66306,
+      "inode": 108297284,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence": {
+      "device": 66306,
+      "inode": 104636573,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "device": 66306,
+      "inode": 106209646,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": {
+      "device": 66306,
+      "inode": 104636575,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014": {
+      "device": 66306,
+      "inode": 107356341,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014": {
+      "device": 66306,
+      "inode": 107369107,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe": {
+      "device": 66306,
+      "inode": 105424838,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "device": 66306,
+      "inode": 105555390,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap": {
+      "device": 66306,
+      "inode": 101712073,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4767-python": {
+      "device": 66306,
+      "inode": 11573632,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal": {
+      "device": 66306,
+      "inode": 20842491,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "device": 66306,
+      "inode": 101712074,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective": {
+      "device": 66306,
+      "inode": 18220713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-23e5": {
+      "device": 66306,
+      "inode": 18230593,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-9b22": {
+      "device": 66306,
+      "inode": 18225636,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-d81d": {
+      "device": 66306,
+      "inode": 18235506,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline": {
+      "device": 66306,
+      "inode": 20472713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5057": {
+      "device": 66306,
+      "inode": 3824345,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5058": {
+      "device": 66306,
+      "inode": 3831420,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5059": {
+      "device": 66306,
+      "inode": 3838497,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5060": {
+      "device": 66306,
+      "inode": 3956624,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5061": {
+      "device": 66306,
+      "inode": 3967576,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5065-final-00d2c370": {
+      "device": 66306,
+      "inode": 2269976,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-baseline-attribution": {
+      "device": 66306,
+      "inode": 4199922,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-growth-probe": {
+      "device": 66306,
+      "inode": 4077041,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-lifecycle-size-diagnostic": {
+      "device": 66306,
+      "inode": 4212126,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-candidate-3182": {
+      "device": 66306,
+      "inode": 4868036,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-control-3182": {
+      "device": 66306,
+      "inode": 4757513,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-c-2572": {
+      "device": 66306,
+      "inode": 4472027,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-final-f796": {
+      "device": 66306,
+      "inode": 4464413,
+      "mode": 16893
+    }
+  },
+  "protected_before": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015": {
+      "device": 66306,
+      "inode": 108297284,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence": {
+      "device": 66306,
+      "inode": 104636573,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "device": 66306,
+      "inode": 106209646,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111": {
+      "device": 66306,
+      "inode": 104636575,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014": {
+      "device": 66306,
+      "inode": 107356341,
+      "mode": 16893
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014": {
+      "device": 66306,
+      "inode": 107369107,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe": {
+      "device": 66306,
+      "inode": 105424838,
+      "mode": 16832
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "device": 66306,
+      "inode": 105555390,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap": {
+      "device": 66306,
+      "inode": 101712073,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4767-python": {
+      "device": 66306,
+      "inode": 11573632,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal": {
+      "device": 66306,
+      "inode": 20842491,
+      "mode": 16893
+    },
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "device": 66306,
+      "inode": 101712074,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective": {
+      "device": 66306,
+      "inode": 18220713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-23e5": {
+      "device": 66306,
+      "inode": 18230593,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-9b22": {
+      "device": 66306,
+      "inode": 18225636,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q4-prospective-d81d": {
+      "device": 66306,
+      "inode": 18235506,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline": {
+      "device": 66306,
+      "inode": 20472713,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5057": {
+      "device": 66306,
+      "inode": 3824345,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5058": {
+      "device": 66306,
+      "inode": 3831420,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5059": {
+      "device": 66306,
+      "inode": 3838497,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5060": {
+      "device": 66306,
+      "inode": 3956624,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5061": {
+      "device": 66306,
+      "inode": 3967576,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-5065-final-00d2c370": {
+      "device": 66306,
+      "inode": 2269976,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-baseline-attribution": {
+      "device": 66306,
+      "inode": 4199922,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-growth-probe": {
+      "device": 66306,
+      "inode": 4077041,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-lifecycle-size-diagnostic": {
+      "device": 66306,
+      "inode": 4212126,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-candidate-3182": {
+      "device": 66306,
+      "inode": 4868036,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-m0-matched-control-3182": {
+      "device": 66306,
+      "inode": 4757513,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-c-2572": {
+      "device": 66306,
+      "inode": 4472027,
+      "mode": 16893
+    },
+    "/home/mikers/gomap-r1-retained-final-f796": {
+      "device": 66306,
+      "inode": 4464413,
+      "mode": 16893
+    }
+  },
+  "scope": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015"
+  ],
+  "source_durability": {
+    "3744b999": {
+      "advertised_containing_refs": [],
+      "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0"
+    },
+    "5936ecf": {
+      "advertised_containing_refs": [
+        {
+          "head": "5936ecf934248b7956a3030196be0208051b68a9",
+          "ref": "refs/heads/codex/5130-main-allocator-evidence-20261015"
+        }
+      ],
+      "commit": "5936ecf934248b7956a3030196be0208051b68a9"
+    },
+    "71d6bbd": {
+      "advertised_containing_refs": [
+        {
+          "head": "71d6bbd802bba83e4bad9d3eb87123f2da84e975",
+          "ref": "refs/heads/codex/5130-allocator-evidence-20261015"
+        }
+      ],
+      "commit": "71d6bbd802bba83e4bad9d3eb87123f2da84e975"
+    },
+    "7a6fd35": {
+      "advertised_containing_refs": [
+        {
+          "head": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+          "ref": "refs/heads/codex/4871-allocation-integration-20261015"
+        },
+        {
+          "head": "71d6bbd802bba83e4bad9d3eb87123f2da84e975",
+          "ref": "refs/heads/codex/5130-allocator-evidence-20261015"
+        }
+      ],
+      "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df"
+    }
+  },
+  "started_utc": "2026-10-15T06:23:48.284340+00:00",
+  "target_consumers": [],
+  "unreadable_processes": [
+    {
+      "command": "/usr/lib/systemd/systemd --system --deserialize=93 splash",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 2,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 3,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 4,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 5,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 6,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 7,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 8,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 10,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 13,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 14,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 15,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 16,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 17,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 18,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 19,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 20,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 21,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 22,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 23,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 24,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 25,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 27,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 28,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 29,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 30,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 31,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 33,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 34,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 35,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 36,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 37,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 39,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 40,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 41,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 42,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 43,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 45,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 46,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 47,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 48,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 49,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 51,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 52,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 53,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 54,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 55,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 57,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 58,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 59,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 60,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 61,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 63,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 64,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 65,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 66,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 67,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 69,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 70,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 71,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 72,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 73,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 75,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 76,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 77,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 78,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 79,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 81,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 82,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 83,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 84,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 85,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 87,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 88,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 89,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 90,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 91,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 93,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 94,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 95,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 96,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 97,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 99,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 100,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 101,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 102,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 103,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 105,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 106,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 107,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 108,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 109,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 111,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 112,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 113,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 114,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 115,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 116,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 117,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 118,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 121,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 122,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 123,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 124,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 125,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 126,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 127,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 128,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 131,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 132,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 133,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 134,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 135,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 136,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 137,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 139,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 141,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 142,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 144,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 145,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 146,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 148,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 149,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 150,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 151,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 175,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 176,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 177,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 178,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 414,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 415,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 416,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 417,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 418,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 419,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 420,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 421,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 422,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 423,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 424,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 425,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 431,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 432,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 433,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 434,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 456,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 459,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 460,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 469,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 478,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd-journald",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 518,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 554,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd-resolved",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 556,
+      "uid": 989
+    },
+    {
+      "command": "/usr/lib/systemd/systemd-oomd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 559,
+      "uid": 986
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 560,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 561,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd-udevd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 563,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 566,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 569,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 622,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 804,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 912,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 913,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 914,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 915,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 916,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 917,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 931,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 932,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 934,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 935,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 936,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 937,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 938,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 939,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 940,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 941,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 942,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 943,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 965,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 966,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 967,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 987,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 997,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1005,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1017,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1038,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1291,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1292,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1293,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1294,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1295,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1296,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1297,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1298,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1299,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1300,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1301,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1302,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1303,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1304,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1305,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1306,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1307,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1308,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1309,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1310,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1311,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1312,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1313,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1541,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1542,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1543,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1680,
+      "uid": 0
+    },
+    {
+      "command": "avahi-daemon: running [mikers-MS-7E71.local]",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1740,
+      "uid": 103
+    },
+    {
+      "command": "/usr/libexec/bluetooth/bluetoothd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1741,
+      "uid": 0
+    },
+    {
+      "command": "/bin/sh /usr/lib/systemd/scripts/chronyd-starter.sh -n -F 1",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1742,
+      "uid": 0
+    },
+    {
+      "command": "@dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1744,
+      "uid": 995
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1746,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1751,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/polkit-1/polkitd --no-debug --log-level=notice",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1758,
+      "uid": 979
+    },
+    {
+      "command": "/usr/bin/nvidia-persistenced --user nvidia-persistenced --no-persistence-mode --verbose",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1768,
+      "uid": 112
+    },
+    {
+      "command": "/usr/libexec/accounts-daemon",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1771,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/cron -f -P",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1774,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/switcheroo-control",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1775,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd-logind",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1778,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/udisks2/udisksd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1780,
+      "uid": 0
+    },
+    {
+      "command": "avahi-daemon: chroot helper",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1801,
+      "uid": 103
+    },
+    {
+      "command": "/usr/sbin/chronyd -n -F 1",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1838,
+      "uid": 988
+    },
+    {
+      "command": "/usr/sbin/rsyslogd -n -iNONE",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1839,
+      "uid": 100
+    },
+    {
+      "command": "/usr/sbin/chronyd -n -F 1",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1890,
+      "uid": 988
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1892,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1894,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/NetworkManager --no-daemon",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1901,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/wpa_supplicant -u -s -O DIR=/run/wpa_supplicant GROUP=netdev",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1902,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/ModemManager",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1943,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1953,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 2073,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2104,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/gdm3",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2123,
+      "uid": 0
+    },
+    {
+      "command": "gdm-session-worker [pam/gdm-autologin]",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2131,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd --user --deserialize=65",
+      "denied": [
+        "cwd",
+        "exe",
+        "fdlink",
+        "maps"
+      ],
+      "pid": 2148,
+      "uid": 1000
+    },
+    {
+      "command": "(sd-pam)",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2175,
+      "uid": 1000
+    },
+    {
+      "command": "/usr/libexec/rtkit-daemon",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2226,
+      "uid": 978
+    },
+    {
+      "command": "fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2415,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/ssh-agent -D",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2448,
+      "uid": 1000
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 2611,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/colord",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2654,
+      "uid": 977
+    },
+    {
+      "command": "/usr/libexec/upowerd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 2715,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/power-profiles-daemon",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3396,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 3418,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 12562,
+      "uid": 0
+    },
+    {
+      "command": "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 158697,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/fwupd/fwupd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 236788,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 442220,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 725816,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 739805,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 916715,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 976869,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 998901,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1012189,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1025833,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1096330,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1109101,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1124355,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1130414,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1130690,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1162844,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1185735,
+      "uid": 0
+    },
+    {
+      "command": "sudo su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195196,
+      "uid": 0
+    },
+    {
+      "command": "sudo su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195263,
+      "uid": 0
+    },
+    {
+      "command": "su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195264,
+      "uid": 0
+    },
+    {
+      "command": "/usr/lib/systemd/systemd --user",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195268,
+      "uid": 0
+    },
+    {
+      "command": "(sd-pam)",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195270,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195292,
+      "uid": 0
+    },
+    {
+      "command": "/snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195294,
+      "uid": 0
+    },
+    {
+      "command": "bash",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195295,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/xdg-document-portal",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195369,
+      "uid": 0
+    },
+    {
+      "command": "/usr/libexec/xdg-permission-store",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195376,
+      "uid": 0
+    },
+    {
+      "command": "fusermount3 --auto-unmount -- /run/user/0/doc",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1195384,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1198353,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/containerd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1199661,
+      "uid": 0
+    },
+    {
+      "command": "/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1200019,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1212725,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1213107,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1222096,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1240477,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1242120,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1249636,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1262669,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1262714,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1267833,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1267910,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1268431,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1273375,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1273901,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1274374,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1275066,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1276074,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1279942,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1281485,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1283534,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1284708,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1288000,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1289391,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1289632,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1289633,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 1292244,
+      "uid": 0
+    },
+    {
+      "command": "sshd-session: mikers [priv]",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1294124,
+      "uid": 0
+    },
+    {
+      "command": "sshd-session: mikers@notty",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1294165,
+      "uid": 1000
+    },
+    {
+      "command": "/snap/snapd/current/usr/lib/snapd/snapd",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 1435980,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 2516367,
+      "uid": 0
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 2566163,
+      "uid": 0
+    },
+    {
+      "command": "sudo su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3036614,
+      "uid": 0
+    },
+    {
+      "command": "sudo su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3036617,
+      "uid": 0
+    },
+    {
+      "command": "su",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3036618,
+      "uid": 0
+    },
+    {
+      "command": "bash",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3036620,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/cupsd -l",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3728903,
+      "uid": 0
+    },
+    {
+      "command": "/usr/sbin/cups-browsed",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3728904,
+      "uid": 110
+    },
+    {
+      "command": "/usr/lib/cups/notifier/dbus dbus://",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3728951,
+      "uid": 7
+    },
+    {
+      "command": "/usr/lib/cups/notifier/dbus dbus://",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds",
+        "maps"
+      ],
+      "pid": 3728952,
+      "uid": 7
+    },
+    {
+      "command": "",
+      "denied": [
+        "cwd",
+        "exe",
+        "fds"
+      ],
+      "pid": 4037386,
+      "uid": 0
+    }
+  ]
+}

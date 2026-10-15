@@ -1,0 +1,8 @@
+{
+  "git_apply_check_exit": 0,
+  "diagnostic": "",
+  "ready_receipt_sha256": "bc94ed7a2e694c933395e7020aad4c976c0b57b2351aa894a5bb502dbb083d5d",
+  "ready_patch_sha256": "a504679f5b2b97a1d897606a46c7442d5a3c6623b567cb93bdea87a3609d4f72",
+  "source_manifest_sha256": "ecc5858214335967c9920988d2f35211ca79008fe9a03d55942c88ec77cd85c0",
+  "check_only_no_apply": true
+}

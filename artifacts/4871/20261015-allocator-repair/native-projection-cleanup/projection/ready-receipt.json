@@ -1,0 +1,43 @@
+{
+  "final_manifest": {
+    "bytes": 31924,
+    "sha256": "ecc5858214335967c9920988d2f35211ca79008fe9a03d55942c88ec77cd85c0",
+    "git_blob": "ac3b7d1ae1d0c575b5cee3e7ba302006642e7b83"
+  },
+  "ready_patch": {
+    "bytes": 98043,
+    "sha256": "a504679f5b2b97a1d897606a46c7442d5a3c6623b567cb93bdea87a3609d4f72",
+    "git_blob": "7ca626d7ff7145c6c207ff70c7ae485139102147"
+  },
+  "paths": 31,
+  "unresolved_conflicts": [],
+  "precise_resolutions": [
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "regions": 1,
+      "rule": "preserve native signature/registry cleanup; add canonical helper/gates"
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "regions": 2,
+      "rule": "preserve native signature/registry cleanup; add canonical helper/gates"
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "regions": 1,
+      "rule": "retain both independent appended sections"
+    }
+  ],
+  "checks": {
+    "writable_preflight_and_fresh_marker": true,
+    "readonly_two_gates_and_native_registry_wrapper": true,
+    "native_registry_cleanup_before_inner_gate": true,
+    "native_named_return_plus_root_retention": true,
+    "activation_only_retirement_delta": true,
+    "native_installAppend_preserved": true,
+    "all_native_preimages_still_match": true
+  },
+  "no_source_or_index_writes": true,
+  "no_go": true,
+  "required_followup": "Adapt preserved native generation_snapshot_v1 work classifier to canonical depth/prefix/direct terminal and exact charged minChunk key check; no implementation authorized in this packet."
+}

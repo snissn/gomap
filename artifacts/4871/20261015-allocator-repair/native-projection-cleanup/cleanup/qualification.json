@@ -1,0 +1,98 @@
+{
+  "candidates": [
+    {
+      "allocated_bytes_estimate": 934273024,
+      "changed_file_count": 0,
+      "durability": "construction 7a6fd35 advertised source ref and artifact71d6bbd",
+      "head": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+      "logical_bytes": 907459112,
+      "members": 11170,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+      "recommendation": "eligible for root release; clean no-force worktree removal after exact snapshot recheck",
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-integration-20261015-snapshot.json",
+        "sha256": "c2def84470e93f24898197b06669703a5bff83c0898ba4042cdd4219b8e24787"
+      },
+      "status_unchanged": true,
+      "unique_unpreserved_content_found": false
+    },
+    {
+      "allocated_bytes_estimate": 934281216,
+      "changed_file_count": 13,
+      "durability": "construction 7a6fd35 advertised source ref and artifact71d6bbd",
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "logical_bytes": 907450923,
+      "members": 11169,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+      "recommendation": "retain until root authorizes exact tracked-file restoration and exact untracked-file deletion against preserved bytes, followed by fresh clean-state snapshot and no-force removal",
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-topology-20261015-snapshot.json",
+        "sha256": "ef2e8ba4b96d93a905c2e43696ebb28bd654ca0dafdfcbae798ee12c4b665f08"
+      },
+      "status_unchanged": true,
+      "unique_unpreserved_content_found": false
+    },
+    {
+      "allocated_bytes_estimate": 934248448,
+      "changed_file_count": 6,
+      "durability": "construction 7a6fd35 advertised source ref and artifact71d6bbd",
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "logical_bytes": 907434234,
+      "members": 11168,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+      "recommendation": "retain until root authorizes exact tracked-file restoration and exact untracked-file deletion against preserved bytes, followed by fresh clean-state snapshot and no-force removal",
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-private-20261015-snapshot.json",
+        "sha256": "7703d6a4d7f577ae860aad9b5a8f6aa3f4202efdd5355a9600b2bc2297c1b901"
+      },
+      "status_unchanged": true,
+      "unique_unpreserved_content_found": false
+    },
+    {
+      "allocated_bytes_estimate": 934256640,
+      "changed_file_count": 4,
+      "durability": "tracked zipper.go reproduced from exact published patch in artifact3744b999; all three new files byte-identical to same advertised artifact commit",
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "logical_bytes": 907437423,
+      "members": 11170,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+      "recommendation": "retain until root authorizes exact tracked-file restoration and exact untracked-file deletion against preserved bytes, followed by fresh clean-state snapshot and no-force removal",
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-zipper-20261015-snapshot.json",
+        "sha256": "67165d87ccd8b567daae746ed456809dd0a5cb5f7da3729968bfaced0b982bff"
+      },
+      "status_unchanged": true,
+      "unique_unpreserved_content_found": false
+    }
+  ],
+  "captured_utc": "2026-10-15T06:25:07.798325+00:00",
+  "deletion_authorized": false,
+  "deletion_performed": false,
+  "host": "mikers@192.168.0.111",
+  "no_source_or_git_mutation": true,
+  "protected_identities_unchanged": true,
+  "remaining_actions": "Root must supply exact released allowlist and snapshots. Dirty lanes require explicit normalization scope, not force. Immediately reverify snapshot, consumers, protected and mounts at deletion.",
+  "scope": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015"
+  ],
+  "summary": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/inventory-summary.json",
+    "sha256": "4c5382eb599eb37a7bbed0126c2f24d4669ea1104aab4a8099e2e71163feb069"
+  },
+  "target_consumers": [],
+  "total_allocated_bytes_estimate": 3737059328,
+  "total_logical_bytes": 3629781692,
+  "unreadable_standard_system_or_session_daemons_are_not_consumers": "Explicit root policy from prior cleanup; accessible command/cwd/exe/fd/maps target references checked; same-user denied identities limited to systemd --user, sd-pam, ssh-agent, current sshd-session transport.",
+  "zipper_durability_supplement": {
+    "advertised_ref": "3744b999531fcc4bb76a144a359d2be475dd6bf0\trefs/heads/codex/5133-zipper-evidence-20261015",
+    "artifact_commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+    "artifact_patch_path": "artifacts/4871/20261015-zipper-clone-scratch/packet/candidate-final.patch",
+    "interpretation": "Supersedes initial snapshot false advertised_durable flags for 3744b999; content inventories unchanged.",
+    "matches_current_complete_tracked_diff": true,
+    "new_file_bytes_match_artifact": true,
+    "patch_sha256": "7c2d6c76039f353904cd1327d55a3301cbf5463ab6aeb0142d3c51f438ae9546"
+  }
+}

@@ -1,0 +1,391 @@
+{
+  "allowlist": [
+    {
+      "head": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+      "preservation": [],
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-integration-20261015-snapshot.json",
+        "sha256": "c2def84470e93f24898197b06669703a5bff83c0898ba4042cdd4219b8e24787"
+      },
+      "tracked_to_restore": [],
+      "untracked_to_unlink": []
+    },
+    {
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-topology-20261015",
+      "preservation": [
+        {
+          "bytes": 210465,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/db.go"
+            }
+          ],
+          "path": "TreeDB/db/db.go",
+          "sha256": "035c99c4238b382e1e5603e79d6273649a65918f929e97ccc4ef66759bad672e"
+        },
+        {
+          "bytes": 23893,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/format_config.go"
+            }
+          ],
+          "path": "TreeDB/db/format_config.go",
+          "sha256": "1a3ad3f7eb5dd79a8d5e0d2582af515f08d0fdc43395a73801a232ac562ecd6f"
+        },
+        {
+          "bytes": 9498,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/format_config_test.go"
+            }
+          ],
+          "path": "TreeDB/db/format_config_test.go",
+          "sha256": "3874e4eaa5d359dc182e32da6cc6f82278730dca7b093d36d4cbf64b83a1eb36"
+        },
+        {
+          "bytes": 5419,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/freelist_patricia_feature_v2_test.go"
+            }
+          ],
+          "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+          "sha256": "5e727ec94fe053c2d403698cd9d2af4eb4a1fdcea61a4b1ec62ecc0082933055"
+        },
+        {
+          "bytes": 17636,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/db/open_readonly.go"
+            }
+          ],
+          "path": "TreeDB/db/open_readonly.go",
+          "sha256": "a3be4240eba7060a7b50932cbdd8adf814cdd36cc53cd519215c3922a9f4ba17"
+        },
+        {
+          "bytes": 47051,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/docs/spec/recovery.md"
+            }
+          ],
+          "path": "TreeDB/docs/spec/recovery.md",
+          "sha256": "55ef4e4826aa32560d384006d7c244a4bf31b005aae6f7c96b88b4249fe94082"
+        },
+        {
+          "bytes": 231656,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/docs/spec/storage-format.md"
+            }
+          ],
+          "path": "TreeDB/docs/spec/storage-format.md",
+          "sha256": "30ff8cabc8f6657dcffad4b21029ff334d845a9eb5e5aa6e578684afd007f850"
+        },
+        {
+          "bytes": 4156,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_snapshot_v1.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_snapshot_v1.go",
+          "sha256": "1d8ddb3d5093d54aee4be51fe01de8b2fba9c8496390dc16f86909b1d742a669"
+        },
+        {
+          "bytes": 8817,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_topology_5131_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_topology_5131_test.go",
+          "sha256": "0d33c7a5a70f2b0e2eb52e8797b61500356cc5ecbbaee29bca06e1ea16a27c74"
+        },
+        {
+          "bytes": 18951,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_format.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_format.go",
+          "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+        },
+        {
+          "bytes": 21889,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_reservation.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_reservation.go",
+          "sha256": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7"
+        },
+        {
+          "bytes": 42810,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_test.go",
+          "sha256": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417"
+        },
+        {
+          "bytes": 13327,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_tree.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_tree.go",
+          "sha256": "f770cca08be51fb80c417c50c11873eda5c843c296b8fab51d9f36d7de328e91"
+        }
+      ],
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-topology-20261015-snapshot.json",
+        "sha256": "ef2e8ba4b96d93a905c2e43696ebb28bd654ca0dafdfcbae798ee12c4b665f08"
+      },
+      "tracked_to_restore": [
+        "TreeDB/db/db.go",
+        "TreeDB/db/format_config.go",
+        "TreeDB/db/format_config_test.go",
+        "TreeDB/db/open_readonly.go",
+        "TreeDB/docs/spec/recovery.md",
+        "TreeDB/docs/spec/storage-format.md",
+        "TreeDB/freelist/generation_snapshot_v1.go",
+        "TreeDB/freelist/generation_v1_format.go",
+        "TreeDB/freelist/generation_v1_reservation.go",
+        "TreeDB/freelist/generation_v1_test.go",
+        "TreeDB/freelist/generation_v1_tree.go"
+      ],
+      "untracked_to_unlink": [
+        "TreeDB/db/freelist_patricia_feature_v2_test.go",
+        "TreeDB/freelist/generation_topology_5131_test.go"
+      ]
+    },
+    {
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015",
+      "preservation": [
+        {
+          "bytes": 24925,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/allocator_cow.go"
+            }
+          ],
+          "path": "TreeDB/freelist/allocator_cow.go",
+          "sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685"
+        },
+        {
+          "bytes": 11211,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+          "sha256": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+        },
+        {
+          "bytes": 8092,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_reuse.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_reuse.go",
+          "sha256": "4a93f586219e126e51e4ef05f72ccddf6063b08839033d1156aa5e2db2e0dc63"
+        },
+        {
+          "bytes": 21535,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+          "sha256": "7fae09ed8b51d49b6ae5a9aa9498022d38f0bbd4ab42f3d4b195ec9a90b7c95b"
+        },
+        {
+          "bytes": 6462,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_private_test.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_private_test.go",
+          "sha256": "ef8082b3eed1ce843a5c0287500b370ebc7f87b768efa087a22e0b20a2679812"
+        },
+        {
+          "bytes": 30812,
+          "matching_durable_source": [
+            {
+              "advertised_durable": true,
+              "commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+              "path": "TreeDB/freelist/generation_v1_txn.go"
+            }
+          ],
+          "path": "TreeDB/freelist/generation_v1_txn.go",
+          "sha256": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3"
+        }
+      ],
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-private-20261015-snapshot.json",
+        "sha256": "7703d6a4d7f577ae860aad9b5a8f6aa3f4202efdd5355a9600b2bc2297c1b901"
+      },
+      "tracked_to_restore": [
+        "TreeDB/freelist/allocator_cow.go",
+        "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+        "TreeDB/freelist/generation_v1_metadata_reuse.go",
+        "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+        "TreeDB/freelist/generation_v1_txn.go"
+      ],
+      "untracked_to_unlink": [
+        "TreeDB/freelist/generation_v1_private_test.go"
+      ]
+    },
+    {
+      "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+      "preservation": [
+        {
+          "bytes": 1900,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/clone_scratch_public_test.go"
+            }
+          ],
+          "path": "TreeDB/zipper/clone_scratch_public_test.go",
+          "sha256": "0daf133c32b65e5e224e65cdcf43bcf0616b36951cb4fc4ce619095be56ba210"
+        },
+        {
+          "bytes": 5778,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/clone_scratch_test.go"
+            }
+          ],
+          "path": "TreeDB/zipper/clone_scratch_test.go",
+          "sha256": "9b96e1912daeba1659cd9d7ff71e525e0aab1724add0162a8a35e952147926a2"
+        },
+        {
+          "bytes": 2299,
+          "matching_durable_source": [
+            {
+              "advertised_durable": false,
+              "commit": "3744b999531fcc4bb76a144a359d2be475dd6bf0",
+              "path": "TreeDB/zipper/scratch-reuse.md"
+            }
+          ],
+          "path": "TreeDB/zipper/scratch-reuse.md",
+          "sha256": "e1161c7e6d52948f6bcebd23b431bcffbf0f9f4675fb039c51231c162ced8a66"
+        },
+        {
+          "bytes": 136362,
+          "matching_durable_source": [],
+          "path": "TreeDB/zipper/zipper.go",
+          "sha256": "37a21c56eac789c09cab08492f7fcea7c7e67a155f7f5bf209ce68a359e115de"
+        }
+      ],
+      "snapshot": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/inactive-allocation-cleanup-inventory-20261015/allocation-zipper-20261015-snapshot.json",
+        "sha256": "67165d87ccd8b567daae746ed456809dd0a5cb5f7da3729968bfaced0b982bff"
+      },
+      "tracked_to_restore": [
+        "TreeDB/zipper/zipper.go"
+      ],
+      "untracked_to_unlink": [
+        "TreeDB/zipper/clone_scratch_public_test.go",
+        "TreeDB/zipper/clone_scratch_test.go",
+        "TreeDB/zipper/scratch-reuse.md"
+      ]
+    }
+  ],
+  "protected": [
+    "/home/mikers/dev/snissn/gomap/.git",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015",
+    "/home/mikers/dev/snissn/gomap",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-empty-checkpoint-20261014",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-pointer-tail-20261014",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/successor-4876-probe",
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4767-python",
+    "/home/mikers/dev/snissn/gomap-worktrees/issue-4769-wal",
+    "/home/mikers/gomap-q4-prospective",
+    "/home/mikers/gomap-q4-prospective-23e5",
+    "/home/mikers/gomap-q4-prospective-9b22",
+    "/home/mikers/gomap-q4-prospective-d81d",
+    "/home/mikers/gomap-q5-evidence/minima-sprint-20260918-Y8kbuC/baseline",
+    "/home/mikers/gomap-r1-5057",
+    "/home/mikers/gomap-r1-5058",
+    "/home/mikers/gomap-r1-5059",
+    "/home/mikers/gomap-r1-5060",
+    "/home/mikers/gomap-r1-5061",
+    "/home/mikers/gomap-r1-5065-final-00d2c370",
+    "/home/mikers/gomap-r1-baseline-attribution",
+    "/home/mikers/gomap-r1-growth-probe",
+    "/home/mikers/gomap-r1-lifecycle-size-diagnostic",
+    "/home/mikers/gomap-r1-m0-matched-candidate-3182",
+    "/home/mikers/gomap-r1-m0-matched-control-3182",
+    "/home/mikers/gomap-r1-retained-c-2572",
+    "/home/mikers/gomap-r1-retained-final-f796"
+  ],
+  "release_authority": "Root explicit four-lane cleanup authorization: frozen qualification f586fb3e2729262d84da485dfc4e6fb767bab5a1c362a04085e33fef70f83e60 and exact four full snapshot hashes; normalize only listed tracked/untracked paths after fresh full verification, then clean snapshot and no-force worktree remove. No branch removal, no force, no blanket clean, all protected paths retained.",
+  "released_utc": "2026-10-15T06:28:43.946247+00:00",
+  "required_gates": [
+    "full snapshot + identity + protected/mount/nested-worktree checks",
+    "live relevant consumer and fresh advertised remote durability checks",
+    "exact changed-byte preservation including published zipper tracked patch",
+    "fresh clean snapshot after exact normalization",
+    "no-force exact worktree removal and absence/unregistration/protected verification"
+  ]
+}
