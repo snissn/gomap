@@ -45,6 +45,7 @@ type nativeCOWMergeV6 struct {
 	cutClosing                             bool
 	cutCloseIndex                          int
 	cutBasisReleased                       bool
+	frozenOnly, includeTombstones          bool
 }
 
 func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
@@ -86,7 +87,9 @@ func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.Ordinal
 	for m.opened < m.count {
 		i := m.opened
 		var root *memtable.COWRoot
-		if i < len(m.cut.shards) {
+		if m.frozenOnly {
+			root = m.cut.frozen[len(m.cut.frozen)-1-i].root
+		} else if i < len(m.cut.shards) {
 			root = m.cut.shards[len(m.cut.shards)-1-i].root
 		} else {
 			root = m.cut.frozen[len(m.cut.frozen)-1-(i-len(m.cut.shards))].root
@@ -211,7 +214,7 @@ func (c *NativeMVCCCaptureV6) StepNativeProjectionV6(base *tree.ChargedProjectio
 			m.index++
 			m.phase = 0
 		case 3:
-			if !m.baseAdvance {
+			if !m.baseAdvance || m.frozenOnly {
 				m.phase = 6
 				m.compare = 0
 				m.winner = -1
@@ -263,7 +266,7 @@ func (c *NativeMVCCCaptureV6) StepNativeProjectionV6(base *tree.ChargedProjectio
 				m.key = nil
 				return true, nil
 			}
-			if m.record.Flags&node.FlagTombstone != 0 {
+			if m.record.Flags&node.FlagTombstone != 0 && !m.includeTombstones {
 				// Advance ALL equal sources. A cached tombstone hides the older basis;
 				// omitting only its top source would resurrect the disk record.
 				m.operation, m.index, m.phase = tree.ProjectionNext, 0, 8
@@ -316,7 +319,9 @@ func (c *NativeMVCCCaptureV6) NativePinnedValueLogFileV6(id uint32, w *iterator.
 	for m.lookupSource < m.count {
 		i := m.lookupSource
 		var resources *cowGenerationResources
-		if i < len(m.cut.shards) {
+		if m.frozenOnly {
+			resources = m.cut.frozen[len(m.cut.frozen)-1-i].resources
+		} else if i < len(m.cut.shards) {
 			resources = m.cut.shards[len(m.cut.shards)-1-i].resources
 		} else {
 			resources = m.cut.frozen[len(m.cut.frozen)-1-(i-len(m.cut.shards))].resources
@@ -494,4 +499,31 @@ func (c *NativeMVCCCaptureV6) NativeMVCCSelectedRecordV6(snapshot *backenddb.Sna
 		return node.LeafEntry{}, false, tree.ErrProjectionOwner
 	}
 	return m.record, true, nil
+}
+
+// stepNativeFrozenInputV6 uses the SAME ordered cursor/merge engine for
+// physical output input. Winning tombstones must reach materialized DATA as
+// deletes; hiding them here would resurrect older backend values.
+func (db *DB) stepNativeFrozenInputV6(c *NativeMVCCCaptureV6, cut *cowReadCut, w *iterator.OrdinalScanWork) (bool, error) {
+	m := &c.composite
+	if m.cut == nil {
+		if cut == nil || len(cut.frozen) > len(m.sources) {
+			return false, ErrCOWUnsupported
+		}
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))) {
+			return false, nil
+		}
+		db.cow.cutMu.Lock()
+		if cut.refs <= 0 || cut.refs == int(^uint(0)>>1) {
+			db.cow.cutMu.Unlock()
+			return false, memtable.ErrCOWClosed
+		}
+		cut.refs++
+		db.cow.cutMu.Unlock()
+		m.cut, m.cache, m.count = cut, db.cow, len(cut.frozen)
+		m.frozenOnly, m.includeTombstones = true, true
+		c.cache, c.Snapshot = db, cut.basis.snapshot
+	}
+	_, ready, e := db.stepNativeCOWCaptureV6(c, w)
+	return ready, e
 }

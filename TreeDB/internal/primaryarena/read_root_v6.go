@@ -284,6 +284,27 @@ func (a *Arena) DetachReadRootConstructionV6(ref Ref, owner ReadRootConstruction
 	return true, nil
 }
 
+// AcquireAndDetachReadRootConstructionV6 transfers constructor discoverability
+// to the publication edge in one admitted bank transition. Refusal leaves both
+// the constructor and reference count unchanged; no compensating Drop is needed.
+func (a *Arena) AcquireAndDetachReadRootConstructionV6(ref Ref, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (bool, error) {
+	bytes := 4 * uint64(unsafe.Sizeof(bank{}))
+	if !reserve(w, 2, bytes) {
+		return false, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.valid(ref)
+	if b == nil || !b.sealed || b.refs == ^uint64(0) || b.construction != owner {
+		return false, ErrStale
+	}
+	b.refs++
+	b.construction = nil
+	a.counters.RootAcquires++
+	a.counters.Bytes += bytes
+	return true, nil
+}
+
 // CloneReadRootForPromotionV6 owns a separate immutable RAM image and genuine
 // group edges. The visible logical root and its admitted retention never grow.
 // Capsule encoding still consumes the original constructor certificate; this

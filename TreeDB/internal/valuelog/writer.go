@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"io"
 	"math/bits"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -449,6 +449,13 @@ func (w *Writer) ensureAppendBufCap(capacity int) {
 }
 
 func (w *Writer) writeBytes(buf []byte) error {
+	return w.writeBytesWithCapacity(buf, 0)
+}
+
+// capacity is an already admitted buffer target. Ordinary writers retain their
+// original full-buffer policy; work-bearing single-frame appends may grow the
+// SAME buffer only to the capacity their actual current append needs.
+func (w *Writer) writeBytesWithCapacity(buf []byte, capacity int) error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
 	}
@@ -488,8 +495,12 @@ func (w *Writer) writeBytes(buf []byte) error {
 			return w.writeAllToFile(buf)
 		}
 	}
-	if cap(w.appendBuf) < max {
-		w.ensureAppendBufCap(max)
+	target := max
+	if capacity > 0 {
+		target = capacity
+	}
+	if cap(w.appendBuf) < target {
+		w.ensureAppendBufCap(target)
 	}
 	w.appendBuf = append(w.appendBuf, buf...)
 	if len(w.appendBuf) >= max {
@@ -684,78 +695,23 @@ func NewStagingWriterWithMetadata(path string, fileID uint32, owner *retainedall
 	return newFileWriter(path, fileID, false, syncStagingFileData, nil, owner)
 }
 func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry, explicitOwner ...*retainedalloc.Owner) (result *Writer, resultErr error) {
-	var owner *retainedalloc.Owner
-	if registry != nil {
-		owner = registry.MetadataOwner()
-	}
+	state := WriterCreationWork{Path: path, FileID: fileID, Registry: registry, SyncDirectory: syncDirectory, Sync: syncFn}
 	if len(explicitOwner) != 0 {
-		owner = explicitOwner[0]
+		state.Owner = explicitOwner[0]
 	}
-	fileCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(path)))
-	if err != nil {
-		return nil, err
-	}
-	parentCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(filepath.Dir(path))))
-	if err != nil {
-		return nil, err
-	}
-	const prefixCapacity = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Writer{}))) + fileCharge + parentCharge + retainedalloc.AllocationCharge(uint64(prefixCapacity))
-	if owner != nil {
-		if err = owner.AddPending(charge); err != nil {
+	for {
+		ready, err := state.Step(nil)
+		if err != nil {
+			if cleanupErr := state.Close(); cleanupErr != nil {
+				state.Writer.cleanupFailure.LinkPriorCleanupError(err)
+				return nil, cleanupErr
+			}
 			return nil, err
 		}
-	}
-	w := &Writer{metadata: owner, metadataCharge: charge, fileMetadataCharge: fileCharge, parentMetadataCharge: parentCharge, syncFn: syncFn}
-	w.cleanupFailure.writer = w
-	defer func() {
-		if resultErr != nil {
-			if cleanupErr := w.Close(); cleanupErr != nil {
-				w.cleanupFailure.LinkPriorCleanupError(resultErr)
-				resultErr = cleanupErr
-			}
+		if ready {
+			return state.Writer, nil
 		}
-	}()
-	f, created, err := openLogFile(path)
-	w.f = f
-	if err != nil {
-		return nil, err
 	}
-	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
-	if w.stableParentErr != nil && w.stableParent != nil {
-		w.parentCloseAttempted = true
-		if closeErr := w.stableParent.Close(); closeErr != nil {
-			w.closeMu.Lock()
-			w.addCleanupFailureLocked(closeErr)
-			w.closeMu.Unlock()
-			return nil, w.stableParentErr
-		}
-		w.stableParent = nil
-	}
-	if err = w.observeStableResourceFile(f, registry); err != nil {
-		return nil, err
-	}
-	proof, unsupported, uncertified, err := w.prepareStableCreationProof(w.stableParent, f, path, created, syncDirectory, registry != nil)
-	w.creationProof = proof
-	if err != nil {
-		return nil, err
-	}
-	w.creationUnsupported, w.creationUncertified = unsupported, uncertified
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	w.size = info.Size()
-	w.fileID = fileID
-	w.appendMax = defaultBufferSize
-	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes
-	w.rawWritevMinBatchRecs = defaultRawWritevMinBatchRecords
-	w.prefixBuf = make([]byte, 0, prefixCapacity)
-	w.dictFrameEncodeLevel = zstd.SpeedFastest
-	w.blockCodec = BlockCodecSnappy
-	w.clock = RealClock{}
-	w.keepSafetyMargin = DefaultKeepSafetyMargin
-	return w, nil
 }
 
 func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
@@ -1409,6 +1365,86 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 // and returns its value pointer without requiring caller-owned pointer-slice
 // scratch.
 func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
+	return w.appendEncodedFrameOne(body)
+}
+
+// AppendEncodedFrameOneWithWork admits the original CURRENT buffer, including
+// its actual growth/copy and any complete prior-buffer flush. The frame and
+// current buffer are never partially installed across a returned allowance
+// refusal. Segment creation/rotation remains the enclosing owner's transition.
+func (w *Writer) AppendEncodedFrameOneWithWork(body []byte, work *iterator.OrdinalScanWork) (page.ValuePtr, bool, error) {
+	capacity := 0
+	if work != nil {
+		if w == nil || w.f == nil || w.producedFrameObserver != nil {
+			return page.ValuePtr{}, false, fmt.Errorf("leaf writer nil=%t file=%t observer=%t: %w", w == nil, w != nil && w.f != nil, w != nil && w.producedFrameObserver != nil, ErrLeafAppendWorkUnsupported)
+		}
+		max := w.appendMax
+		if max <= 0 {
+			max = defaultBufferSize
+		}
+		n := HeaderSize + len(body)
+		threshold := max >> 10
+		if threshold < 8<<10 {
+			threshold = 8 << 10
+		}
+		if threshold > 256<<10 {
+			threshold = 256 << 10
+		}
+		buffered := len(w.appendBuf)
+		flush := 0
+		if n >= max || buffered+n > max {
+			flush, buffered = buffered, 0
+		}
+		direct := n >= max || (buffered == 0 && n >= threshold)
+		allocation := 0
+		if cap(w.scratch) < n {
+			allocation = n
+		}
+		copied := 0
+		if !direct {
+			capacity = buffered + n
+			if capacity < 8<<10 {
+				capacity = 8 << 10
+			}
+			// Geometric growth is shared with the original buffer owner, but
+			// never preallocates the unrelated full 4 MiB for one leaf.
+			target := 8 << 10
+			for target < capacity && target <= max/2 {
+				target *= 2
+			}
+			if target < capacity {
+				target = capacity
+			}
+			if target > max {
+				target = max
+			}
+			capacity = target
+			if cap(w.appendBuf) < capacity {
+				allocation += capacity
+				copied = buffered
+			}
+			if buffered+n == max {
+				flush += buffered + n
+			}
+		}
+		bytes := uint64(allocation + copied + 4*n + flush + 256)
+		records := uint64(8)
+		if flush != 0 {
+			records++
+		}
+		ok, e := leafAppendReserve(work, records, bytes)
+		if !ok || e != nil {
+			return page.ValuePtr{}, false, e
+		}
+	}
+	ptr, e := w.appendEncodedFrameOneCapacity(body, capacity)
+	return ptr, e == nil, e
+}
+
+func (w *Writer) appendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
+	return w.appendEncodedFrameOneCapacity(body, 0)
+}
+func (w *Writer) appendEncodedFrameOneCapacity(body []byte, capacity int) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
@@ -1450,7 +1486,7 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-	if err := w.writeBytes(buf); err != nil {
+	if err := w.writeBytesWithCapacity(buf, capacity); err != nil {
 		return page.ValuePtr{}, err
 	}
 	w.size += int64(recordLen)

@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -70,6 +71,8 @@ type materializedWriteFrame struct {
 	output                              [page.PageSize]byte
 	scratch, key, nextKey               [page.PageSize]byte
 	encoder                             node.Builder
+	leafAppend                          valuelog.LeafAppendWork
+	outputReserved                      bool
 	selectLeaf                          leafMergeCursor
 	event                               leafMergeEvent
 	haveEvent                           bool
@@ -178,7 +181,10 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 				// Preserve the original configured/adaptive format and enclosing revision
 				// decision. Diagnostic codec selection/finalization is unbounded.
 				revisions := f.old.LeafEntryRevisionsEnabled() || batchHasEntryRevisions(f.ops)
-				f.encoder.ResetWithOptions(f.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops, revisions))
+				ready, e := f.encoder.ResetWithOptionsWithWork(f.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops, revisions), w)
+				if !ready || e != nil {
+					return false, e
+				}
 				f.selectLeaf = newLeafMergeCursor(&f.old, f.ops, nil, f.scratch[:])
 				f.active = f
 				f.phase = 1
@@ -231,7 +237,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 					}
 					ready = e == nil
 				} else {
-					ready, e = f.active.encoder.AddLeafEntryWithRevisionWithWork(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision, w)
+					ready, e = f.active.encoder.AddLeafEntryWithRevisionWithWorkAndReserve(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision, s.z.leafReserveBytes, w)
 				}
 				if e == node.ErrNodeFull {
 					if f.active.encoder.Count() == 0 {
@@ -371,7 +377,39 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 			}
 			if f.old.Type() == page.PageTypeLeaf && s.z.outerLeavesInValueLog {
 				if !s.unboundedLeafPersistenceDiagnostic {
-					return false, ErrMaterializedWriteContinuation
+					producer, ok := s.z.leafPageLog.(interface {
+						AppendLeafPageWithWork([]byte, *valuelog.LeafAppendWork, *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error)
+					})
+					if !ok {
+						return false, ErrMaterializedWriteContinuation
+					}
+					if target.leafAppend.Phase == 0 {
+						target.encoder.SetPageID(0)
+						ready, e := target.encoder.FinishNoNodeWithWork(w)
+						if !ready || e != nil {
+							return false, e
+						}
+					}
+					if !target.outputReserved {
+						if ok, e := mergeReserve(w, 1, 8); !ok || e != nil {
+							return false, e
+						}
+						if e := s.z.outputPageLimit.reserve(1); e != nil {
+							return false, e
+						}
+						target.outputReserved = true
+					}
+					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], &target.leafAppend, w)
+					if !ready || e != nil {
+						return false, e
+					}
+					if ok, e := mergeReserve(w, 2, uint64(2*page.PageSize+64)); !ok || e != nil {
+						return false, e
+					}
+					s.z.cachePersistedLeafPage(ptr, target.output[:], leafPageCacheClone)
+					target.result = page.LeafLogChildRef(ptr)
+					f.phase = 9
+					continue
 				}
 				target.encoder.SetPageID(0)
 				ready, e := target.encoder.FinishNoNodeWithWork(nil)
@@ -462,8 +500,19 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 			if f.event.fromBatch && start > 0 {
 				start--
 			}
-			next.encoder.ResetWithOptions(next.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops[start:], f.active.encoder.LeafEntryRevisionsEnabled()))
+			_ = start // options are bound by the same immutable operation suffix below.
 			f.active.segmentNext = next
+			f.phase = 15
+		case 15:
+			next := f.active.segmentNext
+			start := f.selectLeaf.opIndex
+			if f.event.fromBatch && start > 0 {
+				start--
+			}
+			ready, e := next.encoder.ResetWithOptionsWithWork(next.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops[start:], f.active.encoder.LeafEntryRevisionsEnabled()), w)
+			if !ready || e != nil {
+				return false, e
+			}
 			f.active = next
 			f.splitPending = false
 			f.phase = 1

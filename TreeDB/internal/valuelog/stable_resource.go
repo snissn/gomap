@@ -161,7 +161,7 @@ func (w *Writer) newStableCreationProof(parent, child *os.File, path string, met
 	}
 	if err != nil {
 		w.directorySyncErrors.Add(1)
-		return nil, err
+		return proof, err
 	}
 	return proof, durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, resource, "", dir)
 }

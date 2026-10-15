@@ -104,7 +104,7 @@ func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTermina
 	node := t.terminalMetadataV6
 	t.terminalMetadataV6 = nil
 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+	t.clearDurableRootCallbacksV6()
 	t.releaseOwnerLockedV6()
 	t.phase = durableRootConsumed
 	return node, nil

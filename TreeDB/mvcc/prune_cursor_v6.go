@@ -42,9 +42,9 @@ type PruneCursor struct {
 	projection                                          *tree.ChargedProjection
 	projectionAdmitted                                  bool
 	reader                                              backenddb.NativeMVCCFrameReaderV6
- outputReader backenddb.NativeMVCCFrameReaderV6
- outputLeaf valuelog.COWLeafProjectionReader
- outputInput,outputRaw [64 << 10]byte
+	outputReader                                        backenddb.NativeMVCCFrameReaderV6
+	outputLeaf                                          valuelog.COWLeafProjectionReader
+	outputInput, outputRaw                              [64 << 10]byte
 	value                                               valuelog.COWLeafContinuation
 	codec                                               valuelog.COWZSTDContinuation
 	template                                            valuelog.COWTemplateContinuation
@@ -121,8 +121,8 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
 		c.namespaceSize = len(mvcckey.AppendNamespaceLower(c.namespace[:0]))
 		c.leaf = valuelog.COWLeafProjectionReader{Input: c.leafInput[:], Raw: c.leafRaw[:], Limits: valuelog.COWReadLimits{MaxRecordBytes: uint64(len(c.leafInput)), MaxRawBytes: uint64(len(c.leafRaw)), MaxValueBytes: 4096}, VerifyCRC: true, ZSTD: &c.codec, Template: &c.template}
 		c.reader.Leaf = &c.leaf
- c.outputLeaf=valuelog.COWLeafProjectionReader{Input:c.outputInput[:],Raw:c.outputRaw[:],Limits:valuelog.COWReadLimits{MaxRecordBytes:uint64(len(c.outputInput)),MaxRawBytes:uint64(len(c.outputRaw)),MaxValueBytes:4096},VerifyCRC:true,ZSTD:&c.codec,Template:&c.template}
- c.outputReader.Leaf=&c.outputLeaf
+		c.outputLeaf = valuelog.COWLeafProjectionReader{Input: c.outputInput[:], Raw: c.outputRaw[:], Limits: valuelog.COWReadLimits{MaxRecordBytes: uint64(len(c.outputInput)), MaxRawBytes: uint64(len(c.outputRaw)), MaxValueBytes: 4096}, VerifyCRC: true, ZSTD: &c.codec, Template: &c.template}
+		c.outputReader.Leaf = &c.outputLeaf
 	}
 	stats.Cursor = c
 	c.mu.Lock()
@@ -584,13 +584,22 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			c.record = node.LeafEntry{}
 			c.phase = 5
 		case 16:
-			if !c.diagnosticUnbounded {
-				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
-			}
 			c.preparation.BindNativeMVCCOutputReaderV6(&c.outputReader)
- ready, err := c.db.StepNativeMVCCUnboundedDiagnosticOutputV6(c.preparation, w)
+			var ready bool
+			var err error
+			if c.diagnosticUnbounded {
+				ready, err = c.db.StepNativeMVCCUnboundedDiagnosticOutputV6(c.preparation, w)
+			} else {
+				ready, err = c.db.StepNativeMVCCMaterializedOutputV6(c.preparation, w)
+			}
 			if !ready || err != nil {
 				return err
+			}
+			// Output construction is not publication. Keep the native final
+			// callback/authority guard until its genuine work-bearing stages
+			// can bind, fence, Consume and physically Finish.
+			if !c.diagnosticUnbounded {
+				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
 			}
 			if err := c.db.PublishNativeMVCCUnboundedDiagnosticV6(c.preparation); err != nil {
 				return err
@@ -729,10 +738,15 @@ func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
 			}
 			c.record = node.LeafEntry{}
 			c.reader = backenddb.NativeMVCCFrameReaderV6{}
-            ready,err=c.outputReader.CancelProjectionFrame(&w)
-            if err!=nil { return nil,err };if !ready { continue }
-            c.outputReader=backenddb.NativeMVCCFrameReaderV6{}
-            c.outputLeaf=valuelog.COWLeafProjectionReader{}
+			ready, err = c.outputReader.CancelProjectionFrame(&w)
+			if err != nil {
+				return nil, err
+			}
+			if !ready {
+				continue
+			}
+			c.outputReader = backenddb.NativeMVCCFrameReaderV6{}
+			c.outputLeaf = valuelog.COWLeafProjectionReader{}
 			c.closePhase = 3
 		case 3:
 			if c.captureBegun {

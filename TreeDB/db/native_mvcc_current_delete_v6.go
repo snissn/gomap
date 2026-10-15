@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -190,8 +191,10 @@ type NativeMVCCCurrentDeleteV6 struct {
 	output              *zipper.MaterializedWriteWork
 	outputSequence      uint64
 	outputInput         zipper.MaterializedInputV6
+	inputWork           *zipper.MaterializedInputWorkV6
 	outputInputReady    bool
 	outputAdoptionReady bool
+	outputDiagnostic    bool
 	outputScope         NativeMVCCPrivateOutputScopeV6
 	outputReader        *NativeMVCCFrameReaderV6
 	release             rootpublication.PrimaryConstructionReleaseWork
@@ -384,17 +387,14 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 		c.outputReader = nil
 		return true, nil
 	}
-	if c.outputReader != nil {
-		ready, err := c.outputReader.CancelProjectionFrame(w)
-		if !ready || err != nil {
-			return false, err
-		}
-		c.outputReader = nil
-	}
 	if c.output != nil {
 		// Explicit synchronous diagnostic teardown only. The bounded installed-page
 		// cancellation continuation remains a reported refusal, never hidden here.
-		ready, err := c.output.Cancel(nil)
+		cleanupWork := w
+		if c.outputDiagnostic {
+			cleanupWork = nil
+		}
+		ready, err := c.output.Cancel(cleanupWork)
 		if !ready || err != nil {
 			return false, err
 		}
@@ -402,10 +402,30 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 		c.output = nil
 		owner.RemovePending(charge)
 	}
-	if c.outputScope != nil {
-		lease, err := c.outputScope.ClosePrivateNativeOutputV6()
-		if err != nil {
+	if ready, err := c.closeMaterializedInputWorkV6(w); !ready || err != nil {
+		return false, err
+	}
+	if c.outputReader != nil {
+		ready, err := c.outputReader.CancelProjectionFrame(w)
+		if !ready || err != nil {
 			return false, err
+		}
+		c.outputReader = nil
+	}
+	if c.outputScope != nil {
+		var lease *memtable.COWExternalLease
+		var err error
+		if step, ok := c.outputScope.(NativeMVCCPrivateOutputStepScopeV6); ok {
+			var ready bool
+			ready, lease, err = step.ClosePrivateNativeOutputStepV6(w)
+			if !ready || err != nil {
+				return false, err
+			}
+		} else {
+			lease, err = c.outputScope.ClosePrivateNativeOutputV6()
+			if err != nil {
+				return false, err
+			}
 		}
 		c.outputScope = nil
 		if lease != nil {

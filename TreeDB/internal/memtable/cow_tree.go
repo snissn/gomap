@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"sync"
 	"unsafe"
 
@@ -72,6 +73,12 @@ type COWWriter struct {
 }
 
 func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
+	return NewCOWWriterWithWorkV6(b, nil)
+}
+
+// NewCOWWriterWithWorkV6 admits the original five empty-generation allocations.
+// NewMap initializes only its private header; it allocates no tree node.
+func NewCOWWriterWithWorkV6(b *COWBudget, work *iterator.OrdinalScanWork) (*COWWriter, error) {
 	if b == nil {
 		return nil, fmt.Errorf("nil COW budget")
 	}
@@ -79,11 +86,32 @@ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
 		cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(COWResourceID{}))) +
 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(cowResourceOwner{})))
+	if work != nil && !work.Reserve(5, 2*base) {
+		return nil, btree.ErrWork
+	}
 	g, err := newCOWGeneration(b, base)
 	if err != nil {
 		return nil, err
 	}
 	return &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}, nil
+}
+
+// PrepareEmptyWithWorkV6 is restricted to a private, never-published empty
+// successor. It admits the six allocations in the SAME Prepare engine: two
+// map headers, prepared/root headers and the one-slot ID/owner vectors. There
+// are no key probes, node copies or mutation callbacks on this empty route.
+func (w *COWWriter) PrepareEmptyWithWorkV6(work *iterator.OrdinalScanWork) (*COWPrepared, error) {
+	w.mu.Lock()
+	empty := !w.closed && w.pending == nil && w.private.Len() == 0 && len(w.generation.ids) == 0
+	w.mu.Unlock()
+	if !empty {
+		return nil, ErrCOWPending
+	}
+	bytes := 2 * (uint64(unsafe.Sizeof(COWPrepared{})) + uint64(unsafe.Sizeof(COWRoot{})) + 2*uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})) + uint64(unsafe.Sizeof(COWResourceID{})) + uint64(unsafe.Sizeof(cowResourceOwner{})))
+	if work != nil && !work.Reserve(6, bytes) {
+		return nil, btree.ErrWork
+	}
+	return w.Prepare(nil, COWPrepareOptions{ResourceSlots: 1})
 }
 
 // COWPrepareOptions reserves the later pre-frame resource binding and C2's

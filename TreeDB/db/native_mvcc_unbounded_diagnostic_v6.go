@@ -119,6 +119,9 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 		c.output = nil
 		refs = nil
 		owner.RemovePending(charge)
+		if ready, e := c.closeMaterializedInputWorkV6(w); !ready || e != nil {
+			return false, e
+		}
 	} else {
 		base, sequence, retired, metrics, err = z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
 		if err != nil {

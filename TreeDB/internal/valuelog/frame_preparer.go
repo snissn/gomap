@@ -3,7 +3,11 @@ package valuelog
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
@@ -272,6 +276,35 @@ func ensureFrameBody(dst []byte, bodyLen int) []byte {
 
 func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameStats, error) {
 	return p.PrepareFrameInto(nil, dictID, dict, records)
+}
+
+// PrepareLeafFrameIntoWithWork admits the original fixed-page block primitive,
+// scratch birth, keep/raw choice and frame copies before calling the SAME
+// preparer. Only the actual outer-leaf LZ4 policy is supported by this bounded
+// entry. Ordinary callers use PrepareFrameInto with no work overhead.
+func (p *FramePreparer) PrepareLeafFrameIntoWithWork(dst []byte, rid uint64, value []byte, w *iterator.OrdinalScanWork) ([]byte, FrameStats, bool, error) {
+	if p == nil {
+		return nil, FrameStats{}, false, ErrCorrupt
+	}
+	if w != nil {
+		if len(value) > page.PageSize || !p.blockCompression || normalizeBlockCodec(p.blockCodec) != BlockCodecLZ4 {
+			return nil, FrameStats{}, false, ErrLeafAppendWorkUnsupported
+		}
+		bound := lz4.CompressBlockBound(len(value))
+		// One fixed-page codec operation; its original caller-owned hash table,
+		// reset bitmap and bounded destination are included even on a cold pool.
+		// Frame construction owns a second destination and copies either raw or
+		// encoded payload. The original codec and keep policy remain unchanged.
+		bytes := uint64(unsafe.Sizeof(lz4.Compressor{})) + uint64(len(value)+3*bound+4*FrameHeaderSize+256)
+		ok, e := leafAppendReserve(w, 8, bytes)
+		if !ok || e != nil {
+			return nil, FrameStats{}, false, e
+		}
+	}
+	var records [1]Record
+	records[0] = Record{RID: rid, Value: value}
+	body, stats, e := p.PrepareFrameInto(dst, 0, nil, records[:])
+	return body, stats, e == nil, e
 }
 
 // PrepareFrameInto behaves like PrepareFrame, but writes the frame body into dst

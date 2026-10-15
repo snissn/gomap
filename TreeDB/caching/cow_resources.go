@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sync"
@@ -48,6 +49,9 @@ type cowLiveResource struct {
 }
 
 func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResources, error) {
+	return newCOWGenerationResourcesWithWorkV6(budget, nil)
+}
+func newCOWGenerationResourcesWithWorkV6(budget *memtable.COWBudget, work *iterator.OrdinalScanWork) (*cowGenerationResources, error) {
 	n := budget.Limits().MaxResources - 1 // the resolver itself occupies one C1 slot
 	if n < 0 {
 		return nil, memtable.ErrCOWCapacity
@@ -55,6 +59,9 @@ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResour
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowGenerationResources{}))) +
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
 		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
+	if work != nil && !work.Reserve(3, 2*bytes) {
+		return nil, cowbtree.ErrWork
+	}
 	lease, err := budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err

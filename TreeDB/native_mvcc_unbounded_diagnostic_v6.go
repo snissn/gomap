@@ -26,3 +26,14 @@ func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(c *backenddb.NativeMVCCC
 	}
 	return db.cached.StepNativeMVCCUnboundedDiagnosticOutputV6(c, w)
 }
+
+// StepNativeMVCCMaterializedOutputV6 advances admitted construction only. It
+// grants no publication or acknowledgement authority.
+func (db *DB) StepNativeMVCCMaterializedOutputV6(c *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.cached == nil {
+		return false, ErrClosed
+	}
+	return db.cached.StepNativeMVCCMaterializedOutputV6(c, w)
+}

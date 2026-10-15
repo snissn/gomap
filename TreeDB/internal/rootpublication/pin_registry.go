@@ -298,24 +298,8 @@ func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, er
 func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
 
 func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
-	identity, err := validateRegistryIdentity(identity)
-	if err != nil {
-		return err
-	}
-	if registry == nil {
-		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
-	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	state, err := registry.stateLocked(identity)
-	if err != nil {
-		return err
-	}
-	if state.retired || state.deleting {
-		return ErrResourceConflict
-	}
-	state.observers++
-	return nil
+ _, err := registry.ObserveWithWorkV6(identity,nil)
+ return err
 }
 
 func (registry *IdentityPinRegistry) Unobserve(identity StableIdentity) error {

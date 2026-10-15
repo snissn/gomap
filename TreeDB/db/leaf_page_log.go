@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -1188,4 +1189,170 @@ func (db *DB) SetCurrentValueLogReadBarrierWithSize(fn func(fileID uint32) (int6
 		return
 	}
 	db.valueLogManager.SetCurrentWritableReadBarrierWithSize(fn)
+}
+
+// AppendLeafPageWithWork keeps the original dependency hooks around the actual
+// append exactly once. The caller owns the immutable leaf and continuation.
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
+	if l == nil || l.inner == nil || s == nil {
+		return page.LeafLogPtr{}, false, fmt.Errorf("leaf wrapper missing producer: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
+	producer, ok := l.inner.(interface {
+		AppendLeafPageWithWork([]byte, *valuelog.LeafAppendWork, *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error)
+	})
+	if !ok {
+		return page.LeafLogPtr{}, false, fmt.Errorf("leaf inner lacks work append (%T): %w", l.inner, valuelog.ErrLeafAppendWorkUnsupported)
+	}
+	if s.Err != nil {
+		return s.Ptr, true, s.Err
+	}
+	if !s.Before {
+		if w != nil && !w.Reserve(1, 64) {
+			return page.LeafLogPtr{}, false, nil
+		}
+		if e := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); e != nil {
+			s.Err = e
+			return page.LeafLogPtr{}, true, e
+		}
+		s.Before = true
+	}
+	ptr, ready, e := producer.AppendLeafPageWithWork(leaf, s, w)
+	if !ready || e != nil {
+		return ptr, ready, e
+	}
+	if !s.After {
+		if w != nil && !w.Reserve(4, uint64(2*len(leaf)+4096)) {
+			return page.LeafLogPtr{}, false, nil
+		}
+		if e := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); e != nil {
+			s.Err = e
+			return ptr, true, e
+		}
+		if l.db != nil {
+			l.db.storeLeafPageReadCache(ptr, leaf)
+			if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
+				l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
+			}
+		}
+		s.After = true
+	}
+	return ptr, true, nil
+}
+
+// AppendLeafFrameWithWorkV6 keeps the original record-length index update in
+// the same admitted append. Both index-vector growth and the original Writer's
+// actual buffer transition are admitted before their effects. No pointer is
+// returned before its original record-length entry is installed.
+func (db *DB) AppendLeafFrameWithWorkV6(writer *valuelog.Writer, body []byte, w *iterator.OrdinalScanWork) (page.ValuePtr, bool, error) {
+	if db == nil || writer == nil || w == nil {
+		return page.ValuePtr{}, false, fmt.Errorf("leaf frame missing writer/work: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
+	raw, ok := rawLeafGenerationFileID(writer.FileID())
+	size := writer.Size()
+	if !ok || size < 0 || uint64(size)+4 > uint64(^uint32(0)) {
+		return page.ValuePtr{}, false, fmt.Errorf("leaf frame identity %d size=%d: %w", writer.FileID(), size, valuelog.ErrLeafAppendWorkUnsupported)
+	}
+	offset := uint64(size) + 4
+	db.leafGenerationRecordLengthMu.Lock()
+	defer db.leafGenerationRecordLengthMu.Unlock()
+	idx := db.leafGenerationRecordLengthByFile[raw]
+	if db.leafGenerationRecordLengthByFile == nil || (idx != nil && (len(idx.offsets) != len(idx.lengths) || (len(idx.offsets) > 0 && uint64(idx.offsets[len(idx.offsets)-1]) >= offset))) {
+		return page.ValuePtr{}, false, fmt.Errorf("leaf record-length index identity: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
+	n, capacity := 0, 8
+	if idx != nil {
+		n = len(idx.offsets)
+		capacity = cap(idx.offsets)
+		if cap(idx.lengths) < capacity {
+			capacity = cap(idx.lengths)
+		}
+		if n == capacity {
+			capacity *= 2
+			if capacity < 8 {
+				capacity = 8
+			}
+		}
+	}
+	grow := idx == nil || cap(idx.offsets) <= n || cap(idx.lengths) <= n
+	cost := uint64(16)
+	records := uint64(2)
+	if grow {
+		cost += uint64(8*capacity + 8*n + 128)
+		records += 3
+	}
+	if records > w.RecordLimit || cost > w.ByteLimit {
+		return page.ValuePtr{}, false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: cost}
+	}
+	if !w.Reserve(records, cost) {
+		return page.ValuePtr{}, false, nil
+	}
+	if grow {
+		offsets, lengths := make([]uint32, n, capacity), make([]uint32, n, capacity)
+		if idx == nil {
+			idx = &leafGenerationRecordLengthIndex{}
+			db.leafGenerationRecordLengthByFile[raw] = idx
+		} else {
+			copy(offsets, idx.offsets)
+			copy(lengths, idx.lengths)
+		}
+		idx.offsets, idx.lengths = offsets, lengths
+	}
+	ptr, ready, err := writer.AppendEncodedFrameOneWithWork(body, w)
+	if err != nil || !ready {
+		return ptr, ready, err
+	}
+	// Both capacity and monotone position remain protected through the append.
+	// No index entry exists for a refused or failed physical operation.
+	idx.add(ptr.Offset, page.ValuePtrRecordLength(ptr))
+	return ptr, true, nil
+}
+
+// RegisterLeafSegmentWithWorkV6 completes the SAME Manager registration and
+// original manifest admission before a cache lane installs its current writer.
+func (db *DB) RegisterLeafSegmentWithWorkV6(path string, id uint32, s *valuelog.CurrentSegmentRegistrationWork, w *iterator.OrdinalScanWork) (bool, error) {
+	if db == nil || db.valueLogManager == nil {
+		return false, fmt.Errorf("value-log manager unavailable")
+	}
+	if s.Phase < 2 {
+		ready, e := db.valueLogManager.RegisterCurrentSegmentWithWorkV6(path, id, 0, s, w)
+		if e != nil || !ready {
+			return false, e
+		}
+	}
+	if s.Phase >= 3 {
+		return true, nil
+	}
+	if db.isLeafGenerationSegmentPath(path) && db.leafGenerationManifest != nil {
+		raw, ok := rawLeafGenerationFileID(id)
+		if !ok {
+			return false, fmt.Errorf("invalid leaf file id")
+		}
+		db.leafGenerationPendingMu.Lock()
+		count := uint64(len(db.leafGenerationPendingSet) + len(db.leafGenerationPendingCommitSeq))
+		bytes := (count+2)*64 + uint64(len(db.leafGenerationPendingFileIDs)+1)*8 + 256
+		records := 2 + count
+		if w != nil {
+			if records > w.RecordLimit || bytes > w.ByteLimit {
+				db.leafGenerationPendingMu.Unlock()
+				return false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: bytes}
+			}
+			if !w.Reserve(records, bytes) {
+				db.leafGenerationPendingMu.Unlock()
+				return false, nil
+			}
+		}
+		if db.leafGenerationPendingSet == nil {
+			db.leafGenerationPendingSet = make(map[uint32]struct{})
+		}
+		if db.leafGenerationPendingCommitSeq == nil {
+			db.leafGenerationPendingCommitSeq = make(map[uint32]uint64)
+		}
+		if _, exists := db.leafGenerationPendingSet[raw]; !exists {
+			db.leafGenerationPendingSet[raw] = struct{}{}
+			db.leafGenerationPendingFileIDs = append(db.leafGenerationPendingFileIDs, raw)
+		}
+		db.leafGenerationPendingMu.Unlock()
+	}
+	s.Phase = 3
+	return true, nil
 }

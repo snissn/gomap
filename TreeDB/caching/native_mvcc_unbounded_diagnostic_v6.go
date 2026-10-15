@@ -1,7 +1,6 @@
 package caching
 
 import (
-	"bytes"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -14,20 +13,31 @@ import (
 )
 
 // nativePrivateOutputV6 is the SAME handoff's private pre-acceptance state.
-// Its cut and normalized batch remain owned by the original handoff lease.
-// Prefix collection/normalization and final adoption are explicit synchronous
-// diagnostic stages; only materialized output Step uses the supplied work.
+// The constructor owns this containing lease from its first setup allocation;
+// no publication/group lock survives a Step return.
 type nativePrivateOutputV6 struct {
-	db          *DB
-	handoff     *cowFlushHandoff
-	prepared    *backenddb.NativeMVCCCurrentDeleteV6
-	delta       *batch.Batch
-	outputDelta *batch.Batch
-	entries     []batch.Entry
+	db           *DB
+	handoff      *cowFlushHandoff
+	prepared     *backenddb.NativeMVCCCurrentDeleteV6
+	rollover     nativeRolloverWorkV6
+	prefix       nativeFrozenDeltaWorkV6
+	closing      NativeMVCCCaptureV6
+	phase        uint8
+	closingPhase uint8
 }
 
 func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
-	if db == nil || db.cow == nil || prepared == nil {
+	return db.stepNativeMVCCMaterializedOutputV6(prepared, true, w)
+}
+
+// StepNativeMVCCMaterializedOutputV6 retains original rollover, ordered prefix
+// operands and materialized DATA frames. It does not enter allocator prepare,
+// visible install or publication. Those require the separate final caller.
+func (db *DB) StepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
+	return db.stepNativeMVCCMaterializedOutputV6(prepared, false, w)
+}
+func (db *DB) stepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if db == nil || db.cow == nil || prepared == nil || w == nil {
 		return false, ErrCOWUnsupported
 	}
 	db.flushMu.Lock()
@@ -36,143 +46,145 @@ func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(prepared *backenddb.Nati
 	if db.closing.Load() {
 		return false, backenddb.ErrClosed
 	}
-	if c.handoff == nil {
-		db.writeMu.Lock()
-		defer db.writeMu.Unlock()
-		backend, ok := db.backend.(interface{ NativeMVCCDiagnosticAwaitV6() error })
-		if !ok {
+	var private *nativePrivateOutputV6
+	if scope := prepared.NativeMVCCPrivateOutputScopeV6(); scope != nil {
+		var ok bool
+		private, ok = scope.(*nativePrivateOutputV6)
+		if !ok || private.db != db || private.prepared != prepared {
 			return false, ErrCOWUnsupported
 		}
-		if err := backend.NativeMVCCDiagnosticAwaitV6(); err != nil {
-			return false, err
+	} else {
+		if c.handoff != nil {
+			return false, ErrCOWUnsupported
 		}
-		// The rollover uses the original source/retirement owner and successors.
-		// No ordinary flush or checkpoint is invoked.
-		c.writerMu.Lock()
-		rollover, err := c.prepareRollover()
-		if err == nil && rollover != nil {
-			rollover.install()
+		size := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) +
+			memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePrivateOutputV6{})))
+		// Binding is admitted before birth; its scalar write cannot then yield
+		// with an allocated but unrooted private preparation.
+		if !w.Reserve(4, 2*size+128) {
+			return false, nil
 		}
-		c.writerMu.Unlock()
-		if rollover != nil {
-			// Checked drain of the SAME retirement. Retained read cuts keep every
-			// covered root alive until the exact post-publication handoff.
-			if rollover.installed {
-				for i := range rollover.retired {
-					err = errors.Join(err, rollover.retired[i].DrainWithError())
-				}
-				if rollover.old != nil {
-					err = errors.Join(err, rollover.old.drain())
-				}
-				if err == nil {
-					rollover.scratch.Close()
-				}
-			} else {
-				rollover.drain()
-			}
+		lease, e := c.budget.AcquireExternal(size)
+		if e != nil {
+			return false, e
 		}
-		if err != nil {
-			return false, err
-		}
-		cut := c.retainCut()
-		if cut == nil {
-			return false, backenddb.ErrClosed
-		}
-		lease, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePrivateOutputV6{}))))
-		if err != nil {
-			return false, errors.Join(err, c.releaseCut(cut))
-		}
-		handoff := &cowFlushHandoff{cut: cut, lease: lease}
-		// Exactly the original frozen prefix, oldest to newest. The batch copies
-		// borrowed entry payloads before iterator advance; its final duplicate-key
-		// normalization preserves the canonical winner without reading untouched DATA.
-		delta := batch.New(nil, int(^uint(0)>>1))
-		for _, root := range cut.frozen {
-			it := root.NewIterator(nil, nil)
-			metadata, ok := it.(iterator.RevisionUnsafeIterator)
-			raw, rawOK := it.(iterator.UnsafeIterator)
-			if !ok || !rawOK {
-				err = errors.Join(ErrCOWUnsupported, it.Close())
-				break
-			}
-			for it.Valid() {
-				v, p, f, r := metadata.UnsafeEntryWithRevision()
-				op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
-				if f&node.FlagTombstone != 0 {
-					op.Type = batch.OpDelete
-					op.Value = nil
-				}
-				if err = delta.SetOps([]batch.Entry{op}); err != nil {
-					break
-				}
-				it.Next()
-			}
-			err = errors.Join(err, it.Error(), it.Close())
-			if err != nil {
-				break
-			}
-		}
-		if err != nil {
-			lease.Close()
-			delta.Close()
-			return false, errors.Join(err, c.releaseCut(cut))
-		}
-		if err = prepared.AppendNativeMVCCDiagnosticDeletesV6(delta); err != nil {
-			delta.Close()
-			lease.Close()
-			return false, errors.Join(err, c.releaseCut(cut))
-		}
-		// Normalize once in the explicitly synchronous setup, not inside an admitted
-		// construction Step. The original batch owns all copied delta payloads.
-		outputDelta, prepareErr := prepared.PrepareNativeMVCCMaterializedInputV6(cut.basis.snapshot, delta)
-		if prepareErr != nil {
-			delta.Close()
-			lease.Close()
-			return false, errors.Join(prepareErr, c.releaseCut(cut))
-		}
-		entries, ranges := outputDelta.ApplyPlan()
-		if len(ranges) != 0 {
-			delta.Close()
-			lease.Close()
-			return false, errors.Join(ErrCOWUnsupported, c.releaseCut(cut))
-		}
-
-		private := &nativePrivateOutputV6{db: db, handoff: handoff, prepared: prepared, delta: delta, outputDelta: outputDelta, entries: entries}
+		handoff := &cowFlushHandoff{lease: lease}
+		private = &nativePrivateOutputV6{db: db, handoff: handoff, prepared: prepared}
 		handoff.native = private
-		c.handoff = handoff
+		if e := prepared.BindNativeMVCCPrivateOutputScopeV6(private); e != nil {
+			handoff.native = nil
+			*private = nativePrivateOutputV6{}
+			*handoff = cowFlushHandoff{}
+			lease.Close()
+			return false, e
+		}
 	}
-	h := c.handoff
-	if h.accepted || h.native == nil || h.native.prepared != prepared {
+	h := private.handoff
+	if h == nil || h.accepted || private.closingPhase != 0 {
 		return false, ErrCOWUnsupported
 	}
-	return prepared.StepNativeMVCCMaterializedOutputV6(h.cut.basis.snapshot, h.native.entries, h.native, w)
+	for {
+		switch private.phase {
+		case 0:
+			if c.handoff != nil && c.handoff != h {
+				return false, ErrCOWUnsupported
+			}
+			ready, e := private.rollover.Step(db, w)
+			if !ready || e != nil {
+				return false, e
+			}
+			h.cut = private.rollover.TakeCut()
+			if h.cut == nil {
+				return false, ErrCOWUnsupported
+			}
+			// This exact immutable prefix is now original handoff custody.
+			// Ordinary point writes use its successor writers. Incompatible
+			// flush cannot consume a private (not accepted) prefix.
+			c.handoff = h
+			private.phase = 1
+		case 1:
+			ready, e := private.prefix.Step(db, h.cut, w)
+			if !ready || e != nil {
+				return false, e
+			}
+			private.phase = 2
+		case 2:
+			entries, ready, e := prepared.StepNativeMVCCMaterializedInputV6(h.cut.basis.snapshot, private.prefix.entries, w)
+			if !ready || e != nil {
+				return false, e
+			}
+			return prepared.StepNativeMVCCMaterializedOutputPolicyV6(h.cut.basis.snapshot, entries, private, diagnostic, w)
+		default:
+			return false, ErrCOWUnsupported
+		}
+	}
 }
 
-// ClosePrivateNativeOutputV6 does not authorize prefix removal. Its original
-// lease is returned after producer aliases are detached; caller clears its
-// scope alias before refunding the containing handoff/preparation.
+// ClosePrivateNativeOutputV6 is the ordinary synchronous driver of the SAME
+// checked stages. Native callers use ClosePrivateNativeOutputStepV6 directly.
 func (p *nativePrivateOutputV6) ClosePrivateNativeOutputV6() (*memtable.COWExternalLease, error) {
+	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	ready, lease, e := p.ClosePrivateNativeOutputStepV6(&w)
+	if !ready && e == nil {
+		return nil, ErrCOWUnsupported
+	}
+	return lease, e
+}
+func (p *nativePrivateOutputV6) ClosePrivateNativeOutputStepV6(w *iterator.OrdinalScanWork) (bool, *memtable.COWExternalLease, error) {
 	if p == nil || p.db == nil {
-		return nil, nil
+		return true, nil, nil
 	}
 	db := p.db
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	c := db.cow
-	h := p.handoff
-	if c == nil || h == nil || c.handoff != h || h.accepted {
-		return nil, ErrCOWUnsupported
+	c, h := db.cow, p.handoff
+	if c == nil || h == nil || h.accepted || (c.handoff != nil && c.handoff != h) {
+		return false, nil, ErrCOWUnsupported
 	}
-	if err := c.releaseCut(h.cut); err != nil {
-		return nil, err
+	if p.closingPhase == 0 {
+		p.closingPhase = 1
 	}
-	p.delta.Close()
-	p.outputDelta.Close()
+	if p.closingPhase == 1 {
+		ready, lease, e := p.prefix.CloseStep(w)
+		if !ready || e != nil {
+			return false, nil, e
+		}
+		if lease != nil {
+			lease.Close()
+		}
+		p.closingPhase = 2
+	}
+	if p.closingPhase == 2 {
+		ready, e := p.rollover.CloseStep(w)
+		if !ready || e != nil {
+			return false, nil, e
+		}
+		p.closingPhase = 3
+	}
+	if p.closingPhase == 3 {
+		if h.cut != nil && p.closing.composite.cut == nil {
+			p.closing.composite.cut, p.closing.composite.cache = h.cut, c
+			p.closing.Snapshot = h.cut.basis.snapshot
+			h.cut = nil
+		}
+		if p.closing.composite.cut != nil {
+			ready, e := p.closing.closeNativeCOWCaptureV6(w)
+			if !ready || e != nil {
+				return false, nil, e
+			}
+		}
+		p.closingPhase = 4
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*p))+2*uint64(unsafe.Sizeof(*h))) || !h.lease.AdmitRetentionClose(w) {
+		return false, nil, nil
+	}
 	lease := h.lease
-	c.handoff = nil
+	if c.handoff == h {
+		c.handoff = nil
+	}
 	*h = cowFlushHandoff{}
 	*p = nativePrivateOutputV6{}
-	return lease, nil
+	return true, lease, nil
 }
 
 // PublishNativeMVCCUnboundedDiagnosticV6 adopts the exact prepared materialized
@@ -216,12 +228,23 @@ func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeM
 		return errors.Join(ErrCOWUnsupported, merged.Close())
 	}
 	raw := &nativeDiagnosticMergeV6{Iterator: owner.Iterator}
-	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(h.cut.basis.snapshot, raw, h.native.delta)
+	delta := batch.New(nil, int(^uint(0)>>1))
+	defer delta.Close()
+	if err = delta.SetOps(h.native.prefix.entries); err != nil {
+		return errors.Join(err, merged.Close())
+	}
+	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(h.cut.basis.snapshot, raw, delta)
 	closeErr := merged.Close()
 	if accepted {
 		h.accepted = true
-		h.native.delta.Close()
-		h.native.outputDelta.Close()
+		unlimited := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+		ready, lease, e := h.native.prefix.CloseStep(&unlimited)
+		if !ready || e != nil {
+			return errors.Join(publishErr, closeErr, e)
+		}
+		if lease != nil {
+			lease.Close()
+		}
 		*h.native = nativePrivateOutputV6{}
 		h.native = nil
 		prepared.DetachNativeMVCCPrivateOutputScopeV6()

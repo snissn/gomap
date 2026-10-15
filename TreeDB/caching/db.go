@@ -3535,6 +3535,9 @@ func (db *DB) closeLeafValueLogLane(l *lane) error {
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
+	if err := l.vlogBirth.close(); err != nil {
+		return err
+	}
 	if l.vlog != nil {
 		if err := l.vlog.Close(); err != nil {
 			return err
@@ -18668,6 +18671,24 @@ func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint
 }
 
 func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
+	return db.appendValueLogOneInternalWork(l, dictID, dict, rid, value, durability, allowQueue, nil, nil)
+}
+
+var errLeafAppendWorkPending = errors.New("cachingdb: outer-leaf append allowance exhausted")
+
+func (db *DB) appendValueLogOneInternalWork(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, state *valuelog.LeafAppendWork, work *iterator.OrdinalScanWork) (page.ValuePtr, string, error) {
+	if work != nil {
+		if state == nil || allowQueue || dictID != 0 || len(value) > page.PageSize || db.valueLogTemplateEnabled {
+			return page.ValuePtr{}, "", fmt.Errorf("outer-leaf unsupported input policy: %w", valuelog.ErrLeafAppendWorkUnsupported)
+		}
+		if work.RecordLimit < 12 || work.ByteLimit < uint64(4*len(value)+4096) {
+			return page.ValuePtr{}, "", &iterator.OrdinalUnitTooLarge{Records: 12, Bytes: uint64(4*len(value) + 4096)}
+		}
+		if !work.Reserve(12, uint64(4*len(value)+4096)) {
+			return page.ValuePtr{}, "", errLeafAppendWorkPending
+		}
+	}
+
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -18846,7 +18867,25 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	var preparedOneFrame preparedDictFrame
 	var preparedOnePrepNs int64
-	if leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
+	if work != nil {
+		if !leafLogAppend || finalWriteMode != vlogWriteBlock || finalBlockCodec != valuelog.BlockCodecLZ4 || durability != journalDurabilityNone {
+			return page.ValuePtr{}, "", fmt.Errorf("outer-leaf configured selector mode=%v codec=%v durability=%v: %w", finalWriteMode, finalBlockCodec, durability, valuelog.ErrLeafAppendWorkUnsupported)
+		}
+		keepIo, keepEncode, keepSafety := db.valueLogKeepPolicy()
+		if forceBlockCompressionAttempt {
+			keepIo = 0
+			keepEncode = 0
+		}
+		ready, e := state.Prepare(rid, finalBlockCodec, keepIo, keepEncode, keepSafety, work)
+		if e != nil {
+			return page.ValuePtr{}, "", e
+		}
+		if !ready {
+			return page.ValuePtr{}, "", errLeafAppendWorkPending
+		}
+		preparedOneFrame = preparedDictFrame{body: state.Frame, stats: state.Stats}
+	}
+	if work == nil && leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
 		keepIoNs, keepEncodeNs, keepSafety := db.valueLogKeepPolicy()
 		if forceBlockCompressionAttempt {
 			keepIoNs = 0
@@ -18876,6 +18915,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+			if work != nil && (l.vlog == nil || l.vlogPath == "" || l.vlogPath != l.vlogRetainedPath || (db.valueLogMaxSegmentBytesForLane(l) > 0 && l.vlog.Size() > db.valueLogMaxSegmentBytesForLane(l))) {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf queued writer not installed: %w", valuelog.ErrLeafAppendWorkUnsupported)
+			}
 			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", err
@@ -19062,6 +19105,20 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if leafLogAppend {
 		lockHoldStart = time.Now()
 	}
+	if work != nil && l.vlog == nil {
+		ready, err := db.ensureLeafWriterWithWorkMuHeld(l, work)
+		if err != nil || !ready {
+			l.vlogMu.Unlock()
+			if err != nil {
+				return page.ValuePtr{}, "", err
+			}
+			return page.ValuePtr{}, "", errLeafAppendWorkPending
+		}
+	}
+	if work != nil && (db.valueLogMaxSegmentBytesForLane(l) > 0 && l.vlog.Size() > db.valueLogMaxSegmentBytesForLane(l)) {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf current writer absent or rotation required: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
 		if preparedOneFrame.bodyBuf != nil {
@@ -19105,7 +19162,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	startSize := w.Size()
 	flushedBoundary := false
 	syncedBoundary := false
-	usePreparedOneFrame := preparedOneFrame.bodyBuf != nil && caps.prepared != nil
+	usePreparedOneFrame := (preparedOneFrame.bodyBuf != nil || work != nil) && caps.prepared != nil
+	if work != nil && !usePreparedOneFrame {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf writer lacks prepared-frame interface: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
 	if preparedOneFrame.bodyBuf != nil && caps.prepared == nil {
 		releasePreparedDictFrame(&preparedOneFrame)
 	}
@@ -19117,11 +19178,34 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		compressionResetter.ResetCompressionHints()
 	}
 
+	if work != nil && db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf deferred flush transition required: %w", valuelog.ErrLeafAppendWorkUnsupported)
+	}
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if usePreparedOneFrame {
 		pf := &preparedOneFrame
 		stats = pf.stats
-		if oneAppender, ok := w.(interface {
+		if work != nil {
+			concrete, ok := w.(*valuelog.Writer)
+			if !ok {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf writer implementation: %w", valuelog.ErrLeafAppendWorkUnsupported)
+			}
+			var ready bool
+			producer, supported := db.backend.(interface {
+				AppendLeafFrameWithWorkV6(*valuelog.Writer, []byte, *iterator.OrdinalScanWork) (page.ValuePtr, bool, error)
+			})
+			if !supported {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf backend work-bearing frame append: %w", valuelog.ErrLeafAppendWorkUnsupported)
+			}
+			ptr, ready, err = producer.AppendLeafFrameWithWorkV6(concrete, pf.body, work)
+			if err == nil && !ready {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", errLeafAppendWorkPending
+			}
+		} else if oneAppender, ok := w.(interface {
 			AppendEncodedFrameOne([]byte) (page.ValuePtr, error)
 		}); ok && pf.stats.Records == 1 {
 			ptr, err = oneAppender.AppendEncodedFrameOne(pf.body)
@@ -19136,7 +19220,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 				ptr = ptrs[0]
 			}
 		}
-		releasePreparedDictFrame(pf)
+		if work == nil {
+			releasePreparedDictFrame(pf)
+		}
 	} else if finalWriteMode == vlogWriteBlock {
 		if concrete, ok := w.(*valuelog.Writer); ok {
 			ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
@@ -28883,6 +28969,17 @@ func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
 	}
 	if l.vlog != nil {
 		return nil
+	}
+	if db.isLeafLogAppendLane(l) {
+		for {
+			ready, err := db.ensureLeafWriterWithWorkMuHeld(l, nil)
+			if err != nil {
+				return err
+			}
+			if ready {
+				return nil
+			}
+		}
 	}
 	return db.rotateValueLogMuHeld(l)
 }

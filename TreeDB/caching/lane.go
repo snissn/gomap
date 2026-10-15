@@ -32,6 +32,7 @@ type lane struct {
 	walCoalesceSeq           uint64
 	walZeroInlineKeyProvider zeroInlineBatchKeyProvider
 
+	vlogBirth                      leafLogWriterBirth
 	vlog                           valueWriter
 	vlogPath                       string
 	vlogSeq                        int

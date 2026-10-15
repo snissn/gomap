@@ -204,55 +204,26 @@ func (f *File) appendMaybeDecodeLeafLogPayload(dst, payload []byte) ([]byte, err
 }
 
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (result *File, retErr error) {
-	// registerSegmentLocked admitted this exact original File and both bounded
-	// parent operands before invoking the constructor. Standalone legacy users
-	// retain the same payload through its actual error receipt.
-	vf := &File{
-		ID: id, Path: path, dictLookup: dictLookup, templateLookup: templateLookup,
-		templateDecodeOpts: templateOpts, templateDefCache: templateCache,
-		compactLeafPayloadAllowed:    allowsCompactLeafLogPayload(id, path),
-		compactLeafPayloadAllowedSet: true,
-		groupedFrameCacheEntries:     defaultGroupedFrameCacheEntries,
-		groupedFrameCacheMaxRaw:      defaultGroupedFrameCacheMaxRawBytes,
-		groupedFrameCacheMaxBytes:    defaultGroupedFrameCacheMaxBytes,
-	}
-	vf.mmapData.Store([]byte(nil))
-	defer func() {
-		var parentErr error
-		for i := range vf.constructionParents {
-			parentErr = errors.Join(parentErr, vf.closeConstructionParent(i))
-		}
-		retErr = errors.Join(retErr, parentErr)
-		if retErr != nil {
-			actual := vf.Close()
-			if actual != nil {
-				result = vf
-				retErr = errors.Join(retErr, actual)
-			} else {
-				result = nil
+	state := segmentOpenWork{path: path, id: id, dictLookup: dictLookup, templateLookup: templateLookup, templateOpts: templateOpts, templateCache: templateCache}
+	for {
+		ready, err := state.step(nil)
+		if err != nil {
+			var actual error
+			if state.file != nil {
+				for i := range state.file.constructionParents {
+					actual = errors.Join(actual, state.file.closeConstructionParent(i))
+				}
+				actual = errors.Join(actual, state.file.Close())
 			}
-		}
-	}()
-	parent, parentIdentity, err := openRegisteredSegmentParent(path)
-	vf.constructionParents[0] = parent
-	vf.registeredParentIdentity = parentIdentity
-	if err != nil && !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
-		return nil, err
-	}
-	supportedParent := err == nil && parent != nil
-	vf.File, err = openSegmentReadHandle(path)
-	if err != nil {
-		return nil, err
-	}
-	if supportedParent {
-		if err := validateRegisteredSegmentParent(path, vf, parent, parentIdentity); err != nil {
+			if actual != nil {
+				return state.file, errors.Join(err, actual)
+			}
 			return nil, err
 		}
+		if ready {
+			return state.file, nil
+		}
 	}
-	if info, err := vf.File.Stat(); err == nil {
-		vf.noteVerifiedFileSize(info.Size())
-	}
-	return vf, nil
 }
 
 func (f *File) noteVerifiedFileSize(size int64) {
@@ -2178,10 +2149,7 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	}
 	m.fileAliases.Add(1)
 	f.manager = m
-	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
-	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
-	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
-	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	configureRegisteredFile(m, f)
 	if err := m.observeStableFileLocked(f); err != nil {
 		closeErr := f.Close()
 		if closeErr == nil {
@@ -2214,9 +2182,13 @@ func (m *Manager) PromoteCurrentWritableReplacing(fileID, previousFileID uint32)
 	if m == nil {
 		return nil
 	}
-	lane, _ := DecodeFileID(fileID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.promoteCurrentWritableReplacingLocked(fileID, previousFileID)
+}
+
+func (m *Manager) promoteCurrentWritableReplacingLocked(fileID, previousFileID uint32) error {
+	lane, _ := DecodeFileID(fileID)
 	if m.currentWritableByLane == nil {
 		m.currentWritableByLane = make(map[uint32]uint32)
 	}
