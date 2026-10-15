@@ -84,8 +84,24 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 					t.Fatal(err)
 				}
 				t.Logf("slot=%d commit=%d parentPage=%d parentCommit=%d oldest=%d classifiedUnused=%v free=%v", slot, record.CommitSeq, record.ParentRecordPageID, record.ParentCommitSeq, cut.oldest, unused, cut.generation.Allocatable(record.ParentRecordPageID))
-				if uint64(slot) != active && !unused {
-					t.Fatal("fixture did not exercise reusable older-slot parent")
+				if unused {
+					t.Fatalf("slot %d parent reclaimable at captured oldest %d", slot, cut.oldest)
+				}
+				if uint64(slot) != active {
+					// This retired parent remains reachable through its surviving
+					// successor record, even after its own slot was overwritten.
+					// It becomes reusable only beyond that successor's actual commit.
+					atSuccessor, err := cut.generation.SnapshotPageUnusedV1(record.ParentRecordPageID, record.CommitSeq)
+					if err != nil {
+						t.Fatal(err)
+					}
+					afterSuccessor, err := cut.generation.SnapshotPageUnusedV1(record.ParentRecordPageID, record.CommitSeq+1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if atSuccessor || !afterSuccessor {
+						t.Fatalf("older-slot parent retirement boundary: commit=%d at=%v after=%v", record.CommitSeq, atSuccessor, afterSuccessor)
+					}
 				}
 			}
 			destination := t.TempDir()
