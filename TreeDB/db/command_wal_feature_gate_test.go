@@ -342,6 +342,18 @@ func TestValidateFormatRequiredFeatureGateAllowsIgnoredOrdinaryFormatErrors(t *t
 			if err := db.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
+			cfg, ok, err := LoadFormatConfig(dir)
+			if err != nil || !ok || !cfg.RequiresFreelistPatriciaV2() {
+				t.Fatalf("fresh format marker: %+v %v %v", cfg, ok, err)
+			}
+			reopened, err := Open(Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("reopen repaired format: %v", err)
+			}
+			if err := reopened.Close(); err != nil {
+				t.Fatal(err)
+			}
+
 		})
 	}
 }

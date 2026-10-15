@@ -107,9 +107,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		cfg.TopK = len(rows)
 	}
 
-	if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{
-		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
-	}); err != nil {
+	format, _, err := backenddb.LoadFormatConfig(cfg.Dir)
+	if err != nil {
+		return err
+	}
+	if !format.RequiresCommandWALV1() {
+		format.RequiredFeatures = append(format.RequiredFeatures, backenddb.RequiredFeatureCommandWALV1)
+	}
+	if err := backenddb.SaveFormatConfig(cfg.Dir, format); err != nil {
 		return err
 	}
 	db, err := backenddb.Open(backenddb.Options{Dir: cfg.Dir, DisableBackgroundPrune: true})

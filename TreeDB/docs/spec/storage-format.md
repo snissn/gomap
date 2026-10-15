@@ -3440,16 +3440,35 @@ through `0x08` are reserved for the generation header, radix index, state
 chunk, and candidate reservation record. `DurableRootRecordV1` binds the exact
 generation header identity, counts, high-water boundary, and digest.
 
-The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
-index page contains up to 16 ordered child summaries: page identity, child CRC,
-free and retired counts, and the minimum `lastReachableCommitSeq`. A chunk
-contains a 256-bit free bitmap and 256 retirement sequences. Free means bitmap
-bit 1 and sequence 0; retired means bit 0 and sequence non-zero; live or
-reserved means both zero. A one-chunk mutation therefore emits one chunk, one
-immutable index path, one or more reservation pages, and one generation header.
-Reservation pages form a contiguous, ordered chain so fragmented transactions
-are not bounded by one page. Unchanged paths retain their existing page
-identities and bytes.
+The current physical allocator format is **version 2**, while exported Go API
+names retain their V1 suffix. Fresh stores require the freelist_patricia_v2
+feature in format.json before index creation. A nonempty index without that
+marker is refused before storage recovery or cleanup, including read-only and
+ignored-format-config opens. The marker cannot be removed or retroactively
+added to a nonempty store. Physical version-1 generations are not accepted as
+either durable-slot candidate; rebuild pre-alpha directories instead of migrating.
+
+The sparse state tree is a canonical compressed Patricia tree over 56-bit
+chunk numbers (256 page IDs per chunk). Mutable and physical branches use the
+same topology. A branch stores its first differing nibble depth (0..13), its
+right-aligned shared prefix, and at least two ordered child edges; each child
+is another branch or a direct state chunk. Unary branches and leaf index
+wrappers do not exist. An empty tree uses one depth-zero empty branch sentinel.
+A single chunk is the root itself, so a one-chunk mutation emits one chunk,
+only the actual changed branching ancestors, one or more reservation pages,
+and one generation header. Unchanged subtrees retain page identities and bytes.
+
+Index version 2 uses an 80-byte header: nibble depth at byte 28, empty-root
+sentinel flag at byte 29, 32-byte entry size at bytes 30:32, generation ID at
+32:40, free/retired/minimum-retirement summaries at 40:64, shared prefix at
+64:72, and zero reserved bytes at 72:80. Entries retain child identity, CRC,
+summaries, and a kind byte (0 branch, 1 chunk). Generation header byte 29
+selects the root kind. Generation, index, and chunk version fields are 2;
+reservation-chain version remains 1 with unchanged digest semantics.
+A chunk contains a 256-bit free bitmap and 256 retirement sequences. Free means
+bitmap bit 1 and sequence 0; retired means bit 0 and sequence nonzero; live or
+reserved means both zero. Reservation pages form a contiguous ordered chain so
+fragmented transactions are not bounded by one page.
 
 The generation header binds its exact root page identity and CRC; every index
 entry recursively binds its child page CRC. The header also binds the

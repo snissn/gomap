@@ -121,12 +121,12 @@ func TestMetadataLosingClaimPreservesTransaction4627(t *testing.T) {
 
 func TestMetadataImpossibleRunDoesNotAllocate4627(t *testing.T) {
 	ledger := NewReservationLedger()
-	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5}, nil), ledger)
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4}, nil), ledger)
 	root := txn.root
 	id := candidateIDFromString("too-small")
 	allocs := testing.AllocsPerRun(100, func() {
 		if _, _, _, ok := txn.tryReusedMetadata(id); ok {
-			t.Fatal("four pages cannot hold this dirty state plus reservation and header")
+			t.Fatal("three pages cannot hold metadata while keeping the selected chunk nonempty")
 		}
 	})
 	if allocs != 0 {

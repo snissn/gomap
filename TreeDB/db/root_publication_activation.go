@@ -1092,15 +1092,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if base.slot == MetaPage0ID {
 		target = MetaPage1ID
 	}
-	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(base.slotMeta[target], base.slotRecord[target])
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], base.slotMeta[target], base.slotRecord[target], base.record)
 	if err != nil {
 		return err
-	}
-	retirements := make([]freelist.COWRetirementV1, 0, 2)
-	if len(overwrittenPages) != 0 {
-		retirements = append(retirements, freelist.COWRetirementV1{
-			PageIDs: overwrittenPages, LastReachableCommitSeq: base.slotCommit[target],
-		})
 	}
 	if previous := runtime.activeSeal; previous != nil {
 		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {
