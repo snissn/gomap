@@ -306,8 +306,14 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 		t.Fatalf("trigger report before lane: %v", err)
 	}
 	cell.Details["debt_reason_before"] = indexVacuumM4DebtReason(report)
+	cell.Details["data_generation_before"] = database.backend.Stats()["treedb.durable_root.freelist.generation"]
+	cell.Details["data_pages_before"] = strconv.FormatUint(report.TotalPages, 10)
+	cell.Details["freelist_reclaimable_pages_before"] = strconv.FormatUint(report.FreelistReclaimablePages, 10)
 	cell.Details["freelist_reclaimable_ratio_ppm_before"] = strconv.FormatUint(report.FreelistReclaimableRatioPPM, 10)
 	cell.HighDebt = report.FreelistReclaimableValid && report.FreelistReclaimableRatioPPM >= 500_000
+	if !opts.IndexOuterLeavesInValueLog && !cell.HighDebt {
+		t.Fatalf("fixture failed to establish real DATA freelist debt: %+v", report)
+	}
 	// Every deterministic matrix fixture is seeded with reclaimable index debt.
 	// HighDebt identifies the issue's required subset; supported cells must all
 	// prove that their entry point actually replaces and shrinks the index.
@@ -415,6 +421,9 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 		t.Fatalf("trigger report after lane: %v", reportErr)
 	}
 	cell.Details["debt_reason_after"] = indexVacuumM4DebtReason(afterReport)
+	cell.Details["data_generation_after"] = reopened.backend.Stats()["treedb.durable_root.freelist.generation"]
+	cell.Details["data_pages_after"] = strconv.FormatUint(afterReport.TotalPages, 10)
+	cell.Details["freelist_reclaimable_pages_after"] = strconv.FormatUint(afterReport.FreelistReclaimablePages, 10)
 	cell.Details["freelist_reclaimable_ratio_ppm_after"] = strconv.FormatUint(afterReport.FreelistReclaimableRatioPPM, 10)
 	cell.Verdicts["reopen_digest"] = gotDigest == wantDigest
 	cell.Verdicts["logical_digest"] = cell.Verdicts["logical_digest"] || gotDigest == wantDigest
@@ -481,9 +490,32 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 		}
 	}
 	if !opts.IndexOuterLeavesInValueLog {
-		if err := database.CompactIndex(); err != nil {
-			_ = database.Close()
-			t.Fatalf("compact fixture: %v", err)
+		// Small PRIMARY-only updates can advance slot/parent horizons without
+		// materializing another DATA freelist generation. Seed actual retired
+		// DATA bases through three bounded rebuilds; one or two leave the inline
+		// fixture with zero reclaimable pages. Keep the resulting debt explicit
+		// so every maintenance lane must exercise its original production trigger.
+		for rebuild := 0; rebuild < 3; rebuild++ {
+			before, err := database.backend.IndexVacuumTriggerReport()
+			if err != nil {
+				t.Fatalf("trigger report before fixture rebuild: %v", err)
+			}
+			beforeGeneration := database.backend.Stats()["treedb.durable_root.freelist.generation"]
+			if err := database.CompactIndex(); err != nil {
+				_ = database.Close()
+				t.Fatalf("compact fixture rebuild %d: %v", rebuild, err)
+			}
+			after, err := database.backend.IndexVacuumTriggerReport()
+			if err != nil {
+				t.Fatalf("trigger report after fixture rebuild: %v", err)
+			}
+			afterGeneration := database.backend.Stats()["treedb.durable_root.freelist.generation"]
+			beforeID, beforeErr := strconv.ParseUint(beforeGeneration, 10, 64)
+			afterID, afterErr := strconv.ParseUint(afterGeneration, 10, 64)
+			if beforeErr != nil || afterErr != nil || afterID <= beforeID || after.TotalPages <= before.TotalPages {
+				t.Fatalf("fixture rebuild did not create a fresh DATA generation: generation=%s->%s pages=%d->%d parse=%v/%v", beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, beforeErr, afterErr)
+			}
+			t.Logf("fixture DATA rebuild=%d commit=%d->%d generation=%s->%s pages=%d->%d reclaimable=%d->%d ratio_ppm=%d->%d", rebuild+1, before.CommitSeq, after.CommitSeq, beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, before.FreelistReclaimablePages, after.FreelistReclaimablePages, before.FreelistReclaimableRatioPPM, after.FreelistReclaimableRatioPPM)
 		}
 		for generation := 0; generation < 2; generation++ {
 			if err := database.SetSync([]byte("m4/0000"), bytes.Repeat([]byte{byte(240 + generation)}, fixture.valueSize)); err != nil {

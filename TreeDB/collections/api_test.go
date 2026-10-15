@@ -687,6 +687,11 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
+	oldCut := d.AcquireSnapshot()
+	if oldCut == nil {
+		t.Fatal("acquire pre-pack cut")
+	}
+	defer oldCut.Close()
 
 	packCtx, packCancel := collectionMaintenanceTestContext(t)
 	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
@@ -709,12 +714,37 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
-	// The pre-pack durable slot remains independently recovery-selectable until
-	// a later root publication overwrites it. Checkpoint alone does not advance
-	// CommitSeq, so recommit the packed root without publishing a new cached
-	// leaf-log dependency before asserting physical reclamation.
-	if err := d.ForceCommit(d.State().RootPageID); err != nil {
-		t.Fatalf("commit packed durable-slot successor: %v", err)
+	// Both PRIMARY slots and their embedded parents remain independently
+	// recovery-selectable. Advance all four horizons using real publications of
+	// the packed root, without creating a new cached leaf-log dependency.
+	packedSequence := d.State().CommitSeq
+	for successor := 0; successor < 3; successor++ {
+		if err := d.ForceCommit(d.State().RootPageID); err != nil {
+			t.Fatalf("commit packed durable-slot successor %d: %v", successor, err)
+		}
+	}
+	roots, err := d.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatalf("capture packed recovery horizons: %v", err)
+	}
+	for _, root := range roots.Roots() {
+		if root.CommitSeq < packedSequence {
+			roots.Release()
+			t.Fatalf("pre-pack root remains recovery-selectable: %+v, packed commit=%d", root, packedSequence)
+		}
+	}
+	roots.Release()
+	heldCtx, heldCancel := collectionMaintenanceTestContext(t)
+	heldStats, err := d.LeafGenerationGC(heldCtx, backenddb.LeafGenerationGCOptions{})
+	heldCancel()
+	if err != nil {
+		t.Fatalf("LeafGenerationGC with held pre-pack cut: %v", err)
+	}
+	if heldStats.FilesDeleted != 0 || heldStats.BytesDeleted != 0 {
+		t.Fatalf("held pre-pack cut lost source generations: %+v", heldStats)
+	}
+	if err := oldCut.Close(); err != nil {
+		t.Fatalf("close pre-pack cut: %v", err)
 	}
 
 	gcCtx, gcCancel := collectionMaintenanceTestContext(t)

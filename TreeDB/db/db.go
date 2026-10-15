@@ -1605,17 +1605,21 @@ type Snapshot struct {
 	reader                  valueReader
 	tree                    tree.Tree
 	rootTreesMu             sync.Mutex
-	rootTrees               []snapshotRootTree
-	closed                  atomic.Bool
-	generation              atomic.Uint64
-	finalized               atomic.Bool
-	readState               atomic.Uint64
-	iteratorMu              sync.Mutex
-	iterators               map[*snapshotBoundIterator]struct{}
-	foregroundReadMarked    bool
-	foregroundReadEnd       func()
-	treePager               *pager.Pager
-	treeRoot                uint64
+	// The first alternate root shares this Snapshot's lifetime and admission.
+	// Independently retained exported handles remain single-use; only overflow
+	// roots need separate cache backing storage.
+	rootTreeFirst        [1]snapshotRootTree
+	rootTrees            []snapshotRootTree
+	closed               atomic.Bool
+	generation           atomic.Uint64
+	finalized            atomic.Bool
+	readState            atomic.Uint64
+	iteratorMu           sync.Mutex
+	iterators            map[*snapshotBoundIterator]struct{}
+	foregroundReadMarked bool
+	foregroundReadEnd    func()
+	treePager            *pager.Pager
+	treeRoot             uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint             int

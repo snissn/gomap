@@ -392,6 +392,34 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	return db.compactStorage(ctx, opts)
 }
 
+// SettleCompactStorageAfterReadBasisRefresh retries leaf retirement held by a
+// cached caller's previous read basis. The caller keeps its writer fence across
+// the original compaction, basis refresh, and this settle operation. Ordinary
+// root, recoverable-slot/parent, and independent reader protections still apply.
+// No checkpoint or root publication is needed merely to retire those read pins.
+func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) error {
+	if stats == nil || stats.LeafGenerationGC.GenerationsRetiring == 0 {
+		return nil
+	}
+	opts = normalizeCompactStorageOptions(opts)
+	if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-read-basis-refresh", func() error {
+		roots, systems := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{ProtectedRootIDs: roots, ProtectedSystemRootIDs: systems})
+		stats.LeafGenerationGC = gc
+		return err
+	}); err != nil {
+		return err
+	}
+	final, err := db.CompactStoragePlan(ctx, opts)
+	if err != nil {
+		return err
+	}
+	addCompactStorageAuditStats(&stats.Audit, final.Audit)
+	stats.After, stats.RemainingDebt = final.After, final.RemainingDebt
+	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = final.FullyCompacted, final.PolicyFullyCompacted, final.ByteMinimized
+	return nil
+}
+
 func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (stats CompactStorageStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")

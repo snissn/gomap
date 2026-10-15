@@ -689,3 +689,53 @@ func TestSnapshotRootProbesSkipTombstones(t *testing.T) {
 		t.Fatalf("HasPrefixesAtRoot single tombstone prefix mismatch: got=%v want=%v", hasPrefixes, want)
 	}
 }
+
+func TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, roots, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{
+		{Iter: mustFrozenSystemMemtable(t, "first", "one").NewIterator(nil, nil)},
+		{Iter: mustFrozenSystemMemtable(t, "second", "two").NewIterator(nil, nil)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	first, err := snap.treeAtRoot(roots[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != &snap.rootTreeFirst[0].tree {
+		t.Fatal("first root did not use Snapshot-owned storage")
+	}
+	it, err := snap.IteratorAtRoot(roots[0], nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	if _, err = snap.treeAtRoot(roots[1]); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := first.Get([]byte("first")); err != nil || string(got) != "one" {
+		t.Fatalf("retained first tree after overflow: %q %v", got, err)
+	}
+	if err = snap.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snap.rootTreeFirst[0].root != roots[0] {
+		t.Fatal("inline alias scrubbed before retained iterator drained")
+	}
+	if err = it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snap.rootTreeFirst[0].root != 0 || len(snap.rootTrees) != 0 || snap.db != nil {
+		t.Fatal("root cache aliases survived final cleanup")
+	}
+}

@@ -562,11 +562,21 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	var snapshot *powerlossoracle.Model
 	var actualSnapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
+	dependencyPaths := make(map[string]bool)
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if err := observed.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaWrite {
+		if event.Point == durabilitycut.AfterDependencyFileSync {
+			for _, path := range event.Paths {
+				rel, err := filepath.Rel(dir, path)
+				if err != nil {
+					return err
+				}
+				dependencyPaths[filepath.ToSlash(rel)] = true
+			}
+		}
+		if event.Point == durabilitycut.AfterMetaWrite && filepath.Base(event.Path) == "index.db.primary" {
 			meta = event
 			actualSnapshot = observed.Clone()
 			// Retain a regression image with the new process-visible generation
@@ -644,6 +654,23 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if len(metaChanged) == 0 || len(indexChanged) == 0 {
 		t.Fatalf("adversarial replay model did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
 	}
+	// This witness selectively withholds actual data dependencies. V6 embeds
+	// its authoritative generation metadata in PRIMARY; the compatibility alias
+	// and unused manifest revisions are not leaf-record dependencies. Keep their
+	// already-synced bodies rather than manufacturing an empty JSON alias when a
+	// namespace variant promotes all siblings in leaf_vlog.
+	for _, path := range snapshot.VolatilePaths() {
+		if !strings.HasPrefix(filepath.ToSlash(path), "leaf_vlog/") || !strings.HasSuffix(path, ".json") {
+			continue
+		}
+		actualDirty, err := actualSnapshot.ChangedRanges(path)
+		if err != nil || len(actualDirty) != 0 {
+			t.Fatalf("ancillary manifest was not already synced at authority cut: path=%s dirty=%v err=%v", path, actualDirty, err)
+		}
+		if err := snapshot.SyncFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	stablePaths := make(map[string]bool)
 	for _, path := range snapshot.StablePaths() {
@@ -661,9 +688,13 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		slashed := filepath.ToSlash(path)
 		kind := powerlossoracle.ResourceKind("")
 		switch {
-		case strings.Contains(slashed, "value_vlog/"):
+		case slashed == "index.db":
+			// V6 authority is in PRIMARY; its DATA pages remain a separate
+			// dependency of the complete new generation.
+			kind = powerlossoracle.ResourceIndex
+		case strings.Contains(slashed, "value_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceValueLog
-		case strings.Contains(slashed, "leaf_vlog/"):
+		case strings.Contains(slashed, "leaf_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceOuterLeaf
 		default:
 			continue

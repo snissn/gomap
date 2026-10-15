@@ -231,6 +231,13 @@ func TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport(t *testing.T)
 		t.Fatal(err)
 	}
 	restore := t.TempDir()
+	format, ok, err := LoadFormatConfig(dir)
+	if err != nil || !ok {
+		t.Fatalf("load captured physical format: found=%v error=%v", ok, err)
+	}
+	if err = SaveFormatConfig(restore, format); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.WriteFile(filepath.Join(restore, "index.db"), exported.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
