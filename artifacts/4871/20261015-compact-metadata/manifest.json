@@ -1,0 +1,22 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 4341,
+    "sha256": "a9502a45e0b45ba35c028c837db554b4c463a87b47d24e97dd84d6bd33b70a61"
+  },
+  {
+    "path": "compact-metadata.tar.gz",
+    "bytes": 2155680,
+    "sha256": "ad26a8da21fc9aa3d4db055784d4af88de84e32edeac2c1ffeb2903574bf00a5"
+  },
+  {
+    "path": "performance-summary.json",
+    "bytes": 11528,
+    "sha256": "0ec6f6ce7bed0a8049a6eba79ba5bc201586be23802ebb705d08b268d0a48b02"
+  },
+  {
+    "path": "source-overlay-manifest.json",
+    "bytes": 5150,
+    "sha256": "d1f6e89cea1031b31dea119791a894d9c2530fa3d3e293e5761b3038292387a0"
+  }
+]

@@ -1,0 +1,282 @@
+{
+  "rows": [
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 1,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 148345.0,
+        "generation_advances/op": 2.0,
+        "B/op": 279180.0,
+        "allocs/op": 474.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-1-baseline.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    148345 ns/op\t         2.000 generation_advances/op\t  279180 B/op\t     474 allocs/op"
+    },
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 1,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 150517.0,
+        "generation_advances/op": 0.0,
+        "B/op": 226680.0,
+        "allocs/op": 390.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-1-candidate.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    150517 ns/op\t         0 generation_advances/op\t  226680 B/op\t     390 allocs/op"
+    },
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 2,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 142737.0,
+        "generation_advances/op": 2.0,
+        "B/op": 279179.0,
+        "allocs/op": 474.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-2-baseline.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    142737 ns/op\t         2.000 generation_advances/op\t  279179 B/op\t     474 allocs/op"
+    },
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 2,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 150653.0,
+        "generation_advances/op": 0.0,
+        "B/op": 226679.0,
+        "allocs/op": 390.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-2-candidate.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    150653 ns/op\t         0 generation_advances/op\t  226679 B/op\t     390 allocs/op"
+    },
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 3,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 143150.0,
+        "generation_advances/op": 2.0,
+        "B/op": 279179.0,
+        "allocs/op": 474.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-3-baseline.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    143150 ns/op\t         2.000 generation_advances/op\t  279179 B/op\t     474 allocs/op"
+    },
+    {
+      "bench": "CommitAtPrimaryOnlyAfterDataGeneration",
+      "round": 3,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 149774.0,
+        "generation_advances/op": 0.0,
+        "B/op": 226679.0,
+        "allocs/op": 390.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/CommitAtPrimaryOnlyAfterDataGeneration-3-candidate.raw",
+      "line": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration \t     128\t    149774 ns/op\t         0 generation_advances/op\t  226679 B/op\t     390 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 1,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 21294.0,
+        "B/op": 31943.0,
+        "allocs/op": 127.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-1-baseline.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21294 ns/op\t   31943 B/op\t     127 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 1,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 20469.0,
+        "B/op": 31504.0,
+        "allocs/op": 104.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-1-candidate.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20469 ns/op\t   31504 B/op\t     104 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 2,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 21382.0,
+        "B/op": 31944.0,
+        "allocs/op": 127.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-2-baseline.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21382 ns/op\t   31944 B/op\t     127 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 2,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 20415.0,
+        "B/op": 31504.0,
+        "allocs/op": 104.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-2-candidate.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20415 ns/op\t   31504 B/op\t     104 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 3,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 21121.0,
+        "B/op": 31943.0,
+        "allocs/op": 127.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-3-baseline.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     21121 ns/op\t   31943 B/op\t     127 allocs/op"
+    },
+    {
+      "bench": "ConditionalTxnBaselineBatchWrite",
+      "round": 3,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 20137.0,
+        "B/op": 31504.0,
+        "allocs/op": 104.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/ConditionalTxnBaselineBatchWrite-3-candidate.raw",
+      "line": "BenchmarkConditionalTxnBaselineBatchWrite \t    1000\t     20137 ns/op\t   31504 B/op\t     104 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 1,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 318.1,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-1-baseline.raw",
+      "line": "BenchmarkGetVersioned \t 1884781\t       318.1 ns/op\t       0 B/op\t       0 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 1,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 330.8,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-1-candidate.raw",
+      "line": "BenchmarkGetVersioned \t 1805404\t       330.8 ns/op\t       0 B/op\t       0 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 2,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 318.8,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-2-baseline.raw",
+      "line": "BenchmarkGetVersioned \t 1855676\t       318.8 ns/op\t       0 B/op\t       0 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 2,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 329.3,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-2-candidate.raw",
+      "line": "BenchmarkGetVersioned \t 1798198\t       329.3 ns/op\t       0 B/op\t       0 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 3,
+      "kind": "baseline",
+      "metrics": {
+        "ns/op": 321.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-3-baseline.raw",
+      "line": "BenchmarkGetVersioned \t 1884412\t       321.0 ns/op\t       0 B/op\t       0 allocs/op"
+    },
+    {
+      "bench": "GetVersioned",
+      "round": 3,
+      "kind": "candidate",
+      "metrics": {
+        "ns/op": 332.1,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/primary-metadata-scratch-repair/perf/GetVersioned-3-candidate.raw",
+      "line": "BenchmarkGetVersioned \t 1806157\t       332.1 ns/op\t       0 B/op\t       0 allocs/op"
+    }
+  ],
+  "summary": {
+    "CommitAtPrimaryOnlyAfterDataGeneration": {
+      "baseline": {
+        "ns/op": 143150.0,
+        "B/op": 279179.0,
+        "allocs/op": 474.0
+      },
+      "candidate": {
+        "ns/op": 150517.0,
+        "B/op": 226679.0,
+        "allocs/op": 390.0
+      },
+      "delta": {
+        "ns/op": 7367.0,
+        "B/op": -52500.0,
+        "allocs/op": -84.0
+      },
+      "time_pct": 5.146349982535803
+    },
+    "ConditionalTxnBaselineBatchWrite": {
+      "baseline": {
+        "ns/op": 21294.0,
+        "B/op": 31943.0,
+        "allocs/op": 127.0
+      },
+      "candidate": {
+        "ns/op": 20415.0,
+        "B/op": 31504.0,
+        "allocs/op": 104.0
+      },
+      "delta": {
+        "ns/op": -879.0,
+        "B/op": -439.0,
+        "allocs/op": -23.0
+      },
+      "time_pct": -4.127923358692587
+    },
+    "GetVersioned": {
+      "baseline": {
+        "ns/op": 318.8,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "candidate": {
+        "ns/op": 330.8,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "delta": {
+        "ns/op": 12.0,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      },
+      "time_pct": 3.7641154328732718
+    }
+  }
+}
