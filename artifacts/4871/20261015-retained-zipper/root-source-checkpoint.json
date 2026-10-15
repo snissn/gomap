@@ -1,0 +1,47 @@
+{
+  "at_utc": "2026-10-15T02:10:09.436357+00:00",
+  "parent": "41dd12c84c874b1d9a0a1c8cdc9e160c9379f17c",
+  "packet_receipt_sha256": "981d3d62dfa4183c6ba1fe10258259d02654f82ab2ab74ab8b004db8c1257504",
+  "source_census_rows": 4350,
+  "owned_paths": [
+    "TreeDB/caching/cow_flush.go",
+    "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/db/native_materialized_trace_testtag.go",
+    "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/freelist/append_work.go",
+    "TreeDB/freelist/append_work_test.go",
+    "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "TreeDB/mvcc/prune_cursor_v6.go",
+    "TreeDB/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/node/internal_builder_work.go",
+    "TreeDB/zipper/leaf_merge_work.go",
+    "TreeDB/zipper/materialized_write_trace_testtag.go",
+    "TreeDB/zipper/materialized_write_work.go",
+    "TreeDB/zipper/zipper.go"
+  ],
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "diagnostic_actual_output_activation": true,
+  "append_focused_tests": "NOT_RUN",
+  "qualification": "Unbounded diagnostic only. SAME configured columnar-prefix/packed/outerLeafLog output; installed page29->CommitAt->same publishedDATA29 ACK1.132writes outside sampled calls;945477ns/2005752B/1122alloc,cleanup5370ns. Counters incomplete; no comparative speedup, bounded/publicQ32/final acceptance.",
+  "stage": "source_pushed_remote_verified",
+  "source": "03a90b426fa0eeba25b799bbe14ad628ac612061",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014"
+}

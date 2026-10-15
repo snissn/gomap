@@ -1,0 +1,337 @@
+[
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/README.md",
+    "bytes": 2486,
+    "sha256": "450d091e6bd7395b4d678e3a3b2b183a5c3846629d418aa1e74b84b503de44f9"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/after.json",
+    "bytes": 826636,
+    "sha256": "78021f43e338f0de324952f72bfbeb3301b27ca53ed28e83f1879645fa38cb98"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/before.json",
+    "bytes": 826636,
+    "sha256": "78021f43e338f0de324952f72bfbeb3301b27ca53ed28e83f1879645fa38cb98"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/command.json",
+    "bytes": 683,
+    "sha256": "55a9b680ee34de72cc2a2a4293e5c1d149cf74abd9238e1f8a95281ca729699d"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/exit.json",
+    "bytes": 46,
+    "sha256": "964aa75db08653b37d8859e6dab3f74a7b4ab7e1a392bf5c8b7e86bf6600d8dc"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/frozen-sources.json",
+    "bytes": 2323,
+    "sha256": "8f5539e2469c42c2fe7e9c06f542bf405116414fdf2f6b181ad7f795ab34b29b"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/raw.jsonl",
+    "bytes": 7188,
+    "sha256": "6107e5699006b3463fb74202c66bec8f972a6ab09f05bb14c396e8ec219bd262"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/caching/cow_flush.go",
+    "bytes": 7703,
+    "sha256": "a811a72aacd9e15ee2591392a90a9773145de2ece1e73a9c88b0164c6f3b0e36"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 8504,
+    "sha256": "014dd272ce7289f87a615eccd2e5b7ac2a5c054c092cff8efcfa419138cf6d49"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/db/native_materialized_trace_testtag.go",
+    "bytes": 215,
+    "sha256": "c1103247636661195b5ab397cf3ab761da2407cd7e587921619344a3b28e5c0a"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "bytes": 16390,
+    "sha256": "a0501d951ee643a5ee535a750f7b84db2abb5ea9f249ede060879aff48ec5256"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "bytes": 3117,
+    "sha256": "3cbb9efcef51d47c572a0c1f718651bf7a395ec0e31ef90cfb7d8612501d58bd"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 6130,
+    "sha256": "7c3e72f10c3ae2832d260d104a8750d10696200ef7ee40d5c1c3461511f59ae5"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 11573,
+    "sha256": "18d521ddee10d7dafe065d31fe4b989220732715c98deb8780442bf9bffe8e51"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 23932,
+    "sha256": "99bfbcd6a4b30d6f439085fc52e0250efc19379e2eb81a801d227157e7345ce8"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 983,
+    "sha256": "095596c68c34aacb6c04f07577134ca319b64601713fe09c8f550a5fa47cafe7"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/node/internal_builder_work.go",
+    "bytes": 1064,
+    "sha256": "17478dd201bafefe83cddfacbdf550a40c338b9218e927d4fa7de6512a9b9c4a"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/zipper/leaf_merge_work.go",
+    "bytes": 5594,
+    "sha256": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/zipper/materialized_write_trace_testtag.go",
+    "bytes": 387,
+    "sha256": "c5783f588300429c50c163458af5a98a1a05316e6356801abca73261cbce2aa6"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 14751,
+    "sha256": "0be90edf74c90911e9d8080c73e38ae432688f6b212d39672dfcf76ac50ad29c"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/activation-red-v4/sources/TreeDB/zipper/zipper.go",
+    "bytes": 133083,
+    "sha256": "e2350c765d885f2883a0f530f0e1b18905a10b52c99ded305a52df8d37add047"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/SCOPE.md",
+    "bytes": 1928,
+    "sha256": "257ae3ff2fd5a4cf091dd07580b8821b06cca8043003b431da1de2f504c58e8c"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/after.json",
+    "bytes": 826711,
+    "sha256": "1f76bf526e95311233f88938477dd007699eed80fbe1ffd4c08c4e30a44bd614"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/before.json",
+    "bytes": 826711,
+    "sha256": "1f76bf526e95311233f88938477dd007699eed80fbe1ffd4c08c4e30a44bd614"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/command.json",
+    "bytes": 683,
+    "sha256": "92ef83c84f367dce0b9147de242e117dded61959a9ead74d26e88f6cb7890222"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/exit.json",
+    "bytes": 46,
+    "sha256": "19cd2956278957a6cc1981f00963a806c246c04ab20cc0023f94dab2db360f1f"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/after.json",
+    "bytes": 826636,
+    "sha256": "ee2e0b536e0e31bd4bb82662b8319cd9631585ed39e4f7c5753195a44a000f1b"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/before.json",
+    "bytes": 826636,
+    "sha256": "ee2e0b536e0e31bd4bb82662b8319cd9631585ed39e4f7c5753195a44a000f1b"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/command.json",
+    "bytes": 683,
+    "sha256": "a681335b80b8a012b01c89ad835044be57e69fd9ab91348612f7fc51d6625b44"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/exit.json",
+    "bytes": 46,
+    "sha256": "c9bebd3b3be8b71caa307b64a2790332d547e419d6ca8e640375d8f9ddcf698d"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/raw.jsonl",
+    "bytes": 6979,
+    "sha256": "d21e913eb133b1046b4603dd5fede5851469653e5342e403f3f3b75e68e19aef"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v6/sources/TreeDB/freelist/append_work.go",
+    "bytes": 5375,
+    "sha256": "0ed83dc2e9454d69fcbe90914b490fb6e230b6743156468e4a37fb0d7e2a3a25"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v9/after.json",
+    "bytes": 826711,
+    "sha256": "497c4995617b63df3af410a928aaab44ab5fffa7effa7de4c607e31888678505"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v9/before.json",
+    "bytes": 826711,
+    "sha256": "497c4995617b63df3af410a928aaab44ab5fffa7effa7de4c607e31888678505"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v9/command.json",
+    "bytes": 683,
+    "sha256": "ce739966369e467191ffe53576a5754f7d9a53943b4b466c0a91f54c4d688812"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v9/exit.json",
+    "bytes": 46,
+    "sha256": "481119573806f363a8457c8567475df1db5bac47ac63c4c7de902e4d1288ec24"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/history/retained-zipper-output-v9/raw.jsonl",
+    "bytes": 6514,
+    "sha256": "23eba6b614a3d9b0a6300223d19c46e85c7de0833d6beeb1591c85517b35ab57"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/caching/cow_flush.go",
+    "bytes": 7622,
+    "sha256": "e1b0b8ee7f167b488d218c586d216728c6a94622aca85e08feaa4c6dab87290f"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 5318,
+    "sha256": "0b849e63a956526347346eefb839c226f5faa53460d5c3a66df9d8224284a645"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "bytes": 15556,
+    "sha256": "734582e65e286a20acee02fa04500a6abf82e1585aa7024ef1ba114eedfd5cec"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 5164,
+    "sha256": "4cb260a0f3e3d9623ceaf00c36d6ac5cc2c0800381686063348acedd567de799"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/freelist/append_work.go",
+    "bytes": 5375,
+    "sha256": "0ed83dc2e9454d69fcbe90914b490fb6e230b6743156468e4a37fb0d7e2a3a25"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/freelist/append_work_test.go",
+    "bytes": 1847,
+    "sha256": "9b4cba903bc320e7e19eb26781fd6d73bcf533c28827d1a892c50d4efa01a9a9"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 23801,
+    "sha256": "3da78304fcd08d7d32a5faea7f213182e33c1456f60fb17aa52ba6bd2ba4ee82"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 465,
+    "sha256": "4227a5b901bec3d0239db9f2d119121290ca69013d0f13ca9f91769ab4e68f61"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/preimages/TreeDB/zipper/zipper.go",
+    "bytes": 134963,
+    "sha256": "1642ceb3d77058f1a025a18f0aa6c2a254ba300faf4307b8a89caf164ee7aac3"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/raw.jsonl",
+    "bytes": 6216,
+    "sha256": "efc8d1a23b14c3162986c5b0aa5fd0e325795460e00904a7c9acc71d274de843"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/receipt.json",
+    "bytes": 14996,
+    "sha256": "981d3d62dfa4183c6ba1fe10258259d02654f82ab2ab74ab8b004db8c1257504"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/repair.patch",
+    "bytes": 36862,
+    "sha256": "83bfb80fb3d416b6a75c9727e92e289bf16f64b2e9cb201585f00bbfa37e8117"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/caching/cow_flush.go",
+    "bytes": 7703,
+    "sha256": "a811a72aacd9e15ee2591392a90a9773145de2ece1e73a9c88b0164c6f3b0e36"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 8504,
+    "sha256": "014dd272ce7289f87a615eccd2e5b7ac2a5c054c092cff8efcfa419138cf6d49"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/db/native_materialized_trace_testtag.go",
+    "bytes": 218,
+    "sha256": "a10cc800b4ed3aed1d02d2dcac2dd1a6f0a0351f590d199a1d3428ecc920a9ba"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "bytes": 16693,
+    "sha256": "cfa48db00488a06cb7d5469ac7b1ecd11472d95a0acd29b333d266354d273992"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "bytes": 3749,
+    "sha256": "9bd09932dcf83b5da2eadf5af2f80bdcb6177a465a7dff9cbf17db751725fa3e"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 6182,
+    "sha256": "3b8792a4a02c12f21605410a0d58caa118a41392b5cd7686bca3c340badcb977"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/freelist/append_work.go",
+    "bytes": 6141,
+    "sha256": "c32cf198af71a244f41c4559890de25539cf5740b4e2ccb16c795859312da48a"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/freelist/append_work_test.go",
+    "bytes": 2820,
+    "sha256": "7a48a0e4f7c4bb7982367d47eada2d895bfa8dc9e91f6301d4751023cad4019e"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 12292,
+    "sha256": "23e90bb9030baad3e5a635ae30244e637665fed71a0519635585f12a44bb683d"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 24680,
+    "sha256": "f0f8364abc24590839bcf890258363f0765ad5a6405b4e473a3aa88d649691fe"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/native_mvcc_unbounded_diagnostic_v6.go",
+    "bytes": 983,
+    "sha256": "095596c68c34aacb6c04f07577134ca319b64601713fe09c8f550a5fa47cafe7"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/node/internal_builder_work.go",
+    "bytes": 1064,
+    "sha256": "17478dd201bafefe83cddfacbdf550a40c338b9218e927d4fa7de6512a9b9c4a"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/zipper/leaf_merge_work.go",
+    "bytes": 5594,
+    "sha256": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/zipper/materialized_write_trace_testtag.go",
+    "bytes": 474,
+    "sha256": "3c1ded4722162d372e69a0f53edb806c7b89535bf10229efd4f2685045d8c887"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 20009,
+    "sha256": "e453856232f70efa9d82ec1519040feca35328e6b02b2464b4f2119556ee897e"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/freeze/sources/TreeDB/zipper/zipper.go",
+    "bytes": 133074,
+    "sha256": "6e27e00c1c8f86088edf8119ec540ee582607f4312d84fb07839f9e2cf6d45f5"
+  },
+  {
+    "path": "artifacts/4871/20261015-retained-zipper/root-source-checkpoint.json",
+    "bytes": 2194,
+    "sha256": "4aec2f8a9f8c39efc4b54ca9ab96549b0f402b93e4fb673c40a2683266539037"
+  }
+]

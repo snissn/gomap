@@ -1,0 +1,981 @@
+diff --git a/TreeDB/caching/cow_flush.go b/TreeDB/caching/cow_flush.go
+index 0f260ebfb..d097392ab 100644
+--- a/TreeDB/caching/cow_flush.go
++++ b/TreeDB/caching/cow_flush.go
+@@ -19,6 +19,7 @@ type cowFlushHandoff struct {
+ 	cut      *cowReadCut
+ 	lease    *memtable.COWExternalLease
+ 	accepted bool
++	native   *nativePrivateOutputV6
+ }
+ 
+ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBackendBasis, error) {
+@@ -120,6 +121,9 @@ func (db *DB) completeCOWHandoff() error {
+ 	if h == nil {
+ 		return nil
+ 	}
++	if !h.accepted {
++		return ErrCOWUnsupported
++	}
+ 	basis, err := c.captureBackendBasis(db.backend.(backendSnapshotProvider))
+ 	if err != nil {
+ 		return err
+diff --git a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+index aad8a0199..42b9f99a0 100644
+--- a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+@@ -13,130 +13,221 @@ import (
+ 	"unsafe"
+ )
+ 
+-// PublishNativeMVCCUnboundedDiagnosticV6 uses the canonical current composite
+-// ordering and SAME frozen-prefix handoff. The entire operation is synchronous;
+-// no prepared allocator candidate or publication turn survives this return.
+-func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeMVCCCurrentDeleteV6) (retErr error) {
++// nativePrivateOutputV6 is the SAME handoff's private pre-acceptance state.
++// Its cut and normalized batch remain owned by the original handoff lease.
++// Prefix collection/normalization and final adoption are explicit synchronous
++// diagnostic stages; only materialized output Step uses the supplied work.
++type nativePrivateOutputV6 struct {
++	db          *DB
++	handoff     *cowFlushHandoff
++	prepared    *backenddb.NativeMVCCCurrentDeleteV6
++	delta       *batch.Batch
++	outputDelta *batch.Batch
++	entries     []batch.Entry
++}
++
++func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
+ 	if db == nil || db.cow == nil || prepared == nil {
+-		return ErrCOWUnsupported
++		return false, ErrCOWUnsupported
+ 	}
+ 	db.flushMu.Lock()
+ 	defer db.flushMu.Unlock()
+-	db.writeMu.Lock()
+-	defer db.writeMu.Unlock()
++	c := db.cow
+ 	if db.closing.Load() {
+-		return backenddb.ErrClosed
++		return false, backenddb.ErrClosed
++	}
++	if c.handoff == nil {
++		db.writeMu.Lock()
++		defer db.writeMu.Unlock()
++		backend, ok := db.backend.(interface{ NativeMVCCDiagnosticAwaitV6() error })
++		if !ok {
++			return false, ErrCOWUnsupported
++		}
++		if err := backend.NativeMVCCDiagnosticAwaitV6(); err != nil {
++			return false, err
++		}
++		// The rollover uses the original source/retirement owner and successors.
++		// No ordinary flush or checkpoint is invoked.
++		c.writerMu.Lock()
++		rollover, err := c.prepareRollover()
++		if err == nil && rollover != nil {
++			rollover.install()
++		}
++		c.writerMu.Unlock()
++		if rollover != nil {
++			// Checked drain of the SAME retirement. Retained read cuts keep every
++			// covered root alive until the exact post-publication handoff.
++			if rollover.installed {
++				for i := range rollover.retired {
++					err = errors.Join(err, rollover.retired[i].DrainWithError())
++				}
++				if rollover.old != nil {
++					err = errors.Join(err, rollover.old.drain())
++				}
++				if err == nil {
++					rollover.scratch.Close()
++				}
++			} else {
++				rollover.drain()
++			}
++		}
++		if err != nil {
++			return false, err
++		}
++		cut := c.retainCut()
++		if cut == nil {
++			return false, backenddb.ErrClosed
++		}
++		lease, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePrivateOutputV6{}))))
++		if err != nil {
++			return false, errors.Join(err, c.releaseCut(cut))
++		}
++		handoff := &cowFlushHandoff{cut: cut, lease: lease}
++		// Exactly the original frozen prefix, oldest to newest. The batch copies
++		// borrowed entry payloads before iterator advance; its final duplicate-key
++		// normalization preserves the canonical winner without reading untouched DATA.
++		delta := batch.New(nil, int(^uint(0)>>1))
++		for _, root := range cut.frozen {
++			it := root.NewIterator(nil, nil)
++			metadata, ok := it.(iterator.RevisionUnsafeIterator)
++			raw, rawOK := it.(iterator.UnsafeIterator)
++			if !ok || !rawOK {
++				err = errors.Join(ErrCOWUnsupported, it.Close())
++				break
++			}
++			for it.Valid() {
++				v, p, f, r := metadata.UnsafeEntryWithRevision()
++				op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
++				if f&node.FlagTombstone != 0 {
++					op.Type = batch.OpDelete
++					op.Value = nil
++				}
++				if err = delta.SetOps([]batch.Entry{op}); err != nil {
++					break
++				}
++				it.Next()
++			}
++			err = errors.Join(err, it.Error(), it.Close())
++			if err != nil {
++				break
++			}
++		}
++		if err != nil {
++			lease.Close()
++			delta.Close()
++			return false, errors.Join(err, c.releaseCut(cut))
++		}
++		if err = prepared.AppendNativeMVCCDiagnosticDeletesV6(delta); err != nil {
++			delta.Close()
++			lease.Close()
++			return false, errors.Join(err, c.releaseCut(cut))
++		}
++		// Normalize once in the explicitly synchronous setup, not inside an admitted
++		// construction Step. The original batch owns all copied delta payloads.
++		outputDelta, prepareErr := prepared.PrepareNativeMVCCMaterializedInputV6(cut.basis.snapshot, delta)
++		if prepareErr != nil {
++			delta.Close()
++			lease.Close()
++			return false, errors.Join(prepareErr, c.releaseCut(cut))
++		}
++		entries, ranges := outputDelta.ApplyPlan()
++		if len(ranges) != 0 {
++			delta.Close()
++			lease.Close()
++			return false, errors.Join(ErrCOWUnsupported, c.releaseCut(cut))
++		}
++
++		private := &nativePrivateOutputV6{db: db, handoff: handoff, prepared: prepared, delta: delta, outputDelta: outputDelta, entries: entries}
++		handoff.native = private
++		c.handoff = handoff
+ 	}
+-	c := db.cow
+-	if c.handoff != nil {
+-		return ErrCOWUnsupported
++	h := c.handoff
++	if h.accepted || h.native == nil || h.native.prepared != prepared {
++		return false, ErrCOWUnsupported
+ 	}
+-	backend, ok := db.backend.(interface{ NativeMVCCDiagnosticAwaitV6() error })
+-	if !ok {
++	return prepared.StepNativeMVCCMaterializedOutputV6(h.cut.basis.snapshot, h.native.entries, h.native, w)
++}
++
++// ClosePrivateNativeOutputV6 does not authorize prefix removal. Its original
++// lease is returned after producer aliases are detached; caller clears its
++// scope alias before refunding the containing handoff/preparation.
++func (p *nativePrivateOutputV6) ClosePrivateNativeOutputV6() (*memtable.COWExternalLease, error) {
++	if p == nil || p.db == nil {
++		return nil, nil
++	}
++	db := p.db
++	db.flushMu.Lock()
++	defer db.flushMu.Unlock()
++	c := db.cow
++	h := p.handoff
++	if c == nil || h == nil || c.handoff != h || h.accepted {
++		return nil, ErrCOWUnsupported
++	}
++	if err := c.releaseCut(h.cut); err != nil {
++		return nil, err
++	}
++	p.delta.Close()
++	p.outputDelta.Close()
++	lease := h.lease
++	c.handoff = nil
++	*h = cowFlushHandoff{}
++	*p = nativePrivateOutputV6{}
++	return lease, nil
++}
++
++// PublishNativeMVCCUnboundedDiagnosticV6 adopts the exact prepared materialized
++// DATA through SAME constructor/current validation/fence/Consume/checked Finish.
++// This final stretch is synchronous and has NO Q32 claim.
++func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeMVCCCurrentDeleteV6) (retErr error) {
++	if db == nil || db.cow == nil || prepared == nil {
+ 		return ErrCOWUnsupported
+ 	}
+-	if err := backend.NativeMVCCDiagnosticAwaitV6(); err != nil {
+-		return err
+-	}
+-	// The rollover uses the original source/retirement owner and successors.
+-	// No ordinary flush or checkpoint is invoked.
+-	c.writerMu.Lock()
+-	rollover, err := c.prepareRollover()
+-	if err == nil && rollover != nil {
+-		rollover.install()
+-	}
+-	c.writerMu.Unlock()
+-	if rollover != nil {
+-		// Checked drain of the SAME retirement. Retained read cuts keep every
+-		// covered root alive until the exact post-publication handoff.
+-		if rollover.installed {
+-			for i := range rollover.retired {
+-				err = errors.Join(err, rollover.retired[i].DrainWithError())
+-			}
+-			if rollover.old != nil {
+-				err = errors.Join(err, rollover.old.drain())
+-			}
+-			if err == nil {
+-				rollover.scratch.Close()
+-			}
+-		} else {
+-			rollover.drain()
++	// Compatibility callers drive the SAME producer synchronously.
++	if db.cow.handoff == nil {
++		w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++		ready, err := db.StepNativeMVCCUnboundedDiagnosticOutputV6(prepared, w)
++		if err != nil {
++			return err
++		}
++		if !ready {
++			return ErrCOWUnsupported
+ 		}
+ 	}
+-	if err != nil {
+-		return err
++	db.flushMu.Lock()
++	defer db.flushMu.Unlock()
++	db.writeMu.Lock()
++	defer db.writeMu.Unlock()
++	c := db.cow
++	h := c.handoff
++	if h == nil || h.accepted || h.native == nil || h.native.prepared != prepared {
++		return ErrCOWUnsupported
+ 	}
+ 	snapshot, err := db.acquireCOWSnapshotWithError()
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer func() { retErr = errors.Join(retErr, snapshot.Close()) }()
+-	cut := c.retainCut()
+-	if cut == nil {
+-		return backenddb.ErrClosed
+-	}
+-	lease, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))))
+-	if err != nil {
+-		return errors.Join(err, c.releaseCut(cut))
+-	}
+-	handoff := &cowFlushHandoff{cut: cut, lease: lease}
+-	// This owner supplies the canonical pointer resolver while the raw merge
+-	// retains persistent pointers and per-entry revisions in the output.
+ 	merged, err := snapshot.buildCOWIteratorLocked(nil, nil, false)
+ 	if err != nil {
+-		lease.Close()
+-		return errors.Join(err, c.releaseCut(cut))
++		return err
+ 	}
+ 	owner, ok := merged.(*cowMergeIterator)
+ 	if !ok {
+-		lease.Close()
+-		return errors.Join(ErrCOWUnsupported, merged.Close(), c.releaseCut(cut))
+-	}
+-	// Exactly the original frozen prefix, oldest to newest. The batch copies
+-	// borrowed entry payloads before iterator advance; its final duplicate-key
+-	// normalization preserves the canonical winner without reading untouched DATA.
+-	delta := batch.New(nil, int(^uint(0)>>1))
+-	defer delta.Close()
+-	for _, root := range cut.frozen {
+-		it := root.NewIterator(nil, nil)
+-		metadata, ok := it.(iterator.RevisionUnsafeIterator)
+-		raw, rawOK := it.(iterator.UnsafeIterator)
+-		if !ok || !rawOK {
+-			err = errors.Join(ErrCOWUnsupported, it.Close())
+-			break
+-		}
+-		for it.Valid() {
+-			v, p, f, r := metadata.UnsafeEntryWithRevision()
+-			op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
+-			if f&node.FlagTombstone != 0 {
+-				op.Type = batch.OpDelete
+-				op.Value = nil
+-			}
+-			if err = delta.SetOps([]batch.Entry{op}); err != nil {
+-				break
+-			}
+-			it.Next()
+-		}
+-		err = errors.Join(err, it.Error(), it.Close())
+-		if err != nil {
+-			break
+-		}
+-	}
+-	if err != nil {
+-		lease.Close()
+-		return errors.Join(err, merged.Close(), c.releaseCut(cut))
++		return errors.Join(ErrCOWUnsupported, merged.Close())
+ 	}
+ 	raw := &nativeDiagnosticMergeV6{Iterator: owner.Iterator}
+-	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(cut.basis.snapshot, raw, delta)
++	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(h.cut.basis.snapshot, raw, h.native.delta)
+ 	closeErr := merged.Close()
+ 	if accepted {
+-		handoff.accepted = true
+-		c.handoff = handoff
+-		// SAME basis capture and exact prefix exclusion, only after actual fence.
++		h.accepted = true
++		h.native.delta.Close()
++		h.native.outputDelta.Close()
++		*h.native = nativePrivateOutputV6{}
++		h.native = nil
++		prepared.DetachNativeMVCCPrivateOutputScopeV6()
+ 		return errors.Join(publishErr, closeErr, db.completeCOWHandoff())
+ 	}
+-	lease.Close()
+-	return errors.Join(publishErr, closeErr, c.releaseCut(cut))
++	return errors.Join(publishErr, closeErr)
+ }
+ 
+ // nativeDiagnosticMergeV6 preserves the original merge winner's raw entry.
+diff --git a/TreeDB/db/native_mvcc_current_delete_v6.go b/TreeDB/db/native_mvcc_current_delete_v6.go
+index 270e2d098..b719078f7 100644
+--- a/TreeDB/db/native_mvcc_current_delete_v6.go
++++ b/TreeDB/db/native_mvcc_current_delete_v6.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"github.com/snissn/gomap/TreeDB/tree"
++	"github.com/snissn/gomap/TreeDB/zipper"
+ 	"unsafe"
+ )
+ 
+@@ -178,16 +179,23 @@ type NativeMVCCSelectionSourceV6 interface {
+ // its unsealed constructor does not select a current root, mutate the floor,
+ // install output, or report a delete ACK.
+ type NativeMVCCCurrentDeleteV6 struct {
+-	db          *DB
+-	snapshot    *Snapshot
+-	selection   tree.NativeMVCCSelectionV6
+-	source      NativeMVCCSelectionSourceV6
+-	record      node.LeafEntry
+-	records     []node.LeafEntry
+-	request     mvccadmission.Request
+-	transaction *rootpublication.DurableRootTransaction
+-	release     rootpublication.PrimaryConstructionReleaseWork
+-	phase       uint8
++	db                  *DB
++	snapshot            *Snapshot
++	selection           tree.NativeMVCCSelectionV6
++	source              NativeMVCCSelectionSourceV6
++	record              node.LeafEntry
++	records             []node.LeafEntry
++	request             mvccadmission.Request
++	transaction         *rootpublication.DurableRootTransaction
++	output              *zipper.MaterializedWriteWork
++	outputSequence      uint64
++	outputInput         zipper.MaterializedInputV6
++	outputInputReady    bool
++	outputAdoptionReady bool
++	outputScope         NativeMVCCPrivateOutputScopeV6
++	outputReader        *NativeMVCCFrameReaderV6
++	release             rootpublication.PrimaryConstructionReleaseWork
++	phase               uint8
+ }
+ 
+ func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
+@@ -373,8 +381,37 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+ 	if c.phase == 6 {
++		c.outputReader = nil
+ 		return true, nil
+ 	}
++	if c.outputReader != nil {
++		ready, err := c.outputReader.CancelProjectionFrame(w)
++		if !ready || err != nil {
++			return false, err
++		}
++		c.outputReader = nil
++	}
++	if c.output != nil {
++		// Explicit synchronous diagnostic teardown only. The bounded installed-page
++		// cancellation continuation remains a reported refusal, never hidden here.
++		ready, err := c.output.Cancel(nil)
++		if !ready || err != nil {
++			return false, err
++		}
++		owner, charge := c.output.Complete()
++		c.output = nil
++		owner.RemovePending(charge)
++	}
++	if c.outputScope != nil {
++		lease, err := c.outputScope.ClosePrivateNativeOutputV6()
++		if err != nil {
++			return false, err
++		}
++		c.outputScope = nil
++		if lease != nil {
++			lease.Close()
++		}
++	}
+ 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
+ 		return false, nil
+ 	}
+diff --git a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+index 3e9b53998..f3b26c60f 100644
+--- a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+@@ -6,6 +6,7 @@ import (
+ 	"errors"
+ 
+ 	"github.com/snissn/gomap/TreeDB/batch"
++	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+@@ -86,9 +87,43 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
+ 	var oldPointerRefs zipper.PointerRefCounts
+ 	var oldEntriesRemoved uint64
+-	base, sequence, retired, metrics, err := z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
+-	if err != nil {
+-		return false, err
++	var base node.PrimaryOperand
++	var sequence uint64
++	var retired []uint64
++	var metrics adaptive.Metrics
++	if c.output != nil {
++		var refs *zipper.PointerRefCounts
++		var ready bool
++		base, refs, oldEntriesRemoved, ready = c.output.Result()
++		if !ready {
++			return false, ErrNativeMVCCSnapshotWork
++		}
++		oldPointerRefs = *refs
++		sequence = c.outputSequence
++		for i := 0; i < c.outputInput.RetiredCount; i++ {
++			retired = append(retired, c.outputInput.Retired[i])
++		}
++		// SAME original tracker takes physical custody BEFORE producer aliases clear.
++		c.output.VisitPages(func(allocated, old uint64) {
++			if allocated != 0 {
++				group.tracker.pages = append(group.tracker.pages, allocated)
++			}
++			if old != 0 {
++				retired = append(retired, old)
++			}
++		})
++		if !primaryarena.IsPage(group.currentRoot) {
++			retired = append(retired, group.currentRoot)
++		}
++		owner, charge := c.output.Complete()
++		c.output = nil
++		refs = nil
++		owner.RemovePending(charge)
++	} else {
++		base, sequence, retired, metrics, err = z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
++		if err != nil {
++			return false, err
++		}
+ 	}
+ 	entries, ranges := delta.ApplyPlan()
+ 	refs, err := c.db.buildValueLogRefDelta(group.idx.pager, group.currentRoot, group.baseSeq, entries, ranges, &oldPointerRefs, oldEntriesRemoved, true)
+diff --git a/TreeDB/freelist/append_work.go b/TreeDB/freelist/append_work.go
+index 4a55b0fc1..34da86d72 100644
+--- a/TreeDB/freelist/append_work.go
++++ b/TreeDB/freelist/append_work.go
+@@ -15,13 +15,13 @@ var ErrAppendRangeContinuation = errors.New("freelist: append reservation gap ne
+ // AppendWork is embedded in its producer's admitted containing control. It uses
+ // the original allocator transaction and Pager Growth; it issues no second
+ // reservation authority. Until installed, ordinary writers can still use the
+-// allocator. A changed transaction/count invalidates this private operation.
++// allocator. A changed high-water/count cancels unpublished growth before selecting
++// again from the live allocator; installed IDs never retain a transaction.
+ type AppendWork struct {
+-	allocator   *Allocator
+-	transaction *FreelistTxn
+-	growth      *pager.Growth
+-	id, count   uint64
+-	phase       uint8
++	allocator *Allocator
++	growth    *pager.Growth
++	id, count uint64
++	phase     uint8
+ }
+ 
+ func appendReserve(w *iterator.OrdinalScanWork, r, b uint64) (bool, error) {
+@@ -64,15 +64,37 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
+ 	// Recheck on EVERY resumed step under the original lock: a reused-page
+ 	// allocation can consume backing capacity without moving highWater/count.
+ 	if len(t.allocated) == cap(t.allocated) {
+-		return 0, false, ErrAppendCapacityContinuation
++		capacity := max(4, 2*cap(t.allocated))
++		n := uint64(unsafe.Sizeof(allocatedPage{}))
++		// Charge the actual original backing allocation, overlap and each copied
++		// slot before replacing it. This remains the live transaction's array.
++		if ok, e := appendReserve(w, 1+uint64(len(t.allocated)), uint64(capacity+len(t.allocated))*n); !ok || e != nil {
++			return 0, false, e
++		}
++		grown := make([]allocatedPage, len(t.allocated), capacity)
++		copy(grown, t.allocated)
++		t.allocated = grown
+ 	}
+ 	if s.phase == 0 {
+ 		// No Go append allocation is permitted in the guarded install callback.
+ 		if t.highWater == math.MaxUint64 || t.highWater < a.pager.PageCount() {
+ 			return 0, false, ErrGenerationFormat
+ 		}
+-	} else if s.allocator != a || s.transaction != t || s.id != t.highWater || s.count != a.pager.PageCount() {
+-		return 0, false, ErrGenerationParent
++	} else if s.allocator != a || s.id != t.highWater || s.count != a.pager.PageCount() {
++		// This private growth owns no transaction. Cancel its unpublished
++		// mapping before selecting from the current live allocator on retry.
++		if s.growth != nil {
++			ready, e := s.growth.Cancel(w)
++			if !ready || e != nil {
++				return 0, false, e
++			}
++			s.growth = nil
++		}
++		s.allocator = nil
++		s.id = 0
++		s.count = 0
++		s.phase = 0
++		return 0, false, nil
+ 	}
+ 	ledger := t.ledger
+ 	ledger.mu.Lock()
+@@ -89,7 +111,7 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
+ 		if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {
+ 			return 0, false, e
+ 		}
+-		s.allocator, s.transaction, s.id, s.count = a, t, t.highWater, a.pager.PageCount()
++		s.allocator, s.id, s.count = a, t.highWater, a.pager.PageCount()
+ 		s.phase = 1
+ 	}
+ 	if s.growth == nil {
+diff --git a/TreeDB/freelist/append_work_test.go b/TreeDB/freelist/append_work_test.go
+index d6b98d69f..328203d96 100644
+--- a/TreeDB/freelist/append_work_test.go
++++ b/TreeDB/freelist/append_work_test.go
+@@ -1,7 +1,6 @@
+ package freelist
+ 
+ import (
+-	"errors"
+ 	"path/filepath"
+ 	"testing"
+ 
+@@ -39,12 +38,49 @@ func TestAppendWorkRechecksCapacityAfterReusedAllocation(t *testing.T) {
+ 	if err != nil || reused != 2 || a.cow.txn.highWater != beforeWater || p.PageCount() != beforeCount {
+ 		t.Fatal("reused allocation", reused, err)
+ 	}
+-	_, ready, err = s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+-	if ready || !errors.Is(err, ErrAppendCapacityContinuation) || s.growth != nil || a.cow.txn.highWater != beforeWater || p.PageCount() != beforeCount || len(a.cow.txn.allocated) != 1 {
+-		t.Fatal("resumed allocation escaped capacity admission", ready, err)
++	id, ready, err := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
++	if err != nil || !ready || id != beforeWater || len(a.cow.txn.allocated) != 2 || a.cow.txn.allocated[0].id != reused {
++		t.Fatal("resumed allocation did not grow same live backing", id, ready, err)
+ 	}
+-	ready, err = s.Cancel(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
++	ready, err = s.Cancel(nil)
+ 	if !ready || err != nil {
+-		t.Fatal("pre-storage cancellation", ready, err)
++		t.Fatal("checked diagnostic cancellation", ready, err)
+ 	}
+ }
++
++func TestAppendWorkAdmitsEmptyLiveBackingBeforeInstall(t *testing.T) {
++	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer p.Close()
++	if _, err = p.Alloc(4); err != nil {
++		t.Fatal(err)
++	}
++	a := New(p, 0)
++	if err = a.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
++		t.Fatal(err)
++	}
++	var s AppendWork
++	before := p.PageCount()
++	_, ready, err := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20})
++	if ready || err != nil || len(a.cow.txn.allocated) != 0 || cap(a.cow.txn.allocated) != 0 || p.PageCount() != before {
++		t.Fatal("unadmitted backing effect", ready, err)
++	}
++	for i := 0; i < 32; i++ {
++		id, done, e := s.Step(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
++		if e != nil {
++			t.Fatal(e)
++		}
++		if done {
++			if id != before || len(a.cow.txn.allocated) != 1 {
++				t.Fatal("wrong live install")
++			}
++			if ok, e := s.Cancel(nil); !ok || e != nil {
++				t.Fatal(ok, e)
++			}
++			return
++		}
++	}
++	t.Fatal("empty backing never installed")
++}
+diff --git a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+index a9762d85e..a65a578a5 100644
+--- a/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
++++ b/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go
+@@ -115,6 +115,8 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 			var cursor *PruneCursor
+ 			var ack, writes, prepared, cut, visited uint64
+ 			var pruneErr error
++			var installedID, adoptionInputID, publishedID uint64
++			var committedAfterInstall, resumedSameID bool
+ 			var firstACKComplete, firstACKIntegrity bool
+ 			var elapsed time.Duration
+ 			var allocBytes, allocCount uint64
+@@ -126,6 +128,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 				if cursor != nil {
+ 					phase = cursor.phase
+ 				}
++				// Observe the retained ID at call entry, before publication consumes
++				// the producer. Final output must bind this exact page below.
++				var inputID uint64
++				if cursor != nil && cursor.preparation != nil {
++					inputID = cursor.preparation.MaterializedInstalledPageForTest()
++				}
+ 				var before, after runtime.MemStats
+ 				runtime.ReadMemStats(&before)
+ 				started := time.Now()
+@@ -142,10 +150,22 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 				if x.Cursor != nil {
+ 					cursor = x.Cursor
+ 				}
++				if cursor != nil && cursor.preparation != nil {
++					id := cursor.preparation.MaterializedInstalledPageForTest()
++					if committedAfterInstall && id != 0 && id == installedID {
++						resumedSameID = true
++					}
++					if id != 0 && installedID == 0 {
++						installedID = id
++					}
++				}
+ 				visited += x.Visited
+ 				ack += x.Pruned
+ 				if x.Pruned != 0 {
+ 					firstACKComplete, firstACKIntegrity = x.Complete, cursor.integrityDone
++					if committedAfterInstall && inputID == installedID {
++						adoptionInputID = inputID
++					}
+ 				}
+ 				if cursor != nil && cursor.preparation != nil {
+ 					_, p, c, _ := cursor.preparation.MaintenanceCurrentDeleteScalarsForTest()
+@@ -167,6 +187,9 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 						t.Fatal(e)
+ 					}
+ 					writes++
++					if installedID != 0 {
++						committedAfterInstall = true
++					}
+ 				}
+ 				if ack != 0 {
+ 					break
+@@ -226,7 +249,10 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 			}
+ 			sharedChildren := 0
+ 			if multileaf {
+-				afterChildren := nativeDiagnosticDATAChildren(t, d)
++				afterChildren := nativeDiagnosticDATAChildren(t, d, &publishedID)
++				if adoptionInputID != 0 && publishedID == adoptionInputID {
++					resumedSameID = true
++				}
+ 				for ref := range afterChildren {
+ 					if beforeChildren[ref] {
+ 						sharedChildren++
+@@ -272,6 +298,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 			if multileaf && sharedChildren == 0 {
+ 				t.Fatal("incremental publication replaced every unrelated backend ChildRef")
+ 			}
++			if multileaf {
++				t.Logf("RETAINED_OUTPUT_ACTIVATION installed_page=%d commit_after_install=%t same_id_resumed=%t published_DATA_page=%d ACK=%d", installedID, committedAfterInstall, resumedSameID, publishedID, ack)
++				if installedID == 0 || !committedAfterInstall || !resumedSameID {
++					t.Error("retained original output page did not survive CommitAt and resume before adoption")
++				}
++			}
+ 			if pruneErr != nil || ack != 1 || prepared == 0 || writes == 0 {
+ 				t.Fatalf("positive composite publication: error=%v ACK=%d writes=%d prepared=%d cut=%d", pruneErr, ack, writes, prepared, cut)
+ 			}
+@@ -281,7 +313,7 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
+ 
+ // Scoped scalar copies only: the certificate/image never outlive its original
+ // backend Snapshot. The child references are observations, not retained owners.
+-func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]bool {
++func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB, rootOut ...*uint64) map[page.ChildRef]bool {
+ 	t.Helper()
+ 	snapshot := d.NativeMembershipSnapshotForTest()
+ 	if snapshot == nil {
+@@ -300,6 +332,9 @@ func nativeDiagnosticDATAChildren(t *testing.T, d *treedb.DB) map[page.ChildRef]
+ 	if base.Ref.Kind != page.ChildRefPage {
+ 		t.Fatal("DATA page", base.Ref)
+ 	}
++	if len(rootOut) != 0 {
++		*rootOut[0] = base.Ref.Page
++	}
+ 	image, e := snapshot.Pager().Get(base.Ref.Page)
+ 	if e != nil {
+ 		t.Fatal(e)
+diff --git a/TreeDB/mvcc/prune_cursor_v6.go b/TreeDB/mvcc/prune_cursor_v6.go
+index fb5685846..c0c531d70 100644
+--- a/TreeDB/mvcc/prune_cursor_v6.go
++++ b/TreeDB/mvcc/prune_cursor_v6.go
+@@ -42,6 +42,9 @@ type PruneCursor struct {
+ 	projection                                          *tree.ChargedProjection
+ 	projectionAdmitted                                  bool
+ 	reader                                              backenddb.NativeMVCCFrameReaderV6
++ outputReader backenddb.NativeMVCCFrameReaderV6
++ outputLeaf valuelog.COWLeafProjectionReader
++ outputInput,outputRaw [64 << 10]byte
+ 	value                                               valuelog.COWLeafContinuation
+ 	codec                                               valuelog.COWZSTDContinuation
+ 	template                                            valuelog.COWTemplateContinuation
+@@ -118,6 +121,8 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
+ 		c.namespaceSize = len(mvcckey.AppendNamespaceLower(c.namespace[:0]))
+ 		c.leaf = valuelog.COWLeafProjectionReader{Input: c.leafInput[:], Raw: c.leafRaw[:], Limits: valuelog.COWReadLimits{MaxRecordBytes: uint64(len(c.leafInput)), MaxRawBytes: uint64(len(c.leafRaw)), MaxValueBytes: 4096}, VerifyCRC: true, ZSTD: &c.codec, Template: &c.template}
+ 		c.reader.Leaf = &c.leaf
++ c.outputLeaf=valuelog.COWLeafProjectionReader{Input:c.outputInput[:],Raw:c.outputRaw[:],Limits:valuelog.COWReadLimits{MaxRecordBytes:uint64(len(c.outputInput)),MaxRawBytes:uint64(len(c.outputRaw)),MaxValueBytes:4096},VerifyCRC:true,ZSTD:&c.codec,Template:&c.template}
++ c.outputReader.Leaf=&c.outputLeaf
+ 	}
+ 	stats.Cursor = c
+ 	c.mu.Lock()
+@@ -582,6 +587,11 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			if !c.diagnosticUnbounded {
+ 				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+ 			}
++			c.preparation.BindNativeMVCCOutputReaderV6(&c.outputReader)
++ ready, err := c.db.StepNativeMVCCUnboundedDiagnosticOutputV6(c.preparation, w)
++			if !ready || err != nil {
++				return err
++			}
+ 			if err := c.db.PublishNativeMVCCUnboundedDiagnosticV6(c.preparation); err != nil {
+ 				return err
+ 			}
+@@ -719,6 +729,10 @@ func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
+ 			}
+ 			c.record = node.LeafEntry{}
+ 			c.reader = backenddb.NativeMVCCFrameReaderV6{}
++            ready,err=c.outputReader.CancelProjectionFrame(&w)
++            if err!=nil { return nil,err };if !ready { continue }
++            c.outputReader=backenddb.NativeMVCCFrameReaderV6{}
++            c.outputLeaf=valuelog.COWLeafProjectionReader{}
+ 			c.closePhase = 3
+ 		case 3:
+ 			if c.captureBegun {
+diff --git a/TreeDB/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
+index f38cdb2a1..d2734bc19 100644
+--- a/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
+@@ -1,6 +1,9 @@
+ package treedb
+ 
+-import backenddb "github.com/snissn/gomap/TreeDB/db"
++import (
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++)
+ 
+ // PublishNativeMVCCUnboundedDiagnosticV6 is the internal diagnostic bridge;
+ // bounded public cursors never select it implicitly.
+@@ -12,3 +15,14 @@ func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(c *backenddb.NativeMVCCCurr
+ 	}
+ 	return db.cached.PublishNativeMVCCUnboundedDiagnosticV6(c)
+ }
++
++// StepNativeMVCCUnboundedDiagnosticOutputV6 retains only admitted private DATA
++// construction. It is not a bounded final-publication policy.
++func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(c *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
++	db.lifecycleMu.RLock()
++	defer db.lifecycleMu.RUnlock()
++	if db.cached == nil {
++		return false, ErrClosed
++	}
++	return db.cached.StepNativeMVCCUnboundedDiagnosticOutputV6(c, w)
++}
+diff --git a/TreeDB/zipper/zipper.go b/TreeDB/zipper/zipper.go
+index c8438533a..30416f439 100644
+--- a/TreeDB/zipper/zipper.go
++++ b/TreeDB/zipper/zipper.go
+@@ -2566,13 +2566,19 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
+ 	return page.ChildRef{}, nil, page.ErrInvalidPageType
+ }
+ 
++func leafEntrySizeWithRevision(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
++	entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
++	if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
++		entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
++	}
++	return entrySize, prefixLen, suffixLen
++}
++
+ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool, cacheOwnedOuterLeafPages bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
+ 	if metrics != nil {
+ 		metrics.ZipperLeafMerges++
+ 	}
+-	oldIdx := uint16(0)
+-	oldCount := oldNode.Count()
+-	opIdx := 0
++	selection := newLeafMergeCursor(oldNode, ops, ranges, nil)
+ 	if oldNode.LeafEntryRevisionsEnabled() {
+ 		z.enableLeafBuilderEntryRevisions(builder, ops)
+ 	}
+@@ -2701,124 +2707,27 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
+ 		}
+ 		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
+ 	}
+-	leafEntrySizeWithRevision := func(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
+-		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
+-		if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
+-			entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
+-		}
+-		return entrySize, prefixLen, suffixLen
+-	}
+ 
+ 	for {
+-		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
+-		var useBatch bool
+-		var oldLoaded bool
+-		var oldKey, oldVal []byte
+-		var oldPtr page.ValuePtr
+-		var oldRevision page.EntryRevision
+-		var oldFlags byte
+-
+-		if oldIdx >= oldCount && opIdx >= len(ops) {
++		event, _, err := selection.next(nil)
++		if err != nil {
++			return page.ChildRef{}, nil, err
++		}
++		if event.done {
+ 			break
+ 		}
+-
+-		if oldIdx >= oldCount {
+-			useBatch = true
+-		} else if opIdx >= len(ops) {
+-			// useOld = true
+-		} else {
+-			// Compare
+-			// Optimization: decode old entry once; reuse it below when we
+-			// consume from oldNode in the same loop iteration.
+-			k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
+-			if err != nil {
+-				return page.ChildRef{}, nil, err
+-			}
+-			oldLoaded = true
+-			oldKey = k
+-			oldVal = v
+-			oldPtr = ptr
+-			oldRevision = rev
+-			oldFlags = f
+-			batchKey := ops[opIdx].Key
+-
+-			cmp := bytes.Compare(k, batchKey)
+-			if cmp < 0 {
+-				// useOld = true
+-			} else if cmp > 0 {
+-				useBatch = true
+-			} else {
+-				// Equal: Update (Batch wins). The old entry is being overwritten
+-				// or deleted; if it was a pointer, track it as dead bytes.
+-				recordRemovedEntry(f, ptr)
+-
+-				useBatch = true
+-				oldIdx++ // Skip old
+-			}
+-		}
+-
+-		// Key/Val to insert
+-		var key, val []byte
+-		var flags byte
+-		var valPtr page.ValuePtr
+-		revision := page.LegacyEntryRevision
+-		insertedFromBatch := false
+-
+-		if useBatch {
+-			op := ops[opIdx]
+-			opIdx++
+-			if op.Type == batch.OpDelete {
+-				continue // Skip insert
+-			}
+-			insertedFromBatch = true
+-			key = op.Key
+-			revision = op.Revision
+-			if op.IsPtr {
+-				flags = node.FlagPointer
+-				valPtr = op.ValuePtr
+-			} else {
+-				flags = node.FlagInline
+-				val = op.Value
+-			}
+-		} else {
+-			// useOld
+-			if oldLoaded {
+-				key = oldKey
+-				flags = oldFlags
+-				revision = oldRevision
+-				if oldFlags&node.FlagPointer != 0 {
+-					valPtr = oldPtr
+-				} else {
+-					val = oldVal
+-				}
+-			} else {
+-				// Optimization: View
+-				k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
+-				if err != nil {
+-					return page.ChildRef{}, nil, err
+-				}
+-				key = k
+-				flags = f
+-				revision = rev
+-				if f&node.FlagPointer != 0 {
+-					valPtr = ptr
+-				} else {
+-					val = v
+-				}
+-			}
+-			oldIdx++
+-			if flags&node.FlagTombstone != 0 {
+-				continue // Skip tombstones
+-			}
+-			if batch.DeleteRangesContainKey(ranges, key) {
+-				recordRemovedEntry(flags, valPtr)
+-				continue
+-			}
++		if event.removes {
++			recordRemovedEntry(event.removed.Flags, event.removed.ValuePtr)
++		}
++		if !event.emit {
++			continue
+ 		}
++		key, val, flags, valPtr, revision := event.entry.Key, event.entry.Value, event.entry.Flags, event.entry.ValuePtr, event.entry.Revision
++		insertedFromBatch := event.fromBatch
+ 
+ 		// Insert into target builder
+ 		entrySize, prefixLen, suffixLen := leafEntrySizeWithRevision(target, key, val, flags, revision)
+-		var err error
++		err = nil
+ 		if z.leafSoftFull(target, entrySize) {
+ 			err = node.ErrNodeFull
+ 		} else {
+@@ -2867,7 +2776,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
+ 			}
+ 
+ 			// New Builder
+-			startIdx := opIdx
++			startIdx := selection.opIndex
+ 			if insertedFromBatch && startIdx > 0 {
+ 				startIdx--
+ 			}

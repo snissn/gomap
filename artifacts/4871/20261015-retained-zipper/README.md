@@ -1,0 +1,12 @@
+Retained SAME zipper integration checkpoint, not production qualification.
+
+Source 03a90b426fa0eeba25b799bbe14ad628ac612061; source parent 41dd12c84c874b1d9a0a1c8cdc9e160c9379f17c.
+
+Actual retained private output / unbounded diagnostic milestone only.
+The same installed original live-allocator page29 survives an actual public CommitAt and is the published DATA root29. 36/37 original childrefs remain. Configured original columnar-prefix V2+packed/revisions and outer LeafLog append are preserved. Selected physical absence, keeper/future/retained cut, postACK durable writer, checked cursor/DB Close and reopen assertions PASS.
+Test uses PruneVersionsUnboundedDiagnosticForTest, NOT production bounded PruneVersions. Original format selection/columnar add/finalization, leaf append/compression/register, prefix collection/normalization and final adoption/authority/Finish are synchronous diagnostic work. Work counters incomplete, no Q32/production/performance acceptance. Actual phase records/bytes only cover implemented work-bearing portions.
+945477ns sum ALL prune calls nilcursor->ACK, 2005752B/1122 allocations sampled processwide during calls,132 intervening writes outside these samples,5370ns checked cursorClose. No wall/write timing yet. Not comparable speedup evidence; exact-one-write control follows checkpoint.
+Append no-spare backing grows SAME live transaction array after real copy/allocation work admission. Large list copy/continuation and progress under allocator-changing legal writes remain unresolved; installed-page abort explicitly refuses bounded work. New append tests not run in this checkpoint. Root split/internal overflow/base-delta/sole LeafLog root and bounded columnar codecs/outer append/current cut/final publisher/Finish remain open or refuse.
+Intended activation RED is retained-zipper-activation-red-v4 with exact sources; v5 NodeFull, v6 capacity refusal, v7 free0, v8 build failure, v9 actual publish but flawed post-consumption observation. These are retained distinct outcomes; only v10 final diagnostic GREEN. No full protected/public target acceptance claimed.
+
+Actual route RED sources retained under activation-red-v4. v9 observation fails after consumed output; v10 uses actual published DATA root and passes. Original protected fixture and foreign source preserved. No append focused test, bounded production, comparative performance, current-head PR/CI/review, or graph completion credit. Follow canonical issue4871 and native4878.
