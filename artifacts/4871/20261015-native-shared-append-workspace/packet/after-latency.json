@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+    "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticLatency$/^pointertrue$",
+    "-test.count=1",
+    "-test.timeout=90s",
+    "-test.v"
+  ],
+  "exit": 0,
+  "timeout": false,
+  "wall": 0.031914747320115566,
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  }
+}

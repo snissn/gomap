@@ -1,0 +1,15 @@
+Shared append workspace checkpoint
+
+Source ff042aea741d165e816d6663322b142b36afb292
+Owned4 paths;4399 source rows unchanged during final check/sample.
+Runtime RED: per-frame workspace identity and active target Cancel custody.
+Runtime GREEN: same target through hook/result/reset refusals; original owner charge retained, normal progress completes.
+Physical terminal-error abandonment remains WIP, not checked-cancel acceptance.
+
+Diagnostic before -> after:
+all prune calls ns:1022150 ->966589
+first call to ACK wall ns:1106271 ->1051380
+outer alloc bytes:2506920 ->2202184 (-304736;12.16%)
+outer alloc objects:1195 ->1195
+exactly1 intervening write;90 prepared observations;ACK1;format/physicaloutput/shared36of37/old/current/postACK/Close/reopen checks pass.
+Single latency pair, no speedup/production/Q32 claim.

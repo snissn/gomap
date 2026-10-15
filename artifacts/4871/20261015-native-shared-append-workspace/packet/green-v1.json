@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-tags",
+    "treedb_test",
+    "-run",
+    "^TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6$",
+    "-count=1",
+    "-timeout=90s",
+    "-v",
+    "./TreeDB/zipper"
+  ],
+  "exit": 0,
+  "wall": 1.0103574441745877,
+  "timeout": false
+}

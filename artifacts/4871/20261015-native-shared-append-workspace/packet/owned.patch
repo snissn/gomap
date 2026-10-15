@@ -1,0 +1,234 @@
+diff --git a/TreeDB/internal/valuelog/leaf_append_work.go b/TreeDB/internal/valuelog/leaf_append_work.go
+index 3e793e4a0..b85c729c2 100644
+--- a/TreeDB/internal/valuelog/leaf_append_work.go
++++ b/TreeDB/internal/valuelog/leaf_append_work.go
+@@ -5,6 +5,7 @@ import (
+ 	"github.com/pierrec/lz4/v4"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/page"
++	"unsafe"
+ )
+ 
+ // ErrLeafAppendWorkUnsupported is a before-effects refusal for a physical
+@@ -21,7 +22,7 @@ func leafAppendReserve(w *iterator.OrdinalScanWork, r, b uint64) (bool, error) {
+ 	return w.Reserve(r, b), nil
+ }
+ 
+-// LeafAppendWork lives in the original admitted zipper output frame. All page,
++// LeafAppendWork lives in the original admitted zipper materialization owner. All page,
+ // body, codec table and preparer backing belongs to that containing receipt;
+ // no pool alias or cache owner is added. The input image stays immutable.
+ type LeafAppendWork struct {
+@@ -91,3 +92,36 @@ func (s *LeafAppendWork) Prepare(rid uint64, codec BlockCodec, ioCost, encodeCos
+ 	s.Phase = 2
+ 	return true, nil
+ }
++
++// ResetCompletedWithWork releases only completed per-leaf metadata aliases.
++// The caller has saved the ChildRef and completed every wrapper/cache hook.
++// Fixed byte arrays and the original LZ4 compressor remain owned by this same
++// containing receipt; CompressBlock resets its own lookup bitmap for each block.
++// No live workspace is copied and no large compressor table is zeroed here.
++func (s *LeafAppendWork) ResetCompletedWithWork(w *iterator.OrdinalScanWork) (bool, error) {
++	if s == nil || s.Phase != 3 || !s.After || s.Err != nil {
++		return false, ErrLeafAppendWorkUnsupported
++	}
++	// This leaf-only producer never acquires a dictionary encoder; do not erase
++	// an opaque physical owner if an unsupported producer were bound here.
++	if s.Preparer.dictEncoder != nil {
++		return false, ErrLeafAppendWorkUnsupported
++	}
++	n := uint64(unsafe.Sizeof(FramePreparer{}) + unsafe.Sizeof(s.Stats) + unsafe.Sizeof(s.Value) + unsafe.Sizeof(s.Frame) + unsafe.Sizeof(s.Ptr) + 64)
++	if ok, e := leafAppendReserve(w, 1, 2*n); !ok || e != nil {
++		return false, e
++	}
++	s.Preparer = FramePreparer{}
++	s.Value = nil
++	s.Frame = nil
++	s.Stats = FrameStats{}
++	s.RID = 0
++	s.Phase = 0
++	s.Ptr = page.LeafLogPtr{}
++	s.Codec = 0
++	s.Before = false
++	s.After = false
++	s.preparerReady = false
++	s.Err = nil
++	return true, nil
++}
+diff --git a/TreeDB/mvcc/native_production_cost_v6_test.go b/TreeDB/mvcc/native_production_cost_v6_test.go
+index e8d70d5ed..ea39487c9 100644
+--- a/TreeDB/mvcc/native_production_cost_v6_test.go
++++ b/TreeDB/mvcc/native_production_cost_v6_test.go
+@@ -27,6 +27,8 @@ const (
+ 	nativeCostProductionLatencyV6 nativeCostModeV6 = "production_latency"
+ 	nativeCostProductionAllocV6   nativeCostModeV6 = "production_outer_alloc"
+ 	nativeCostDiagnosticProfileV6 nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_allocation_attribution"
++	nativeCostDiagnosticLatencyV6 nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_latency"
++	nativeCostDiagnosticAllocV6   nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_outer_alloc"
+ )
+ 
+ func TestNativePruneCOWRetainedOutputProductionLatency(t *testing.T) {
+@@ -39,8 +41,17 @@ func TestNativePruneCOWRetainedOutputDiagnosticAllocationAttribution(t *testing.
+ 	runNativeProductionCostV6(t, nativeCostDiagnosticProfileV6)
+ }
+ 
++// These separately named diagnostic observations never qualify production.
++func TestNativePruneCOWRetainedOutputDiagnosticLatency(t *testing.T) {
++	runNativeProductionCostV6(t, nativeCostDiagnosticLatencyV6)
++}
++func TestNativePruneCOWRetainedOutputDiagnosticAlloc(t *testing.T) {
++	runNativeProductionCostV6(t, nativeCostDiagnosticAllocV6)
++}
++
+ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
+ 	fixed, multileaf := true, true
++	diagnostic := mode == nativeCostDiagnosticProfileV6 || mode == nativeCostDiagnosticLatencyV6 || mode == nativeCostDiagnosticAllocV6
+ 	if mode == nativeCostDiagnosticProfileV6 {
+ 		runtime.MemProfileRate = 1
+ 	}
+@@ -148,16 +159,16 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
+ 				runtime.GC()
+ 				profileBefore = nativeCostMemProfileV6(t, profileBefore)
+ 			}
+-			if mode == nativeCostProductionAllocV6 {
++			if mode == nativeCostProductionAllocV6 || mode == nativeCostDiagnosticAllocV6 {
+ 				runtime.ReadMemStats(&wholeBefore)
+ 			}
+ 			prune := s.PruneVersions
+ 			api := "PruneVersions"
+-			if mode == nativeCostDiagnosticProfileV6 {
++			if diagnostic {
+ 				prune = s.PruneVersionsUnboundedDiagnosticForTest
+ 				api = "PruneVersionsUnboundedDiagnosticForTest"
+ 			}
+-			var sequenceWall time.Duration
++			var sequenceWall, pruneElapsed time.Duration
+ 			sequenceStarted := time.Now()
+ 			for call := 0; call < 4096; call++ {
+ 				// Observe the retained ID at call entry, before publication consumes
+@@ -166,7 +177,9 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
+ 				if cursor != nil && cursor.preparation != nil {
+ 					inputID = cursor.preparation.MaterializedInstalledPageForTest()
+ 				}
++				callStarted := time.Now()
+ 				x, e := prune(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
++				pruneElapsed += time.Since(callStarted)
+ 				if x.Pruned != 0 {
+ 					sequenceWall = time.Since(sequenceStarted)
+ 				}
+@@ -226,7 +239,7 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
+ 			if sequenceWall == 0 {
+ 				sequenceWall = time.Since(sequenceStarted)
+ 			}
+-			if mode == nativeCostProductionAllocV6 {
++			if mode == nativeCostProductionAllocV6 || mode == nativeCostDiagnosticAllocV6 {
+ 				runtime.ReadMemStats(&wholeAfter)
+ 			}
+ 			if mode == nativeCostDiagnosticProfileV6 {
+@@ -250,7 +263,7 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
+ 				}
+ 			}
+ 			cursorCleanup := time.Since(cleanupStarted)
+-			t.Logf("NATIVE_COST_V6 mode=%s api=%s diagnostic=%t fixed_one_write=true first_call_to_ACK_wall_ns=%d intervening_writes=%d write_ns=%d cursor_cleanup_ns=%d whole_sequence_alloc_bytes=%d whole_sequence_alloc_count=%d allocation_scope=processwide_includes_intervening_write_and_runtime ACK=%d nativePrepared_observations=%d nativeCut_observations=%d error=%v", mode, api, mode == nativeCostDiagnosticProfileV6, sequenceWall.Nanoseconds(), writes, writeElapsed.Nanoseconds(), cursorCleanup.Nanoseconds(), wholeAfter.TotalAlloc-wholeBefore.TotalAlloc, wholeAfter.Mallocs-wholeBefore.Mallocs, ack, prepared, cut, pruneErr)
++			t.Logf("NATIVE_COST_V6 mode=%s api=%s diagnostic=%t fixed_one_write=true first_call_to_ACK_wall_ns=%d all_prune_calls_ns=%d intervening_writes=%d write_ns=%d cursor_cleanup_ns=%d whole_sequence_alloc_bytes=%d whole_sequence_alloc_count=%d allocation_scope=processwide_includes_intervening_write_and_runtime ACK=%d nativePrepared_observations=%d nativeCut_observations=%d error=%v", mode, api, diagnostic, sequenceWall.Nanoseconds(), pruneElapsed.Nanoseconds(), writes, writeElapsed.Nanoseconds(), cursorCleanup.Nanoseconds(), wholeAfter.TotalAlloc-wholeBefore.TotalAlloc, wholeAfter.Mallocs-wholeBefore.Mallocs, ack, prepared, cut, pruneErr)
+ 			if ack == 1 {
+ 				got, e := d.Get(selectedKey)
+ 				if e != nil || got != nil {
+diff --git a/TreeDB/zipper/materialized_write_work.go b/TreeDB/zipper/materialized_write_work.go
+index c70a917a0..9397e1ed7 100644
+--- a/TreeDB/zipper/materialized_write_work.go
++++ b/TreeDB/zipper/materialized_write_work.go
+@@ -33,6 +33,8 @@ type MaterializedWriteWork struct {
+ 	owner                              *retainedalloc.Owner
+ 	head, current, root                *materializedWriteFrame
+ 	reader                             MaterializedFrameReaderV6
++	leafAppend                         valuelog.LeafAppendWork
++	appendTarget                       *materializedWriteFrame
+ 	unboundedLeafPersistenceDiagnostic bool
+ 	charge                             uint64
+ 	refs                               PointerRefCounts
+@@ -71,7 +73,6 @@ type materializedWriteFrame struct {
+ 	output                              [page.PageSize]byte
+ 	scratch, key, nextKey               [page.PageSize]byte
+ 	encoder                             node.Builder
+-	leafAppend                          valuelog.LeafAppendWork
+ 	outputReserved                      bool
+ 	selectLeaf                          leafMergeCursor
+ 	event                               leafMergeEvent
+@@ -111,6 +112,23 @@ func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.Ch
+ 	s.root, s.current = f, f
+ 	return s, true, nil
+ }
++
++// appendWorkspaceForTarget binds the single original producer workspace through
++// physical append, wrapper hooks and cache/result admission. Traversal is serial;
++// another target cannot borrow it until the previous target is written.
++func (s *MaterializedWriteWork) appendWorkspaceForTarget(target *materializedWriteFrame, w *iterator.OrdinalScanWork) (*valuelog.LeafAppendWork, bool, error) {
++	if s.appendTarget == target {
++		return &s.leafAppend, true, nil
++	}
++	if s.appendTarget != nil {
++		return nil, false, ErrMaterializedWriteContinuation
++	}
++	if ok, e := mergeReserve(w, 1, uint64(2*unsafe.Sizeof(target))); !ok || e != nil {
++		return nil, false, e
++	}
++	s.appendTarget = target
++	return &s.leafAppend, true, nil
++}
+ func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*materializedWriteFrame, bool, error) {
+ 	if (!ref.IsPage() || ref.Page < 2) && !ref.IsLeafLog() {
+ 		return nil, false, fmt.Errorf("%w: child ref=%+v", ErrMaterializedWriteContinuation, ref)
+@@ -383,7 +401,11 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 					if !ok {
+ 						return false, ErrMaterializedWriteContinuation
+ 					}
+-					if target.leafAppend.Phase == 0 {
++					appendWork, ready, e := s.appendWorkspaceForTarget(target, w)
++					if !ready || e != nil {
++						return false, e
++					}
++					if appendWork.Phase == 0 {
+ 						target.encoder.SetPageID(0)
+ 						ready, e := target.encoder.FinishNoNodeWithWork(w)
+ 						if !ready || e != nil {
+@@ -399,7 +421,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 						}
+ 						target.outputReserved = true
+ 					}
+-					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], &target.leafAppend, w)
++					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], appendWork, w)
+ 					if !ready || e != nil {
+ 						return false, e
+ 					}
+@@ -459,6 +481,16 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 				}
+ 			}
+ 			target.written = true
++			if s.appendTarget != nil {
++				if s.appendTarget != target {
++					return false, ErrMaterializedWriteContinuation
++				}
++				ready, e := s.leafAppend.ResetCompletedWithWork(w)
++				if !ready || e != nil {
++					return false, e
++				}
++				s.appendTarget = nil
++			}
+ 			if f.splitPending {
+ 				f.phase = 14
+ 				continue
+@@ -550,6 +582,12 @@ func (s *MaterializedWriteWork) Complete() (*retainedalloc.Owner, uint64) {
+ 	return m, c
+ }
+ func (s *MaterializedWriteWork) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
++	// The original producer can retain physical append/hook aliases across
++	// refusal or error. Until its checked abandonment continuation is installed,
++	// do not discard its target or refund the containing workspace.
++	if s.appendTarget != nil {
++		return false, ErrMaterializedWriteContinuation
++	}
+ 	for s.head != nil {
+ 		f := s.head
+ 		ready, e := f.append.Cancel(w)

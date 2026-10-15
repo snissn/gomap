@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-tags",
+    "treedb_test",
+    "-c",
+    "-o",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/before-mvcc.test",
+    "./TreeDB/mvcc"
+  ],
+  "exit": 0,
+  "timeout": false,
+  "wall": 1.525946768000722,
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  }
+}

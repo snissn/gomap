@@ -1,0 +1,166 @@
+{
+  "after-alloc.json": {
+    "sha256": "bb95e1dce4e903edc6200bb755b3cbac80b558c219dd0c1d0ef572c6331af49b",
+    "size": 563
+  },
+  "after-alloc.raw": {
+    "sha256": "7b5baaf1270a51247508f2db4fdc02b47f6e9e634b42c4a97fc45fc96e28384f",
+    "size": 1819
+  },
+  "after-build.json": {
+    "sha256": "fe77e711a871d96225e7f318e7ea7a3fe2e7e5d8e0108171708b4497e50eeba2",
+    "size": 604
+  },
+  "after-build.raw": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "after-latency.json": {
+    "sha256": "5b5354a89a18de1e995d22b1b75e8324239700bb19528d5b2b44c20f6da6ea13",
+    "size": 565
+  },
+  "after-latency.raw": {
+    "sha256": "c27210eea9a4f5c1fc56bc3c10644e5b6a85b76b32ad85df816ce8cc9528c1ba",
+    "size": 1814
+  },
+  "after-source-after.json": {
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874",
+    "size": 734392
+  },
+  "after-source-before.json": {
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874",
+    "size": 734392
+  },
+  "before-alloc.json": {
+    "sha256": "59e39d1f41c8dd1d3d371f6f47d7a2c1cacbfaa784b3c4f7ef99e2b933f3c174",
+    "size": 563
+  },
+  "before-alloc.raw": {
+    "sha256": "3d420bafc46dea4c82662c0322bdcc1fef905c5fb3fb4fc6ad66fa47f5e8edbe",
+    "size": 1819
+  },
+  "before-build.json": {
+    "sha256": "4435762931ef0359ae312ff15e94a28aa0eee788577f987117bc3d5c30973d26",
+    "size": 606
+  },
+  "before-build.raw": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "before-latency.json": {
+    "sha256": "31c79ad92d92e31e49f16bebc2ad69ffef63a556acddb23ef0894fd5e5823f59",
+    "size": 566
+  },
+  "before-latency.raw": {
+    "sha256": "b3f83995c7127fdd47c98628ca50736118588323ce76562e055b9087a56bd02c",
+    "size": 1815
+  },
+  "before-source-after.json": {
+    "sha256": "a4dd82239fcfc1271016624c62551bd1b7a2971a83ff36a49da785041ecdf96d",
+    "size": 734392
+  },
+  "before-source.json": {
+    "sha256": "a4dd82239fcfc1271016624c62551bd1b7a2971a83ff36a49da785041ecdf96d",
+    "size": 734392
+  },
+  "before/TreeDB/internal/valuelog/leaf_append_work.go": {
+    "sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187",
+    "size": 2737
+  },
+  "before/TreeDB/mvcc/native_production_cost_v6_test.go": {
+    "sha256": "5fc15c45bd105b5a4d3f44b1b521dca9aca07794549d976d7788e4d7d92aa262",
+    "size": 16830
+  },
+  "before/TreeDB/zipper/materialized_write_work.go": {
+    "sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc",
+    "size": 21647
+  },
+  "before/TreeDB/zipper/materialized_write_workspace_v6_test.go": {
+    "sha256": "6f37946328b6c25a5f5a2759347d64a7fabcdc47928e539adbabf6def3220796",
+    "size": 5221
+  },
+  "final-source.json": {
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874",
+    "size": 734392
+  },
+  "final/TreeDB/internal/valuelog/leaf_append_work.go": {
+    "sha256": "38c70b8d10b1ae7dcd89231f1736d497febb4ff3810d6ce390f7c6d23ee3d630",
+    "size": 4055
+  },
+  "final/TreeDB/mvcc/native_production_cost_v6_test.go": {
+    "sha256": "5fc15c45bd105b5a4d3f44b1b521dca9aca07794549d976d7788e4d7d92aa262",
+    "size": 16830
+  },
+  "final/TreeDB/zipper/materialized_write_work.go": {
+    "sha256": "799b8c7785d6393963c72dab2d41ddf15a866ce0695eeb0a9d48dd630f57e1be",
+    "size": 23097
+  },
+  "final/TreeDB/zipper/materialized_write_workspace_v6_test.go": {
+    "sha256": "58b865d9b75c9c7fc405cd8a90da6578c037ff7a92b878d8c96b27ca4d2f9679",
+    "size": 5789
+  },
+  "green-final.json": {
+    "sha256": "4eba8afb91bb4821aea7d84d873943670c040021f19a0bb1c2f1b059602ce511",
+    "size": 605
+  },
+  "green-final.raw": {
+    "sha256": "aec94748c059f2c404d74b74058b7222099b6d8bc9a8e6330983e77481eaffac",
+    "size": 657
+  },
+  "green-v1.json": {
+    "sha256": "d4e851a80bcf5af29243393f0abe4f05588a43ce6e0b62becfbe0967542b7c9c",
+    "size": 389
+  },
+  "green-v1.raw": {
+    "sha256": "65f1f3464885d4f97431f28d07ac3bed96063ee15d0d5f74899210c6b6359350",
+    "size": 657
+  },
+  "head-preimages/TreeDB/internal/valuelog/leaf_append_work.go": {
+    "sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187",
+    "size": 2737
+  },
+  "head-preimages/TreeDB/mvcc/native_production_cost_v6_test.go": {
+    "sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc",
+    "size": 16028
+  },
+  "head-preimages/TreeDB/zipper/materialized_write_work.go": {
+    "sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc",
+    "size": 21647
+  },
+  "owned.patch": {
+    "sha256": "a3ce11f8324b11ccaf13cf5187e6e75df765e726cd7401f1f8ac37a6640e1839",
+    "size": 11581
+  },
+  "receipt.json": {
+    "sha256": "5836ac9e74ab0de840b3feaa02922efd2ae19e9229cac11acc959997e449a35f",
+    "size": 9977
+  },
+  "red-setup.raw": {
+    "sha256": "1e7405d1c6fbebb4ba4b71a174969836441de7a070062167c595387952293d43",
+    "size": 265
+  },
+  "red-target-and-cancel.json": {
+    "sha256": "446079292c29ae9dbfbd28906490569d0fddcddc5038ef5598643caea76af04d",
+    "size": 388
+  },
+  "red-target-and-cancel.raw": {
+    "sha256": "6fb2484eb5eb271fc4e5fb53c57aea296f802602456a5f30f221d604fe6f01e1",
+    "size": 886
+  },
+  "red.json": {
+    "sha256": "ffa498b1a071246a8e54678f324fc1771e0f921f5babca2e9dab242ba40024e2",
+    "size": 605
+  },
+  "red.raw": {
+    "sha256": "fb585c0830663d84704ffd20b2a76411237f9ef95b6a57595180c268a9fceda5",
+    "size": 356
+  },
+  "report.txt": {
+    "sha256": "d1db4aff38a6c6272db420787bb65c78ccd210e9778900cc7a8fc65a3d3734cd",
+    "size": 815
+  },
+  "status.txt": {
+    "sha256": "0e3ff5a9508b3d9a952340e8046398e06ec90aefadf5d10d2b64594eec188496",
+    "size": 326
+  }
+}

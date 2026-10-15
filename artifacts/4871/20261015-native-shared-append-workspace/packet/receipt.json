@@ -1,0 +1,259 @@
+{
+  "after_source_unchanged": true,
+  "final_source_rows": 4399,
+  "head": "ff042aea741d165e816d6663322b142b36afb292",
+  "index_sha256": "31c617f9f290fbb6ccbc4a70e8aeb17ada88fe7d47de80c410dfd0274b35ce7d",
+  "limitations": [
+    "Explicit unbounded native diagnostic only; no production ACK or Q32/final publication credit.",
+    "Behavioral component producer models physical append and wrapper pauses; diagnostic cost preserves actual configured combinedV2/LZ4 output.",
+    "Cancel with live target refuses before effects and retains original target/charge; successful abandonment after terminal physical error is not implemented or claimed.",
+    "Installed-trie cancellation remains separate inherited unfinished stage.",
+    "One sample before/after each; latency not statistically qualified.",
+    "Allocation processwide includes one actual intervening CommitAt/runtime; object count unchanged.",
+    "Reset only clears admitted metadata, retaining original compressor and fixed arrays."
+  ],
+  "owned_paths": {
+    "TreeDB/internal/valuelog/leaf_append_work.go": {
+      "head_sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187",
+      "head_size": 2737,
+      "sha256": "38c70b8d10b1ae7dcd89231f1736d497febb4ff3810d6ce390f7c6d23ee3d630",
+      "size": 4055
+    },
+    "TreeDB/mvcc/native_production_cost_v6_test.go": {
+      "head_sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc",
+      "head_size": 16028,
+      "sha256": "5fc15c45bd105b5a4d3f44b1b521dca9aca07794549d976d7788e4d7d92aa262",
+      "size": 16830
+    },
+    "TreeDB/zipper/materialized_write_work.go": {
+      "head_sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc",
+      "head_size": 21647,
+      "sha256": "799b8c7785d6393963c72dab2d41ddf15a866ce0695eeb0a9d48dd630f57e1be",
+      "size": 23097
+    },
+    "TreeDB/zipper/materialized_write_workspace_v6_test.go": {
+      "head_sha256": null,
+      "head_size": null,
+      "sha256": "58b865d9b75c9c7fc405cd8a90da6578c037ff7a92b878d8c96b27ca4d2f9679",
+      "size": 5789
+    }
+  },
+  "protected_and_foreign": {
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7",
+      "size": 6899
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+      "size": 7036
+    },
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+      "size": 6429
+    }
+  },
+  "results": {
+    "after-alloc": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+        "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticAlloc$/^pointertrue$",
+        "-test.count=1",
+        "-test.timeout=90s",
+        "-test.v"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "7b5baaf1270a51247508f2db4fdc02b47f6e9e634b42c4a97fc45fc96e28384f",
+      "raw_size": 1819,
+      "timeout": false,
+      "wall": 0.023109042085707188
+    },
+    "after-build": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags",
+        "treedb_test",
+        "-c",
+        "-o",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+        "./TreeDB/mvcc"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_size": 0,
+      "timeout": false,
+      "wall": 6.30632516508922
+    },
+    "after-latency": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/after-mvcc.test",
+        "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticLatency$/^pointertrue$",
+        "-test.count=1",
+        "-test.timeout=90s",
+        "-test.v"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "c27210eea9a4f5c1fc56bc3c10644e5b6a85b76b32ad85df816ce8cc9528c1ba",
+      "raw_size": 1814,
+      "timeout": false,
+      "wall": 0.031914747320115566
+    },
+    "before-alloc": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/before-mvcc.test",
+        "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticAlloc$/^pointertrue$",
+        "-test.count=1",
+        "-test.timeout=90s",
+        "-test.v"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "3d420bafc46dea4c82662c0322bdcc1fef905c5fb3fb4fc6ad66fa47f5e8edbe",
+      "raw_size": 1819,
+      "timeout": false,
+      "wall": 0.02296866988763213
+    },
+    "before-build": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags",
+        "treedb_test",
+        "-c",
+        "-o",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/before-mvcc.test",
+        "./TreeDB/mvcc"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_size": 0,
+      "timeout": false,
+      "wall": 1.525946768000722
+    },
+    "before-latency": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-append-workspace-20261015/before-mvcc.test",
+        "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticLatency$/^pointertrue$",
+        "-test.count=1",
+        "-test.timeout=90s",
+        "-test.v"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "b3f83995c7127fdd47c98628ca50736118588323ce76562e055b9087a56bd02c",
+      "raw_size": 1815,
+      "timeout": false,
+      "wall": 0.025881907902657986
+    },
+    "green-final": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags",
+        "treedb_test",
+        "-run",
+        "^TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6$",
+        "-count=1",
+        "-timeout=90s",
+        "-v",
+        "./TreeDB/zipper"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOMAXPROCS": "4",
+        "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "raw_sha256": "aec94748c059f2c404d74b74058b7222099b6d8bc9a8e6330983e77481eaffac",
+      "raw_size": 657,
+      "timeout": false,
+      "wall": 0.5318505177274346
+    },
+    "green-v1": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags",
+        "treedb_test",
+        "-run",
+        "^TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6$",
+        "-count=1",
+        "-timeout=90s",
+        "-v",
+        "./TreeDB/zipper"
+      ],
+      "exit": 0,
+      "raw_sha256": "65f1f3464885d4f97431f28d07ac3bed96063ee15d0d5f74899210c6b6359350",
+      "raw_size": 657,
+      "timeout": false,
+      "wall": 1.0103574441745877
+    },
+    "red-setup": {
+      "raw_sha256": "1e7405d1c6fbebb4ba4b71a174969836441de7a070062167c595387952293d43",
+      "raw_size": 265
+    },
+    "red-target-and-cancel": {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags",
+        "treedb_test",
+        "-run",
+        "^TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6$",
+        "-count=1",
+        "-timeout=90s",
+        "-v",
+        "./TreeDB/zipper"
+      ],
+      "exit": 1,
+      "raw_sha256": "6fb2484eb5eb271fc4e5fb53c57aea296f802602456a5f30f221d604fe6f01e1",
+      "raw_size": 886,
+      "timeout": false,
+      "wall": 0.606910590082407
+    }
+  },
+  "staged_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "status": " M TreeDB/internal/valuelog/leaf_append_work.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n M TreeDB/mvcc/native_production_cost_v6_test.go\n M TreeDB/zipper/materialized_write_work.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n?? TreeDB/zipper/materialized_write_workspace_v6_test.go\n"
+}

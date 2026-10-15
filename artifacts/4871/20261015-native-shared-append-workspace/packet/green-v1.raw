@@ -1,0 +1,8 @@
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/target-identity
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/cancel-refusal-custody
+--- PASS: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6 (0.00s)
+    --- PASS: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/target-identity (0.00s)
+    --- PASS: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/cancel-refusal-custody (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.002s

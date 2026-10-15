@@ -1,0 +1,11 @@
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/target-identity
+    materialized_write_workspace_v6_test.go:42: serial outputs allocated separate append workspaces
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/cancel-refusal-custody
+    materialized_write_workspace_v6_test.go:144: cancel discarded unfinished append target or containing custody true <nil>
+--- FAIL: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6 (0.00s)
+    --- FAIL: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/target-identity (0.00s)
+    --- FAIL: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6/cancel-refusal-custody (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/zipper	0.001s
+FAIL

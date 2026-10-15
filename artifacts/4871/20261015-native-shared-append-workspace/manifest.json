@@ -1,0 +1,222 @@
+[
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/README.md",
+    "bytes": 716,
+    "sha256": "cc23e9a5ae107a802b9f7427a6c79590a6c4dbd71320ce84222d7e49a9726dfd"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-alloc.json",
+    "bytes": 563,
+    "sha256": "bb95e1dce4e903edc6200bb755b3cbac80b558c219dd0c1d0ef572c6331af49b"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-alloc.raw",
+    "bytes": 1819,
+    "sha256": "7b5baaf1270a51247508f2db4fdc02b47f6e9e634b42c4a97fc45fc96e28384f"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-build.json",
+    "bytes": 604,
+    "sha256": "fe77e711a871d96225e7f318e7ea7a3fe2e7e5d8e0108171708b4497e50eeba2"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-build.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-latency.json",
+    "bytes": 565,
+    "sha256": "5b5354a89a18de1e995d22b1b75e8324239700bb19528d5b2b44c20f6da6ea13"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-latency.raw",
+    "bytes": 1814,
+    "sha256": "c27210eea9a4f5c1fc56bc3c10644e5b6a85b76b32ad85df816ce8cc9528c1ba"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-source-after.json",
+    "bytes": 734392,
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/after-source-before.json",
+    "bytes": 734392,
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-alloc.json",
+    "bytes": 563,
+    "sha256": "59e39d1f41c8dd1d3d371f6f47d7a2c1cacbfaa784b3c4f7ef99e2b933f3c174"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-alloc.raw",
+    "bytes": 1819,
+    "sha256": "3d420bafc46dea4c82662c0322bdcc1fef905c5fb3fb4fc6ad66fa47f5e8edbe"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-build.json",
+    "bytes": 606,
+    "sha256": "4435762931ef0359ae312ff15e94a28aa0eee788577f987117bc3d5c30973d26"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-build.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-latency.json",
+    "bytes": 566,
+    "sha256": "31c79ad92d92e31e49f16bebc2ad69ffef63a556acddb23ef0894fd5e5823f59"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-latency.raw",
+    "bytes": 1815,
+    "sha256": "b3f83995c7127fdd47c98628ca50736118588323ce76562e055b9087a56bd02c"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-source-after.json",
+    "bytes": 734392,
+    "sha256": "a4dd82239fcfc1271016624c62551bd1b7a2971a83ff36a49da785041ecdf96d"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before-source.json",
+    "bytes": 734392,
+    "sha256": "a4dd82239fcfc1271016624c62551bd1b7a2971a83ff36a49da785041ecdf96d"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before/TreeDB/internal/valuelog/leaf_append_work.go",
+    "bytes": 2737,
+    "sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before/TreeDB/mvcc/native_production_cost_v6_test.go",
+    "bytes": 16830,
+    "sha256": "5fc15c45bd105b5a4d3f44b1b521dca9aca07794549d976d7788e4d7d92aa262"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 21647,
+    "sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/before/TreeDB/zipper/materialized_write_workspace_v6_test.go",
+    "bytes": 5221,
+    "sha256": "6f37946328b6c25a5f5a2759347d64a7fabcdc47928e539adbabf6def3220796"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/final-source.json",
+    "bytes": 734392,
+    "sha256": "e30b30f354bb3d793d95b2a040a49de367aa9ab50d48d2d609f7eaef14d24874"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/final/TreeDB/internal/valuelog/leaf_append_work.go",
+    "bytes": 4055,
+    "sha256": "38c70b8d10b1ae7dcd89231f1736d497febb4ff3810d6ce390f7c6d23ee3d630"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/final/TreeDB/mvcc/native_production_cost_v6_test.go",
+    "bytes": 16830,
+    "sha256": "5fc15c45bd105b5a4d3f44b1b521dca9aca07794549d976d7788e4d7d92aa262"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/final/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 23097,
+    "sha256": "799b8c7785d6393963c72dab2d41ddf15a866ce0695eeb0a9d48dd630f57e1be"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/final/TreeDB/zipper/materialized_write_workspace_v6_test.go",
+    "bytes": 5789,
+    "sha256": "58b865d9b75c9c7fc405cd8a90da6578c037ff7a92b878d8c96b27ca4d2f9679"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/green-final.json",
+    "bytes": 605,
+    "sha256": "4eba8afb91bb4821aea7d84d873943670c040021f19a0bb1c2f1b059602ce511"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/green-final.raw",
+    "bytes": 657,
+    "sha256": "aec94748c059f2c404d74b74058b7222099b6d8bc9a8e6330983e77481eaffac"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/green-v1.json",
+    "bytes": 389,
+    "sha256": "d4e851a80bcf5af29243393f0abe4f05588a43ce6e0b62becfbe0967542b7c9c"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/green-v1.raw",
+    "bytes": 657,
+    "sha256": "65f1f3464885d4f97431f28d07ac3bed96063ee15d0d5f74899210c6b6359350"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/head-preimages/TreeDB/internal/valuelog/leaf_append_work.go",
+    "bytes": 2737,
+    "sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/head-preimages/TreeDB/mvcc/native_production_cost_v6_test.go",
+    "bytes": 16028,
+    "sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/head-preimages/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 21647,
+    "sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/manifest.json",
+    "bytes": 5662,
+    "sha256": "060b726fae02b703d1047fe23a0a004045431aaaf6a3df3caf27caa80f5bc4ae"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/owned.patch",
+    "bytes": 11581,
+    "sha256": "a3ce11f8324b11ccaf13cf5187e6e75df765e726cd7401f1f8ac37a6640e1839"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/receipt.json",
+    "bytes": 9977,
+    "sha256": "5836ac9e74ab0de840b3feaa02922efd2ae19e9229cac11acc959997e449a35f"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/red-setup.raw",
+    "bytes": 265,
+    "sha256": "1e7405d1c6fbebb4ba4b71a174969836441de7a070062167c595387952293d43"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/red-target-and-cancel.json",
+    "bytes": 388,
+    "sha256": "446079292c29ae9dbfbd28906490569d0fddcddc5038ef5598643caea76af04d"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/red-target-and-cancel.raw",
+    "bytes": 886,
+    "sha256": "6fb2484eb5eb271fc4e5fb53c57aea296f802602456a5f30f221d604fe6f01e1"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/red.json",
+    "bytes": 605,
+    "sha256": "ffa498b1a071246a8e54678f324fc1771e0f921f5babca2e9dab242ba40024e2"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/red.raw",
+    "bytes": 356,
+    "sha256": "fb585c0830663d84704ffd20b2a76411237f9ef95b6a57595180c268a9fceda5"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/report.txt",
+    "bytes": 815,
+    "sha256": "d1db4aff38a6c6272db420787bb65c78ccd210e9778900cc7a8fc65a3d3734cd"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/packet/status.txt",
+    "bytes": 326,
+    "sha256": "0e3ff5a9508b3d9a952340e8046398e06ec90aefadf5d10d2b64594eec188496"
+  },
+  {
+    "path": "artifacts/4871/20261015-native-shared-append-workspace/root-verification.json",
+    "bytes": 2982,
+    "sha256": "9f491d5206ec4eb2cac8b96a88a168cf173d923f98a014189624d68877a8f056"
+  }
+]

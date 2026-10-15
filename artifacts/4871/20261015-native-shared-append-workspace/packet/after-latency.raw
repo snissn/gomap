@@ -1,0 +1,12 @@
+=== RUN   TestNativePruneCOWRetainedOutputDiagnosticLatency
+=== RUN   TestNativePruneCOWRetainedOutputDiagnosticLatency/pointertrue
+    native_production_cost_v6_test.go:266: NATIVE_COST_V6 mode=UNBOUNDED_DIAGNOSTIC_latency api=PruneVersionsUnboundedDiagnosticForTest diagnostic=true fixed_one_write=true first_call_to_ACK_wall_ns=1051380 all_prune_calls_ns=966589 intervening_writes=1 write_ns=77961 cursor_cleanup_ns=4640 whole_sequence_alloc_bytes=0 whole_sequence_alloc_count=0 allocation_scope=processwide_includes_intervening_write_and_runtime ACK=1 nativePrepared_observations=90 nativeCut_observations=0 error=<nil>
+    native_production_cost_v6_test.go:301: PUBLISHED_LEAF_ENCODING ref={Kind:1 Page:0 Log:{FileID:2139095041 Offset:40667 RecordLengthHint:1073741989 SubIndex:0}} flags=0xf044 entries=1 combined_columnar_prefix_v2=true packed_pointer=true revisions=true
+    native_production_cost_v6_test.go:301: PUBLISHED_LEAF_ENCODING ref={Kind:1 Page:0 Log:{FileID:2139095041 Offset:39912 RecordLengthHint:1073742575 SubIndex:0}} flags=0xf044 entries=49 combined_columnar_prefix_v2=true packed_pointer=true revisions=true
+    native_production_cost_v6_test.go:307: INCREMENTAL_DATA_PATH before_children=37 after_children=38 shared_children=36
+    native_production_cost_v6_test.go:339: STREAMING_FIRST_ACK visited=2 expected_anchor_and_obsolete=2 namespace_complete=false selection_integrity=true
+    native_production_cost_v6_test.go:348: RETAINED_OUTPUT_ACTIVATION installed_page=29 commit_after_install=false same_id_resumed=true published_DATA_page=29 ACK=1
+    native_production_cost_v6_test.go:353: NATIVE_COST_CLOSE_REOPEN_CHECKS_COMPLETE
+--- PASS: TestNativePruneCOWRetainedOutputDiagnosticLatency (0.03s)
+    --- PASS: TestNativePruneCOWRetainedOutputDiagnosticLatency/pointertrue (0.03s)
+PASS

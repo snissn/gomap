@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/zipper [github.com/snissn/gomap/TreeDB/zipper.test]
+TreeDB/zipper/materialized_write_workspace_v6_test.go:120:66: unknown field Op in struct literal of type batch.Entry
+FAIL	github.com/snissn/gomap/TreeDB/zipper [build failed]
+FAIL

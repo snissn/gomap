@@ -1,0 +1,6 @@
+=== RUN   TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6
+    materialized_write_workspace_v6_test.go:140: cancel discarded unfinished append target or containing custody true <nil>
+--- FAIL: TestMaterializedWriteSharesAppendWorkspaceThroughHookAndResultRefusalV6 (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/zipper	0.002s
+FAIL

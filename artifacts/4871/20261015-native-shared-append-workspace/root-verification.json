@@ -1,0 +1,71 @@
+{
+  "at_utc": "2026-10-15T04:19:46.446901+00:00",
+  "parent": "ff042aea741d165e816d6663322b142b36afb292",
+  "owned_paths": [
+    "TreeDB/internal/valuelog/leaf_append_work.go",
+    "TreeDB/mvcc/native_production_cost_v6_test.go",
+    "TreeDB/zipper/materialized_write_work.go",
+    "TreeDB/zipper/materialized_write_workspace_v6_test.go"
+  ],
+  "source_rows": 4399,
+  "before_after_source_delta": [
+    "TreeDB/internal/valuelog/leaf_append_work.go",
+    "TreeDB/zipper/materialized_write_work.go",
+    "TreeDB/zipper/materialized_write_workspace_v6_test.go"
+  ],
+  "frozen_receipt_sha256": "5836ac9e74ab0de840b3feaa02922efd2ae19e9229cac11acc959997e449a35f",
+  "packet_manifest_sha256": "060b726fae02b703d1047fe23a0a004045431aaaf6a3df3caf27caa80f5bc4ae",
+  "cells": {
+    "before-latency": {
+      "first_call_to_ACK_wall_ns": 1106271,
+      "all_prune_calls_ns": 1022150,
+      "whole_sequence_alloc_bytes": 0,
+      "whole_sequence_alloc_count": 0
+    },
+    "after-latency": {
+      "first_call_to_ACK_wall_ns": 1051380,
+      "all_prune_calls_ns": 966589,
+      "whole_sequence_alloc_bytes": 0,
+      "whole_sequence_alloc_count": 0
+    },
+    "before-alloc": {
+      "first_call_to_ACK_wall_ns": 1044020,
+      "all_prune_calls_ns": 962289,
+      "whole_sequence_alloc_bytes": 2506920,
+      "whole_sequence_alloc_count": 1195
+    },
+    "after-alloc": {
+      "first_call_to_ACK_wall_ns": 1018269,
+      "all_prune_calls_ns": 935928,
+      "whole_sequence_alloc_bytes": 2202184,
+      "whole_sequence_alloc_count": 1195
+    }
+  },
+  "byte_delta": -304736,
+  "objects_delta": 0,
+  "latency_qualification": "Single clean pair only; diagnostic, not production or sprint acceptance",
+  "limitations": [
+    "Explicit unbounded native diagnostic only; no production ACK or Q32/final publication credit.",
+    "Behavioral component producer models physical append and wrapper pauses; diagnostic cost preserves actual configured combinedV2/LZ4 output.",
+    "Cancel with live target refuses before effects and retains original target/charge; successful abandonment after terminal physical error is not implemented or claimed.",
+    "Installed-trie cancellation remains separate inherited unfinished stage.",
+    "One sample before/after each; latency not statistically qualified.",
+    "Allocation processwide includes one actual intervening CommitAt/runtime; object count unchanged.",
+    "Reset only clears admitted metadata, retaining original compressor and fixed arrays."
+  ],
+  "binaries": {
+    "before-mvcc.test": {
+      "size": 30373069,
+      "sha256": "78cb7368f2d0005cd0b7df098f9a098bb3af137eab9ecd60cd0a452ef9a6aa3e",
+      "retained": true
+    },
+    "after-mvcc.test": {
+      "size": 30374758,
+      "sha256": "667990cf2be1cfa1fa1a85317f681e81a144bfc1d0515a33ddff0fc6e6a603d7",
+      "retained": true
+    }
+  },
+  "stage": "source_pushed_verified",
+  "source": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014"
+}
