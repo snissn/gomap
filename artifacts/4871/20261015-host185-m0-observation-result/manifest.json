@@ -1,0 +1,1109 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/artifacts-final.json",
+    "path": "artifacts-final.json",
+    "source_bytes": 929,
+    "source_sha256": "5736a730a5436986ef39883dfe780fc08ef19cfa21fa093712a4ff621bbe0994",
+    "stored_bytes": 929,
+    "stored_sha256": "5736a730a5436986ef39883dfe780fc08ef19cfa21fa093712a4ff621bbe0994",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/dispatch-receipt.json",
+    "path": "dispatch-receipt.json",
+    "source_bytes": 295,
+    "source_sha256": "49254e8693f13f56db89d014ed9375dbfd6a558b6f7f6768fabdd791fe733967",
+    "stored_bytes": 295,
+    "stored_sha256": "49254e8693f13f56db89d014ed9375dbfd6a558b6f7f6768fabdd791fe733967",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/dispatch-request.json",
+    "path": "dispatch-request.json",
+    "source_bytes": 49,
+    "source_sha256": "ff00bf4e4c27a7e67b2318c3b08b70ca5513095df4e6ebf4f18073ce01dfc48c",
+    "stored_bytes": 49,
+    "stored_sha256": "ff00bf4e4c27a7e67b2318c3b08b70ca5513095df4e6ebf4f18073ce01dfc48c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/artifact-hashes.json",
+    "path": "download/m0-observation-2588c-38824531924-1/artifact-hashes.json",
+    "source_bytes": 12153,
+    "source_sha256": "999150143086d4183e94fcd34794951343cedaece5623d956665b839c6f871e2",
+    "stored_bytes": 12153,
+    "stored_sha256": "999150143086d4183e94fcd34794951343cedaece5623d956665b839c6f871e2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/bindings.json",
+    "path": "download/m0-observation-2588c-38824531924-1/bindings.json",
+    "source_bytes": 6304,
+    "source_sha256": "662e42bfda1f84a2df13490c87abd89aba9ad818fec3d1c58122d088c040d62f",
+    "stored_bytes": 6304,
+    "stored_sha256": "662e42bfda1f84a2df13490c87abd89aba9ad818fec3d1c58122d088c040d62f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/commands.json",
+    "path": "download/m0-observation-2588c-38824531924-1/commands.json",
+    "source_bytes": 36679,
+    "source_sha256": "03084822e1b226d61960cc290dc78476ac63b6abadc34c64015e354a4738372d",
+    "stored_bytes": 36679,
+    "stored_sha256": "03084822e1b226d61960cc290dc78476ac63b6abadc34c64015e354a4738372d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/commands.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/commands.txt.gz",
+    "source_bytes": 8081,
+    "source_sha256": "0316d0c751b2f13b1bf9c96bd1e4374ba2eea05dc0ccb2fa5a4c615a8b041af2",
+    "stored_bytes": 396,
+    "stored_sha256": "8f9ad691970c67159bc2790a629f8e9e20209f9d23f8ae553ae0f68775d96ed3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/environment.json",
+    "path": "download/m0-observation-2588c-38824531924-1/environment.json",
+    "source_bytes": 909,
+    "source_sha256": "c53123182e27333bd5ab04af5a91ffbb2bf5fb24cb9653aeee1fd0caae3efdde",
+    "stored_bytes": 909,
+    "stored_sha256": "c53123182e27333bd5ab04af5a91ffbb2bf5fb24cb9653aeee1fd0caae3efdde",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/fixture-artifact/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/fixture-artifact/exec.json",
+    "source_bytes": 595,
+    "source_sha256": "c4ef3dde8d57363d875e4cafed90343deada3bd18829209119f6f903d468b8c9",
+    "stored_bytes": 595,
+    "stored_sha256": "c4ef3dde8d57363d875e4cafed90343deada3bd18829209119f6f903d468b8c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/fixture-debt/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/fixture-debt/exec.json",
+    "source_bytes": 602,
+    "source_sha256": "143049ba227667d9c4f007b586cbd1a4316988f09d20ebd2aa5e7172ab1b878d",
+    "stored_bytes": 602,
+    "stored_sha256": "143049ba227667d9c4f007b586cbd1a4316988f09d20ebd2aa5e7172ab1b878d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-1/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-1/exec.json",
+    "source_bytes": 685,
+    "source_sha256": "a9205077087470331f556b00900d9e2b78209e8db305ec7779a7324fa4009a0c",
+    "stored_bytes": 685,
+    "stored_sha256": "a9205077087470331f556b00900d9e2b78209e8db305ec7779a7324fa4009a0c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-10/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-10/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "00eae49de4f6ccb0f62ca02009a252a414d01ed3127bdfb39e8dd1142b9cbb03",
+    "stored_bytes": 686,
+    "stored_sha256": "00eae49de4f6ccb0f62ca02009a252a414d01ed3127bdfb39e8dd1142b9cbb03",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-2/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-2/exec.json",
+    "source_bytes": 685,
+    "source_sha256": "889dcb7c987219d9872aa155757bb73f0389ba64274b5219c75d76ff70157100",
+    "stored_bytes": 685,
+    "stored_sha256": "889dcb7c987219d9872aa155757bb73f0389ba64274b5219c75d76ff70157100",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-3/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-3/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "451d1c3f0760923189679187bd4e385abe31d8bd90b65c3f4d3e26b560b0b835",
+    "stored_bytes": 686,
+    "stored_sha256": "451d1c3f0760923189679187bd4e385abe31d8bd90b65c3f4d3e26b560b0b835",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-4/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-4/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "ed271d59b07cf7188744bec564c958bfaa77710b0ac40f0b68277113204c030b",
+    "stored_bytes": 686,
+    "stored_sha256": "ed271d59b07cf7188744bec564c958bfaa77710b0ac40f0b68277113204c030b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-5/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-5/exec.json",
+    "source_bytes": 685,
+    "source_sha256": "1ae34e721fcadedf85e7e19010133c52b969dc38c19ce60704be09015e50be55",
+    "stored_bytes": 685,
+    "stored_sha256": "1ae34e721fcadedf85e7e19010133c52b969dc38c19ce60704be09015e50be55",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-6/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-6/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "156f4d65bbb32d672fd4a3760c6029cf5b8791d0e27280490e3c57e5dd16b8ff",
+    "stored_bytes": 686,
+    "stored_sha256": "156f4d65bbb32d672fd4a3760c6029cf5b8791d0e27280490e3c57e5dd16b8ff",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-7/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-7/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "b03f59e357f03efe8018b5d9fd9a3e6a5e971d1812aa32c73a3356dbbe56f72d",
+    "stored_bytes": 686,
+    "stored_sha256": "b03f59e357f03efe8018b5d9fd9a3e6a5e971d1812aa32c73a3356dbbe56f72d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-8/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-8/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "d827ac758630e56667b2e6ea670a55a639e24a510c6c6c47e3582b84a4c78f30",
+    "stored_bytes": 686,
+    "stored_sha256": "d827ac758630e56667b2e6ea670a55a639e24a510c6c6c47e3582b84a4c78f30",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-9/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/legacy-9/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "214e6bed5b5f924703dd264a62cc8b98222a7c461736e148b6d4cdbc9eeba025",
+    "stored_bytes": 686,
+    "stored_sha256": "214e6bed5b5f924703dd264a62cc8b98222a7c461736e148b6d4cdbc9eeba025",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-1/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-1/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "096e9a97db736515f36e26ef1b931aee68017d19c34cd84a8eacd7c68c973f2f",
+    "stored_bytes": 687,
+    "stored_sha256": "096e9a97db736515f36e26ef1b931aee68017d19c34cd84a8eacd7c68c973f2f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-10/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-10/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "9c53bb7a600662b2fe05ccdd4918c5971918279652d524750e8f140ef02f11f9",
+    "stored_bytes": 687,
+    "stored_sha256": "9c53bb7a600662b2fe05ccdd4918c5971918279652d524750e8f140ef02f11f9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-2/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-2/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "de15f8e7ab18b86cc03edbca7782b0bdc702937b2d644bcc398906b9b14f0f3e",
+    "stored_bytes": 687,
+    "stored_sha256": "de15f8e7ab18b86cc03edbca7782b0bdc702937b2d644bcc398906b9b14f0f3e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-3/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-3/exec.json",
+    "source_bytes": 686,
+    "source_sha256": "86498725d0ab4081de94073cb93fbd7616ce7c7783f49e376685202f9293edc1",
+    "stored_bytes": 686,
+    "stored_sha256": "86498725d0ab4081de94073cb93fbd7616ce7c7783f49e376685202f9293edc1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-4/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-4/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "7736745e6e98082e9284433cc2f1e67d2de148db2d8cd93b499d09204e2aa69a",
+    "stored_bytes": 687,
+    "stored_sha256": "7736745e6e98082e9284433cc2f1e67d2de148db2d8cd93b499d09204e2aa69a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-5/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-5/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "42187c38a4dee8d271c0a067ace1f95ab8fd4060f595df6c2db296afb11c3a30",
+    "stored_bytes": 687,
+    "stored_sha256": "42187c38a4dee8d271c0a067ace1f95ab8fd4060f595df6c2db296afb11c3a30",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-6/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-6/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "2204074e166600066050942ec102a0dc13d7e699fa4c973045d7c1a6cf99143c",
+    "stored_bytes": 687,
+    "stored_sha256": "2204074e166600066050942ec102a0dc13d7e699fa4c973045d7c1a6cf99143c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-7/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-7/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "66a8a14857c75d32c9a42f36fb81a0e5cd10c9a8e0a433f55ebb3fa3bfc04d43",
+    "stored_bytes": 687,
+    "stored_sha256": "66a8a14857c75d32c9a42f36fb81a0e5cd10c9a8e0a433f55ebb3fa3bfc04d43",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-8/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-8/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "e7d7c4a997d31c852c942dea07cbef199655b0d21352ee73f4ea2b3f8b3dcf48",
+    "stored_bytes": 687,
+    "stored_sha256": "e7d7c4a997d31c852c942dea07cbef199655b0d21352ee73f4ea2b3f8b3dcf48",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-9/exec.json",
+    "path": "download/m0-observation-2588c-38824531924-1/executables/public-9/exec.json",
+    "source_bytes": 687,
+    "source_sha256": "2912944fe706db483969f823ed89fac009dc26d270a80301290848dac5e1c438",
+    "stored_bytes": 687,
+    "stored_sha256": "2912944fe706db483969f823ed89fac009dc26d270a80301290848dac5e1c438",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/fixture.json",
+    "path": "download/m0-observation-2588c-38824531924-1/fixture.json",
+    "source_bytes": 1274,
+    "source_sha256": "fabdde5dd71c2475a1226dc6cacf6e3fa7cff840804266abfca1b43052f82e55",
+    "stored_bytes": 1274,
+    "stored_sha256": "fabdde5dd71c2475a1226dc6cacf6e3fa7cff840804266abfca1b43052f82e55",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation.py",
+    "path": "download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation.py",
+    "source_bytes": 20603,
+    "source_sha256": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+    "stored_bytes": 20603,
+    "stored_sha256": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation_exec.py",
+    "path": "download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation_exec.py",
+    "source_bytes": 1067,
+    "source_sha256": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+    "stored_bytes": 1067,
+    "stored_sha256": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation_gc.go.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/harness/mvcc_m0_observation_gc.go.txt.gz",
+    "source_bytes": 1768,
+    "source_sha256": "18b656d47ffd7caa0a04fd393d1ce31caa4a8a8a0b582f6a848e4f44b738f443",
+    "stored_bytes": 899,
+    "stored_sha256": "c628635b589ba3b36f56a798975cd82c6c6e2b852e6739c3f0bb4ac25e1dbbad",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness/test_mvcc_m0_observation.py",
+    "path": "download/m0-observation-2588c-38824531924-1/harness/test_mvcc_m0_observation.py",
+    "source_bytes": 7073,
+    "source_sha256": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979",
+    "stored_bytes": 7073,
+    "stored_sha256": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness-source.json",
+    "path": "download/m0-observation-2588c-38824531924-1/harness-source.json.gz",
+    "source_bytes": 1535482,
+    "source_sha256": "8d69ca1427dc4c3c65cfe277ee09a6477b479b0a5c607a3881a5559313b147a5",
+    "stored_bytes": 442668,
+    "stored_sha256": "56f76e24dae7cbfd844a1c9e92309c3da9ec99dea3efa9fdf794d0eb1c6a047f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/harness-tests.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/harness-tests.txt.gz",
+    "source_bytes": 109,
+    "source_sha256": "bcd43c07ba6477767764d65e72a64b9773d41940a0f1c1c8969033414a6f948b",
+    "stored_bytes": 73,
+    "stored_sha256": "429b91bd72d02bd49216b40ca0673ec6d5205f5ac3ac795c56729c5f2f94399c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-1-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-1-operations.json.gz",
+    "source_bytes": 228178,
+    "source_sha256": "223c58148975fbe344b0fb19e3f6dfba257ecf72265aecdfa266b8eb6b56b0fc",
+    "stored_bytes": 30526,
+    "stored_sha256": "6a433ed5d5af6d987d7aafd987197698151912405f0e6117ffa0bfa6692f516e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-10-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-10-operations.json.gz",
+    "source_bytes": 228039,
+    "source_sha256": "0f432bf23a6ea5b9eae11d2100be3f5c69ef01a2ad091d9b83d8f44b916e4152",
+    "stored_bytes": 30435,
+    "stored_sha256": "db83917efc2c3dae7a9a2f5ba8084438e7e2716e753036beec316e16845048fb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-2-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-2-operations.json.gz",
+    "source_bytes": 228074,
+    "source_sha256": "fa568f531f1114770308a92be396642a2dfbd436d584f79c2d74b80c6bb31e95",
+    "stored_bytes": 30505,
+    "stored_sha256": "b0727a73c448a5447b240328891d79cb6872d5994ff58f428892ee5f2f281e13",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-3-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-3-operations.json.gz",
+    "source_bytes": 228031,
+    "source_sha256": "265d303d3a7b34174e41e8996bec35ae7c09965ee7d097d36fc522217296ae57",
+    "stored_bytes": 30343,
+    "stored_sha256": "eb6992361705572836086ffefd67e2b1947aad2ae930c985afc094df26bffffb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-4-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-4-operations.json.gz",
+    "source_bytes": 228102,
+    "source_sha256": "dff75deddf59228c19b8f89e2b22c8e28f83c0661e695fff877d053337cf9276",
+    "stored_bytes": 30417,
+    "stored_sha256": "8ca2d0f1d40c9efad07a4743c7b9e2cca993524b1356fbb15567a5d157813098",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-5-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-5-operations.json.gz",
+    "source_bytes": 228060,
+    "source_sha256": "3084147ac5cf1d1b6f45adf782b9918266dc43943c86e1aaee24b37b44009931",
+    "stored_bytes": 30336,
+    "stored_sha256": "2a64764b52f077d230b0616422dbce4ce0ae2a966b53a21c58c91c8497e13e94",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-6-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-6-operations.json.gz",
+    "source_bytes": 228104,
+    "source_sha256": "5dee37812153834dce14951ba9a2b3540449ba822c24b341aaf47677c794757c",
+    "stored_bytes": 30358,
+    "stored_sha256": "da878a9bff2c8d775fcef234438a9d70341d015a9648566184e4ec027a68fae6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-7-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-7-operations.json.gz",
+    "source_bytes": 228102,
+    "source_sha256": "bd6bc43d20b77049f790d4fde0e4e533bba52572ff3464177151ef99c15f50df",
+    "stored_bytes": 30483,
+    "stored_sha256": "91df48b29e32d72bdc56a2814756dbd663f274e7d5b8e725b279d078622310ff",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-8-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-8-operations.json.gz",
+    "source_bytes": 227954,
+    "source_sha256": "59f29e00c787139fded77a36591d09e0fe77d495b05d37f48213213becbdf20c",
+    "stored_bytes": 30407,
+    "stored_sha256": "594c599cc67bbfe45b99bb2a609484c0ebf6af096a3de8548e6de3af93dd67c2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-9-operations.json",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-9-operations.json.gz",
+    "source_bytes": 227980,
+    "source_sha256": "9c664ae63e1f173098e3172ca84b3d36e2879b12cbed8e7d1c45d26892b41c62",
+    "stored_bytes": 30344,
+    "stored_sha256": "0ad11820e8f552a30c11bbb1ade47ff62d79fa68a01e4a52f8f7ea27afd173ed",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/legacy-benchstat-input.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/legacy-benchstat-input.txt.gz",
+    "source_bytes": 11130,
+    "source_sha256": "d9399e78354039dca22e90d703b327a1e2f4a196ca7f9b7b6d729009905b5ded",
+    "stored_bytes": 1476,
+    "stored_sha256": "22c7eb378493c39092dae43697817f94a4d78ff76ed1363e04406c9c6a2fd9d5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/observations-summary.json",
+    "path": "download/m0-observation-2588c-38824531924-1/observations-summary.json",
+    "source_bytes": 22234,
+    "source_sha256": "1481524e7e2a81fe276f464a1712785146312de5503065c1930a7638e290193d",
+    "stored_bytes": 22234,
+    "stored_sha256": "1481524e7e2a81fe276f464a1712785146312de5503065c1930a7638e290193d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/observations.jsonl",
+    "path": "download/m0-observation-2588c-38824531924-1/observations.jsonl.gz",
+    "source_bytes": 206138266,
+    "source_sha256": "c963ab5e0f5e7e718bc5b3b1e5f44580da3530ae1043d58f3c090b4323c59458",
+    "stored_bytes": 12789484,
+    "stored_sha256": "cb24d5f6003690457b8f5ec32a74928d91a40268c45fc616e01c64aa57512227",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/observations.processes.jsonl",
+    "path": "download/m0-observation-2588c-38824531924-1/observations.processes.jsonl.gz",
+    "source_bytes": 9946362,
+    "source_sha256": "6b39a13415f16458cfd16ee6fb47a2541352d8d9b199367a9a58d7a30ef55bbf",
+    "stored_bytes": 91790,
+    "stored_sha256": "99b8754acb2ad6328698e9adba9c96019c0ca306e410697d10e594ab1c845d74",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/overlay.json",
+    "path": "download/m0-observation-2588c-38824531924-1/overlay.json",
+    "source_bytes": 368,
+    "source_sha256": "815620e1d91bfecb956cc1d232c441395c5147dd11d75e02e114445bf266dab8",
+    "stored_bytes": 368,
+    "stored_sha256": "815620e1d91bfecb956cc1d232c441395c5147dd11d75e02e114445bf266dab8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/quiet-preflight.json",
+    "path": "download/m0-observation-2588c-38824531924-1/quiet-preflight.json",
+    "source_bytes": 20908,
+    "source_sha256": "c5bd0d106086b203b1cdf11c1b97b4ab040120e0bad3655d1869df634b407c33",
+    "stored_bytes": 20908,
+    "stored_sha256": "c5bd0d106086b203b1cdf11c1b97b4ab040120e0bad3655d1869df634b407c33",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/quiet-preflight.jsonl",
+    "path": "download/m0-observation-2588c-38824531924-1/quiet-preflight.jsonl.gz",
+    "source_bytes": 11294120,
+    "source_sha256": "133099fbc45144f52e4cecfe3234ad8db673e37205edb84754bef7e87df68d21",
+    "stored_bytes": 674127,
+    "stored_sha256": "dffc2fc279530290f4db1ef41b53953061083f761730f10da06e4bc33768284f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/quiet-preflight.processes.jsonl",
+    "path": "download/m0-observation-2588c-38824531924-1/quiet-preflight.processes.jsonl.gz",
+    "source_bytes": 576355,
+    "source_sha256": "e207225be8abdf4708fbb491474900f92a635dfc786af4ddda7f5d0d1a9be8d6",
+    "stored_bytes": 7292,
+    "stored_sha256": "baa0c0c62922eeea5bc586ab0cfa669b9480e4b72877c09ae2797df93396d4ec",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/archive-pristine.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/archive-pristine.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 41,
+    "stored_sha256": "31dd0d49f82c252989c9f893adacf0ae68dfb7b89d424d19cc957d393067199d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/buildinfo-overlay.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/buildinfo-overlay.txt.gz",
+    "source_bytes": 352,
+    "source_sha256": "5d28b97acea387762f32ec4380baba6408dbd0c819133f1cb47bf34dcf4a0b76",
+    "stored_bytes": 251,
+    "stored_sha256": "886fda6a3ab07faa215856540c8adfb218291b5c845ee05e0af7e822679b8833",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/buildinfo-pristine.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/buildinfo-pristine.txt.gz",
+    "source_bytes": 353,
+    "source_sha256": "9f9f424b12dfffe87a09f1b3ae831e8c924dcecd41e197753d7752bacc6cbb73",
+    "stored_bytes": 252,
+    "stored_sha256": "8ca22640bf07f254d1a35c7222c089b96572af51b68eb86e78d19d3976e7a912",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/c-compiler.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/c-compiler.txt.gz",
+    "source_bytes": 246,
+    "source_sha256": "8497f84b2b8334c413d9c6166bd39d009ba55d2ff60a8f23e66dfa5819c2b048",
+    "stored_bytes": 229,
+    "stored_sha256": "8d7ee01f5fb9459dd82f26f8a519ac092ba8e77ab0a513247698f1c1af34b6a9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/compile-overlay.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/compile-overlay.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 40,
+    "stored_sha256": "5b866a3c6be25e594bdb2eb4f095971289d6c4793099c82a6ae107d258835c3c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/compile-pristine.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/compile-pristine.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 41,
+    "stored_sha256": "406951c909b04ef84f3f7f14b03545a9274c72aea0fa0b5874b9749c5e262bf9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/filesystem.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/filesystem.txt.gz",
+    "source_bytes": 133,
+    "source_sha256": "7be5ffe5ab8d8b8eb2d46fcb617fda53c640e66a8263f1dbfb8f3e5ab6201398",
+    "stored_bytes": 151,
+    "stored_sha256": "b594d436ece8944239851b86ffec63ab90fb933a3932e5d865214ee0505e3a89",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/fixture-artifact.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/fixture-artifact.txt.gz",
+    "source_bytes": 131,
+    "source_sha256": "192dafaf62065fa87a610dd63ade989a5242284df193bac33b85d884e82903e8",
+    "stored_bytes": 146,
+    "stored_sha256": "9457321ae6545aeffaf27b157b5df00fdde8d758d45ed02ae72d4528a6614c04",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/fixture-debt.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/fixture-debt.txt.gz",
+    "source_bytes": 46,
+    "source_sha256": "656587767fc7912ee30c2fa3fa01a81f68582f91d84dae0c032f17cccc999956",
+    "stored_bytes": 83,
+    "stored_sha256": "d659f4a074ed4ef535acc60954dabd0a2d534d7f2fcbbc595a8076810bc7b76d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/go-environment.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/go-environment.txt.gz",
+    "source_bytes": 1375,
+    "source_sha256": "6d66b40c87d0aef7732ffceae391595970ed22df33ee81dde77dd1ecbc99c94b",
+    "stored_bytes": 598,
+    "stored_sha256": "1baf01840bcc08d9c18d0e43e92a089285e02aed8f8a3d08e74311ea1fc63e71",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/go-version.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/go-version.txt.gz",
+    "source_bytes": 32,
+    "source_sha256": "34113d5d84bc5406ab3bfd0028c381611cad764f40baa15e43cffd89485c0aee",
+    "stored_bytes": 67,
+    "stored_sha256": "b8467ff5bfdc6e8ad6898194a2f1ded8ea249738e1cc6ba01f6713a9acffd00e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-1.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-1.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "e0ec91383ea1962dbb4b61e72c2d1fa72e6d2e0b8349199ac950742920d842fe",
+    "stored_bytes": 557,
+    "stored_sha256": "bb2dbc4f199621c0ef370d94611032e07c46697c3b99956038146f870dade91d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-10.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-10.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "72da0f353d49a633db6ab3e2da080eef88e08a617bac87c819b367c46b08dd95",
+    "stored_bytes": 558,
+    "stored_sha256": "dabecf6ec32cc0034edd1c97abf04a03bae4cff8b9ebd9247a49a99fbfdfee27",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-2.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-2.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "eb1058396884a6f42dc2f87d962f36be3db760061eaf1d76bdfadb0bb9ba027c",
+    "stored_bytes": 559,
+    "stored_sha256": "2fe91a8511dc82841c37eda2888e69f384affb16c1f00737ccd9e3b6e2c47b49",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-3.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-3.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "4f5405e0963dbb6c630dbffca1692f48e0c2fe7f09fc4c78a39482eaaab5b8ac",
+    "stored_bytes": 556,
+    "stored_sha256": "51b779c50e53f316ac59410d67648f2d55c7e93006a8c701dba5bfc7eeca7596",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-4.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-4.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "0c0365612cd29403e352dca2ed9cd8e2a68afbd95a576a73de6610eb6e696846",
+    "stored_bytes": 554,
+    "stored_sha256": "f53482e4672632348ca0a6026b304701fc90aaebcf7fab461784db488fe39c50",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-5.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-5.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "13b2a7acf4b2aaf61860ee29f3a2200f26a87ce2a53761ba0967714f250ed761",
+    "stored_bytes": 555,
+    "stored_sha256": "882933fc2e3724c89d05663cbb4ee42df45f6c96b0721be0c75eeba0caa3c58d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-6.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-6.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "7c999aa5dfac50c29d3639b1a072a5acbc0e847ff74fa40b270697478902f523",
+    "stored_bytes": 556,
+    "stored_sha256": "d631efe1bc4fec84e409adaaa4edcb33453384fdbcd7f670158c6ecf43c8db7a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-7.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-7.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "0c9879b93370421b0fe68d654591215f38b101a3ad649ce84d06838a6c843080",
+    "stored_bytes": 557,
+    "stored_sha256": "5545e0070f05008940ac25d9d14981139aafb1f5d36a04b9d12ef32abeccba8b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-8.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-8.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "6b76d2a365c13c1f56906168c479b635fd75e6dc6207b833078bc43ff410ce22",
+    "stored_bytes": 557,
+    "stored_sha256": "7a711036225798b28748627590060e39f4ba0aea6511f46192abb22cf105cc98",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/legacy-9.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/legacy-9.txt.gz",
+    "source_bytes": 1113,
+    "source_sha256": "2c11863ee7deed4576fc953f4652f8a062418f23a0a78258820648360325a851",
+    "stored_bytes": 559,
+    "stored_sha256": "b516bc80d661712f6cffca01513603c0e63d711ca1186f36dc76576f853b997b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/lscpu.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/lscpu.txt.gz",
+    "source_bytes": 3189,
+    "source_sha256": "4476e601951bb5e5dc85ca4b9d2e3bc795bb83c0d4e62b8d9f2bdec6659b0e7a",
+    "stored_bytes": 1160,
+    "stored_sha256": "f78aa5259ed6fae89778959a33d360eed97a774b567092d91bad0aa0a9967f66",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/module-download.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/module-download.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 40,
+    "stored_sha256": "c2a46c54165686eaeba4727b6b8d80c44c8127bdf200a604208bbcf1f7ee63ce",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/module-verify.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/module-verify.txt.gz",
+    "source_bytes": 21,
+    "source_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd",
+    "stored_bytes": 59,
+    "stored_sha256": "5b52fcc5430c2b0feb9fcdcf025d83777508c0bf7ba3d68f593d55626e68b892",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-1.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-1.txt.gz",
+    "source_bytes": 666,
+    "source_sha256": "6f5ff617ad937ee31614ec77db2e1a78ddca8dab266dafdb3c9b7576ccd9b487",
+    "stored_bytes": 370,
+    "stored_sha256": "3028ddef87060491cdfb9f64e1dbf7cdd4bff09b3a0dcbd7a5d71b3a7c451631",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-10.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-10.txt.gz",
+    "source_bytes": 665,
+    "source_sha256": "7fa1a824ef93007fa121b8eb80595015f79b020960c7ca244a52eaae41fa0fc9",
+    "stored_bytes": 368,
+    "stored_sha256": "b50980c4f52b1716a3e1c7e8c9332a6b1d462fe3b99fb604d55c92d86ca17280",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-2.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-2.txt.gz",
+    "source_bytes": 665,
+    "source_sha256": "b1d1129256ff0ffe4678c65f56616d156d7f0219cfac79cb36345a37de02ce7a",
+    "stored_bytes": 367,
+    "stored_sha256": "d8204a29b3d67c06ba2e3368d8a83fbb38373e474f341605db83d5418f461e2c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-3.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-3.txt.gz",
+    "source_bytes": 666,
+    "source_sha256": "1cd870a79c9466c9ba11ad169e65624d6b043970266931b1460c7c0f9a79a7d4",
+    "stored_bytes": 368,
+    "stored_sha256": "b404e5fa6af7b1ee671f95aa03a74ccf3e50f51446ac4d31e64c472fe72360f9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-4.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-4.txt.gz",
+    "source_bytes": 666,
+    "source_sha256": "3e5acaa26d8fa549a10f86801eb00aacd331750ea0be3e7c7d2ec0ccce51a1f4",
+    "stored_bytes": 370,
+    "stored_sha256": "cb6e626d53e043e5226082139b588ea8e9cc31df5afe6440c6297e7f41fac0ad",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-5.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-5.txt.gz",
+    "source_bytes": 661,
+    "source_sha256": "c3604907d6e349ddcd9dac1d98fc04514143cfdc0f93d0519925c73f5e548171",
+    "stored_bytes": 363,
+    "stored_sha256": "2c3681282a4f8fa0ca736aa3886f70f12cc01bc0ca749a31f6d889003dab83b7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-6.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-6.txt.gz",
+    "source_bytes": 666,
+    "source_sha256": "75278c35c5a1025a76467af47f2b8b26d3f19de2f7c692f4c0c39c105b992fff",
+    "stored_bytes": 368,
+    "stored_sha256": "ffa4ea6be6a682955b8d84110bdf78aa55131c461b4eeb42f13c160b5e9cd26d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-7.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-7.txt.gz",
+    "source_bytes": 661,
+    "source_sha256": "4b36bee451ebd40831bb1a74d6e16d7bcadb9e31d8d5e38a1bf43a21a6b65aa2",
+    "stored_bytes": 362,
+    "stored_sha256": "c2717119fbfc1a94bb156874428db9b96b9fbbc3dc4d54babf630eba8cca3ef6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-8.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-8.txt.gz",
+    "source_bytes": 661,
+    "source_sha256": "573bac10194685f2ef70bb331ce89a46017765b90914a8c0f775049370ecebac",
+    "stored_bytes": 364,
+    "stored_sha256": "15926edb4f19e93e5c0142efb74e276c7f2c32d068255e2380c251b304c1d3f7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/public-9.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/public-9.txt.gz",
+    "source_bytes": 666,
+    "source_sha256": "a4991e234a092607adaee052b895ad7b0eabb36ec858a63a17f8fccab2fe38e9",
+    "stored_bytes": 368,
+    "stored_sha256": "3f46f5c0b5f2aceab3d10f67bb95ea986d0cb530962039f5b0223be2f850d19f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/summarizer-unit.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/summarizer-unit.txt.gz",
+    "source_bytes": 104,
+    "source_sha256": "62cfbeb2911bb226088bfb0918eb4b05008ea70b20bce854ee2ca8a564bd37a5",
+    "stored_bytes": 74,
+    "stored_sha256": "2c73bfc0594944f48b25bda979deaf7cb0185ab425985cfe1dc03076be8b4c5e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/summarizer.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/summarizer.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 35,
+    "stored_sha256": "1d3efd233f8d411a57820ea7aaa7ac40095701f4a3112923b96c0319a6ffb339",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/raw/uname.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/raw/uname.txt.gz",
+    "source_bytes": 113,
+    "source_sha256": "cd8e31ad3f05d597238a1403bb5c2d25c975d53959c3d48af034216515712dc5",
+    "stored_bytes": 126,
+    "stored_sha256": "ca4c97d6e31042ca93566ac6c02dbce24345b352b6781ca86d699baa387bdb7f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/results.json",
+    "path": "download/m0-observation-2588c-38824531924-1/results.json",
+    "source_bytes": 24633,
+    "source_sha256": "b56cddb29492a4b1e9eb09a1e31e6286d00efd183c78ba9aff03fb7bba00bde7",
+    "stored_bytes": 24633,
+    "stored_sha256": "b56cddb29492a4b1e9eb09a1e31e6286d00efd183c78ba9aff03fb7bba00bde7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/sdk-bootstrap.txt",
+    "path": "download/m0-observation-2588c-38824531924-1/sdk-bootstrap.txt.gz",
+    "source_bytes": 475,
+    "source_sha256": "a9127e93f802aae40be8aed1024d32b7f305a8dbd14dc503ee03fc0f3462d158",
+    "stored_bytes": 257,
+    "stored_sha256": "e102bedbc45f2d5802c1e884a269904f49b8c9135529b5987e77230db6b19fcb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/sdk-manifest.json",
+    "path": "download/m0-observation-2588c-38824531924-1/sdk-manifest.json.gz",
+    "source_bytes": 1690579,
+    "source_sha256": "8f84aac4891a5edb269dc3d301960fd5c01edb1834db86ab521a937a0de9a8e1",
+    "stored_bytes": 676310,
+    "stored_sha256": "437f194de4f8d34671fc1cbb5e97e38ac6bd1670d191c409201fbddce202102f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/source-after.json",
+    "path": "download/m0-observation-2588c-38824531924-1/source-after.json.gz",
+    "source_bytes": 1572866,
+    "source_sha256": "703bac8315b0b821692f6d1a6247343e223ede4ba8a691937dd760a8a2f7fb91",
+    "stored_bytes": 457315,
+    "stored_sha256": "8dffde0ac601b1cb16ca6b0d2e44c955bb951aa21359eb411dfa5e86f3b14410",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/source-before.json",
+    "path": "download/m0-observation-2588c-38824531924-1/source-before.json.gz",
+    "source_bytes": 1572866,
+    "source_sha256": "703bac8315b0b821692f6d1a6247343e223ede4ba8a691937dd760a8a2f7fb91",
+    "stored_bytes": 457316,
+    "stored_sha256": "322044492d59f57e9e4b3cbcbdb08740c292a0e16707f1ccaa620d2838aa8a82",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/source-equality.json",
+    "path": "download/m0-observation-2588c-38824531924-1/source-equality.json",
+    "source_bytes": 20,
+    "source_sha256": "d9115dc79df0418b8037c3010e58ef04bc222dc5872c5d0a9de52824266ef747",
+    "stored_bytes": 20,
+    "stored_sha256": "d9115dc79df0418b8037c3010e58ef04bc222dc5872c5d0a9de52824266ef747",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/source-pristine.json",
+    "path": "download/m0-observation-2588c-38824531924-1/source-pristine.json.gz",
+    "source_bytes": 1572866,
+    "source_sha256": "703bac8315b0b821692f6d1a6247343e223ede4ba8a691937dd760a8a2f7fb91",
+    "stored_bytes": 457318,
+    "stored_sha256": "bad76e3084805929ed007c5b5666dc400174aba6d78a28c54b8b5eb80d9094b5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/start.json",
+    "path": "download/m0-observation-2588c-38824531924-1/start.json",
+    "source_bytes": 78,
+    "source_sha256": "08f0265c1d854ed03138340b0c501edde151c1d0c9baaa282c3d7e59eef36aa9",
+    "stored_bytes": 78,
+    "stored_sha256": "08f0265c1d854ed03138340b0c501edde151c1d0c9baaa282c3d7e59eef36aa9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/summary.md",
+    "path": "download/m0-observation-2588c-38824531924-1/summary.md",
+    "source_bytes": 9742,
+    "source_sha256": "929101998acabb39e509a8b50d211313db3f6ec0a96bc00a050f17fee76aefa5",
+    "stored_bytes": 9742,
+    "stored_sha256": "929101998acabb39e509a8b50d211313db3f6ec0a96bc00a050f17fee76aefa5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/vacuum_collection_bench_test.go",
+    "path": "download/m0-observation-2588c-38824531924-1/vacuum_collection_bench_test.go",
+    "source_bytes": 15603,
+    "source_sha256": "481ecead43b7a533f97ffa2856d08b05e613fd735c53cdbf0e502e71979b6e8f",
+    "stored_bytes": 15603,
+    "stored_sha256": "481ecead43b7a533f97ffa2856d08b05e613fd735c53cdbf0e502e71979b6e8f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/workflow-terminal.json",
+    "path": "download/m0-observation-2588c-38824531924-1/workflow-terminal.json",
+    "source_bytes": 248,
+    "source_sha256": "7f089d6217ccda6a8d1557748a4b359deb08a5e8325c16554e91a80c208ee80f",
+    "stored_bytes": 248,
+    "stored_sha256": "7f089d6217ccda6a8d1557748a4b359deb08a5e8325c16554e91a80c208ee80f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/grant.json",
+    "path": "grant.json",
+    "source_bytes": 1780,
+    "source_sha256": "cbe1b1e33ba63cd9704972b5ae9fdf8bfe91e44e5f21c11f3356dee3d8e1dec1",
+    "stored_bytes": 1780,
+    "stored_sha256": "cbe1b1e33ba63cd9704972b5ae9fdf8bfe91e44e5f21c11f3356dee3d8e1dec1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-analysis.json",
+    "path": "independent-analysis.json",
+    "source_bytes": 52205,
+    "source_sha256": "bbb99ebe4ccbf5b5bc36317f85a5dc67a3d7c0f1fac3ec87fa7cfc4685eeb2ed",
+    "stored_bytes": 52205,
+    "stored_sha256": "bbb99ebe4ccbf5b5bc36317f85a5dc67a3d7c0f1fac3ec87fa7cfc4685eeb2ed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-analysis.md",
+    "path": "independent-analysis.md",
+    "source_bytes": 6962,
+    "source_sha256": "f17e05eb60a10b9b1de5795fb174097321880133559d6d6517e2867cb91de06b",
+    "stored_bytes": 6962,
+    "stored_sha256": "f17e05eb60a10b9b1de5795fb174097321880133559d6d6517e2867cb91de06b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-host-analysis.json",
+    "path": "independent-host-analysis.json",
+    "source_bytes": 2493,
+    "source_sha256": "2daf3bacbdbb9be25668bcdf62ac83d4b617aa3c78f86ef340cac02a3e961084",
+    "stored_bytes": 2493,
+    "stored_sha256": "2daf3bacbdbb9be25668bcdf62ac83d4b617aa3c78f86ef340cac02a3e961084",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-operation-analysis.json",
+    "path": "independent-operation-analysis.json",
+    "source_bytes": 15615,
+    "source_sha256": "49dc5068ac828ac62b32bb115ab79c2ba8b691730e3dc073e9db3aa21ae30533",
+    "stored_bytes": 15615,
+    "stored_sha256": "49dc5068ac828ac62b32bb115ab79c2ba8b691730e3dc073e9db3aa21ae30533",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-process-analysis.json",
+    "path": "independent-process-analysis.json",
+    "source_bytes": 3944,
+    "source_sha256": "efae9de10caff8a677d0c12df378c035e68a1a68386cf6e8c5ebac6fd1a5dd46",
+    "stored_bytes": 3944,
+    "stored_sha256": "efae9de10caff8a677d0c12df378c035e68a1a68386cf6e8c5ebac6fd1a5dd46",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/independent-raw-metrics.json",
+    "path": "independent-raw-metrics.json",
+    "source_bytes": 17616,
+    "source_sha256": "23f41231ddb2e5783395ae07d19141a3d2fd560ca8401ac2ffb25cb9e777ac66",
+    "stored_bytes": 17616,
+    "stored_sha256": "23f41231ddb2e5783395ae07d19141a3d2fd560ca8401ac2ffb25cb9e777ac66",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/jobs-final.json",
+    "path": "jobs-final.json",
+    "source_bytes": 4293,
+    "source_sha256": "90ecde719169dc96c19e6455b20d457ff55a9585df455022e870e3ba95ce7274",
+    "stored_bytes": 4293,
+    "stored_sha256": "90ecde719169dc96c19e6455b20d457ff55a9585df455022e870e3ba95ce7274",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/jobs-status-01.json",
+    "path": "jobs-status-01.json",
+    "source_bytes": 3835,
+    "source_sha256": "5a296d702b38f83c7084521b3fe9fccda632be5fd47f23afc7d8c65bf0412c7a",
+    "stored_bytes": 3835,
+    "stored_sha256": "5a296d702b38f83c7084521b3fe9fccda632be5fd47f23afc7d8c65bf0412c7a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/packet-verification.json",
+    "path": "packet-verification.json",
+    "source_bytes": 3432,
+    "source_sha256": "a7fe98a73705433ec5217b05d5132a36f82bcc544b2b735423719a1764025aba",
+    "stored_bytes": 3432,
+    "stored_sha256": "a7fe98a73705433ec5217b05d5132a36f82bcc544b2b735423719a1764025aba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/root-disposition.md",
+    "path": "root-disposition.md",
+    "source_bytes": 5285,
+    "source_sha256": "e34b6d05d9de5e5dacb794b65cdf2cba6f3a7a7b81aaf032d41fdc84989b0a31",
+    "stored_bytes": 5285,
+    "stored_sha256": "e34b6d05d9de5e5dacb794b65cdf2cba6f3a7a7b81aaf032d41fdc84989b0a31",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/run-binding.json",
+    "path": "run-binding.json",
+    "source_bytes": 12734,
+    "source_sha256": "25cc96b32d9737ab7b6c7c29973c252c6cc2315889e04a7df0474559145cc58b",
+    "stored_bytes": 12734,
+    "stored_sha256": "25cc96b32d9737ab7b6c7c29973c252c6cc2315889e04a7df0474559145cc58b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/run-final.json",
+    "path": "run-final.json",
+    "source_bytes": 12737,
+    "source_sha256": "308724b474636625d71f553a31b4b268423cb7f3aa2abd3b1823ae0cd11aa69f",
+    "stored_bytes": 12737,
+    "stored_sha256": "308724b474636625d71f553a31b4b268423cb7f3aa2abd3b1823ae0cd11aa69f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/run-status-01.json",
+    "path": "run-status-01.json",
+    "source_bytes": 12734,
+    "source_sha256": "25cc96b32d9737ab7b6c7c29973c252c6cc2315889e04a7df0474559145cc58b",
+    "stored_bytes": 12734,
+    "stored_sha256": "25cc96b32d9737ab7b6c7c29973c252c6cc2315889e04a7df0474559145cc58b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/run-status-02.json",
+    "path": "run-status-02.json",
+    "source_bytes": 12737,
+    "source_sha256": "308724b474636625d71f553a31b4b268423cb7f3aa2abd3b1823ae0cd11aa69f",
+    "stored_bytes": 12737,
+    "stored_sha256": "308724b474636625d71f553a31b4b268423cb7f3aa2abd3b1823ae0cd11aa69f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/runs-after-dispatch.json",
+    "path": "runs-after-dispatch.json",
+    "source_bytes": 13679,
+    "source_sha256": "3677855e55dea2d5158815333ca9adcf83cdb237213f57e1a1f0cc44a4ab1604",
+    "stored_bytes": 13679,
+    "stored_sha256": "3677855e55dea2d5158815333ca9adcf83cdb237213f57e1a1f0cc44a4ab1604",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/tag-request.json",
+    "path": "tag-request.json",
+    "source_bytes": 110,
+    "source_sha256": "13287db70a022c252c0b37899de853898140d708581982e649ff54fe1e93365b",
+    "stored_bytes": 110,
+    "stored_sha256": "13287db70a022c252c0b37899de853898140d708581982e649ff54fe1e93365b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/tag-response.json",
+    "path": "tag-response.json",
+    "source_bytes": 474,
+    "source_sha256": "c41c876f40164da9af5b5dc7f8abb26aed3b46fa8680d3617211c1957323b9d7",
+    "stored_bytes": 474,
+    "stored_sha256": "c41c876f40164da9af5b5dc7f8abb26aed3b46fa8680d3617211c1957323b9d7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/verify-packet.py",
+    "path": "verify-packet.py",
+    "source_bytes": 6019,
+    "source_sha256": "75db8c237d5d6a56a205d13edb7f88127eefb3e1ee9bee350ee65c82b0a8c343",
+    "stored_bytes": 6019,
+    "stored_sha256": "75db8c237d5d6a56a205d13edb7f88127eefb3e1ee9bee350ee65c82b0a8c343",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/workflow.json",
+    "path": "workflow.json",
+    "source_bytes": 621,
+    "source_sha256": "a55ca7a0098ee2df67df0561046f0f74044c4777ab32d4aa31efa2e21e5ea84b",
+    "stored_bytes": 621,
+    "stored_sha256": "a55ca7a0098ee2df67df0561046f0f74044c4777ab32d4aa31efa2e21e5ea84b",
+    "encoding": "identity"
+  }
+]

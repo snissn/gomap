@@ -1,0 +1,817 @@
+{
+  "environment": {
+    "artifact_paths": [
+      "fixture.json",
+      "results.json",
+      "summary.md",
+      "commands.txt",
+      "legacy-benchstat-input.txt",
+      "legacy-benchstat.txt (when benchstat is installed)",
+      "raw/legacy-*.txt",
+      "raw/public-*.txt"
+    ],
+    "commands": [
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling$' -count=1",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^TestVacuumM0WriteArtifact$' -count=1 -v",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "taskset -c 0,1 /home/runner/work/_temp/m0-observation/go/bin/go test -overlay /home/runner/work/_temp/m0-observation/packet/overlay.json -exec '/usr/bin/python3 /home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_exec.py' ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+    ],
+    "cpu_set": "0,1",
+    "device": "/dev/root",
+    "dirty_state": "clean",
+    "filesystem": "ext4",
+    "git_sha": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+    "go_version": "go version go1.26.9 linux/amd64",
+    "goarch": "amd64",
+    "gomaxprocs": "2",
+    "gomemlimit": "8GiB",
+    "goos": "linux",
+    "repetitions": 10
+  },
+  "fixture": {
+    "environment": {
+      "command": "observation-only original M0 schedule (commands.json)",
+      "device": "/dev/root",
+      "dirty_state": "clean+explicit-test-overlay",
+      "filesystem": "ext4",
+      "git_sha": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+      "go_version": "go1.26.9",
+      "goarch": "amd64",
+      "goos": "linux"
+    },
+    "fixture": {
+      "collection_root_span": 1,
+      "fixture": "m0-index-debt",
+      "index_bytes": 917504,
+      "key_count": 512,
+      "leaf_log_bytes": 0,
+      "live_pages": 48,
+      "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+      "offline_index_bytes": 131072,
+      "offline_value_log_bytes": 1207296,
+      "parameters": {
+        "chunk_size": 65536,
+        "collection_documents": 128,
+        "collection_generations": 3,
+        "debt_compactions": 16,
+        "pointer_threshold": 512,
+        "user_generations": 3,
+        "user_keys": 384
+      },
+      "reclaimable_page_percent": 77.88018433179724,
+      "reclaimable_pages": 169,
+      "schema_version": 1,
+      "status": "offline-ceiling",
+      "value_log_bytes": 1207296
+    },
+    "repetitions": 10,
+    "schema_version": 1,
+    "status": "production-index-vacuum-unavailable",
+    "timing_boundary": "one fixed-work vacuum operation; setup excluded; diagnostic observer"
+  },
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": true,
+    "public_status_explicit": true
+  },
+  "metrics": {
+    "legacy": {
+      "B/op": {
+        "cv": 0.0003174189798069015,
+        "mean": 295975015.2,
+        "median": 295963680.0,
+        "samples": [
+          296027528.0,
+          295837808.0,
+          296093248.0,
+          296011520.0,
+          295907936.0,
+          295888912.0,
+          295911312.0,
+          296108408.0,
+          296047640.0,
+          295915840.0
+        ]
+      },
+      "allocs/op": {
+        "cv": 2.4563579967936098e-05,
+        "mean": 685920.9,
+        "median": 685921.0,
+        "samples": [
+          685954.0,
+          685921.0,
+          685927.0,
+          685938.0,
+          685898.0,
+          685906.0,
+          685908.0,
+          685908.0,
+          685928.0,
+          685921.0
+        ]
+      },
+      "collection-basis-ns/op": {
+        "cv": 0.025710871540122786,
+        "mean": 2813968.7,
+        "median": 2807889.0,
+        "samples": [
+          2733383.0,
+          2801166.0,
+          2826958.0,
+          2814612.0,
+          2793150.0,
+          2966092.0,
+          2791048.0,
+          2873915.0,
+          2703854.0,
+          2835509.0
+        ]
+      },
+      "concurrent-aborts/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "cutover-clone-pages/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "cutover-ns/op": {
+        "cv": 0.017592829758579565,
+        "mean": 56456234.3,
+        "median": 56147739.5,
+        "samples": [
+          58711992.0,
+          55799643.0,
+          56562056.0,
+          56176824.0,
+          57576923.0,
+          55554760.0,
+          56118655.0,
+          55981182.0,
+          55532631.0,
+          56547677.0
+        ]
+      },
+      "deferred-cutovers/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "dirty-descriptors/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "final-pager-sync-ns/op": {
+        "cv": 0.08989124163900149,
+        "mean": 5054267.8,
+        "median": 5058193.5,
+        "samples": [
+          5797921.0,
+          4922177.0,
+          5204860.0,
+          5478522.0,
+          5383918.0,
+          5091172.0,
+          4910834.0,
+          4376948.0,
+          4351111.0,
+          5025215.0
+        ]
+      },
+      "foreground-exposure-misses/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "foreground-overlap-samples/op": {
+        "cv": 0.0,
+        "mean": 4096.0,
+        "median": 4096.0,
+        "samples": [
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0,
+          4096.0
+        ]
+      },
+      "foreground-p95-ns/op": {
+        "cv": 0.01703933126816315,
+        "mean": 29061213.9,
+        "median": 29021588.0,
+        "samples": [
+          28962257.0,
+          29080919.0,
+          29316552.0,
+          29759260.0,
+          28918701.0,
+          29191906.0,
+          28824976.0,
+          27982442.0,
+          28910204.0,
+          29664922.0
+        ]
+      },
+      "foreground-p99-ns/op": {
+        "cv": 0.024987638570692392,
+        "mean": 42211745.1,
+        "median": 42356458.5,
+        "samples": [
+          43602784.0,
+          43230878.0,
+          42251749.0,
+          40928084.0,
+          42461168.0,
+          40705513.0,
+          43097539.0,
+          43049348.0,
+          41741039.0,
+          41049349.0
+        ]
+      },
+      "foreground-points/op": {
+        "cv": 0.0,
+        "mean": 2048.0,
+        "median": 2048.0,
+        "samples": [
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0
+        ]
+      },
+      "foreground-ranges/op": {
+        "cv": 0.0,
+        "mean": 2048.0,
+        "median": 2048.0,
+        "samples": [
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0
+        ]
+      },
+      "max-writer-pause-ns": {
+        "cv": 0.022187428371807275,
+        "mean": 61511458.4,
+        "median": 61302283.5,
+        "samples": [
+          64510655.0,
+          60723163.0,
+          61767737.0,
+          61656059.0,
+          62961782.0,
+          60646846.0,
+          61030541.0,
+          60359021.0,
+          59884754.0,
+          61574026.0
+        ]
+      },
+      "ns/op": {
+        "cv": 0.005854091809875881,
+        "mean": 16165031178.4,
+        "median": 16149542814.5,
+        "samples": [
+          16372351894.0,
+          16148396235.0,
+          16278723457.0,
+          16138900758.0,
+          16080093465.0,
+          16150689394.0,
+          16074855471.0,
+          16154869969.0,
+          16175627692.0,
+          16075803449.0
+        ]
+      },
+      "preclone-pages/op": {
+        "cv": 0.0,
+        "mean": 345.0,
+        "median": 345.0,
+        "samples": [
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0,
+          345.0
+        ]
+      },
+      "preflush-ns/op": {
+        "cv": 1.8164389115701782,
+        "mean": 5776461.5,
+        "median": 808896.5,
+        "samples": [
+          26972650.0,
+          783578.0,
+          24325055.0,
+          1017404.0,
+          854439.0,
+          757488.0,
+          754192.0,
+          756897.0,
+          834215.0,
+          708697.0
+        ]
+      },
+      "reclone-pages/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "swap-publish-ns/op": {
+        "cv": 0.06263462924995794,
+        "mean": 549780.4,
+        "median": 546213.5,
+        "samples": [
+          557735.0,
+          535152.0,
+          547536.0,
+          556982.0,
+          593741.0,
+          611525.0,
+          494616.0,
+          544559.0,
+          544891.0,
+          511067.0
+        ]
+      },
+      "system-reserve-ns/op": {
+        "cv": 0.11622551010146573,
+        "mean": 235325.5,
+        "median": 222576.5,
+        "samples": [
+          281577.0,
+          211516.0,
+          206977.0,
+          239879.0,
+          213841.0,
+          272530.0,
+          219090.0,
+          262692.0,
+          225642.0,
+          219511.0
+        ]
+      },
+      "system-tree-ns/op": {
+        "cv": 0.019104966512924922,
+        "mean": 43382531.6,
+        "median": 43242355.5,
+        "samples": [
+          45562695.0,
+          43014734.0,
+          43310580.0,
+          43291289.0,
+          42959992.0,
+          42721641.0,
+          43237682.0,
+          43247029.0,
+          42698894.0,
+          43780780.0
+        ]
+      },
+      "tail-mutations/op": {
+        "cv": 0.0,
+        "mean": 2176.0,
+        "median": 2176.0,
+        "samples": [
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0,
+          2176.0
+        ]
+      },
+      "tail-points/op": {
+        "cv": 0.0,
+        "mean": 128.0,
+        "median": 128.0,
+        "samples": [
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0,
+          128.0
+        ]
+      },
+      "tail-ranges/op": {
+        "cv": 0.0,
+        "mean": 2048.0,
+        "median": 2048.0,
+        "samples": [
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0,
+          2048.0
+        ]
+      },
+      "user-tree-ns/op": {
+        "cv": 0.055715509815529356,
+        "mean": 206654.0,
+        "median": 204398.0,
+        "samples": [
+          204934.0,
+          233808.0,
+          198873.0,
+          204914.0,
+          196838.0,
+          210714.0,
+          217067.0,
+          203882.0,
+          198732.0,
+          196778.0
+        ]
+      },
+      "vacuum-errors/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "vacuum-total-ns/op": {
+        "cv": 0.005854067111752257,
+        "mean": 16165006293.9,
+        "median": 16149515608.5,
+        "samples": [
+          16372330575.0,
+          16148369585.0,
+          16278694803.0,
+          16138869630.0,
+          16080070952.0,
+          16150661632.0,
+          16074834352.0,
+          16154847357.0,
+          16175600751.0,
+          16075783302.0
+        ]
+      }
+    },
+    "public": {
+      "B/op": {
+        "cv": 0.5271331988918019,
+        "mean": 10901773.6,
+        "median": 10688808.0,
+        "samples": [
+          5243904.0,
+          18937384.0,
+          19536152.0,
+          5395760.0,
+          7718624.0,
+          13783400.0,
+          5261288.0,
+          13658992.0,
+          13937584.0,
+          5544648.0
+        ]
+      },
+      "allocs/op": {
+        "cv": 0.2755961252082219,
+        "mean": 23056.4,
+        "median": 24051.0,
+        "samples": [
+          15870.0,
+          26007.0,
+          27002.0,
+          16425.0,
+          22095.0,
+          30447.0,
+          15928.0,
+          29599.0,
+          30442.0,
+          16749.0
+        ]
+      },
+      "foreground-exposure-misses/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "foreground-overlap-samples/op": {
+        "cv": 0.7539025591831748,
+        "mean": 94.8,
+        "median": 121.0,
+        "samples": [
+          13.0,
+          160.0,
+          160.0,
+          15.0,
+          82.0,
+          160.0,
+          18.0,
+          160.0,
+          160.0,
+          20.0
+        ]
+      },
+      "foreground-p95-ns": {
+        "cv": 0.10420183298450994,
+        "mean": 1822602.8,
+        "median": 1811762.0,
+        "samples": [
+          2166819.0,
+          1995981.0,
+          1973899.0,
+          1647436.0,
+          1810286.0,
+          1813238.0,
+          1519053.0,
+          1658094.0,
+          1781561.0,
+          1859661.0
+        ]
+      },
+      "foreground-p99-ns": {
+        "cv": 0.19211562208952065,
+        "mean": 3502182.8,
+        "median": 3239128.0,
+        "samples": [
+          3001734.0,
+          3400265.0,
+          3877020.0,
+          4122071.0,
+          4754365.0,
+          2968558.0,
+          4127369.0,
+          2893988.0,
+          2798467.0,
+          3077991.0
+        ]
+      },
+      "foreground-points/op": {
+        "cv": 0.0,
+        "mean": 80.0,
+        "median": 80.0,
+        "samples": [
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0
+        ]
+      },
+      "foreground-ranges/op": {
+        "cv": 0.0,
+        "mean": 80.0,
+        "median": 80.0,
+        "samples": [
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0
+        ]
+      },
+      "foreground-samples/op": {
+        "cv": 0.0,
+        "mean": 160.0,
+        "median": 160.0,
+        "samples": [
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0,
+          160.0
+        ]
+      },
+      "ns/op": {
+        "cv": 0.05467544389753853,
+        "mean": 85548098.1,
+        "median": 84532753.0,
+        "samples": [
+          85275479.0,
+          83733992.0,
+          86219217.0,
+          77365579.0,
+          83790027.0,
+          91064740.0,
+          83412812.0,
+          89193592.0,
+          93430586.0,
+          81994957.0
+        ]
+      },
+      "vacuum-concurrent-retries/op": {
+        "cv": 0.6900655593423543,
+        "mean": 0.7,
+        "median": 1.0,
+        "samples": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "vacuum-unexpected-errors/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "vacuum-unsupported/op": {
+        "cv": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  },
+  "public_status": "production-index-vacuum-available",
+  "schema_version": 1
+}

@@ -1,0 +1,9 @@
+{
+  "started_utc": "2026-10-15T23:35:50.236840+00:00",
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "harness": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "ref": "codex-4871-m0-observation-185-20261015",
+  "grant_sha256": "cbe1b1e33ba63cd9704972b5ae9fdf8bfe91e44e5f21c11f3356dee3d8e1dec1"
+}

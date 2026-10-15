@@ -1,0 +1,25 @@
+{
+  "authorized_by": "sole root coordinator under user execute-and-merge graph authorization",
+  "written_utc": "2026-10-15T23:35:48.188942+00:00",
+  "runtime_grant": "ONE_DIAGNOSTIC_EXECUTION",
+  "harness_landed_commit": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "harness_tree": "5b727b1f56eaeb6eef7c9b371ba349cfa76097fb",
+  "reviewed_harness_head": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "harness_manifest_sha256": "8d69ca1427dc4c3c65cfe277ee09a6477b479b0a5c607a3881a5559313b147a5",
+  "harness_review_sha256": "c16f63c87a2c7be5ee83784e2ba910eb0c2773bfe47ad02ef92fa164446c4a9f",
+  "source_files": 9942,
+  "product": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49",
+  "workflow": ".github/workflows/treedb-vacuum-m0-observation.yml",
+  "dispatch_tag": "codex-4871-m0-observation-185-20261015",
+  "schedule": "original2fixtures thenL1,P1,...,L10,P10; original1x/count1/selectors/benchmem/timer bodies",
+  "preflight": "one10s2percent externalprocess preflight; refusal executes0; no retry",
+  "limits": "20min total workflow,19min driver fromfirststep, original10minGo timeout with outer minremaining; CPU0,1 GOMAX2 8GiB GOGC100; frozenGo1.26.9",
+  "retention": "full exactsource/SDK archives, actual22GoELFs, rawGC/process/host/cgroup/foregrounddurations andkilljoinreceipts; preserveeveryoutcome",
+  "infrastructure": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: dedicated persistent runner; ephemeralubuntu24.04 fallback",
+    "INFRASTRUCTURE_UNAVAILABLE: cache: persistent cache; taskfresh fallback",
+    "INFRASTRUCTURE_UNAVAILABLE: storage: permanent hosted archive;30dayGitHubartifact thenrootlocal+projectretention"
+  ],
+  "acceptance": "diagnostic only; failure remainsfailure; observedPASScannotreplaceM0; ordinarycost+nativeunfinished",
+  "automatic_retry": false
+}

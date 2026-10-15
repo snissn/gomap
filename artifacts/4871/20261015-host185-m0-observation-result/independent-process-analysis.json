@@ -1,0 +1,182 @@
+[
+  {
+    "arm": 1,
+    "pid": 6404,
+    "sample_count": 65,
+    "observed_span_s": 16.001673215,
+    "delta": {
+      "minflt": 39733,
+      "majflt": 138,
+      "utime_ticks": 112,
+      "stime_ticks": 117,
+      "voluntary_ctxt_switches": 5398,
+      "nonvoluntary_ctxt_switches": 97,
+      "read_bytes": 0,
+      "write_bytes": 6375342080,
+      "syscr": 2004,
+      "syscw": 5966
+    }
+  },
+  {
+    "arm": 2,
+    "pid": 6489,
+    "sample_count": 65,
+    "observed_span_s": 16.009412146,
+    "delta": {
+      "minflt": 40340,
+      "majflt": 139,
+      "utime_ticks": 114,
+      "stime_ticks": 109,
+      "voluntary_ctxt_switches": 5422,
+      "nonvoluntary_ctxt_switches": 111,
+      "read_bytes": 0,
+      "write_bytes": 6487539712,
+      "syscr": 2020,
+      "syscw": 6054
+    }
+  },
+  {
+    "arm": 3,
+    "pid": 6597,
+    "sample_count": 65,
+    "observed_span_s": 16.00413479,
+    "delta": {
+      "minflt": 40715,
+      "majflt": 138,
+      "utime_ticks": 115,
+      "stime_ticks": 112,
+      "voluntary_ctxt_switches": 5497,
+      "nonvoluntary_ctxt_switches": 75,
+      "read_bytes": 0,
+      "write_bytes": 6560210944,
+      "syscr": 2057,
+      "syscw": 6131
+    }
+  },
+  {
+    "arm": 4,
+    "pid": 6678,
+    "sample_count": 64,
+    "observed_span_s": 15.753502603,
+    "delta": {
+      "minflt": 40601,
+      "majflt": 136,
+      "utime_ticks": 118,
+      "stime_ticks": 102,
+      "voluntary_ctxt_switches": 5129,
+      "nonvoluntary_ctxt_switches": 73,
+      "read_bytes": 0,
+      "write_bytes": 6441254912,
+      "syscr": 2005,
+      "syscw": 6015
+    }
+  },
+  {
+    "arm": 5,
+    "pid": 6760,
+    "sample_count": 64,
+    "observed_span_s": 15.757555448,
+    "delta": {
+      "minflt": 39518,
+      "majflt": 137,
+      "utime_ticks": 115,
+      "stime_ticks": 104,
+      "voluntary_ctxt_switches": 6362,
+      "nonvoluntary_ctxt_switches": 78,
+      "read_bytes": 0,
+      "write_bytes": 6337495040,
+      "syscr": 1989,
+      "syscw": 5932
+    }
+  },
+  {
+    "arm": 6,
+    "pid": 6844,
+    "sample_count": 65,
+    "observed_span_s": 16.009444391,
+    "delta": {
+      "minflt": 41481,
+      "majflt": 142,
+      "utime_ticks": 113,
+      "stime_ticks": 114,
+      "voluntary_ctxt_switches": 3829,
+      "nonvoluntary_ctxt_switches": 43,
+      "read_bytes": 0,
+      "write_bytes": 6588579840,
+      "syscr": 2036,
+      "syscw": 6130
+    }
+  },
+  {
+    "arm": 7,
+    "pid": 6926,
+    "sample_count": 65,
+    "observed_span_s": 16.007563036,
+    "delta": {
+      "minflt": 40507,
+      "majflt": 140,
+      "utime_ticks": 110,
+      "stime_ticks": 118,
+      "voluntary_ctxt_switches": 6164,
+      "nonvoluntary_ctxt_switches": 183,
+      "read_bytes": 0,
+      "write_bytes": 6491103232,
+      "syscr": 2029,
+      "syscw": 6069
+    }
+  },
+  {
+    "arm": 8,
+    "pid": 7007,
+    "sample_count": 65,
+    "observed_span_s": 16.012363123,
+    "delta": {
+      "minflt": 40457,
+      "majflt": 140,
+      "utime_ticks": 110,
+      "stime_ticks": 117,
+      "voluntary_ctxt_switches": 3904,
+      "nonvoluntary_ctxt_switches": 51,
+      "read_bytes": 0,
+      "write_bytes": 6521094144,
+      "syscr": 2006,
+      "syscw": 6055
+    }
+  },
+  {
+    "arm": 9,
+    "pid": 7088,
+    "sample_count": 65,
+    "observed_span_s": 16.00774046,
+    "delta": {
+      "minflt": 42099,
+      "majflt": 141,
+      "utime_ticks": 110,
+      "stime_ticks": 121,
+      "voluntary_ctxt_switches": 5390,
+      "nonvoluntary_ctxt_switches": 67,
+      "read_bytes": 0,
+      "write_bytes": 6556184576,
+      "syscr": 2047,
+      "syscw": 6117
+    }
+  },
+  {
+    "arm": 10,
+    "pid": 7168,
+    "sample_count": 65,
+    "observed_span_s": 16.007012725,
+    "delta": {
+      "minflt": 41248,
+      "majflt": 141,
+      "utime_ticks": 116,
+      "stime_ticks": 113,
+      "voluntary_ctxt_switches": 4497,
+      "nonvoluntary_ctxt_switches": 58,
+      "read_bytes": 0,
+      "write_bytes": 6525313024,
+      "syscr": 2046,
+      "syscw": 6097
+    }
+  }
+]

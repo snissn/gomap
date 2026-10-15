@@ -1,0 +1,7 @@
+{
+  "wall_ns": 1792107756780442990,
+  "harness_sha": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "run_id": "38824531924",
+  "attempt": "1",
+  "note": "See step logs for bootstrap failures; missing runner receipts mean no completed diagnostic."
+}

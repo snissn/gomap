@@ -1,0 +1,158 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/go1.26.9.linux-amd64.tar.gz",
+    "bytes": 66935201,
+    "sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/pristine-source.tar.gz",
+    "bytes": 159354409,
+    "sha256": "954a3f630ddbb8dc4ce607b4cc62c8b569f3e6ce164dcf13e300ace40641f2d2",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/overlay.test",
+    "bytes": 61482434,
+    "sha256": "a810b6d886314feb766571b45056eceb0a0378a790f1abd4e62db6b27f9cba02",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/pristine.test",
+    "bytes": 61475634,
+    "sha256": "969364c0b398529101b572261b722d5d2cc110dcbd20c268c52fcadd3307d0c9",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-10/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-8/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-2/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-3/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-2/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-5/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-4/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-7/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-8/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-3/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-9/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-10/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-1/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-4/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-5/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-9/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-6/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-7/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/fixture-artifact/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/fixture-debt/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/legacy-6/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/download/m0-observation-2588c-38824531924-1/executables/public-1/actual.test",
+    "bytes": 44351753,
+    "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+    "reason": "complete binary/SDK/source archive retained locally; exact hash published"
+  }
+]

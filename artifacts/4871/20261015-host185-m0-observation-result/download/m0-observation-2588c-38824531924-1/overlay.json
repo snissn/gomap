@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "/home/runner/work/gomap/gomap/product/TreeDB/db/mvcc_m0_observation_overlay_test.go": "/home/runner/work/gomap/gomap/harness/.github/scripts/mvcc_m0_observation_gc.go.txt",
+    "/home/runner/work/gomap/gomap/product/TreeDB/db/vacuum_collection_bench_test.go": "/home/runner/work/_temp/m0-observation/packet/vacuum_collection_bench_test.go"
+  }
+}

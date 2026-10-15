@@ -1,0 +1,23 @@
+{
+  "CGO_ENABLED": "1",
+  "CPU_SET": "0,1",
+  "GOAMD64": "v1",
+  "GOARCH": "amd64",
+  "GOCACHE": "/home/runner/work/_temp/m0-observation/packet/cache",
+  "GODEBUG": "",
+  "GOENV": "off",
+  "GOEXPERIMENT": "",
+  "GOFLAGS": "",
+  "GOGC": "100",
+  "GOMAXPROCS": "2",
+  "GOMEMLIMIT": "8GiB",
+  "GOMODCACHE": "/home/runner/work/_temp/m0-observation/packet/modcache",
+  "GOOS": "linux",
+  "GOPROXY": "off",
+  "GOROOT": "/home/runner/work/_temp/m0-observation/go",
+  "GOSUMDB": "off",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "PATH": "/home/runner/work/_temp/m0-observation/go/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+  "TMPDIR": "/home/runner/work/_temp/m0-observation/packet/tmp"
+}

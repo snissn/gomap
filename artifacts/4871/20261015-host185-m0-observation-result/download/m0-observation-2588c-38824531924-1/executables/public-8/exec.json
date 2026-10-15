@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/home/runner/work/_temp/m0-observation/packet/tmp/go-build3612621703/b001/db.test",
+    "-test.paniconexit0",
+    "-test.timeout=10m0s",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$",
+    "-test.benchtime=1x",
+    "-test.count=1",
+    "-test.benchmem=true"
+  ],
+  "pid": 7049,
+  "pgid": 7016,
+  "copy_start_ns": 1792107714439537329,
+  "exec_wall_ns": 1792107714453726685,
+  "sha256": "e50c4926d0d8d613b78ea509b5983115f313dff3a71c34e70c686df684ceb0c3",
+  "wrapper_sha256": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+  "overhead": "ELF copy/hash before benchmark setup; diagnostic I/O"
+}

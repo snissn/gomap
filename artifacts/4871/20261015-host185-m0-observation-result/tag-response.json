@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/codex-4871-m0-observation-185-20261015",
+  "node_id": "REF_kwDOIdn7C9oAMHJlZnMvdGFncy9jb2RleC00ODcxLW0wLW9ic2VydmF0aW9uLTE4NS0yMDI2MTAxNQ",
+  "url": "https://api.github.com/repos/snissn/gomap/git/refs/tags/codex-4871-m0-observation-185-20261015",
+  "object": {
+    "sha": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+    "type": "commit",
+    "url": "https://api.github.com/repos/snissn/gomap/git/commits/eae34350200668e1aae35d56f7f4c8ddfc2acb47"
+  }
+}

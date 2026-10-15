@@ -1,0 +1,114 @@
+{
+  "sample_count": 789,
+  "wall_s": 194.554721468,
+  "sample_interval_s": {
+    "min": 0.050700181,
+    "max": 0.264665714
+  },
+  "host_pressure_delta_us": {
+    "pressure/cpu": {
+      "some": 7801442,
+      "full": 0
+    },
+    "pressure/io": {
+      "some": 61553531,
+      "full": 60277063
+    },
+    "pressure/memory": {
+      "some": 0,
+      "full": 0
+    }
+  },
+  "vm_counter_deltas": {
+    "pgmajfault": 5228,
+    "pswpin": 0,
+    "pswpout": 0,
+    "allocstall_normal": 0,
+    "pgscan_direct": 0,
+    "oom_kill": 0
+  },
+  "cpu0_1_steal_tick_deltas": {
+    "cpu0": 0,
+    "cpu1": 0
+  },
+  "cgroups": [
+    {
+      "path": "/sys/fs/cgroup/system.slice/hosted-compute-agent.service",
+      "cpu_max_values": [
+        "max 100000"
+      ],
+      "cpu_stat_deltas": {
+        "usage_usec": 84738049,
+        "user_usec": 61716433,
+        "system_usec": 23021616,
+        "nice_usec": 0,
+        "core_sched.force_idle_usec": 0,
+        "nr_periods": 0,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "cpu_pressure_delta_us": {
+        "some": 3080500,
+        "full": 1563772
+      },
+      "io_pressure_delta_us": {
+        "some": 64529458,
+        "full": 64289788
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup/system.slice",
+      "cpu_max_values": [
+        "max 100000"
+      ],
+      "cpu_stat_deltas": {
+        "usage_usec": 85157756,
+        "user_usec": 61725107,
+        "system_usec": 23432649,
+        "nice_usec": 0,
+        "core_sched.force_idle_usec": 0,
+        "nr_periods": 0,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "cpu_pressure_delta_us": {
+        "some": 3079108,
+        "full": 1567692
+      },
+      "io_pressure_delta_us": {
+        "some": 64416575,
+        "full": 64165447
+      }
+    },
+    {
+      "path": "/sys/fs/cgroup",
+      "cpu_max_values": [
+        "unavailable"
+      ],
+      "cpu_stat_deltas": {
+        "usage_usec": 76066000,
+        "user_usec": 53152000,
+        "system_usec": 22914000,
+        "nice_usec": 0,
+        "core_sched.force_idle_usec": 0,
+        "nr_periods": 0,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "cpu_pressure_delta_us": {
+        "some": 7801442,
+        "full": 0
+      },
+      "io_pressure_delta_us": {
+        "some": 61553531,
+        "full": 60277063
+      }
+    }
+  ]
+}
