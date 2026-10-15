@@ -1,0 +1,13 @@
+{"Time":"2026-10-14T15:07:58.462977801-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-14T15:07:58.464544126-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation"}
+{"Time":"2026-10-14T15:07:58.464554796-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation","Output":"=== RUN   TestNativePruneStreamingContinuation\n"}
+{"Time":"2026-10-14T15:07:58.464570096-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation/batch-two"}
+{"Time":"2026-10-14T15:07:58.464571376-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation/batch-two","Output":"=== RUN   TestNativePruneStreamingContinuation/batch-two\n"}
+{"Time":"2026-10-14T15:07:58.475972926-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation/batch-two","Output":"    native_streaming_prune_v6_test.go:126: BatchSize=2 must use one actual publication for two verified deletions: pruned=1 batches=1\n"}
+{"Time":"2026-10-14T15:07:58.476862575-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation/batch-two","Output":"--- FAIL: TestNativePruneStreamingContinuation/batch-two (0.01s)\n"}
+{"Time":"2026-10-14T15:07:58.476865755-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation/batch-two","Elapsed":0.01}
+{"Time":"2026-10-14T15:07:58.476871805-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation","Output":"--- FAIL: TestNativePruneStreamingContinuation (0.01s)\n"}
+{"Time":"2026-10-14T15:07:58.476874335-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePruneStreamingContinuation","Elapsed":0.01}
+{"Time":"2026-10-14T15:07:58.476913636-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"FAIL\n"}
+{"Time":"2026-10-14T15:07:58.477043987-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/mvcc\t0.014s\n"}
+{"Time":"2026-10-14T15:07:58.477059427-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0.014}

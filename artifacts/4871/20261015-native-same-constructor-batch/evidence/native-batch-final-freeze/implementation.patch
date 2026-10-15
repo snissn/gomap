@@ -1,0 +1,760 @@
+diff --git a/TreeDB/db/native_mvcc_current_delete_v6.go b/TreeDB/db/native_mvcc_current_delete_v6.go
+index e9997e85c..270e2d098 100644
+--- a/TreeDB/db/native_mvcc_current_delete_v6.go
++++ b/TreeDB/db/native_mvcc_current_delete_v6.go
+@@ -183,6 +183,7 @@ type NativeMVCCCurrentDeleteV6 struct {
+ 	selection   tree.NativeMVCCSelectionV6
+ 	source      NativeMVCCSelectionSourceV6
+ 	record      node.LeafEntry
++	records     []node.LeafEntry
+ 	request     mvccadmission.Request
+ 	transaction *rootpublication.DurableRootTransaction
+ 	release     rootpublication.PrimaryConstructionReleaseWork
+@@ -218,6 +219,24 @@ func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, s
+ 	return true, nil
+ }
+ 
++// BindNativeMVCCDeleteBatchV6 borrows the cursor's preadmitted verified vector.
++// Its last row is the stationary original producer selection used to create
++// this SAME constructor. The caller retains every payload until checked Finish.
++func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCDeleteBatchV6(records []node.LeafEntry, w *iterator.OrdinalScanWork) (bool, error) {
++	if c == nil || c.phase != 3 || len(records) == 0 {
++		return false, ErrNativeMVCCSnapshotWork
++	}
++	last := records[len(records)-1]
++	if !w.Reserve(1, uint64(len(last.Key))+64) {
++		return false, nil
++	}
++	if !bytes.Equal(last.Key, c.record.Key) || last.Revision != c.record.Revision || last.Flags != c.record.Flags || last.ValuePtr != c.record.ValuePtr {
++		return false, rootpublication.ErrDurableRootOwnership
++	}
++	c.records = records
++	return true, nil
++}
++
+ // StepNativeMVCCCurrentDeleteV6 validates the selected immutable physical
+ // operand and creates the SAME producer transaction. It deliberately leaves
+ // the directory unsealed so legal future writes may complete at prepared
+@@ -361,7 +380,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 	}
+ 	if c.transaction == nil && c.phase != 5 {
+ 		c.db, c.snapshot, c.selection, c.request, c.phase = nil, nil, tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
+-		c.source, c.record = nil, node.LeafEntry{}
++		c.source, c.record, c.records = nil, node.LeafEntry{}, nil
+ 		return true, nil
+ 	}
+ 	if c.phase != 5 {
+@@ -376,7 +395,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 	if ready && err == nil {
+ 		c.transaction, c.db, c.snapshot = nil, nil, nil
+ 		c.selection, c.request, c.phase = tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
+-		c.source, c.record = nil, node.LeafEntry{}
++		c.source, c.record, c.records = nil, node.LeafEntry{}, nil
+ 	}
+ 	return ready, err
+ }
+diff --git a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+index 9af58e6bc..3e9b53998 100644
+--- a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+@@ -52,26 +52,35 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 	w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 	cut := c.db.mvccAdmission.Begin()
+ 	defer cut.Abort()
+-	ready, err := cut.ObservePrune(c.request, c.record.Key, w)
+-	if !ready || err != nil {
+-		return false, err
+-	}
+-	// Validate against the SAME retained composite winner immediately before
+-	// applying its physical delete. Do not omit the overlay row and resurrect
+-	// an older disk incarnation.
+-	input.Seek(c.record.Key)
+-	if !input.Valid() || !bytes.Equal(input.UnsafeKey(), c.record.Key) {
+-		return false, rootpublication.ErrDurableRootOwnership
+-	}
+-	v, p, f, r := iterator.UnsafeEntryWithRevision(input)
+-	if r != c.record.Revision || p != c.record.ValuePtr || f != c.record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, c.record.Value)) {
+-		return false, rootpublication.ErrDurableRootOwnership
+-	}
+-	if err = input.Error(); err != nil {
+-		return false, err
++	records := c.records
++	if len(records) == 0 {
++		records = []node.LeafEntry{c.record}
++	}
++	// All entries are validated under the SAME fresh canonical cut before any
++	// DATA mutation. A conflicting current winner refuses the whole batch.
++	for i := range records {
++		record := &records[i]
++		ready, err := cut.ObservePrune(c.request, record.Key, w)
++		if !ready || err != nil {
++			return false, err
++		}
++		input.Seek(record.Key)
++		if !input.Valid() || !bytes.Equal(input.UnsafeKey(), record.Key) {
++			return false, rootpublication.ErrDurableRootOwnership
++		}
++		v, p, f, r := iterator.UnsafeEntryWithRevision(input)
++		if r != record.Revision || p != record.ValuePtr || f != record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, record.Value)) {
++			return false, rootpublication.ErrDurableRootOwnership
++		}
++		if err = input.Error(); err != nil {
++			return false, err
++		}
+ 	}
+-	if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(c.record.Key), Revision: c.record.Revision}}); err != nil {
+-		return false, err
++	for i := range records {
++		record := &records[i]
++		if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(record.Key), Revision: record.Revision}}); err != nil {
++			return false, err
++		}
+ 	}
+ 	group.pinBatchValueLogSegmentsLocked(delta)
+ 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
+@@ -95,7 +104,7 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, sequence, base, nil); err != nil {
+ 		return false, err
+ 	}
+-	ready, err = txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
++	ready, err := txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
+ 	if !ready || err != nil {
+ 		return false, err
+ 	}
+@@ -126,6 +135,7 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 		c.snapshot = nil
+ 		c.source = nil
+ 		c.record = node.LeafEntry{}
++		c.records = nil
+ 	}
+ 	return accepted, retErr
+ }
+diff --git a/TreeDB/mvcc/native_streaming_prune_v6.md b/TreeDB/mvcc/native_streaming_prune_v6.md
+index 986ede66f..1730fb731 100644
+--- a/TreeDB/mvcc/native_streaming_prune_v6.md
++++ b/TreeDB/mvcc/native_streaming_prune_v6.md
+@@ -2,12 +2,12 @@
+ 
+ The native cursor retains one original capture and immutable admission Request
+ while it scans history in physical order. A verified value anchor at or below
+-the discard floor makes each older verified record eligible immediately. Its
++the discard floor makes each older verified record eligible for the current batch immediately. Its
+ key, envelope, pointer resolution/CRC and floor checks precede preparation.
+ Unrelated later records are not prerequisites for that deletion.
+ 
+ The private `integrityDone` scalar describes integrity prerequisites for the
+-current selected deletion. It does not certify the whole namespace. It stays
++current selected batch. It does not certify the whole namespace. It stays
+ true through publication/ACK and resets after the original checked transaction
+ receipt is detached. The same cursor then advances its stationary retained
+ projection rather than restarting the namespace scan.
+@@ -25,3 +25,22 @@ incomplete. Streaming selection improves when the first deletion becomes ready;
+ it does not establish Q32, a bounded publication window, production readiness,
+ or complete native-prune qualification. The bounded publication route continues
+ to refuse its unsupported final stage honestly.
++
++`BatchSize` sets the retained vector capacity (default 256). The original cursor
++admits the actual vector backing and each copied key/inline payload before
++allocation. Work refusal preserves the same scan and buffered selections.
++Publication rechecks every selected winner under one fresh canonical cut,
++observes the same immutable Request for every key, and applies all deletes to
++one original native constructor/zipper/fence/Consume/Finish. ACK counts the
++actual finished vector. The stationary last selected row remains the original
++constructor's physical selection; earlier entries are not substituted for it.
++
++EOF flushes the actual remainder. Pending older history is published before a
++tombstone anchor is queued, even when that requires a partial batch. A later
++malformed record reports its error and preserves earlier completed batches;
++verified but unpublished entries receive no ACK. A conflicting current winner
++refuses the entire pending vector before physical deletion. Checked completion
++detaches constructor aliases before phased vector clearing and payload refund.
++Capacity admission failures are returned, rather than silently clamping the
++requested batch size. Batching amortizes the synchronous diagnostic publisher;
++it does not make its final publication stage bounded or establish Q32.
+diff --git a/TreeDB/mvcc/native_streaming_prune_v6_test.go b/TreeDB/mvcc/native_streaming_prune_v6_test.go
+index 43e9f030a..5b8f2db9c 100644
+--- a/TreeDB/mvcc/native_streaming_prune_v6_test.go
++++ b/TreeDB/mvcc/native_streaming_prune_v6_test.go
+@@ -5,7 +5,11 @@ package mvcc
+ import (
+ 	"bytes"
+ 	"errors"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"runtime"
+ 	"testing"
++	"time"
+ 
+ 	treedb "github.com/snissn/gomap/TreeDB"
+ 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+@@ -15,7 +19,7 @@ import (
+ // These exercise continuation of the SAME retained capture and Request after
+ // checked physical Finish, rather than starting another namespace scan per ACK.
+ func TestNativePruneStreamingContinuation(t *testing.T) {
+-	for _, scenario := range []string{"value-anchors", "later-malformed", "tombstone-boundary", "tombstone-end"} {
++	for _, scenario := range []string{"value-anchors", "later-malformed", "tombstone-boundary", "tombstone-end", "batch-two", "batch-one", "batch-remainder", "batch-malformed", "batch-tombstone-boundary", "batch-tombstone-end", "batch-conflict", "batch-capacity"} {
+ 		t.Run(scenario, func(t *testing.T) {
+ 			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+ 			opts.MemtableMode, opts.MemtableShards = "cow_btree", 4
+@@ -46,7 +50,7 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 			if e := d.Checkpoint(); e != nil {
+ 				t.Fatal(e)
+ 			}
+-			tombstone := scenario == "tombstone-boundary" || scenario == "tombstone-end"
++			tombstone := scenario == "tombstone-boundary" || scenario == "tombstone-end" || scenario == "batch-tombstone-boundary" || scenario == "batch-tombstone-end"
+ 			if tombstone {
+ 				if e := s.CommitAt(3, []Mutation{{Key: []byte("a"), Delete: true}}, CommitDurable); e != nil {
+ 					t.Fatal(e)
+@@ -59,13 +63,13 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 					}
+ 				}
+ 			}
+-			if scenario == "tombstone-boundary" {
++			if scenario == "tombstone-boundary" || scenario == "batch-tombstone-boundary" {
+ 				if e := s.CommitAt(1, []Mutation{{Key: []byte("b"), Value: []byte("boundary")}}, CommitDurable); e != nil {
+ 					t.Fatal(e)
+ 				}
+ 			}
+ 			malformed := physical("z", 1)
+-			if scenario == "later-malformed" {
++			if scenario == "later-malformed" || scenario == "batch-malformed" {
+ 				if e := d.Set(malformed, []byte{0xff}); e != nil {
+ 					t.Fatal(e)
+ 				}
+@@ -86,9 +90,38 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 			if e != nil {
+ 				t.Fatal(e)
+ 			}
++			if scenario == "batch-capacity" {
++				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: int(^uint(0) >> 1), Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20})
++				var unit *iterator.OrdinalUnitTooLarge
++				if !errors.As(e, &unit) || x.Pruned != 0 || x.Complete || x.Cursor == nil || x.Cursor.captureBegun || len(x.Cursor.batchEntries) != 0 {
++					t.Fatal("requested capacity must refuse before capture/allocation, not clamp", x, e)
++				}
++				if e := x.Cursor.Close(); e != nil {
++					t.Fatal(e)
++				}
++				got, e := d.Get(physical("a", 1))
++				if e != nil || !bytes.Equal(got, oldSelected) {
++					t.Fatal("capacity refusal changed history", got, e)
++				}
++				t.Log("BATCH_CAPACITY original requested size refused before capture and allocation")
++				return
++			}
++
++			batchSize := 1
++			if scenario == "batch-two" || scenario == "batch-malformed" || scenario == "batch-tombstone-boundary" || scenario == "batch-tombstone-end" || scenario == "batch-conflict" {
++				batchSize = 2
++			}
++			if scenario == "batch-remainder" {
++				batchSize = 3
++			}
++			measured := scenario == "batch-one" || scenario == "batch-two"
++			var elapsedNS, allocBytes, allocs, calls, publications uint64
++			var before, after runtime.MemStats
++			conflicted := false
+ 			var cursor *PruneCursor
+ 			t.Cleanup(func() {
+ 				if cursor != nil {
++
+ 					if e := cursor.Close(); e != nil {
+ 						t.Error("cursor Close", e)
+ 					}
+@@ -106,7 +139,55 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 				expected = append(expected, physical("b", 1))
+ 			}
+ 			for call := 0; call < 4096; call++ {
+-				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
++				if scenario == "batch-conflict" && cursor != nil && cursor.phase == 16 && !conflicted {
++					// A legitimate competing prune consumes the FIRST buffered
++					// row under the same floor. The last constructor-bound row
++					// remains present, so validating only that row is unsafe.
++					var other *PruneCursor
++					t.Cleanup(func() {
++						if other != nil {
++							if e := other.Close(); e != nil {
++								t.Error(e)
++							}
++						}
++					})
++					for i := 0; i < 4096; i++ {
++						y, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: other})
++						if y.Cursor != nil {
++							other = y.Cursor
++						}
++						if e != nil {
++							t.Fatal("competing prune", e)
++						}
++						if y.Pruned != 0 {
++							if y.Pruned != 1 {
++								t.Fatal(y)
++							}
++							conflicted = true
++							break
++						}
++					}
++					if !conflicted {
++						t.Fatal("competing prune never published")
++					}
++					if e := other.Close(); e != nil {
++						t.Fatal(e)
++					}
++				}
++				if measured {
++					runtime.ReadMemStats(&before)
++				}
++				start := time.Now()
++				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: batchSize, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
++				duration := time.Since(start)
++				if measured {
++					runtime.ReadMemStats(&after)
++					elapsedNS += uint64(duration)
++					allocBytes += after.TotalAlloc - before.TotalAlloc
++					allocs += after.Mallocs - before.Mallocs
++					calls++
++					publications += x.Batches
++				}
+ 				if x.Cursor != nil {
+ 					cursor = x.Cursor
+ 				}
+@@ -118,19 +199,24 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 					request, captured = cursor.request, true
+ 				}
+ 				if x.Pruned != 0 {
+-					if x.Pruned != 1 || ack >= uint64(len(expected)) {
++					if scenario == "batch-two" && (x.Pruned != 2 || x.Batches != 1) {
++						t.Fatalf("BatchSize=2 must use one actual publication for two verified deletions: pruned=%d batches=%d", x.Pruned, x.Batches)
++					}
++					if x.Pruned > uint64(batchSize) || ack+x.Pruned > uint64(len(expected)) {
+ 						t.Fatal("unexpected ACK", ack, x)
+ 					}
+ 					if x.Complete || !cursor.integrityDone {
+ 						t.Fatal("ACK incorrectly claims EOF or lacks selected integrity", x.Complete, cursor.integrityDone)
+ 					}
+-					got, ge := d.Get(expected[ack])
+-					if ge != nil || got != nil {
+-						t.Fatal("ACK lacks actual physical deletion", ack, ge, got)
++					for i := uint64(0); i < x.Pruned; i++ {
++						got, ge := d.Get(expected[ack])
++						if ge != nil || got != nil {
++							t.Fatal("ACK lacks actual physical deletion", ack, ge, got)
++						}
++						ack++
+ 					}
+-					ack++
+ 					if tombstone && ack < 3 {
+-						got, ge = d.Get(physical("a", 3))
++						got, ge := d.Get(physical("a", 3))
+ 						if ge != nil || !bytes.Equal(got, []byte{recordTombstoneV1}) {
+ 							t.Fatal("tombstone removed before older history", ack, ge, got)
+ 						}
+@@ -151,14 +237,49 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 					break
+ 				}
+ 			}
++			if scenario == "batch-conflict" {
++				if !conflicted || ack != 0 || !errors.Is(scanErr, rootpublication.ErrDurableRootOwnership) {
++					t.Fatal("nonlast current conflict did not refuse whole original batch", conflicted, ack, scanErr)
++				}
++				got, e := d.Get(physical("a", 2))
++				if e != nil || got != nil {
++					t.Fatal("competing physical deletion lost", got, e)
++				}
++				got, e = d.Get(physical("a", 1))
++				if e != nil || !bytes.Equal(got, oldSelected) {
++					t.Fatal("batch prefix deleted before full validation", got, e)
++				}
++				if e := cursor.Close(); e != nil {
++					t.Fatal(e)
++				}
++				if e := old.Close(); e != nil {
++					t.Fatal(e)
++				}
++				if e := d.Close(); e != nil {
++					t.Fatal(e)
++				}
++				reopened, e := treedb.Open(opts)
++				if e != nil {
++					t.Fatal(e)
++				}
++				got, e = reopened.Get(physical("a", 1))
++				if e != nil || !bytes.Equal(got, oldSelected) {
++					t.Fatal("refused batch changed reopened history", got, e)
++				}
++				if e := reopened.Close(); e != nil {
++					t.Fatal(e)
++				}
++				t.Log("BATCH_CONFLICT nonlast winner refused before physical deletion; old and current custody closed")
++				return
++			}
+ 			if ack != uint64(len(expected)) || writes == 0 {
+ 				t.Fatal("continuation did not ACK exact history", ack, len(expected), writes, scanErr)
+ 			}
+-			if scenario == "later-malformed" {
++			if scenario == "later-malformed" || scenario == "batch-malformed" {
+ 				if !errors.Is(scanErr, ErrMalformedRecord) || complete {
+ 					t.Fatal("later malformed must preserve earlier ACK and report error", scanErr, complete)
+ 				}
+-				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
++				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: batchSize, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
+ 				if !errors.Is(e, ErrMalformedRecord) || x.Pruned != 0 || x.Complete {
+ 					t.Fatal("malformed continuation replay", x, e)
+ 				}
+@@ -173,7 +294,7 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 			if scenario == "value-anchors" {
+ 				wantVisited = 5
+ 			}
+-			if scenario == "tombstone-boundary" {
++			if scenario == "tombstone-boundary" || scenario == "batch-tombstone-boundary" {
+ 				wantVisited = 4
+ 			}
+ 			if visited != wantVisited {
+@@ -196,6 +317,9 @@ func TestNativePruneStreamingContinuation(t *testing.T) {
+ 			if e := s.CommitAt(101, []Mutation{{Key: []byte("zz"), Value: []byte("after-scan")}}, CommitDurable); e != nil {
+ 				t.Fatal(e)
+ 			}
++			if measured {
++				t.Logf("BATCH_PUBLIC_COST batch=%d ACK=%d publications=%d calls=%d writes=%d ns=%d B=%d allocs=%d", batchSize, ack, publications, calls, writes, elapsedNS, allocBytes, allocs)
++			}
+ 			if e := cursor.Close(); e != nil {
+ 				t.Fatal(e)
+ 			}
+diff --git a/TreeDB/mvcc/prune_cursor_v6.go b/TreeDB/mvcc/prune_cursor_v6.go
+index 661a1eef6..fb5685846 100644
+--- a/TreeDB/mvcc/prune_cursor_v6.go
++++ b/TreeDB/mvcc/prune_cursor_v6.go
+@@ -28,46 +28,50 @@ import (
+ type PruneCursor struct {
+ 	diagnosticUnbounded bool
+ 
+-	mu                                        sync.Mutex
+-	store                                     *Store
+-	db                                        *treedb.DB
+-	mode                                      CommitMode
+-	batchSize                                 int
+-	recordLimit, byteLimit                    uint64
+-	retention                                 *memtable.COWExternalLease
+-	retainedBytes                             uint64
+-	currentWork                               *iterator.OrdinalScanWork
+-	capture                                   treedb.NativeMVCCCaptureV6
+-	captureBegun                              bool
+-	projection                                *tree.ChargedProjection
+-	projectionAdmitted                        bool
+-	reader                                    backenddb.NativeMVCCFrameReaderV6
+-	value                                     valuelog.COWLeafContinuation
+-	codec                                     valuelog.COWZSTDContinuation
+-	template                                  valuelog.COWTemplateContinuation
+-	leaf                                      valuelog.COWLeafProjectionReader
+-	leafInput, leafRaw                        [64 << 10]byte
+-	namespace                                 [16]byte
+-	namespaceSize                             int
+-	input, raw                                [64 << 10]byte
+-	logical, previous, selected               [mvcckey.MaxEncodedKeySize]byte
+-	logicalSize, previousSize, selectedSize   int
+-	selectedBytes                             uint64
+-	selectedPending, haveAnchor, recordActive bool
+-	anchorKey, resumeKey                      [mvcckey.MaxEncodedKeySize]byte
+-	anchorSize, resumeSize                    int
+-	anchorBytes                               uint64
+-	anchorTombstone, resumeAfterAnchor        bool
+-	namespaceEnd                              bool
+-	timestamp                                 uint64
+-	record                                    node.LeafEntry
+-	requestCaptured                           bool
+-	request                                   mvccadmission.Request
+-	preparation                               *backenddb.NativeMVCCCurrentDeleteV6
+-	prepared                                  backenddb.NativeMVCCCurrentDeleteV6
+-	loadingFloor                              bool
++	mu                                                  sync.Mutex
++	store                                               *Store
++	db                                                  *treedb.DB
++	mode                                                CommitMode
++	batchSize                                           int
++	recordLimit, byteLimit                              uint64
++	retention                                           *memtable.COWExternalLease
++	retainedBytes                                       uint64
++	currentWork                                         *iterator.OrdinalScanWork
++	capture                                             treedb.NativeMVCCCaptureV6
++	captureBegun                                        bool
++	projection                                          *tree.ChargedProjection
++	projectionAdmitted                                  bool
++	reader                                              backenddb.NativeMVCCFrameReaderV6
++	value                                               valuelog.COWLeafContinuation
++	codec                                               valuelog.COWZSTDContinuation
++	template                                            valuelog.COWTemplateContinuation
++	leaf                                                valuelog.COWLeafProjectionReader
++	leafInput, leafRaw                                  [64 << 10]byte
++	namespace                                           [16]byte
++	namespaceSize                                       int
++	input, raw                                          [64 << 10]byte
++	logical, previous, selected                         [mvcckey.MaxEncodedKeySize]byte
++	logicalSize, previousSize, selectedSize             int
++	selectedBytes                                       uint64
++	batchEntries                                        []node.LeafEntry
++	batchBytes, batchPayloadCharge                      uint64
++	batchClear                                          int
++	selectionBuffered, batchFlushing, flushBeforeAnchor bool
++	selectedPending, haveAnchor, recordActive           bool
++	anchorKey, resumeKey                                [mvcckey.MaxEncodedKeySize]byte
++	anchorSize, resumeSize                              int
++	anchorBytes                                         uint64
++	anchorTombstone, resumeAfterAnchor                  bool
++	namespaceEnd                                        bool
++	timestamp                                           uint64
++	record                                              node.LeafEntry
++	requestCaptured                                     bool
++	request                                             mvccadmission.Request
++	preparation                                         *backenddb.NativeMVCCCurrentDeleteV6
++	prepared                                            backenddb.NativeMVCCCurrentDeleteV6
++	loadingFloor                                        bool
+ 	// integrityDone certifies the floor, retained anchor and exact selected
+-	// key/value integrity for ONE deletion, not global namespace validation.
++	// key/value integrity for the selected batch, not global namespace validation.
+ 	integrityDone     bool
+ 	phase, closePhase uint8
+ 	closed, complete  bool
+@@ -84,6 +88,9 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
+ 	if options.WorkRecords == 0 || options.WorkBytes == 0 {
+ 		return stats, &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: 1}
+ 	}
++	if options.BatchSize <= 0 {
++		options.BatchSize = 256
++	}
+ 	w := iterator.OrdinalScanWork{RecordLimit: options.WorkRecords, ByteLimit: options.WorkBytes}
+ 	defer func() { stats.WorkRecords, stats.WorkBytes = w.Records, w.Bytes }()
+ 	c := options.Cursor
+@@ -166,10 +173,43 @@ func (c *PruneCursor) ReleaseCodecBytes(n uint64) {
+ 	c.retainedBytes -= n
+ }
+ 
++// beginBatchFlushV6 repositions the SAME retained projection on its last
++// verified selection, so the original constructor binds a real producer row.
++func (c *PruneCursor) beginBatchFlushV6() {
++	last := c.batchEntries[len(c.batchEntries)-1]
++	copy(c.selected[:], last.Key)
++	c.selectedSize = len(last.Key)
++	c.selectedPending, c.integrityDone, c.batchFlushing = true, true, true
++	c.phase = 12
++}
++
+ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {
+ 	if c.complete {
+ 		return nil
+ 	}
++	if c.batchEntries == nil {
++		size := uint64(unsafe.Sizeof(node.LeafEntry{}))
++		if uint64(c.batchSize) > ^uint64(0)/size {
++			return &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: ^uint64(0)}
++		}
++		size *= uint64(c.batchSize)
++		if size > w.ByteLimit {
++			return &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: size}
++		}
++		if !w.Reserve(1, size) {
++			return nil
++		}
++		charge := retainedalloc.AllocationCharge(size)
++		if charge > ^uint64(0)-c.retainedBytes {
++			return &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: charge}
++		}
++		ready, err := c.retention.ResizeWork(c.retainedBytes+charge, w)
++		if !ready || err != nil {
++			return err
++		}
++		c.retainedBytes += charge
++		c.batchEntries = make([]node.LeafEntry, 0, c.batchSize)
++	}
+ 	for {
+ 		switch c.phase {
+ 		case 0:
+@@ -186,6 +226,9 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 					return nil
+ 				}
+ 				charge := tree.ChargedProjectionRetainedCharge()
++				if charge > ^uint64(0)-c.retainedBytes {
++					return &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: charge}
++				}
+ 				ready, err := c.retention.ResizeWork(c.retainedBytes+charge, w)
+ 				if !ready || err != nil {
+ 					return err
+@@ -276,6 +319,12 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 				return err
+ 			}
+ 			if !valid || !mvcckey.InNamespace(record.Key) {
++				c.namespaceEnd = true
++				if len(c.batchEntries) != 0 {
++					c.flushBeforeAnchor = c.anchorTombstone
++					c.beginBatchFlushV6()
++					continue
++				}
+ 				if c.anchorTombstone {
+ 					if !w.Reserve(1, uint64(c.anchorSize)+128) {
+ 						return nil
+@@ -337,11 +386,17 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			}
+ 			same := c.previousSize == c.logicalSize && bytes.Equal(c.previous[:c.previousSize], c.logical[:c.logicalSize])
+ 			if !same && c.anchorTombstone {
+-				// All older versions were individually fenced and ACKed before
+-				// advancing here. Only now may their tombstone anchor disappear.
++				// Older versions must be fenced and ACKed before
++				// their tombstone anchor disappears. Flush any retained batch first.
+ 				// Keep the next logical key as a seek boundary, not a second scan.
+ 				copy(c.resumeKey[:], c.record.Key)
+ 				c.resumeSize = len(c.record.Key)
++				if len(c.batchEntries) != 0 {
++					c.flushBeforeAnchor = true
++					c.record = node.LeafEntry{}
++					c.beginBatchFlushV6()
++					continue
++				}
+ 				copy(c.selected[:], c.anchorKey[:c.anchorSize])
+ 				c.selectedSize, c.selectedBytes = c.anchorSize, c.anchorBytes
+ 				c.selectedPending, c.integrityDone = true, true
+@@ -417,6 +472,7 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			}
+ 			c.phase = 14
+ 		case 14:
++			var selectedRecord node.LeafEntry
+ 			var ready bool
+ 			var err error
+ 			if c.capture.IsCompositeCOWV6() {
+@@ -431,7 +487,7 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 				if !bytes.Equal(record.Key, c.selected[:c.selectedSize]) {
+ 					return tree.ErrProjectionOwner
+ 				}
+-				ready, err = c.prepared.BindNativeMVCCCompositeDeleteV6(c.reader.Snapshot, &c.capture, c.request, w)
++				selectedRecord = record
+ 			} else {
+ 				var selection tree.NativeMVCCSelectionV6
+ 				selection, ready, err = c.projection.NativeMVCCSelectionV6(w)
+@@ -444,6 +500,46 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 				if !bytes.Equal(selection.Record().Key, c.selected[:c.selectedSize]) {
+ 					return tree.ErrProjectionOwner
+ 				}
++				selectedRecord = selection.Record()
++			}
++			if !c.selectionBuffered && !c.batchFlushing {
++				value := selectedRecord.Value
++				if selectedRecord.Flags&node.FlagPointer != 0 {
++					value = nil
++				}
++				n := uint64(len(selectedRecord.Key) + len(value))
++				if !w.Reserve(1, n*2+uint64(unsafe.Sizeof(selectedRecord))) {
++					return nil
++				}
++				charge := retainedalloc.AllocationCharge(uint64(len(selectedRecord.Key)))
++				if len(value) != 0 {
++					charge += retainedalloc.AllocationCharge(uint64(len(value)))
++				}
++				ready, err := c.retention.ResizeWork(c.retainedBytes+charge, w)
++				if !ready || err != nil {
++					return err
++				}
++				c.retainedBytes += charge
++				selectedRecord.Key = bytes.Clone(selectedRecord.Key)
++				selectedRecord.Value = bytes.Clone(value)
++				c.batchEntries = append(c.batchEntries, selectedRecord)
++				c.batchPayloadCharge += charge
++				c.batchBytes += c.selectedBytes
++				c.selectionBuffered = true
++			}
++			if len(c.batchEntries) < c.batchSize && !c.batchFlushing && !c.resumeAfterAnchor {
++				c.selectionBuffered, c.selectedPending, c.integrityDone = false, false, false
++				c.phase = 11
++				continue
++			}
++			if c.capture.IsCompositeCOWV6() {
++				ready, err = c.prepared.BindNativeMVCCCompositeDeleteV6(c.reader.Snapshot, &c.capture, c.request, w)
++			} else {
++				var selection tree.NativeMVCCSelectionV6
++				selection, ready, err = c.projection.NativeMVCCSelectionV6(w)
++				if !ready || err != nil {
++					return err
++				}
+ 				ready, err = c.prepared.BindNativeMVCCCurrentDeleteV6(c.reader.Snapshot, selection, c.request, w)
+ 			}
+ 			if !ready || err != nil {
+@@ -456,6 +552,10 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			if !ready || err != nil {
+ 				return err
+ 			}
++			ready, err = c.preparation.BindNativeMVCCDeleteBatchV6(c.batchEntries, w)
++			if !ready || err != nil {
++				return err
++			}
+ 			c.phase = 16
+ 			// A prepared return must permit legal intervening writes. Current-root
+ 			// composition has not run and the immutable Request remains unchanged.
+@@ -485,8 +585,8 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			if err := c.db.PublishNativeMVCCUnboundedDiagnosticV6(c.preparation); err != nil {
+ 				return err
+ 			}
+-			stats.Pruned++
+-			stats.PrunedBytes += c.selectedBytes
++			stats.Pruned += uint64(len(c.batchEntries))
++			stats.PrunedBytes += c.batchBytes
+ 			stats.Batches++
+ 			// ACK covers this exact finished transaction only. The retained scan
+ 			// still owns later history and may subsequently report a real error.
+@@ -496,14 +596,38 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))+128) {
+ 				return nil
+ 			}
+-			ready, err := c.preparation.CloseNativeMVCCCurrentDeleteStepV6(w)
+-			if !ready || err != nil {
+-				return err
++			if c.preparation != nil {
++				ready, err := c.preparation.CloseNativeMVCCCurrentDeleteStepV6(w)
++				if !ready || err != nil {
++					return err
++				}
++				c.preparation = nil
++				c.prepared = backenddb.NativeMVCCCurrentDeleteV6{}
++			}
++			for c.batchClear < len(c.batchEntries) {
++				if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {
++					return nil
++				}
++				c.batchEntries[c.batchClear] = node.LeafEntry{}
++				c.batchClear++
++			}
++			if !w.Reserve(1, 64) {
++				return nil
+ 			}
+-			c.preparation = nil
+-			c.prepared = backenddb.NativeMVCCCurrentDeleteV6{}
++			c.batchEntries = c.batchEntries[:0]
++			c.ReleaseCodecBytes(c.batchPayloadCharge)
++			c.batchPayloadCharge, c.batchBytes, c.batchClear = 0, 0, 0
++			c.selectionBuffered, c.batchFlushing = false, false
+ 			c.selectedPending, c.integrityDone = false, false
+ 			c.selectedSize, c.selectedBytes = 0, 0
++			if c.flushBeforeAnchor {
++				c.flushBeforeAnchor = false
++				copy(c.selected[:], c.anchorKey[:c.anchorSize])
++				c.selectedSize, c.selectedBytes = c.anchorSize, c.anchorBytes
++				c.selectedPending, c.integrityDone, c.resumeAfterAnchor = true, true, true
++				c.phase = 12
++				continue
++			}
+ 			if c.resumeAfterAnchor {
+ 				c.resumeAfterAnchor, c.anchorTombstone, c.haveAnchor = false, false, false
+ 				c.anchorSize, c.anchorBytes = 0, 0
+@@ -512,6 +636,9 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 					return nil
+ 				}
+ 				c.phase = 21
++			} else if c.namespaceEnd {
++				c.complete = true
++				return nil
+ 			} else {
+ 				c.phase = 11
+ 			}
+@@ -605,6 +732,7 @@ func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
+ 			}
+ 			c.closePhase = 4
+ 		case 4:
++			c.batchEntries = nil
+ 			c.store, c.db = nil, nil
+ 			c.request = mvccadmission.Request{}
+ 			c.codec = valuelog.COWZSTDContinuation{}

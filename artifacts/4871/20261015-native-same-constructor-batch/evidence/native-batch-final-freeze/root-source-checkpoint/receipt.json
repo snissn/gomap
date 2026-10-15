@@ -1,0 +1,68 @@
+{
+  "at_utc": "2026-10-15T01:20:33.012999+00:00",
+  "parent": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+  "packet_receipt_sha256": "164b9b5b8da141fdb5e299ebb4017d683fbcbdfa19e38be1dfc676c01f8c80af",
+  "packet_manifest_sha256": "fab56c41f031f257a449400c7cb8e2e465510415464084e75bdc9fce2eb31775",
+  "source": [
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "bytes": 15556,
+      "sha256": "734582e65e286a20acee02fa04500a6abf82e1585aa7024ef1ba114eedfd5cec",
+      "preimage_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+      "preimage_bytes": 14669,
+      "preimage_sha256": "c03193230d0bbb644ad2584ec3bf918e2e747be4948b6d1ac25e7046fd26be6f"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+      "bytes": 5164,
+      "sha256": "4cb260a0f3e3d9623ceaf00c36d6ac5cc2c0800381686063348acedd567de799",
+      "preimage_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+      "preimage_bytes": 4984,
+      "preimage_sha256": "ea59ac8691bb978ea3921b27c582d98ecc4ccf9a89782501dfb1e5d786d02a17"
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 3009,
+      "sha256": "1bc41b6362fbdab47ae5a1148e6fe54bfebf0513d36cb1beb3dddcaa8f20556f",
+      "preimage_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+      "preimage_bytes": 1681,
+      "preimage_sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5"
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 11949,
+      "sha256": "6b54c1fda11f2d455967d0c71186e365b1d31d61413af7250b7e879c2924e7a1",
+      "preimage_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+      "preimage_bytes": 7124,
+      "preimage_sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 23801,
+      "sha256": "3da78304fcd08d7d32a5faea7f213182e33c1456f60fb17aa52ba6bd2ba4ee82",
+      "preimage_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+      "preimage_bytes": 19129,
+      "preimage_sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    }
+  ],
+  "go_and_doc_source_rows_verified": 4345,
+  "protected_fixture": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "foreign_preserved": {
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+  },
+  "meaningful_public_red_green": true,
+  "focused_normal_and_race_pass": true,
+  "qualification": "SAME-constructor diagnostic batching only. Actual2 deletions/1 publication; focused10 normal/race PASS. Single cost samples: fewer calls/time/alloccount, bytes more than double and intervening29vs32writes. No causal/statistical performance acceptance; bounded phase16/Q32/production/final gates OPEN.",
+  "merged": false,
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "41dd12c84c874b1d9a0a1c8cdc9e160c9379f17c",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}

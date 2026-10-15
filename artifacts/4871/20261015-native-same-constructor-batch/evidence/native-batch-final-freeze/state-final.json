@@ -1,0 +1,22 @@
+{
+  "head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+  "status": " M TreeDB/db/native_mvcc_current_delete_v6.go\n M TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n M TreeDB/mvcc/native_streaming_prune_v6.md\n M TreeDB/mvcc/native_streaming_prune_v6_test.go\n M TreeDB/mvcc/prune_cursor_v6.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "index_sha256": "39306e43ec1850f9e0ab11e0050d20e336aac662dadbc61bf9e267ca67785f4b",
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "foreign": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ]
+}

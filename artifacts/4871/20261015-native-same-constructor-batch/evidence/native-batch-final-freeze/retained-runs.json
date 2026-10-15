@@ -1,0 +1,222 @@
+[
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/command.json",
+    "bytes": 641,
+    "sha256": "9eda89c6b77f331a836311d28ea753151fae202ba5d437f4fb5fa46ead23f267"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/exit.json",
+    "bytes": 141,
+    "sha256": "a58dc391d328c757ad6f08a8bfb9f8e2b66746b6812a001dd09b5f070798df6c"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/raw.jsonl",
+    "bytes": 2470,
+    "sha256": "26570082087e1bda95e217fcccbaa96bb55f6c9600dcdf5a3afabe5b07694816"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/source-after.json",
+    "bytes": 781369,
+    "sha256": "5e6e85c87782827b5742d55c974ac0b0ebb0faabd9ab82438a0b8f3c3c0cfffb"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/source-before.json",
+    "bytes": 781369,
+    "sha256": "5e6e85c87782827b5742d55c974ac0b0ebb0faabd9ab82438a0b8f3c3c0cfffb"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+    "bytes": 1681,
+    "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "bytes": 7517,
+    "sha256": "2b7b66a10a3a4b684c83847dd234bf6325edafaaee574aaefe0fd3895e175fe5"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 19129,
+    "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/state-after.json",
+    "bytes": 336,
+    "sha256": "1b2eb30fe8f5d714e8adabb95ad9939e4cbd5d0746a4dc65da765b41d64460dc"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-two-red-v1/state-before.json",
+    "bytes": 336,
+    "sha256": "1b2eb30fe8f5d714e8adabb95ad9939e4cbd5d0746a4dc65da765b41d64460dc"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/command.json",
+    "bytes": 804,
+    "sha256": "c9f605370f76c38d8aa027a2b50ccced01ea90365d228f5f06eee14e79b52e44"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/exit.json",
+    "bytes": 141,
+    "sha256": "e63d4646f207a86eec9d199623b5bb20bf57194bd3d5ab8dbdfbaf1e573bfa9c"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/raw.jsonl",
+    "bytes": 13640,
+    "sha256": "a4b5b24c31b754bdea7ef41ea16151387cedef7a472e92aa8e5920567e2dfcae"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/source-after.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/source-before.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+    "bytes": 3009,
+    "sha256": "1bc41b6362fbdab47ae5a1148e6fe54bfebf0513d36cb1beb3dddcaa8f20556f"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "bytes": 11949,
+    "sha256": "6b54c1fda11f2d455967d0c71186e365b1d31d61413af7250b7e879c2924e7a1"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 23801,
+    "sha256": "3da78304fcd08d7d32a5faea7f213182e33c1456f60fb17aa52ba6bd2ba4ee82"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/state-after.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-normal-v4/state-before.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/command.json",
+    "bytes": 817,
+    "sha256": "6afee034a6feaebda396afae61257005e2aef750badd59093045545a5a6e1d06"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/exit.json",
+    "bytes": 141,
+    "sha256": "e034eace5e3861578e4b46bc9634cd7eb9639c518dbbb318e2bf1823464b9b99"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/raw.jsonl",
+    "bytes": 13641,
+    "sha256": "145e9fcfe0db6d48ad1807fbc39b968f53aed3518427e9dfe0c9ccfceaa58b0d"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/source-after.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/source-before.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+    "bytes": 3009,
+    "sha256": "1bc41b6362fbdab47ae5a1148e6fe54bfebf0513d36cb1beb3dddcaa8f20556f"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "bytes": 11949,
+    "sha256": "6b54c1fda11f2d455967d0c71186e365b1d31d61413af7250b7e879c2924e7a1"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 23801,
+    "sha256": "3da78304fcd08d7d32a5faea7f213182e33c1456f60fb17aa52ba6bd2ba4ee82"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/state-after.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-risk-race-final/state-before.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/command.json",
+    "bytes": 654,
+    "sha256": "7244447bd2b0af185233ec85a4cf3c0e84b244a11557753a6e0f72f3fe039856"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/exit.json",
+    "bytes": 141,
+    "sha256": "d9b5d07ef59a95fafe332281cbee7cbe444a1105e8214dc2e2d7f9d967d9f699"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/raw.jsonl",
+    "bytes": 4304,
+    "sha256": "54b1631b88f21a98e288e9c8e7b713287a99768c60b42b1cf8fd9a98ac43b0f3"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/source-after.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/source-before.json",
+    "bytes": 781370,
+    "sha256": "571b3293d7050f9cc711a13ea85940703ab08df3fa69cb8b60528be717d9c7e6"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+    "bytes": 3009,
+    "sha256": "1bc41b6362fbdab47ae5a1148e6fe54bfebf0513d36cb1beb3dddcaa8f20556f"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "bytes": 11949,
+    "sha256": "6b54c1fda11f2d455967d0c71186e365b1d31d61413af7250b7e879c2924e7a1"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 23801,
+    "sha256": "3da78304fcd08d7d32a5faea7f213182e33c1456f60fb17aa52ba6bd2ba4ee82"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/state-after.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  },
+  {
+    "path": "evidence/native-public-bridge-20261015/native-batch-total-cost-final/state-before.json",
+    "bytes": 516,
+    "sha256": "93023d39c18d0c3f45848951aa4618d3a29a4fc023467c573767f5e78b5190c4"
+  }
+]

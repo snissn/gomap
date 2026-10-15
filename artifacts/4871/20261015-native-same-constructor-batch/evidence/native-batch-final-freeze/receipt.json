@@ -1,0 +1,46 @@
+{
+  "at_utc": "2026-10-15T01:19:01.754065+00:00",
+  "head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+  "owned_paths": [
+    "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/mvcc/native_streaming_prune_v6.md",
+    "TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "TreeDB/mvcc/prune_cursor_v6.go"
+  ],
+  "source_rows": 4345,
+  "source_frozen": true,
+  "no_go_producer": true,
+  "normal": "native-batch-risk-normal-v4",
+  "race": "native-batch-risk-race-final",
+  "same_total_cost": "native-batch-total-cost-final",
+  "meaningful_red": "native-batch-two-red-v1",
+  "scope": "Native diagnostic SAME-constructor batching and streaming continuation; production phase16/Q32 still refuses. No bounded acceptance or statistical performance claim.",
+  "metrics": [
+    {
+      "batch": 2,
+      "ack": 2,
+      "publications": 1,
+      "calls": 30,
+      "writes": 29,
+      "ns": 665736,
+      "bytes": 6380752,
+      "allocs": 1333
+    },
+    {
+      "batch": 1,
+      "ack": 2,
+      "publications": 2,
+      "calls": 33,
+      "writes": 32,
+      "ns": 897950,
+      "bytes": 2949992,
+      "allocs": 2185
+    }
+  ],
+  "limitations": [
+    "Single sample per batch size, differing intervening write count; higher total allocation bytes for BatchSize2 remains unresolved.",
+    "Explicit synchronous diagnostic work records are incomplete; production bounded phase16 remains unsupported.",
+    "No broad qualification or protected33/80/4096 acceptance in this packet."
+  ]
+}
