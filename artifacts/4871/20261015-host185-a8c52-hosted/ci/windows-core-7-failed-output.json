@@ -1,0 +1,3 @@
+{
+  "TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests": "=== RUN   TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests\n    durable_root_bench_test.go:786: rebuild refusal=online vacuum unsupported on this platform want reject rebuilt runtime before cutover\n    durable_root_bench_test.go:440: cohort final cleanup retained temporary governor\n    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests3595333576\\001\\index.db.primary: The process cannot access the file because it is being used by another process.\n--- FAIL: TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests (2.11s)\n"
+}

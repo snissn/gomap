@@ -1,0 +1,32 @@
+{
+  "classification": "UNRESOLVED_VARIABILITY_DIFFERENT_HOSTS",
+  "prior_head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "current_head": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "prior_cpu": "cpu: AMD EPYC 7763 64-Core Processor",
+  "current_cpu": "cpu: AMD EPYC 9V45 96-Core Processor",
+  "prior_gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": true,
+    "public_status_explicit": true
+  },
+  "current_gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": false,
+    "public_status_explicit": true
+  },
+  "current_p99_samples_ns": [
+    17923635.0,
+    10135629.0,
+    10643403.0,
+    10707930.0,
+    10603853.0,
+    16155972.0,
+    10047718.0,
+    10075049.0,
+    10282019.0,
+    10269421.0
+  ],
+  "current_cv": 0.2450147914246122,
+  "limit": 0.1,
+  "disposition": "No retry of already rejected head. Preserve original threshold and all samples; next coherent successor needs unchanged exact-head CI. Different CPU generations and unmatched machines prevent before/after attribution. Existing artifacts do not prove background-host cause or source cause."
+}

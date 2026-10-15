@@ -1,0 +1,3 @@
+{
+  "TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure": "=== RUN   TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure\n    durable_root_owner_continuity_test.go:229: vacuum result=online vacuum unsupported on this platform\n        original DB physical cleanup failed want admission and actual original Close refusal\n--- FAIL: TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure (0.05s)\n"
+}

@@ -1,0 +1,80 @@
+{
+  "all_6_executables_match": true,
+  "bindings_match": true,
+  "files": [
+    {
+      "path": "measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "bytes": 55518772,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    {
+      "path": "measured-binaries/baseline-caching.test",
+      "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+      "bytes": 32696518,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    {
+      "path": "measured-binaries/baseline-treedb.test",
+      "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+      "bytes": 52438387,
+      "source_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    {
+      "path": "measured-binaries/candidate-db.test",
+      "sha256": "5e182ceb21aa29ad3a271b380ab3afce4a93db1a09d0cc6f6b4c3b50e60e50f7",
+      "bytes": 61274898,
+      "source_sha": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc"
+    },
+    {
+      "path": "measured-binaries/candidate-caching.test",
+      "sha256": "797acda748da99a0867b5bd8d6f606919848bd680bbd9c827eca035e606231ea",
+      "bytes": 36939448,
+      "source_sha": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc"
+    },
+    {
+      "path": "measured-binaries/candidate-treedb.test",
+      "sha256": "edef866f664c149faf9b285c7c05c2f814cef0339363ad24210ab749c8dc29dd",
+      "bytes": 56834722,
+      "source_sha": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc"
+    }
+  ],
+  "raw_recomputation_equal": true,
+  "checker_sha256": "3405c6088aff3ff6d06caa6f62b860edddbcbb18a983f91ac9d67af94c0eec9a",
+  "argv": [
+    "python3",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/checker-a8c52.py",
+    "--baseline",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/baseline.txt",
+    "--candidate",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/candidate.txt",
+    "--baseline-sha",
+    "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "--candidate-sha",
+    "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+    "--json-output",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/root-recomputed-summary.json",
+    "--markdown-output",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/root-recomputed-summary.md",
+    "--expected-samples",
+    "8",
+    "--max-regression-percent",
+    "5",
+    "--max-bytes-regression-percent",
+    "1",
+    "--max-bytes-regression-absolute",
+    "64",
+    "--baseline-db-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/baseline-db.test",
+    "--baseline-caching-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/baseline-caching.test",
+    "--baseline-treedb-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/baseline-treedb.test",
+    "--candidate-db-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/candidate-db.test",
+    "--candidate-caching-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/candidate-caching.test",
+    "--candidate-treedb-binary",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/a8c52-rawpath-hosted/measured-binaries/candidate-treedb.test"
+  ]
+}
