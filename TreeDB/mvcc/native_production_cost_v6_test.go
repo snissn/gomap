@@ -27,6 +27,8 @@ const (
 	nativeCostProductionLatencyV6 nativeCostModeV6 = "production_latency"
 	nativeCostProductionAllocV6   nativeCostModeV6 = "production_outer_alloc"
 	nativeCostDiagnosticProfileV6 nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_allocation_attribution"
+	nativeCostDiagnosticLatencyV6 nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_latency"
+	nativeCostDiagnosticAllocV6   nativeCostModeV6 = "UNBOUNDED_DIAGNOSTIC_outer_alloc"
 )
 
 func TestNativePruneCOWRetainedOutputProductionLatency(t *testing.T) {
@@ -39,8 +41,17 @@ func TestNativePruneCOWRetainedOutputDiagnosticAllocationAttribution(t *testing.
 	runNativeProductionCostV6(t, nativeCostDiagnosticProfileV6)
 }
 
+// These separately named diagnostic observations never qualify production.
+func TestNativePruneCOWRetainedOutputDiagnosticLatency(t *testing.T) {
+	runNativeProductionCostV6(t, nativeCostDiagnosticLatencyV6)
+}
+func TestNativePruneCOWRetainedOutputDiagnosticAlloc(t *testing.T) {
+	runNativeProductionCostV6(t, nativeCostDiagnosticAllocV6)
+}
+
 func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
 	fixed, multileaf := true, true
+	diagnostic := mode == nativeCostDiagnosticProfileV6 || mode == nativeCostDiagnosticLatencyV6 || mode == nativeCostDiagnosticAllocV6
 	if mode == nativeCostDiagnosticProfileV6 {
 		runtime.MemProfileRate = 1
 	}
@@ -148,16 +159,16 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
 				runtime.GC()
 				profileBefore = nativeCostMemProfileV6(t, profileBefore)
 			}
-			if mode == nativeCostProductionAllocV6 {
+			if mode == nativeCostProductionAllocV6 || mode == nativeCostDiagnosticAllocV6 {
 				runtime.ReadMemStats(&wholeBefore)
 			}
 			prune := s.PruneVersions
 			api := "PruneVersions"
-			if mode == nativeCostDiagnosticProfileV6 {
+			if diagnostic {
 				prune = s.PruneVersionsUnboundedDiagnosticForTest
 				api = "PruneVersionsUnboundedDiagnosticForTest"
 			}
-			var sequenceWall time.Duration
+			var sequenceWall, pruneElapsed time.Duration
 			sequenceStarted := time.Now()
 			for call := 0; call < 4096; call++ {
 				// Observe the retained ID at call entry, before publication consumes
@@ -166,7 +177,9 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
 				if cursor != nil && cursor.preparation != nil {
 					inputID = cursor.preparation.MaterializedInstalledPageForTest()
 				}
+				callStarted := time.Now()
 				x, e := prune(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
+				pruneElapsed += time.Since(callStarted)
 				if x.Pruned != 0 {
 					sequenceWall = time.Since(sequenceStarted)
 				}
@@ -226,7 +239,7 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
 			if sequenceWall == 0 {
 				sequenceWall = time.Since(sequenceStarted)
 			}
-			if mode == nativeCostProductionAllocV6 {
+			if mode == nativeCostProductionAllocV6 || mode == nativeCostDiagnosticAllocV6 {
 				runtime.ReadMemStats(&wholeAfter)
 			}
 			if mode == nativeCostDiagnosticProfileV6 {
@@ -250,7 +263,7 @@ func runNativeProductionCostV6(t *testing.T, mode nativeCostModeV6) {
 				}
 			}
 			cursorCleanup := time.Since(cleanupStarted)
-			t.Logf("NATIVE_COST_V6 mode=%s api=%s diagnostic=%t fixed_one_write=true first_call_to_ACK_wall_ns=%d intervening_writes=%d write_ns=%d cursor_cleanup_ns=%d whole_sequence_alloc_bytes=%d whole_sequence_alloc_count=%d allocation_scope=processwide_includes_intervening_write_and_runtime ACK=%d nativePrepared_observations=%d nativeCut_observations=%d error=%v", mode, api, mode == nativeCostDiagnosticProfileV6, sequenceWall.Nanoseconds(), writes, writeElapsed.Nanoseconds(), cursorCleanup.Nanoseconds(), wholeAfter.TotalAlloc-wholeBefore.TotalAlloc, wholeAfter.Mallocs-wholeBefore.Mallocs, ack, prepared, cut, pruneErr)
+			t.Logf("NATIVE_COST_V6 mode=%s api=%s diagnostic=%t fixed_one_write=true first_call_to_ACK_wall_ns=%d all_prune_calls_ns=%d intervening_writes=%d write_ns=%d cursor_cleanup_ns=%d whole_sequence_alloc_bytes=%d whole_sequence_alloc_count=%d allocation_scope=processwide_includes_intervening_write_and_runtime ACK=%d nativePrepared_observations=%d nativeCut_observations=%d error=%v", mode, api, diagnostic, sequenceWall.Nanoseconds(), pruneElapsed.Nanoseconds(), writes, writeElapsed.Nanoseconds(), cursorCleanup.Nanoseconds(), wholeAfter.TotalAlloc-wholeBefore.TotalAlloc, wholeAfter.Mallocs-wholeBefore.Mallocs, ack, prepared, cut, pruneErr)
 			if ack == 1 {
 				got, e := d.Get(selectedKey)
 				if e != nil || got != nil {

@@ -33,6 +33,8 @@ type MaterializedWriteWork struct {
 	owner                              *retainedalloc.Owner
 	head, current, root                *materializedWriteFrame
 	reader                             MaterializedFrameReaderV6
+	leafAppend                         valuelog.LeafAppendWork
+	appendTarget                       *materializedWriteFrame
 	unboundedLeafPersistenceDiagnostic bool
 	charge                             uint64
 	refs                               PointerRefCounts
@@ -71,7 +73,6 @@ type materializedWriteFrame struct {
 	output                              [page.PageSize]byte
 	scratch, key, nextKey               [page.PageSize]byte
 	encoder                             node.Builder
-	leafAppend                          valuelog.LeafAppendWork
 	outputReserved                      bool
 	selectLeaf                          leafMergeCursor
 	event                               leafMergeEvent
@@ -110,6 +111,23 @@ func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.Ch
 	}
 	s.root, s.current = f, f
 	return s, true, nil
+}
+
+// appendWorkspaceForTarget binds the single original producer workspace through
+// physical append, wrapper hooks and cache/result admission. Traversal is serial;
+// another target cannot borrow it until the previous target is written.
+func (s *MaterializedWriteWork) appendWorkspaceForTarget(target *materializedWriteFrame, w *iterator.OrdinalScanWork) (*valuelog.LeafAppendWork, bool, error) {
+	if s.appendTarget == target {
+		return &s.leafAppend, true, nil
+	}
+	if s.appendTarget != nil {
+		return nil, false, ErrMaterializedWriteContinuation
+	}
+	if ok, e := mergeReserve(w, 1, uint64(2*unsafe.Sizeof(target))); !ok || e != nil {
+		return nil, false, e
+	}
+	s.appendTarget = target
+	return &s.leafAppend, true, nil
 }
 func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*materializedWriteFrame, bool, error) {
 	if (!ref.IsPage() || ref.Page < 2) && !ref.IsLeafLog() {
@@ -383,7 +401,11 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 					if !ok {
 						return false, ErrMaterializedWriteContinuation
 					}
-					if target.leafAppend.Phase == 0 {
+					appendWork, ready, e := s.appendWorkspaceForTarget(target, w)
+					if !ready || e != nil {
+						return false, e
+					}
+					if appendWork.Phase == 0 {
 						target.encoder.SetPageID(0)
 						ready, e := target.encoder.FinishNoNodeWithWork(w)
 						if !ready || e != nil {
@@ -399,7 +421,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 						}
 						target.outputReserved = true
 					}
-					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], &target.leafAppend, w)
+					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], appendWork, w)
 					if !ready || e != nil {
 						return false, e
 					}
@@ -459,6 +481,16 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 				}
 			}
 			target.written = true
+			if s.appendTarget != nil {
+				if s.appendTarget != target {
+					return false, ErrMaterializedWriteContinuation
+				}
+				ready, e := s.leafAppend.ResetCompletedWithWork(w)
+				if !ready || e != nil {
+					return false, e
+				}
+				s.appendTarget = nil
+			}
 			if f.splitPending {
 				f.phase = 14
 				continue
@@ -550,6 +582,12 @@ func (s *MaterializedWriteWork) Complete() (*retainedalloc.Owner, uint64) {
 	return m, c
 }
 func (s *MaterializedWriteWork) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
+	// The original producer can retain physical append/hook aliases across
+	// refusal or error. Until its checked abandonment continuation is installed,
+	// do not discard its target or refund the containing workspace.
+	if s.appendTarget != nil {
+		return false, ErrMaterializedWriteContinuation
+	}
 	for s.head != nil {
 		f := s.head
 		ready, e := f.append.Cancel(w)
