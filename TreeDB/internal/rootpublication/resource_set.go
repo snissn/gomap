@@ -2767,6 +2767,15 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 		source.mu.Unlock()
 		return nil, false, ErrResourceOwnership
 	}
+	// Only a genuinely absent generic closure has no ownership to clone.
+	// Empty selected metadata, directory leases, evidence and pin accounting
+	// remain real independent edges even when there are no physical entries.
+	if source.metadata == nil && !source.selected && source.extras == nil &&
+		len(source.entries) == 0 && source.kindViews == nil && len(source.pinHighWater) == 0 &&
+		!source.releasedDirectoryLease {
+		source.mu.Unlock()
+		return nil, true, nil
+	}
 	if directory := source.emptyDependencyDirectoryLocked(); directory != nil {
 		var owner *retainedalloc.Owner
 		if source.metadata != nil {
@@ -3767,7 +3776,9 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			return nil, work, err
 		}
 		if shared {
-			work.PhysicalRootShares = uint64(cloned.kindViews.len())
+			if cloned != nil {
+				work.PhysicalRootShares = uint64(cloned.kindViews.len())
+			}
 			return cloned, work, nil
 		}
 	}

@@ -43,7 +43,7 @@ type indexGen struct {
 	// Original containing-wrapper borrowers are separate from physical
 	// generation/retirement refs and survive terminal physical close.
 	wrapperMu         sync.Mutex
-	wrapperBorrows    uint64
+	wrapperBorrows    atomic.Uint64
 	physicalCompleted bool
 	closeCompleted    bool
 	failedSnapshots   *Snapshot
@@ -127,12 +127,13 @@ func (g *indexGen) close() error {
 	g.closeOnce.Do(func() {
 		defer func() {
 			g.wrapperMu.Lock()
-			g.closeCompleted = true
 			if g.closeErr != nil {
 				g.closeErr = g.originalCloseFailure(g.closeErr)
 				if g.metadata != nil {
 					g.metadata.CleanupFailed()
 				}
+				g.closeCompleted = true
+				g.wrapperBorrows.Or(indexWrapperTerminalV6)
 				g.wrapperMu.Unlock()
 				return
 			}
@@ -140,6 +141,8 @@ func (g *indexGen) close() error {
 			// startup Manager/LOCK cleanup. Keep the original containing
 			// payload until the SAME startup completion edge consumes it.
 			g.physicalCompleted = true
+			g.closeCompleted = true
+			g.wrapperBorrows.Or(indexWrapperTerminalV6)
 			g.wrapperMu.Unlock()
 		}()
 		g.clearPrimaryRecoveryLeasesV5()
@@ -217,34 +220,57 @@ func (g *indexGen) close() error {
 	return g.closeErr
 }
 
+// The terminal bit and borrow count share one atomic handoff. A release
+// either leaves the original physical close caller to observe its decrement,
+// or observes the fixed close outcome and joins the locked terminal/error path.
+const indexWrapperTerminalV6 = uint64(1) << 63
+const indexWrapperCountMaskV6 = indexWrapperTerminalV6 - 1
+
+func (g *indexGen) wrapperBorrowCountV6() uint64 {
+	return g.wrapperBorrows.Load() & indexWrapperCountMaskV6
+}
+
 func (g *indexGen) retainWrapperBorrow() {
-	g.wrapperMu.Lock()
-	// Each increment has one live original containing Snapshot/Prune object;
-	// uint64 represents the complete physically addressable object domain.
-	g.wrapperBorrows++
-	g.wrapperMu.Unlock()
+	// Capture already owns the generation's original physical/registry edge.
+	// The addressable Snapshot domain is smaller than the 63-bit count.
+	if g.wrapperBorrows.Add(1)&indexWrapperCountMaskV6 == 0 {
+		panic("generation scope borrow overflow")
+	}
+}
+
+func (g *indexGen) dropWrapperBorrowV6() uint64 {
+	state := g.wrapperBorrows.Add(^uint64(0))
+	if state&indexWrapperCountMaskV6 == indexWrapperCountMaskV6 {
+		panic("generation completed scope borrow underflow")
+	}
+	return state
 }
 
 // The caller consumes this by-value original completion only after clearing
 // generation aliases. No containing refund runs while wrapperMu is held.
 func (g *indexGen) releaseWrapperBorrowCompletionV6(snapshot *Snapshot, cleanupErr error) (metadata *retainedalloc.Owner, charge uint64, err error) {
+	consumed := false
+	if cleanupErr == nil {
+		state := g.dropWrapperBorrowV6()
+		if state&indexWrapperTerminalV6 == 0 {
+			// Last access through this scope's alias. Concurrent close owns
+			// its own borrow and observes this atomic decrement.
+			return nil, 0, nil
+		}
+		consumed = true
+	}
 	g.wrapperMu.Lock()
 	err = cleanupErr
 	if err == nil && g.closeCompleted {
 		err = g.closeErr
 	}
 	if err != nil {
-		if snapshot == nil && cleanupErr == nil {
-			// This caller successfully disposed its own scope. Reporting an
-			// already failed physical generation does not leave a phantom
-			// scope borrow; closeFailure and metadata retain that exact debt.
-			if g.wrapperBorrows == 0 {
-				g.wrapperMu.Unlock()
-				panic("generation completed scope borrow underflow")
-			}
-			g.wrapperBorrows--
-		}
 		if snapshot != nil {
+			// A failed Snapshot keeps its exact borrow and payload. Failed
+			// physical close cannot detach/refund terminal metadata.
+			if consumed {
+				g.wrapperBorrows.Add(1)
+			}
 			snapshot.generationFailedNext = g.failedSnapshots
 			g.failedSnapshots = snapshot
 		}
@@ -257,7 +283,9 @@ func (g *indexGen) releaseWrapperBorrowCompletionV6(snapshot *Snapshot, cleanupE
 		}
 		return nil, 0, err
 	}
-	g.wrapperBorrows--
+	if !consumed {
+		g.dropWrapperBorrowV6()
+	}
 	metadata, charge = g.detachGenerationMetadataLockedV6()
 	g.wrapperMu.Unlock()
 	return metadata, charge, nil
@@ -281,11 +309,7 @@ func (g *indexGen) closeWithCompletionV6() (metadata *retainedalloc.Owner, charg
 	// This edge covers the physical call scope only. A failed close retains
 	// the SAME closeFailure payload and metadata debt, while each failed
 	// Snapshot retains its separate original wrapper borrow.
-	if g.wrapperBorrows == 0 {
-		g.wrapperMu.Unlock()
-		panic("generation Close call borrow underflow")
-	}
-	g.wrapperBorrows--
+	g.dropWrapperBorrowV6()
 	if err == nil {
 		metadata, charge = g.detachGenerationMetadataLockedV6()
 	}
@@ -306,7 +330,7 @@ func (g *indexGen) detachGenerationMetadataCompletionV6() (metadata *retainedall
 }
 
 func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uint64) {
-	if !g.physicalCompleted || g.wrapperBorrows != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
+	if !g.physicalCompleted || g.wrapperBorrowCountV6() != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
 		return nil, 0
 	}
 	metadata, charge := g.metadata, g.metadataCharge

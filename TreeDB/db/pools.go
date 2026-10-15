@@ -51,7 +51,7 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 	}
 	r := oneShotReadPool.Get().(*oneShotRead)
 	db.valueLogPublicationMu.RLock()
-	ok := db.captureSnapshotWithValueLogPublicationLockHeld(&r.snapshot)
+	ok := db.captureSnapshotForReadWithValueLogPublicationLockHeld(&r.snapshot, true)
 	db.valueLogPublicationMu.RUnlock()
 	if !ok {
 		oneShotReadPool.Put(r)
@@ -63,7 +63,7 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 func (r *oneShotRead) close() error {
 	// Close shares all registry, value-log, and leaf-generation release logic.
 	// The read has returned, so there are no outstanding readers or iterators.
-	err := r.snapshot.Close()
+	err := r.snapshot.closeRead(true)
 	if err != nil {
 		// The exact Snapshot may now be linked to its original cleanup owner.
 		// Reusing it would overwrite that owner's surviving physical debt.
@@ -91,6 +91,10 @@ func (p *SnapshotPool) Get() *Snapshot {
 }
 
 func (p *SnapshotPool) Put(s *Snapshot) {
+	p.putRead(s, false)
+}
+
+func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	if s == nil {
 		return
 	}
@@ -121,12 +125,16 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.leafGenerationPinSet = nil
 	s.reader = valueReader{}
 	s.registryID = 0
-	s.iteratorMu.Lock()
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
 	clear(s.iterators)
 	s.readState.Store(snapshotReadClosedBit)
 	s.closed.Store(true)
 	s.finalized.Store(false)
-	s.iteratorMu.Unlock()
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
 	// Do not make the exported handle reusable. See SnapshotPool's contract.
 }
 

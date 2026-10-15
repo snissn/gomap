@@ -41,6 +41,23 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 	if !native && (state.nativeOwned || f.nativeCallbacks.Load()) {
 		return false, ErrNativeMVCCFileWork
 	}
+	// A finite native turn may retry the same join without hiding a wait.
+	// Ordinary Close stops admission before waiting for the actual queued worker.
+	// No Manager membership lock is held by published-File retirement callers.
+	if !native && f.remapRequested.Load() {
+		f.closed.Store(true)
+		f.closeMu.Unlock()
+		f.remapWorkers.Wait()
+		f.closeMu.Lock()
+		// Another closer may have completed or claimed the original state while
+		// this closer joined the same worker without holding its retirement lock.
+		if state.phase == 8 {
+			return true, f.closeErr
+		}
+		if state.nativeOwned || f.nativeCallbacks.Load() {
+			return false, ErrNativeMVCCFileWork
+		}
+	}
 	for {
 		switch state.phase {
 		case 0:
@@ -66,6 +83,11 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
 			state.cause = errors.Join(f.constructionParentErrors[0], f.constructionParentErrors[1])
 			state.phase = 1
 		case 1:
+			// Phase zero admitted the original close gate. A queued worker may
+			// finish, but no new worker can enter while native retirement yields.
+			if native && f.remapRequested.Load() {
+				return false, nil
+			}
 			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof([]byte{}))+128) {
 				return false, nil
 			}
@@ -233,6 +255,12 @@ func closeNativeMVCCMappingV6(mapping *ownedMmapV6, native bool, w *iterator.Ord
 		available = w.ByteLimit - w.Bytes
 	}
 	overhead := 2 * uint64(unsafe.Sizeof(*mapping))
+	// A constructor mapping can only unmap whole platform pages. Distinguish
+	// an impossible fresh grant from an ordinary exhausted remainder.
+	minimum := overhead + uint64(page)
+	if w != nil && (w.RecordLimit < 1 || w.ByteLimit < minimum) {
+		return false, &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: minimum}
+	}
 	if available <= overhead {
 		return false, nil
 	}

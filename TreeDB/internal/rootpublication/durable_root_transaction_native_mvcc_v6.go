@@ -58,6 +58,8 @@ var ErrNativeMVCCRootWorkRequiredV6 = errors.New("native MVCC transaction requir
 type PrimaryConstructionReleaseWork struct {
 	mu          sync.Mutex
 	transaction *DurableRootTransaction
+	terminal    *primaryTerminalCompletionV6
+	finishing   bool
 	removal     retainedalloc.RemovalWork
 	phase       uint8
 }
@@ -93,6 +95,9 @@ func (s *PrimaryConstructionReleaseWork) ContinueWork(w *iterator.OrdinalScanWor
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.finishing {
+		return false, ErrDurableRootOwnership
+	}
 	if s.phase == 2 {
 		return true, nil
 	}
@@ -188,7 +193,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 		c.certificate, c.promotion = nil, nil
 		c.candidate, c.members = PreparedRootCandidate{}, [1]*DurableRootTransaction{}
 		t.input = DurableRootCallbackInput{}
-		t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+		t.clearDurableRootCallbacksV6()
 		c.cleanupPhase = 4
 	}
 	for c.cleanupPhase == 4 {
@@ -215,7 +220,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 	}
 	t.constructionV6 = nil
 	t.input = DurableRootCallbackInput{}
-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+	t.clearDurableRootCallbacksV6()
 	*c = primaryTransactionConstructionV6{}
 	t.owner, t.phase = ResourceOwnerReleased, durableRootConsumed
 	terminal.owner, terminal.charge = owner, charge

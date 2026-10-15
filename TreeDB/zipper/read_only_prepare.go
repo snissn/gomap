@@ -96,6 +96,10 @@ type ApplyResult struct {
 	// that did not collect apply-fed reference evidence.
 	OldPointerRefsCollected bool
 
+	// unchangedPrimaryBase is apply-local evidence from the actual sealed
+	// constructor. It owns no edge and expires with that constructor.
+	unchangedPrimaryBase unchangedPrimaryBaseEvidence
+
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
 	// true or opt-in parallel apply needs the M1 span plan for gating. It is
 	// planning metadata only; it owns no pager or leaf-log output.
@@ -1117,11 +1121,17 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	if opts.ParallelApplyConcurrency == 1 {
 		applyCfg.maxParallelWorkers = 1
 	}
-	var oldPointerRefs PointerRefCounts
-	var oldEntriesRemoved uint64
+	// These operands have the same synchronous apply lifetime. Keep the
+	// producer receipt in the existing collection control, not a separate owner.
+	var collection struct {
+		pointers      PointerRefCounts
+		removed       uint64
+		unchangedBase unchangedPrimaryBaseEvidence
+	}
 	if opts.CollectOldPointerRefs {
-		applyCfg.oldPointerRefs = &oldPointerRefs
-		applyCfg.oldEntriesRemoved = &oldEntriesRemoved
+		applyCfg.oldPointerRefs = &collection.pointers
+		applyCfg.oldEntriesRemoved = &collection.removed
+		applyCfg.unchangedPrimaryBase = &collection.unchangedBase
 	}
 	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
 		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
@@ -1137,9 +1147,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	result.PendingRetiredPages = retired
 	result.Metrics = metrics
 	if err == nil && opts.CollectOldPointerRefs {
-		result.OldPointerRefs = oldPointerRefs
-		result.OldEntriesRemoved = oldEntriesRemoved
+		result.OldPointerRefs = collection.pointers
+		result.OldEntriesRemoved = collection.removed
 		result.OldPointerRefsCollected = true
+		result.unchangedPrimaryBase = collection.unchangedBase
 	}
 	result.ReadOnlyPrepare = prepared
 	result.ReadOnlyPrepareNs = preparedNs

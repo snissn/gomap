@@ -1057,10 +1057,25 @@ func (p *Pager) SyncIndexDataWithStableFileWithWork(file *os.File, w *iterator.O
 // Caller controls were already reserved on this same grant. They contribute to
 // fresh impossibility without charging the native snapshot a second time.
 func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
+	p.mu.RLock()
+	path := p.path
+	p.mu.RUnlock()
+	return p.syncIndexDataWithStableFileAtPath(file, path, w, callerRecords, callerBytes)
+}
+
+// SyncIndexDataWithStableFileAtPath preserves a capture's diagnostic identity
+// after the original pager retires. Only the retained handle supplies authority;
+// this path is never opened or used to rediscover a file.
+func (p *Pager) SyncIndexDataWithStableFileAtPath(file *os.File, path string) error {
+	_, err := p.syncIndexDataWithStableFileAtPath(file, path, nil, 0, 0)
+	return err
+}
+
+func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
 	if file == nil {
 		return false, errors.New("pager: stable index file unavailable")
 	}
-	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes)
+	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes, path)
 	if !done || err != nil {
 		return done, err
 	}
@@ -1068,7 +1083,7 @@ func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *i
 		p.durableFileSize.Store(info.Size())
 	}
 	if !p.readOnly && !p.memoryOnly {
-		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); e != nil {
+		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path); e != nil {
 			return false, e
 		}
 	}
@@ -1083,7 +1098,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	_, err := p.syncDirtyChunksWithFileWork(syncFile, firstChunk, syncTarget, nil, false, 0, 0)
 	return err
 }
-func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64) (bool, error) {
+func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64, indexPath ...string) (bool, error) {
 	if p.readOnly {
 		return false, ErrReadOnly
 	}
@@ -1091,6 +1106,10 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 		return true, nil
 	}
 	p.mu.Lock()
+	path := p.path
+	if len(indexPath) != 0 {
+		path = indexPath[0]
+	}
 	// takeFrom scans the actual dirty word span, writes selected membership,
 	// allocates its owned ordinal snapshot, then rechecks range hints. Include
 	// the restoration path and the ordinary parallel worker/channel control.
@@ -1101,7 +1120,7 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 	records := uint64(5) + 4*span + 5*n + workers
 	traffic := uint64(4096) + 128*span + 256*n + 1024*workers
 	if indexCut {
-		traffic += uint64(len(p.path))*8 + 2048
+		traffic += uint64(len(path))*8 + 2048
 	}
 	if err := pagerCallerMinimum(w, records, traffic, callerRecords, callerBytes); err != nil {
 		p.mu.Unlock()
@@ -1118,7 +1137,7 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 
 	var syncErr error
 	if indexCut {
-		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path)
+		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path)
 	}
 	// Hold mappings stable through mapped-range and file sync.
 	p.mu.RLock()

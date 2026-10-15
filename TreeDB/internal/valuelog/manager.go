@@ -143,6 +143,9 @@ type File struct {
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
+	// Queued/running asynchronous remap borrows this original containing File.
+	// closeMu serializes admission with Close; Close joins outside all locks.
+	remapWorkers sync.WaitGroup
 
 	currentMappingV6       ownedMmapV6
 	legacyMappingV6        bool
@@ -2382,6 +2385,28 @@ func (m *Manager) CurrentSetNoRefreshWithMaxFiles(maxFiles int) (*Set, error) {
 		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), maxFiles)
 	}
 	return m.currentSetLocked(), nil
+}
+
+// CurrentSetNoRefreshForPublication captures the same exact live file edges as
+// CurrentSetNoRefresh. An absent physical closure is represented by nil instead
+// of an empty owned Set. Limit validation, emptiness and acquisition all observe
+// the same locked registry; no file can be registered between those decisions.
+// Exported snapshot callers retain the nonnil CurrentSet contract.
+func (m *Manager) CurrentSetNoRefreshForPublication(maxFiles *int) (*Set, error) {
+	if maxFiles != nil && *maxFiles < 0 {
+		return nil, fmt.Errorf("value log snapshot: negative file limit %d", *maxFiles)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if maxFiles != nil && len(m.files) > *maxFiles {
+		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), *maxFiles)
+	}
+	for _, f := range m.files {
+		if !m.closing && !f.IsZombie.Load() && !f.closed.Load() {
+			return m.currentSetLocked(), nil
+		}
+	}
+	return nil, nil
 }
 
 // CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.

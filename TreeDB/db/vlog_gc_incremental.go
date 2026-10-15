@@ -747,7 +747,7 @@ func (db *DB) scanValueLogRefCountsOwned(ctx context.Context) (valueLogRefCounts
 	}
 	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
 		Collectors:    maintenanceReachabilityValueLogRefCounts,
-		CountMetadata: db.valueLogRefTracker.metadata,
+		CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
 	})
 	if err != nil {
 		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(err, snap.Close())
@@ -813,6 +813,18 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 		return true
 	}
 	return db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq)
+}
+
+// buildValueLogRefDeltaForApply consumes the producer's borrowed receipt before
+// the caller releases either the source root or output construction. Logical
+// removals remain unchanged; only the proven unchanged raw-leaf base may reuse
+// the already admitted physical dependency closure.
+func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
+	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
+	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
+		delta.requiresCandidateProjection = false
+	}
+	return delta, err
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {

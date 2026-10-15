@@ -19,14 +19,15 @@ func PrimaryBankMetadataEdgesV5(class primaryarena.Class, image []byte) ([]prima
 	return primaryBankMetadataEdgesV5(class, image, nil, nil)
 }
 
-// Fixed page-local validation scratch belongs to the same arena metadata owner.
-// Borrowed codec fields never escape this synchronous scope.
+// Records have exactly two owning edges; manifests have at most one. The
+// decoder's validation-only dependency capacity does not belong to these
+// results. Every result remains independently owned through Close because
+// recovery retains parent edges while recursively decoding children.
 type primaryBankMetadataScratchV5 struct {
-	owner      *retainedalloc.Owner
-	charge     uint64
-	edges      [page.PageSize / 8]primaryarena.MetadataEdge
-	count      int
-	dependency dependencyBorrowScratch
+	owner  *retainedalloc.Owner
+	charge uint64
+	edges  [2]primaryarena.MetadataEdge
+	count  int
 }
 
 func (s *primaryBankMetadataScratchV5) Edges() []primaryarena.MetadataEdge {
@@ -43,16 +44,56 @@ func (s *primaryBankMetadataScratchV5) Close() {
 	*s = primaryBankMetadataScratchV5{}
 	owner.RemovePending(charge)
 }
+
+// Only dependency pages need the full page-local child/codec arrays. Borrowed
+// codec fields never escape this result's synchronous decode scope.
+type primaryBankDependencyScratchV5 struct {
+	owner      *retainedalloc.Owner
+	charge     uint64
+	edges      [page.PageSize / 8]primaryarena.MetadataEdge
+	count      int
+	dependency dependencyBorrowScratch
+}
+
+func (s *primaryBankDependencyScratchV5) Edges() []primaryarena.MetadataEdge {
+	if s.count == 0 {
+		return nil
+	}
+	return s.edges[:s.count]
+}
+func (s *primaryBankDependencyScratchV5) Close() {
+	if s.owner == nil {
+		return
+	}
+	owner, charge := s.owner, s.charge
+	*s = primaryBankDependencyScratchV5{}
+	owner.RemovePending(charge)
+}
+
 func PrimaryBankMetadataEdgesOwnedV5(class primaryarena.Class, image []byte, owner *retainedalloc.Owner) (primaryarena.MetadataEdgeScratch, error) {
 	if owner == nil {
 		return nil, ErrResourceOwnership
+	}
+	if class == primaryarena.Dependency {
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankDependencyScratchV5{})))
+		if err := owner.AddPending(charge); err != nil {
+			return nil, err
+		}
+		s := &primaryBankDependencyScratchV5{owner: owner, charge: charge}
+		edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], &s.dependency)
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.count = len(edges)
+		return s, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankMetadataScratchV5{})))
 	if err := owner.AddPending(charge); err != nil {
 		return nil, err
 	}
 	s := &primaryBankMetadataScratchV5{owner: owner, charge: charge}
-	edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], &s.dependency)
+	edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], nil)
 	if err != nil {
 		s.Close()
 		return nil, err

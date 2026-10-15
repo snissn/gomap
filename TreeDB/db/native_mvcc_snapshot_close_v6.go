@@ -150,11 +150,11 @@ func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (b
 					s.idx.wrapperMu.Unlock()
 					return false, ErrNativeMVCCSnapshotWork
 				}
-				if s.idx.wrapperBorrows == 0 {
+				if s.idx.wrapperBorrowCountV6() == 0 {
 					s.idx.wrapperMu.Unlock()
 					return false, ErrSnapshotCapacity
 				}
-				s.idx.wrapperBorrows--
+				s.idx.dropWrapperBorrowV6()
 				s.idx.wrapperMu.Unlock()
 				s.indexWrapperBorrowed = false
 			}

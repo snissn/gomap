@@ -44,7 +44,7 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
 		if original == nil || original.primary != nil {
 			t.Fatalf("fixture missed ordinary DATA source: %p", original)
 		}
-		sourceBorrows = original.wrapperBorrows
+		sourceBorrows = original.wrapperBorrowCountV6()
 		attempts++
 		if err := original.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
 			t.Errorf("physical fault: %v", err)
@@ -59,10 +59,10 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
 	if !errors.As(err, &receipt) || receipt.generation == nil || receipt.generation.startupDB == nil ||
 		receipt.generation != original || receipt.generation.startupLock == nil ||
 		receipt.generation.startupCustody != nil ||
-		receipt.generation.wrapperBorrows != sourceBorrows ||
+		receipt.generation.wrapperBorrowCountV6() != sourceBorrows ||
 		receipt.generation.metadataCharge == 0 {
 		t.Fatalf("offline cleanup dropped original source/replacement/LOCK custody: source=%p receipt=%p borrows=%d before=%d err=%v",
-			original, receipt, original.wrapperBorrows, sourceBorrows, err)
+			original, receipt, original.wrapperBorrowCountV6(), sourceBorrows, err)
 	}
 	g := receipt.generation
 	if g.startupDB.idx.Load() != nil {
@@ -509,12 +509,12 @@ func TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, borrows := owner.Bytes(), source.wrapperBorrows
+	before, borrows := owner.Bytes(), source.wrapperBorrowCountV6()
 	budget.setLimit(before)
 	replacement, admissionErr := newStartupIndexGeneration(d, lock)
 	budget.setLimit(math.MaxUint64)
 	if replacement != nil || !errors.Is(admissionErr, retainedalloc.ErrCapacity) ||
-		owner.Bytes() != before || source.wrapperBorrows != borrows {
+		owner.Bytes() != before || source.wrapperBorrowCountV6() != borrows {
 		t.Fatalf("refused original replacement changed source/admission: replacement=%p err=%v", replacement, admissionErr)
 	}
 	enrollment.Close()
@@ -538,9 +538,9 @@ func TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource(t *testin
 		source.startupDB != d || source.startupLock != lock ||
 		// Completed physical-Close call borrows drain on refusal; the original
 		// maintenance source borrow and failed physical receipt remain.
-		source.wrapperBorrows != borrows || source.metadataCharge == 0 {
+		source.wrapperBorrowCountV6() != borrows || source.metadataCharge == 0 {
 		t.Fatalf("admission/source Close lost original custody: completion=%p/%d attempts=%d source=%p receipt=%p borrows=%d before=%d err=%v",
-			metadata, charge, attempts, source, receipt, source.wrapperBorrows, borrows, refusal)
+			metadata, charge, attempts, source, receipt, source.wrapperBorrowCountV6(), borrows, refusal)
 	}
 	registry.Close()
 	charged := owner.Bytes()
@@ -586,7 +586,7 @@ func TestOfflineVacuumSetupRefusalConsumesOriginalSourceSuccessfully(t *testing.
 	testDBCloseHook = func(d *DB) {
 		g := d.idx.Load()
 		if g == nil || g.startupDB != d || g.startupManager != d.valueLogManager ||
-			g.startupLock == nil || g.wrapperBorrows != 1 {
+			g.startupLock == nil || g.wrapperBorrowCountV6() != 1 {
 			t.Fatal("original source borrow missing")
 		}
 		owner = g.metadata

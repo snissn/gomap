@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
 	"sync"
@@ -100,6 +101,8 @@ type Coordinator struct {
 	activeAttempt          PublishAttempt
 	retryAttempt           PublishAttempt
 	reportingAttempt       bool
+	nativeDispatchV6       uint64
+	nativePublicationsV6   *NativePublicationV6
 	activeDispatch         uint64
 
 	resourceCoalesces    uint64
@@ -221,6 +224,9 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 // held. Its successful return contains everything needed for an admission wait
 // after the caller has released any builder lease and all locks.
 func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede bool) (enqueueDecision, error) {
+	return c.enqueueLockedWithWorkV6(candidate, supersede, nil)
+}
+func (c *Coordinator) enqueueLockedWithWorkV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork) (enqueueDecision, error) {
 	if err := c.terminalErrorLocked(); err != nil {
 		return enqueueDecision{}, err
 	}
@@ -297,7 +303,7 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		c.rejectedCandidates++
 		return enqueueDecision{}, fmt.Errorf("%w: enqueue durable-root transfer: %w", ErrInvalidCandidate, err)
 	}
-	if err := activateDurableRootGroup(candidate.durableRootGroup()); err != nil {
+	if err := activateDurableRootGroupWithWork(candidate.durableRootGroup(), w); err != nil {
 		_ = transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCoordinator, ResourceOwnerCandidate)
 		if candidateSet := candidate.resourceSet(); candidateSet != nil {
 			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
@@ -352,6 +358,13 @@ func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
 		pending = append(pending, entry.candidate.frontier)
 		if resources := entry.candidate.resourceSet(); resources != nil {
 			sets = append(sets, resources)
+		}
+	}
+	for receipt := c.nativePublicationsV6; receipt != nil; receipt = receipt.next {
+		if receipt.fenced && receipt.candidate != nil {
+			if set := receipt.candidate.resourceSet(); set != nil && set.Owner() == ResourceOwnerCoordinator {
+				sets = append(sets, set)
+			}
 		}
 	}
 	sets = append(sets, c.recoverySets...)
@@ -436,11 +449,14 @@ func transferDurableRootGroup(group durableRootGroupExtension, from, to Resource
 }
 
 func activateDurableRootGroup(group durableRootGroupExtension) error {
+	return activateDurableRootGroupWithWork(group, nil)
+}
+func activateDurableRootGroupWithWork(group durableRootGroupExtension, w *iterator.OrdinalScanWork) error {
 	if len(group.members) > 1 {
 		return ErrDurableRootOwnership
 	}
 	for _, transaction := range group.members {
-		if err := transaction.activateFromCoordinator(); err != nil {
+		if err := transaction.activateFromCoordinatorWithWork(w); err != nil {
 			return err
 		}
 	}
@@ -647,7 +663,13 @@ func (c *Coordinator) endDrain(target *drainRequest) {
 // waits for the single scheduler goroutine. It does not silently claim pending
 // debt was durable.
 func (c *Coordinator) Stop(ctx context.Context) error {
+	joinErr := c.JoinNativePublicationsV6(ctx)
 	c.mu.Lock()
+	if joinErr != nil && c.nativeDispatchV6 != 0 {
+		c.mu.Unlock()
+		return joinErr
+	}
+	c.stopErr = errors.Join(c.stopErr, joinErr)
 	if c.stopped {
 		err := c.stopErr
 		c.mu.Unlock()
@@ -677,7 +699,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 		}
 		if !c.stopped {
 			if len(c.pending) != 0 {
-				c.stopErr = ErrPublicationStopped
+				c.stopErr = errors.Join(c.stopErr, ErrPublicationStopped)
 			}
 			c.captureRecoveryResourcesLocked()
 			c.stopped = true
@@ -765,7 +787,7 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 
 func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
 	c.mu.Lock()
-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && !c.pendingNativeOwnedV6() && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
 	if !ready {
 		c.mu.Unlock()
 		return false, primaryPublicationCompletionV6{}
@@ -937,34 +959,36 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var tail *primaryTerminalCompletionV6
 		for i := 0; i < remove; i++ {
 			entry := &c.pending[i]
-			if set := entry.candidate.resourceSet(); set != nil {
-				txn := entry.candidate.DurableRoot()
-				var node *primaryTerminalCompletionV6
-				var err error
-				if txn.isConstructedPrimaryV6() {
-					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
-				} else {
+			txn := entry.candidate.DurableRoot()
+			var node *primaryTerminalCompletionV6
+			var err error
+			if txn.isConstructedPrimaryV6() {
+				node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
+			} else {
+				if set := entry.candidate.resourceSet(); set != nil {
 					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
-					if err == nil {
-						node, err = txn.finishOrdinaryDataMetadataV6()
-					}
 				}
-				if err != nil {
-					c.removeCompletedPendingPrefixV6(completed, removedBytes)
-					c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
-					c.failWaitersLocked(c.poison)
-					c.clearPublishRequestLocked()
-					c.notifyLocked()
-					return completion
+				// An absent physical closure still owns the original DATA
+				// transaction terminal and its containing metadata receipt.
+				if err == nil {
+					node, err = txn.finishOrdinaryDataMetadataV6()
 				}
-				if node != nil {
-					if tail == nil {
-						completion.head = node
-					} else {
-						tail.next = node
-					}
-					tail = node
+			}
+			if err != nil {
+				c.removeCompletedPendingPrefixV6(completed, removedBytes)
+				c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+				c.failWaitersLocked(c.poison)
+				c.clearPublishRequestLocked()
+				c.notifyLocked()
+				return completion
+			}
+			if node != nil {
+				if tail == nil {
+					completion.head = node
+				} else {
+					tail.next = node
 				}
+				tail = node
 			}
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			*entry = pendingEntry{}
@@ -975,6 +999,12 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			c.pendingBytes -= removedBytes
 		} else {
 			c.pendingBytes = 0
+		}
+		// The consumed group is now the predecessor for admission. Its physical
+		// terminal accounting remains joined below before durable waiters/ACK.
+		// A late older Finish must never restore an older admission frontier.
+		if completion.sequence > c.durableRootSequence {
+			c.durableRootLineage, c.durableRootSequence = completion.lineage, completion.sequence
 		}
 		// Keep the original attempt outstanding through actual terminal
 		// accounting. WaitThrough cannot observe a new durable frontier yet.

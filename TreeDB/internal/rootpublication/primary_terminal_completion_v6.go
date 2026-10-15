@@ -60,7 +60,7 @@ func (c *Coordinator) removeCompletedPendingPrefixV6(n int, bytes uint64) {
 func (c *Coordinator) completePublicationLockedV6(done primaryPublicationCompletionV6) {
 	c.durable, c.oldestRecoverable = done.frontier, done.oldest
 	c.reachabilityEpoch++
-	if done.sequence != 0 {
+	if done.sequence > c.durableRootSequence {
 		c.durableRootLineage, c.durableRootSequence = done.lineage, done.sequence
 	}
 	c.lastGroupSize, c.lastService = done.groupSize, done.service
@@ -104,7 +104,7 @@ func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTermina
 	node := t.terminalMetadataV6
 	t.terminalMetadataV6 = nil
 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+	t.clearDurableRootCallbacksV6()
 	t.releaseOwnerLockedV6()
 	t.phase = durableRootConsumed
 	return node, nil

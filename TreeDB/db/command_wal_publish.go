@@ -32,6 +32,10 @@ type CommandWALLSNRange struct {
 }
 
 type conditionalCommitMutation struct {
+	// nativeCut is the SAME original physical selection cut. It is committed
+	// only by the non-fallible visible install, never after a durability wait.
+	// Its original caller aborts it on every pre-acceptance refusal.
+	nativeCut    *mvccadmission.Cut
 	physicalOnly bool
 	admission    mvccadmission.Summary
 	entries      []batchpkg.Entry

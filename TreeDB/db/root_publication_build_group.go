@@ -315,9 +315,8 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		}
 		c.nextRoot = newRoot
 	}
-	delta, err := db.buildValueLogRefDelta(
-		group.idx.pager, rootID, group.baseSeq, entries, ranges,
-		&result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected,
+	delta, err := db.buildValueLogRefDeltaForApply(
+		group.idx, rootID, newRoot, group.baseSeq, entries, ranges, &result,
 	)
 	if err != nil {
 		db.observeRawBatchSpanNativePublishFallback(b.rawSpanNativeBatchPlan(), spanState, FlushSpanRunFallbackOutputOwnershipFailure)

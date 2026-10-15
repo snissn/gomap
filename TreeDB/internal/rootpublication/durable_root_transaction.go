@@ -75,7 +75,19 @@ type DurableRootTransactionSpec struct {
 	PreparedPrimary         *PreparedPrimaryRootV5
 	Activate                func(DurableRootCallbackInput) error
 	Consume                 func(DurableRootCallbackInput) error
-	Abort                   func(DurableRootCallbackInput) error
+	// Work callbacks run the SAME activation/consumption stages with the original
+	// caller's allowance. They must admit their own concrete effects before
+	// performing them. A false, nil result leaves that stage resumable.
+	// Native construction requires BOTH callbacks. The caller
+	// must admit its entire enqueue/fence/consume/release window before a fence;
+	// callback types alone do not establish that the window fits an allowance.
+	ActivateWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	ConsumeWithWork  func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	// RetireWithWork owns superseded producer operands transferred at the
+	// original fence. It runs after turn release on the SAME Finish receipt,
+	// outside transaction/publication locks, and retains custody on refusal.
+	RetireWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	Abort          func(DurableRootCallbackInput) error
 	// AbortComplete consumes callback payload only after BOTH original physical
 	// callback cleanup and constructor root cleanup have actually succeeded.
 	AbortComplete         func(DurableRootCallbackInput) error
@@ -104,6 +116,9 @@ type DurableRootTransaction struct {
 	input                  DurableRootCallbackInput
 	activate               func(DurableRootCallbackInput) error
 	consume                func(DurableRootCallbackInput) error
+	activateWithWork       func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	consumeWithWork        func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	retireWithWork         func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	abort                  func(DurableRootCallbackInput) error
 	abortComplete          func(DurableRootCallbackInput) error
 	physicalCleanupError   error
@@ -196,7 +211,7 @@ func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next
 
 func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
 	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || (spec.PreparedCOW == nil && spec.PreparedPrimary == nil) ||
-		spec.Abort == nil || spec.Fail == nil || (spec.Activate == nil || spec.Consume == nil) {
+		spec.Abort == nil || spec.Fail == nil || !spec.hasDurableRootCallbacksV6() {
 		return nil, fmt.Errorf("%w: incomplete durable-root transaction", ErrInvalidCandidate)
 	}
 	if err := validateDurableRootTransactionSpec(spec); err != nil {
@@ -219,7 +234,9 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 			Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload,
 			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
 		},
-		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
+		activate: spec.Activate, consume: spec.Consume,
+		activateWithWork: spec.ActivateWithWork, consumeWithWork: spec.ConsumeWithWork, retireWithWork: spec.RetireWithWork,
+		abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
 	}, nil
 }
@@ -408,7 +425,7 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		if node := transaction.terminalMetadataV6; node != nil {
 			transaction.terminalMetadataV6 = nil
 			transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
-			transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
+			transaction.clearDurableRootCallbacksV6()
 			_, terminal = popPrimaryTerminalCompletionV6(node)
 		}
 		return nil
@@ -447,45 +464,95 @@ func (transaction *DurableRootTransaction) activateFromCoordinator() error {
 	return transaction.activateFromCoordinatorWithWork(nil)
 }
 func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
+	ready, err := transaction.activateFromCoordinatorStepWithWorkV6(w)
+	if !ready && err == nil {
+		return ErrNativeMVCCRootWorkRequiredV6
+	}
+	return err
+}
+
+// This is a continuation of the original activation stage, before its effects.
+// The error-only coordinator adapter preserves its existing failure custody;
+// native pre-enqueue callers can observe ordinary allowance refusal separately.
+func (transaction *DurableRootTransaction) activateFromCoordinatorStepWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
 	if transaction == nil {
-		return nil
+		return true, nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootPrepared {
-		return ErrDurableRootOwnership
+		return false, ErrDurableRootOwnership
 	}
-	if err := transaction.activate(transaction.input); err != nil {
-		return err
+	if transaction.requiresNativeCallbackWorkV6() && (w == nil || transaction.activateWithWork == nil || transaction.consumeWithWork == nil) {
+		return false, ErrNativeMVCCRootWorkRequiredV6
+	}
+	if w != nil && !reserveDurableRootCallbackDispatchV6(w) {
+		return false, nil
+	}
+	if w != nil && transaction.activateWithWork != nil {
+		if ready, err := transaction.activateWithWork(transaction.input, w); !ready || err != nil {
+			return false, err
+		}
+	} else {
+		if transaction.activate == nil {
+			return false, ErrNativeMVCCRootWorkRequiredV6
+		}
+		if err := transaction.activate(transaction.input); err != nil {
+			return false, err
+		}
 	}
 	transaction.phase = durableRootActivated
-	return nil
+	return true, nil
 }
 
 func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
 	return transaction.consumeFromCoordinatorWithWork(nil)
 }
 func (transaction *DurableRootTransaction) consumeFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
+	ready, err := transaction.consumeFromCoordinatorStepWithWorkV6(w)
+	if !ready && err == nil {
+		return ErrNativeMVCCRootWorkRequiredV6
+	}
+	return err
+}
+
+// The native driver must never yield here after a visible fence. Its fully
+// admitted window owns that guarantee; unexpected refusal/error remains on the
+// original coordinator ambiguity/failure edge through the error-only adapter.
+func (transaction *DurableRootTransaction) consumeFromCoordinatorStepWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
 	if transaction == nil {
-		return nil
+		return true, nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootActivated {
-		return ErrDurableRootOwnership
+		return false, ErrDurableRootOwnership
 	}
-	{
+	if transaction.requiresNativeCallbackWorkV6() && (w == nil || transaction.activateWithWork == nil || transaction.consumeWithWork == nil) {
+		return false, ErrNativeMVCCRootWorkRequiredV6
+	}
+	if w != nil && !reserveDurableRootCallbackDispatchV6(w) {
+		return false, nil
+	}
+	if w != nil && transaction.consumeWithWork != nil {
+		if ready, err := transaction.consumeWithWork(transaction.input, w); !ready || err != nil {
+			return false, err
+		}
+	} else {
+		if transaction.consume == nil {
+			return false, ErrNativeMVCCRootWorkRequiredV6
+		}
 		if err := transaction.consume(transaction.input); err != nil {
-			return err
-		}
-		if transaction.isConstructedPrimaryV6() || transaction.terminalMetadataV6 != nil {
-			transaction.phase = durableRootFinishing
-		} else {
-			transaction.phase = durableRootConsumed
-			transaction.releaseOwnerLockedV6()
+			return false, err
 		}
 	}
-	return nil
+	if transaction.isConstructedPrimaryV6() || transaction.terminalMetadataV6 != nil {
+		transaction.phase = durableRootFinishing
+	} else {
+		transaction.phase = durableRootConsumed
+		transaction.releaseOwnerLockedV6()
+	}
+	return true, nil
 }
 
 func (transaction *DurableRootTransaction) failFromCoordinator(cause error) error {
@@ -544,7 +611,7 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTermin
 	}
 	if transaction.ownerLockedV6() == ResourceOwnerRecovery {
 		transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
-		transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
+		transaction.clearDurableRootCallbacksV6()
 		transaction.releaseOwnerLockedV6()
 		transaction.phase = durableRootConsumed
 		node := transaction.terminalMetadataV6

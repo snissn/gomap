@@ -665,25 +665,16 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		if spec.OnRelease != nil || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OwnedOperations != nil {
 			return nil, rootpublication.ErrResourceOwnership
 		}
-		var e error
-		ownedOperations, e = newStablePagerOwnedOperations(snapshot, p, spec.MetadataOwner)
-		if e != nil {
-			return nil, e
-		}
 		defer func() {
+			if ownedOperations == nil {
+				return
+			}
 			consumed, err := ownedOperations.Release()
 			if !consumed && err == nil {
 				err = rootpublication.ErrResourceOwnership
 			}
 			retErr = errors.Join(retErr, err)
 		}()
-		spec.OwnedOperations = ownedOperations
-	}
-	if ownedOperations == nil && spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
-		pager := p
-		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
-			return pager.SyncIndexDataWithStableFile(file)
-		}
 	}
 	database := snapshot.db
 	var namespace *rootpublication.StableNamespaceToken
@@ -707,6 +698,20 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		info, err := file.Stat()
 		if err != nil {
 			return err
+		}
+		if spec.MetadataOwner != nil {
+			ownedOperations, err = newStablePagerOwnedOperations(snapshot, p, spec.MetadataOwner, file.Name())
+			if err != nil {
+				return err
+			}
+			spec.OwnedOperations = ownedOperations
+		} else if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
+			// Capture the original spelling while the original handle is live.
+			// The callback retains its duplicate handle, never a pathname authority.
+			syncPath := file.Name()
+			spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
+				return p.SyncIndexDataWithStableFileAtPath(file, syncPath)
+			}
 		}
 		registry := database.StableResourceIdentityPinRegistry()
 		identity, err := rootpublication.StableIdentityFromFile(file)

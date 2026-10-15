@@ -414,3 +414,21 @@ func (a *Arena) AcquireCapsuleDependencyV6(edge MetadataEdge, w *iterator.Ordina
 	a.counters.Bytes += 2 * uint64(unsafe.Sizeof(bank{}))
 	return Ref{edge.PageID, b.incarnation}, true, nil
 }
+
+func (a *Arena) AcquireAndDetachReadRootConstructionV6(ref Ref, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (bool, error) {
+	bytes := 4 * uint64(unsafe.Sizeof(bank{}))
+	if !reserve(w, 2, bytes) {
+		return false, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.valid(ref)
+	if b == nil || !b.sealed || b.refs == ^uint64(0) || b.construction != owner {
+		return false, ErrStale
+	}
+	b.refs++
+	b.construction = nil
+	a.counters.RootAcquires++
+	a.counters.Bytes += bytes
+	return true, nil
+}

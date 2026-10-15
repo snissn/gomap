@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -13,7 +14,7 @@ import (
 
 // Reuses the original DATA allocator/publisher fixture through the selected
 // constructor's public metadata input; it does not install private phase state.
-func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, abortErr error, lineage DurableRootLineageID, seq uint64) *durableRootTransactionFixture {
+func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, abortErr error, lineage DurableRootLineageID, seq uint64, absent ...bool) *durableRootTransactionFixture {
 	t.Helper()
 	withPayload := false
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
@@ -118,9 +119,11 @@ func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, ab
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.resources, err = NewStableResourceSetBuilder().Freeze()
-	if err != nil {
-		t.Fatal(err)
+	if len(absent) == 0 || !absent[0] {
+		fixture.resources, err = NewStableResourceSetBuilder().Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	fixture.candidate, err = NewPreparedRootCandidate(CandidateSpec{
 		Frontier: NewFrontier(seq, 2, 3, 0, 0), TotalPages: generation.HighWater(),
@@ -235,5 +238,44 @@ func TestDurableRootTransactionSelectedDataFailedAbortRetainsExactDebt(t *testin
 	}
 	if owner.Bytes() != before || f.aborts.Load() != 1 || f.tx.PreparedCOW() != f.prepared {
 		t.Fatal("failed physical abort lost original debt or repeated effect")
+	}
+}
+
+// An absent physical closure still has original transaction terminal custody.
+// Both single and coalesced publication must complete it before WaitThrough.
+func TestAbsentPhysicalClosureCompletesOriginalDataTerminal(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			var owners [2]retainedalloc.Owner
+			var fixtures []*durableRootTransactionFixture
+			c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Stop(context.Background())
+			for i := 0; i < count; i++ {
+				owners[i].Initialize(0)
+				f := newSelectedDataTerminalFixture(t, &owners[i], nil, durableLineage(1), uint64(i+2), true)
+				if f.candidate.Resources() != nil || owners[i].Bytes() == 0 {
+					t.Fatal("fixture must retain original terminal charge and no physical closure")
+				}
+				fixtures = append(fixtures, f)
+				if err = c.Enqueue(context.Background(), f.candidate); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = c.WaitThrough(context.Background(), uint64(count+1)); err != nil {
+				t.Fatal(err)
+			}
+			for i, f := range fixtures {
+				if f.tx.Owner() != ResourceOwnerReleased || f.tx.phase != durableRootConsumed || f.tx.terminalMetadataV6 != nil ||
+					f.tx.input.PreparedCOW != nil || f.tx.activate != nil || f.tx.consume != nil || f.tx.abort != nil || f.tx.fail != nil ||
+					owners[i].Bytes() != 0 || f.consumes.Load() != 1 {
+					t.Fatalf("original terminal incomplete: owner=%v phase=%v bytes=%d consumes=%d", f.tx.Owner(), f.tx.phase, owners[i].Bytes(), f.consumes.Load())
+				}
+			}
+		})
 	}
 }

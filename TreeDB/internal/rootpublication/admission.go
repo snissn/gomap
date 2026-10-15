@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"sync"
 )
 
@@ -85,6 +86,12 @@ func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error)
 // ownership moved even when the receipt subsequently requires an admission
 // wait.
 func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *BuilderToken) (*BuilderHandoffReceipt, error) {
+	return c.EnqueueBuiltWithWorkV6(candidate, token, nil)
+}
+
+// EnqueueBuiltWithWorkV6 uses the original atomic builder handoff and native callback allowance.
+// Refusal preserves the builder and candidate; ordinary callers retain the nil-work path.
+func (c *Coordinator) EnqueueBuiltWithWorkV6(candidate *PreparedRootCandidate, token *BuilderToken, w *iterator.OrdinalScanWork) (*BuilderHandoffReceipt, error) {
 	if token == nil || token.handle == nil {
 		return nil, ErrBuilderLease
 	}
@@ -109,7 +116,7 @@ func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *Buil
 		handle.mu.Unlock()
 		return nil, fmt.Errorf("%w: coordinator has no active builder", ErrBuilderLease)
 	}
-	decision, err := c.enqueueLocked(candidate, false)
+	decision, err := c.enqueueLockedWithWorkV6(candidate, false, w)
 	if err != nil {
 		c.mu.Unlock()
 		lease.mu.Unlock()

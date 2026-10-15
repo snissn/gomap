@@ -63,7 +63,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
 			if err = d.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if generation.metadataCharge != birthCharge || generation.registry == nil || generation.wrapperBorrows != 1 {
+			if generation.metadataCharge != birthCharge || generation.registry == nil || generation.wrapperBorrowCountV6() != 1 {
 				t.Fatal("terminal close refunded/cleared original held generation wrapper")
 			}
 			if d.valueLogManager != nil {
@@ -95,7 +95,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
 			if !errors.As(retained, &original) || original != receipt || !errors.Is(retained, prior) || !errors.Is(retained, os.ErrClosed) {
 				t.Fatalf("DB lost original late Manager receipt or sibling: %v", retained)
 			}
-			if generation.wrapperBorrows != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge {
+			if generation.wrapperBorrowCountV6() != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge {
 				t.Fatal("failed finalization lost original generation/Snapshot borrow")
 			}
 			charge := registry.MetadataOwner().Bytes()
@@ -121,13 +121,13 @@ func TestOriginalGenerationWrapperCloseRacesLastSnapshot(t *testing.T) {
 		}
 		g := d.idx.Load()
 		g.wrapperMu.Lock()
-		originalBorrows := g.wrapperBorrows
+		originalBorrows := g.wrapperBorrowCountV6()
 		g.wrapperMu.Unlock()
 		s := d.AcquireSnapshot()
 		if s == nil {
 			t.Fatal("missing actual original Snapshot")
 		}
-		if s.idx != g || g.wrapperBorrows != originalBorrows+1 || g.metadataCharge == 0 {
+		if s.idx != g || g.wrapperBorrowCountV6() != originalBorrows+1 || g.metadataCharge == 0 {
 			t.Fatal("original wrapper was not retained/admitted")
 		}
 		start := make(chan struct{})
@@ -144,7 +144,7 @@ func TestOriginalGenerationWrapperCloseRacesLastSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if g.wrapperBorrows != 0 || g.metadataCharge != 0 || g.registry != nil || g.pager != nil {
+		if g.wrapperBorrowCountV6() != 0 || g.metadataCharge != 0 || g.registry != nil || g.pager != nil {
 			t.Fatal("successful original final wrapper completion did not scrub/refund")
 		}
 	}
@@ -221,7 +221,7 @@ func TestOriginalGenerationPublishedFailureConcurrentInspection(t *testing.T) {
 	close(start)
 	wg.Wait()
 	var late *valuelog.ManagerCleanupFailure
-	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrows != 1 {
+	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrowCountV6() != 1 {
 		t.Fatalf("late physical completion lost from published original receipt: %v", snapshotErr)
 	}
 	missing := errors.New("unrelated missing cause")
