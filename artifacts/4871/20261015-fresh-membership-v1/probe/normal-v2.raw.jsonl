@@ -1,0 +1,9 @@
+{"Time":"2026-10-14T13:57:59.357240291-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-14T13:57:59.359181069-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6"}
+{"Time":"2026-10-14T13:57:59.35920714-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"=== RUN   TestNativePrivateOutputFreshAllocatorMembershipV6\n"}
+{"Time":"2026-10-14T13:57:59.374417536-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"    native_membership_v6_test.go:63: privatePage=7 freshGeneration=3 actualProofRecords=19\n"}
+{"Time":"2026-10-14T13:57:59.375289625-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"--- PASS: TestNativePrivateOutputFreshAllocatorMembershipV6 (0.02s)\n"}
+{"Time":"2026-10-14T13:57:59.375296105-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Elapsed":0.02}
+{"Time":"2026-10-14T13:57:59.375301515-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"PASS\n"}
+{"Time":"2026-10-14T13:57:59.375461667-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/mvcc\t0.018s\n"}
+{"Time":"2026-10-14T13:57:59.375470377-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0.018}

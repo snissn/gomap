@@ -1,0 +1,72 @@
+{
+  "at_utc": "2026-10-15T00:05:14.204489+00:00",
+  "parent": "a92160421b89317de9a231e1bcb68b1a4093e00b",
+  "packet_receipt_sha256": "7e99005fd7118012ed4e680f4060b87f9536565e633889f574b84340b3c864b6",
+  "source": [
+    {
+      "path": "TreeDB/freelist/generation_snapshot_v1.go",
+      "size": 3890,
+      "sha256": "48fe7d7c0f526f363b4e1a3cae90b6ebee1b1411c11f115bc14145983a977d7f",
+      "source_copy": "sources/TreeDB/freelist/generation_snapshot_v1.go"
+    },
+    {
+      "path": "TreeDB/freelist/candidate_root_membership_v1.go",
+      "size": 1828,
+      "sha256": "832abce64162cfecae4592549d5ac5a75ecbdc3927ba414ec1fee9d5d0dcc3ec",
+      "source_copy": "sources/TreeDB/freelist/candidate_root_membership_v1.go"
+    },
+    {
+      "path": "TreeDB/freelist/candidate_root_membership_v1_test.go",
+      "size": 2138,
+      "sha256": "81a0c31f664428d1a614797b3f3cc5dc1968abe16ed8920cf7b4b6864a5528d1",
+      "source_copy": "sources/TreeDB/freelist/candidate_root_membership_v1_test.go"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_data_certificate_v6.go",
+      "size": 6607,
+      "sha256": "90f9e24db240428d46fe5486e84ce1c072a8b9806086d9dff7b270b9aba4045e",
+      "source_copy": "sources/TreeDB/internal/rootpublication/primary_data_certificate_v6.go"
+    },
+    {
+      "path": "TreeDB/native_membership_probe_v6.go",
+      "size": 359,
+      "sha256": "c578963ffe69f6bab2682774c9dfc2e8356c9dc28d0b2d6a296a549e7112eb9a",
+      "source_copy": "sources/TreeDB/native_membership_probe_v6.go"
+    },
+    {
+      "path": "TreeDB/db/native_membership_probe_v6.go",
+      "size": 4466,
+      "sha256": "38498513780e54d547cb5d7ba7f3c26010e663cace58257b5f7bdf6eaa116599",
+      "source_copy": "sources/TreeDB/db/native_membership_probe_v6.go"
+    },
+    {
+      "path": "TreeDB/mvcc/native_membership_v6_test.go",
+      "size": 2174,
+      "sha256": "f63307587176c6c58d11d2c22f20e30899032e6e1bbf8d4759934ea43c7bcd77",
+      "source_copy": "sources/TreeDB/mvcc/native_membership_v6_test.go"
+    }
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "size": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "size": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "go_source_rows_verified": 4336,
+  "protected_fixture_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "merged": false,
+  "qualification": "Capability checkpoint only. Fresh original candidate binds private DATA after actual public CWAL commit. Candidate preparation and sealing use unlimited diagnostic drivers. No complete public native prune, final Q32 or performance acceptance.",
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "5a88c08fe5d8d34fef6cb1dca58fcf9d139c27a4",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "all_working_source_preserved": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}

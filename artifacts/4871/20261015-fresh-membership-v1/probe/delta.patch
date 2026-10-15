@@ -1,0 +1,95 @@
+diff --git a/TreeDB/freelist/generation_snapshot_v1.go b/TreeDB/freelist/generation_snapshot_v1.go
+index eedd0e3d2..c6fd16d3f 100644
+--- a/TreeDB/freelist/generation_snapshot_v1.go
++++ b/TreeDB/freelist/generation_snapshot_v1.go
+@@ -19,6 +19,12 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedV1(id, oldestCommit uint64) (bo
+ // reservation-extent operand actually inspected. It never hides a full metadata
+ // classifier beneath a scalar reservation. Under-admission changes no state.
+ func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uint64, w *iterator.OrdinalScanWork) (bool, bool, error) {
++	return g.pageUnavailableWithWorkV1(id, oldestCommit, false, w)
++}
++
++// Private candidates require live membership, rather than export readability.
++// The classifier shares the actual immutable trie and reservation walk.
++func (g *FreelistGenerationV1) pageUnavailableWithWorkV1(id, oldestCommit uint64, live bool, w *iterator.OrdinalScanWork) (bool, bool, error) {
+ 	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(FreelistGenerationV1{}))) {
+ 		return false, false, nil
+ 	}
+@@ -39,7 +45,7 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uin
+ 		chunk := n.chunk
+ 		if chunk != nil {
+ 			offset := id & (freelistChunkSize - 1)
+-			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && chunk.retired[offset] < oldestCommit) {
++			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && (live || chunk.retired[offset] < oldestCommit)) {
+ 				return true, true, nil
+ 			}
+ 		}
+@@ -61,8 +67,13 @@ func (g *FreelistGenerationV1) SnapshotPageUnusedWithWorkV1(id, oldestCommit uin
+ 			return false, false, nil
+ 		}
+ 		extent := g.record.Extents[lo-1]
+-		if id-extent.StartPageID < uint64(extent.Count) && extent.Kind == ReservationPendingMetadataRetirement {
+-			return extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit, true, nil
++		if id-extent.StartPageID < uint64(extent.Count) {
++			if live && (extent.Kind == ReservationTargetMetadata || extent.Kind == ReservationAbandonedAppend) {
++				return true, true, nil
++			}
++			if extent.Kind == ReservationPendingMetadataRetirement {
++				return live || (extent.LastReachableCommitSeq != 0 && extent.LastReachableCommitSeq < oldestCommit), true, nil
++			}
+ 		}
+ 	}
+ 	return false, true, nil
+diff --git a/TreeDB/internal/rootpublication/primary_data_certificate_v6.go b/TreeDB/internal/rootpublication/primary_data_certificate_v6.go
+index d75d67060..b6ef48727 100644
+--- a/TreeDB/internal/rootpublication/primary_data_certificate_v6.go
++++ b/TreeDB/internal/rootpublication/primary_data_certificate_v6.go
+@@ -17,6 +17,7 @@ import (
+ // retention. The caller's existing index/generation/slot owners must retain
+ // these operands; a certificate cannot replace those owners or a completed cut.
+ type PrimaryDataCertificateV6 struct {
++	membership   freelist.CandidateRootMembershipV1
+ 	generation   *freelist.FreelistGenerationV1
+ 	source       *pager.Pager
+ 	base         node.PrimaryOperand
+@@ -72,10 +73,10 @@ func NewPreparedPrimaryReadRootCertificateV6(cert *primaryarena.ReadRootCertific
+ 	}()
+ 	physical, _ := data.(*pager.Pager)
+ 	proof := previous
+-	if proof == nil || physical == nil || proof.source != physical || proof.generation != generation || proof.base != base || proof.baseSequence != seq || proof.systemID != frontier.systemRootPageID {
++	if proof == nil || physical == nil || proof.source != physical || proof.generation != generation || proof.base != base || proof.baseSequence != seq || proof.systemID != frontier.systemRootPageID || (cow != nil && !proof.membership.Matches(cow, generation, base.Ref.Page, frontier.systemRootPageID)) {
+ 		var ready bool
+ 		var err error
+-		proof, ready, err = preparePrimaryDataCertificateV6(data, physical, generation, base, seq, frontier.systemRootPageID, w)
++		proof, ready, err = preparePrimaryDataCertificateV6(data, physical, generation, cow, base, seq, frontier.systemRootPageID, w)
+ 		if !ready || err != nil {
+ 			return nil, ready, err
+ 		}
+@@ -84,13 +85,25 @@ func NewPreparedPrimaryReadRootCertificateV6(cert *primaryarena.ReadRootCertific
+ 	adopted = true
+ 	return &PreparedPrimaryRootV5{arena: a, bundle: primaryarena.PublicationBundle{Directory: cert.Reference()}, generation: generation, cow: cow, frontier: frontier, projection: projection, dataCertificate: proof, readCertificate: cert}, true, nil
+ }
+-func preparePrimaryDataCertificateV6(data freelist.PageSource, physical *pager.Pager, generation *freelist.FreelistGenerationV1, base node.PrimaryOperand, sequence, systemID uint64, w *iterator.OrdinalScanWork) (*PrimaryDataCertificateV6, bool, error) {
++func preparePrimaryDataCertificateV6(data freelist.PageSource, physical *pager.Pager, generation *freelist.FreelistGenerationV1, cow *freelist.PreparedCOWCandidateV1, base node.PrimaryOperand, sequence, systemID uint64, w *iterator.OrdinalScanWork) (*PrimaryDataCertificateV6, bool, error) {
+ 	proof := &PrimaryDataCertificateV6{generation: generation, source: physical, base: base, baseSequence: sequence, systemID: systemID}
++	if cow != nil {
++		membership, ready, err := cow.CertifyRootMembershipV1(base.Ref.Page, systemID, w)
++		if !ready || err != nil {
++			return nil, ready, err
++		}
++		proof.membership = membership
++	}
+ 	for _, root := range []struct {
+ 		id     uint64
+ 		digest [32]byte
+ 	}{{base.Ref.Page, base.Digest}, {systemID, [32]byte{}}} {
+-		unused, ready, err := generation.SnapshotPageUnusedWithWorkV1(root.id, generation.CommitSeq()+1, w)
++		var unused bool
++		ready := true
++		var err error
++		if cow == nil {
++			unused, ready, err = generation.SnapshotPageUnusedWithWorkV1(root.id, generation.CommitSeq()+1, w)
++		}
+ 		if !ready && err == nil {
+ 			return nil, false, nil
+ 		}

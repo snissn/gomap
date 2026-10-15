@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-race",
+    "-json",
+    "-count=1",
+    "-timeout=90s",
+    "-tags=treedb_test",
+    "-run=^(TestNativePrivateOutputFreshAllocatorMembershipV6|TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1|TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary|TestPrimaryFinishAccountingBeforeAckAndStop)$",
+    "./TreeDB/mvcc",
+    "./TreeDB/freelist",
+    "./TreeDB/internal/rootpublication"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  },
+  "outer_timeout_seconds": 120
+}

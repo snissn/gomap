@@ -1,0 +1,37 @@
+{"Time":"2026-10-14T13:59:10.179407717-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-14T13:59:10.179516338-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/freelist"}
+{"Time":"2026-10-14T13:59:10.179548209-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication"}
+{"Time":"2026-10-14T13:59:10.180551548-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1"}
+{"Time":"2026-10-14T13:59:10.180578359-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Output":"=== RUN   TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1\n"}
+{"Time":"2026-10-14T13:59:10.18066482-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop"}
+{"Time":"2026-10-14T13:59:10.18066657-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop","Output":"=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop\n"}
+{"Time":"2026-10-14T13:59:10.18067517-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/ack"}
+{"Time":"2026-10-14T13:59:10.18067642-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/ack","Output":"=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop/ack\n"}
+{"Time":"2026-10-14T13:59:10.18076308-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Output":"--- PASS: TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1 (0.00s)\n"}
+{"Time":"2026-10-14T13:59:10.18076575-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Elapsed":0}
+{"Time":"2026-10-14T13:59:10.180775661-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary"}
+{"Time":"2026-10-14T13:59:10.180776701-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Output":"=== RUN   TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary\n"}
+{"Time":"2026-10-14T13:59:10.180812741-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Output":"--- PASS: TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary (0.00s)\n"}
+{"Time":"2026-10-14T13:59:10.180814211-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Elapsed":0}
+{"Time":"2026-10-14T13:59:10.180837171-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Output":"PASS\n"}
+{"Time":"2026-10-14T13:59:10.181010083-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/freelist\t0.001s\n"}
+{"Time":"2026-10-14T13:59:10.181020963-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Elapsed":0.002}
+{"Time":"2026-10-14T13:59:10.181068043-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6"}
+{"Time":"2026-10-14T13:59:10.181069483-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"=== RUN   TestNativePrivateOutputFreshAllocatorMembershipV6\n"}
+{"Time":"2026-10-14T13:59:10.181108094-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/ack","Output":"--- PASS: TestPrimaryFinishAccountingBeforeAckAndStop/ack (0.00s)\n"}
+{"Time":"2026-10-14T13:59:10.181114284-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/ack","Elapsed":0}
+{"Time":"2026-10-14T13:59:10.181115674-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/stop"}
+{"Time":"2026-10-14T13:59:10.181116924-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/stop","Output":"=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop/stop\n"}
+{"Time":"2026-10-14T13:59:10.194816226-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"    native_membership_v6_test.go:63: privatePage=7 freshGeneration=3 actualProofRecords=19\n"}
+{"Time":"2026-10-14T13:59:10.195720835-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Output":"--- PASS: TestNativePrivateOutputFreshAllocatorMembershipV6 (0.01s)\n"}
+{"Time":"2026-10-14T13:59:10.195723875-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Test":"TestNativePrivateOutputFreshAllocatorMembershipV6","Elapsed":0.01}
+{"Time":"2026-10-14T13:59:10.195735865-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"PASS\n"}
+{"Time":"2026-10-14T13:59:10.195872036-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/mvcc\t0.016s\n"}
+{"Time":"2026-10-14T13:59:10.195880316-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0.016}
+{"Time":"2026-10-14T13:59:10.206513529-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/stop","Output":"--- PASS: TestPrimaryFinishAccountingBeforeAckAndStop/stop (0.03s)\n"}
+{"Time":"2026-10-14T13:59:10.206515439-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop/stop","Elapsed":0.03}
+{"Time":"2026-10-14T13:59:10.206517769-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop","Output":"--- PASS: TestPrimaryFinishAccountingBeforeAckAndStop (0.03s)\n"}
+{"Time":"2026-10-14T13:59:10.206518869-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Test":"TestPrimaryFinishAccountingBeforeAckAndStop","Elapsed":0.03}
+{"Time":"2026-10-14T13:59:10.206555589-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Output":"PASS\n"}
+{"Time":"2026-10-14T13:59:10.206749271-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.027s\n"}
+{"Time":"2026-10-14T13:59:10.206758861-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/rootpublication","Elapsed":0.027}

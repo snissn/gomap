@@ -1,0 +1,19 @@
+{"ImportPath":"github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]","Action":"build-output","Output":"# github.com/snissn/gomap/TreeDB/mvcc\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]","Action":"build-output","Output":"# [github.com/snissn/gomap/TreeDB/mvcc]\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]","Action":"build-output","Output":"TreeDB/mvcc/native_membership_v6_test.go:69:45: (*testing.common).Fatalf format %q has arg got of wrong type github.com/snissn/gomap/TreeDB/mvcc.Result\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]","Action":"build-fail"}
+{"Time":"2026-10-14T13:57:34.92887799-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/mvcc"}
+{"Time":"2026-10-14T13:57:34.9289444-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/mvcc","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/mvcc [build failed]\n"}
+{"Time":"2026-10-14T13:57:34.9289502-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/mvcc","Elapsed":0,"FailedBuild":"github.com/snissn/gomap/TreeDB/mvcc [github.com/snissn/gomap/TreeDB/mvcc.test]"}
+{"Time":"2026-10-14T13:57:34.929006671-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/freelist"}
+{"Time":"2026-10-14T13:57:34.930378824-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1"}
+{"Time":"2026-10-14T13:57:34.930404734-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Output":"=== RUN   TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1\n"}
+{"Time":"2026-10-14T13:57:34.930575426-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Output":"--- PASS: TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1 (0.00s)\n"}
+{"Time":"2026-10-14T13:57:34.930578366-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1","Elapsed":0}
+{"Time":"2026-10-14T13:57:34.930586136-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary"}
+{"Time":"2026-10-14T13:57:34.930587216-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Output":"=== RUN   TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary\n"}
+{"Time":"2026-10-14T13:57:34.930621816-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Output":"--- PASS: TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary (0.00s)\n"}
+{"Time":"2026-10-14T13:57:34.930623106-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Test":"TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary","Elapsed":0}
+{"Time":"2026-10-14T13:57:34.930642777-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Output":"PASS\n"}
+{"Time":"2026-10-14T13:57:34.930859879-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/freelist","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/freelist\t0.002s\n"}
+{"Time":"2026-10-14T13:57:34.930869039-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/freelist","Elapsed":0.002}
