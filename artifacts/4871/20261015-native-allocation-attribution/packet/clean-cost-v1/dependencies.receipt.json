@@ -1,0 +1,17 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "list",
+    "-deps",
+    "-test",
+    "-json",
+    "-tags=treedb_test",
+    "./TreeDB/mvcc"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.11351203871890903,
+  "started_utc": "2026-10-15T03:52:47.997752+00:00",
+  "raw_sha256": "6f17967f96bf179c00cef9d41c1fcb3b15786642923232d68d6f7d92454b5be2"
+}

@@ -1,0 +1,443 @@
+    PID    PPID STAT %CPU %MEM COMMAND         COMMAND
+      1       0 Ss    0.0  0.0 systemd         /usr/lib/systemd/systemd --system --deserialize=93 splash
+      2       0 S     0.0  0.0 kthreadd        [kthreadd]
+      3       2 S     0.0  0.0 pool_workqueue_ [pool_workqueue_release]
+      4       2 I<    0.0  0.0 kworker/R-rcu_g [kworker/R-rcu_gp]
+      5       2 I<    0.0  0.0 kworker/R-sync_ [kworker/R-sync_wq]
+      6       2 I<    0.0  0.0 kworker/R-kvfre [kworker/R-kvfree_rcu_reclaim]
+      7       2 I<    0.0  0.0 kworker/R-slub_ [kworker/R-slub_flushwq]
+      8       2 I<    0.0  0.0 kworker/R-netns [kworker/R-netns]
+     10       2 I<    0.0  0.0 kworker/0:0H-kb [kworker/0:0H-kblockd]
+     13       2 I<    0.0  0.0 kworker/R-mm_pe [kworker/R-mm_percpu_wq]
+     14       2 S     0.0  0.0 ksoftirqd/0     [ksoftirqd/0]
+     15       2 I     0.0  0.0 rcu_preempt     [rcu_preempt]
+     16       2 S     0.0  0.0 rcu_exp_par_gp_ [rcu_exp_par_gp_kthread_worker/0]
+     17       2 S     0.0  0.0 rcu_exp_gp_kthr [rcu_exp_gp_kthread_worker]
+     18       2 S     0.0  0.0 migration/0     [migration/0]
+     19       2 S     0.0  0.0 kprobe-optimize [kprobe-optimizer]
+     20       2 S     0.0  0.0 idle_inject/0   [idle_inject/0]
+     21       2 S     0.0  0.0 cpuhp/0         [cpuhp/0]
+     22       2 S     0.0  0.0 cpuhp/1         [cpuhp/1]
+     23       2 S     0.0  0.0 idle_inject/1   [idle_inject/1]
+     24       2 S     0.0  0.0 migration/1     [migration/1]
+     25       2 S     0.0  0.0 ksoftirqd/1     [ksoftirqd/1]
+     27       2 I<    0.0  0.0 kworker/1:0H-kb [kworker/1:0H-kblockd]
+     28       2 S     0.0  0.0 cpuhp/2         [cpuhp/2]
+     29       2 S     0.0  0.0 idle_inject/2   [idle_inject/2]
+     30       2 S     0.0  0.0 migration/2     [migration/2]
+     31       2 S     0.0  0.0 ksoftirqd/2     [ksoftirqd/2]
+     33       2 I<    0.0  0.0 kworker/2:0H-kb [kworker/2:0H-kblockd]
+     34       2 S     0.0  0.0 cpuhp/3         [cpuhp/3]
+     35       2 S     0.0  0.0 idle_inject/3   [idle_inject/3]
+     36       2 S     0.0  0.0 migration/3     [migration/3]
+     37       2 S     0.0  0.0 ksoftirqd/3     [ksoftirqd/3]
+     39       2 I<    0.0  0.0 kworker/3:0H-kb [kworker/3:0H-kblockd]
+     40       2 S     0.0  0.0 cpuhp/4         [cpuhp/4]
+     41       2 S     0.0  0.0 idle_inject/4   [idle_inject/4]
+     42       2 S     0.0  0.0 migration/4     [migration/4]
+     43       2 S     0.0  0.0 ksoftirqd/4     [ksoftirqd/4]
+     45       2 I<    0.0  0.0 kworker/4:0H-kb [kworker/4:0H-kblockd]
+     46       2 S     0.0  0.0 cpuhp/5         [cpuhp/5]
+     47       2 S     0.0  0.0 idle_inject/5   [idle_inject/5]
+     48       2 S     0.0  0.0 migration/5     [migration/5]
+     49       2 S     0.0  0.0 ksoftirqd/5     [ksoftirqd/5]
+     51       2 I<    0.0  0.0 kworker/5:0H-kb [kworker/5:0H-kblockd]
+     52       2 S     0.0  0.0 cpuhp/6         [cpuhp/6]
+     53       2 S     0.0  0.0 idle_inject/6   [idle_inject/6]
+     54       2 S     0.0  0.0 migration/6     [migration/6]
+     55       2 S     0.0  0.0 ksoftirqd/6     [ksoftirqd/6]
+     57       2 I<    0.0  0.0 kworker/6:0H-kb [kworker/6:0H-kblockd]
+     58       2 S     0.0  0.0 cpuhp/7         [cpuhp/7]
+     59       2 S     0.0  0.0 idle_inject/7   [idle_inject/7]
+     60       2 S     0.0  0.0 migration/7     [migration/7]
+     61       2 S     0.0  0.0 ksoftirqd/7     [ksoftirqd/7]
+     63       2 I<    0.0  0.0 kworker/7:0H-kb [kworker/7:0H-kblockd]
+     64       2 S     0.0  0.0 cpuhp/8         [cpuhp/8]
+     65       2 S     0.0  0.0 idle_inject/8   [idle_inject/8]
+     66       2 S     0.0  0.0 migration/8     [migration/8]
+     67       2 S     0.0  0.0 ksoftirqd/8     [ksoftirqd/8]
+     69       2 I<    0.0  0.0 kworker/8:0H-kb [kworker/8:0H-kblockd]
+     70       2 S     0.0  0.0 cpuhp/9         [cpuhp/9]
+     71       2 S     0.0  0.0 idle_inject/9   [idle_inject/9]
+     72       2 S     0.0  0.0 migration/9     [migration/9]
+     73       2 S     0.0  0.0 ksoftirqd/9     [ksoftirqd/9]
+     75       2 I<    0.0  0.0 kworker/9:0H-kb [kworker/9:0H-kblockd]
+     76       2 S     0.0  0.0 cpuhp/10        [cpuhp/10]
+     77       2 S     0.0  0.0 idle_inject/10  [idle_inject/10]
+     78       2 S     0.0  0.0 migration/10    [migration/10]
+     79       2 S     0.0  0.0 ksoftirqd/10    [ksoftirqd/10]
+     81       2 I<    0.0  0.0 kworker/10:0H-k [kworker/10:0H-kblockd]
+     82       2 S     0.0  0.0 cpuhp/11        [cpuhp/11]
+     83       2 S     0.0  0.0 idle_inject/11  [idle_inject/11]
+     84       2 S     0.0  0.0 migration/11    [migration/11]
+     85       2 S     0.0  0.0 ksoftirqd/11    [ksoftirqd/11]
+     87       2 I<    0.0  0.0 kworker/11:0H-k [kworker/11:0H-kblockd]
+     88       2 S     0.0  0.0 cpuhp/12        [cpuhp/12]
+     89       2 S     0.0  0.0 idle_inject/12  [idle_inject/12]
+     90       2 S     0.0  0.0 migration/12    [migration/12]
+     91       2 S     0.0  0.0 ksoftirqd/12    [ksoftirqd/12]
+     93       2 I<    0.0  0.0 kworker/12:0H-k [kworker/12:0H-kblockd]
+     94       2 S     0.0  0.0 cpuhp/13        [cpuhp/13]
+     95       2 S     0.0  0.0 idle_inject/13  [idle_inject/13]
+     96       2 S     0.0  0.0 migration/13    [migration/13]
+     97       2 S     0.0  0.0 ksoftirqd/13    [ksoftirqd/13]
+     99       2 I<    0.0  0.0 kworker/13:0H-k [kworker/13:0H-kblockd]
+    100       2 S     0.0  0.0 cpuhp/14        [cpuhp/14]
+    101       2 S     0.0  0.0 idle_inject/14  [idle_inject/14]
+    102       2 S     0.0  0.0 migration/14    [migration/14]
+    103       2 S     0.0  0.0 ksoftirqd/14    [ksoftirqd/14]
+    105       2 I<    0.0  0.0 kworker/14:0H-k [kworker/14:0H-kblockd]
+    106       2 S     0.0  0.0 cpuhp/15        [cpuhp/15]
+    107       2 S     0.0  0.0 idle_inject/15  [idle_inject/15]
+    108       2 S     0.0  0.0 migration/15    [migration/15]
+    109       2 S     0.0  0.0 ksoftirqd/15    [ksoftirqd/15]
+    111       2 I<    0.0  0.0 kworker/15:0H-k [kworker/15:0H-kblockd]
+    112       2 S     0.0  0.0 kdevtmpfs       [kdevtmpfs]
+    113       2 I<    0.0  0.0 kworker/R-inet_ [kworker/R-inet_frag_wq]
+    114       2 I     0.0  0.0 rcu_tasks_kthre [rcu_tasks_kthread]
+    115       2 I     0.0  0.0 rcu_tasks_rude_ [rcu_tasks_rude_kthread]
+    116       2 S     0.0  0.0 kauditd         [kauditd]
+    117       2 S     0.0  0.0 khungtaskd      [khungtaskd]
+    118       2 S     0.0  0.0 oom_reaper      [oom_reaper]
+    121       2 I<    0.0  0.0 kworker/R-write [kworker/R-writeback]
+    122       2 S     0.0  0.0 kcompactd0      [kcompactd0]
+    123       2 SN    0.0  0.0 ksmd            [ksmd]
+    124       2 SN    0.0  0.0 khugepaged      [khugepaged]
+    125       2 I<    0.0  0.0 kworker/R-kbloc [kworker/R-kblockd]
+    126       2 I<    0.0  0.0 kworker/R-blkcg [kworker/R-blkcg_punt_bio]
+    127       2 I<    0.0  0.0 kworker/R-kinte [kworker/R-kintegrityd]
+    128       2 S     0.0  0.0 irq/9-acpi      [irq/9-acpi]
+    131       2 I<    0.0  0.0 kworker/R-tpm_d [kworker/R-tpm_dev_wq]
+    132       2 I<    0.0  0.0 kworker/R-ata_s [kworker/R-ata_sff]
+    133       2 I<    0.0  0.0 kworker/R-md_bi [kworker/R-md_bitmap]
+    134       2 I<    0.0  0.0 kworker/R-md_ll [kworker/R-md_llbitmap_io]
+    135       2 I<    0.0  0.0 kworker/R-md_ll [kworker/R-md_llbitmap_unplug]
+    136       2 I<    0.0  0.0 kworker/R-edac- [kworker/R-edac-poller]
+    137       2 I<    0.0  0.0 kworker/R-devfr [kworker/R-devfreq_wq]
+    139       2 S     0.0  0.0 watchdogd       [watchdogd]
+    141       2 I<    0.0  0.0 kworker/R-quota [kworker/R-quota_events_unbound]
+    142       2 S     0.0  0.0 irq/26-AMD-Vi   [irq/26-AMD-Vi]
+    144       2 S     0.0  0.0 kswapd0         [kswapd0]
+    145       2 S     0.0  0.0 ecryptfs-kthrea [ecryptfs-kthread]
+    146       2 I<    0.0  0.0 kworker/R-kthro [kworker/R-kthrotld]
+    148       2 I<    0.0  0.0 kworker/R-acpi_ [kworker/R-acpi_thermal_pm]
+    149       2 I<    0.0  0.0 kworker/R-mld   [kworker/R-mld]
+    150       2 I<    0.0  0.0 kworker/R-ipv6_ [kworker/R-ipv6_addrconf]
+    151       2 I<    0.0  0.0 kworker/R-kstrp [kworker/R-kstrp]
+    175       2 I<    0.0  0.0 kworker/R-charg [kworker/R-charger_manager]
+    176       2 S     0.0  0.0 irq/27-ACPI:Eve [irq/27-ACPI:Event]
+    177       2 S     0.0  0.0 irq/28-ACPI:Eve [irq/28-ACPI:Event]
+    178       2 S     0.0  0.0 irq/29-ACPI:Eve [irq/29-ACPI:Event]
+    414       2 S     0.0  0.0 scsi_eh_0       [scsi_eh_0]
+    415       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_0]
+    416       2 S     0.0  0.0 scsi_eh_1       [scsi_eh_1]
+    417       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_1]
+    418       2 S     0.0  0.0 scsi_eh_2       [scsi_eh_2]
+    419       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_2]
+    420       2 S     0.0  0.0 scsi_eh_3       [scsi_eh_3]
+    421       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_3]
+    422       2 S     0.0  0.0 scsi_eh_4       [scsi_eh_4]
+    423       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_4]
+    424       2 S     0.0  0.0 scsi_eh_5       [scsi_eh_5]
+    425       2 I<    0.0  0.0 kworker/R-scsi_ [kworker/R-scsi_tmf_5]
+    431       2 I<    0.0  0.0 kworker/R-nvme- [kworker/R-nvme-wq]
+    432       2 I<    0.0  0.0 kworker/R-nvme- [kworker/R-nvme-reset-wq]
+    433       2 I<    0.0  0.0 kworker/R-nvme- [kworker/R-nvme-delete-wq]
+    434       2 I<    0.0  0.0 kworker/R-nvme- [kworker/R-nvme-auth-wq]
+    456       2 I<    0.0  0.0 kworker/14:1H-k [kworker/14:1H-kblockd]
+    459       2 S     0.0  0.0 jbd2/nvme1n1p2- [jbd2/nvme1n1p2-8]
+    460       2 I<    0.0  0.0 kworker/R-ext4- [kworker/R-ext4-rsv-conversion]
+    469       2 I<    0.0  0.0 kworker/4:1H-kb [kworker/4:1H-kblockd]
+    478       2 I<    0.0  0.0 kworker/5:1H-kb [kworker/5:1H-kblockd]
+    518       1 S<s   0.0  0.5 systemd-journal /usr/lib/systemd/systemd-journald
+    554       2 I<    0.0  0.0 kworker/3:1H-kb [kworker/3:1H-kblockd]
+    556       1 Ss    0.0  0.0 systemd-resolve /usr/lib/systemd/systemd-resolved
+    559       1 Ss    0.0  0.0 systemd-oomd    /usr/lib/systemd/systemd-oomd
+    560       2 I<    0.0  0.0 kworker/7:1H-kb [kworker/7:1H-kblockd]
+    561       2 I<    0.0  0.0 kworker/6:1H-kb [kworker/6:1H-kblockd]
+    563       1 Ss    0.0  0.0 systemd-udevd   /usr/lib/systemd/systemd-udevd
+    566       2 I<    0.0  0.0 kworker/8:1H-kb [kworker/8:1H-kblockd]
+    569       2 S     0.0  0.0 psimon          [psimon]
+    622       2 I<    0.0  0.0 kworker/0:1H-kb [kworker/0:1H-kblockd]
+    804       2 I<    0.0  0.0 kworker/R-cfg80 [kworker/R-cfg80211]
+    912       2 S     0.0  0.0 nv_queue        [nv_queue]
+    913       2 S     0.0  0.0 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    914       2 S     0.0  0.0 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    915       2 S     0.0  0.0 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    916       2 S     0.0  0.0 nv_queue        [nv_queue]
+    917       2 S     0.0  0.0 nv_open_q       [nv_open_q]
+    931       2 S     0.0  0.0 nvidia-modeset/ [nvidia-modeset/kthread_q]
+    932       2 S     0.0  0.0 nvidia-modeset/ [nvidia-modeset/deferred_close_kthread_q]
+    934       2 S     0.0  0.0 irq/125-nvidia  [irq/125-nvidia]
+    935       2 S     0.0  0.0 irq/126-nvidia  [irq/126-nvidia]
+    936       2 S     0.0  0.0 irq/127-nvidia  [irq/127-nvidia]
+    937       2 S     0.0  0.0 irq/128-nvidia  [irq/128-nvidia]
+    938       2 S     0.0  0.0 irq/129-nvidia  [irq/129-nvidia]
+    939       2 S     0.0  0.0 irq/130-nvidia  [irq/130-nvidia]
+    940       2 S     0.0  0.0 irq/131-nvidia  [irq/131-nvidia]
+    941       2 S     0.0  0.0 irq/132-nvidia  [irq/132-nvidia]
+    942       2 S     0.0  0.0 nvidia          [nvidia]
+    943       2 S     0.0  0.0 nv_queue        [nv_queue]
+    965       2 S     0.0  0.0 napi/phy0-0     [napi/phy0-0]
+    966       2 S     0.0  0.0 napi/phy0-0     [napi/phy0-0]
+    967       2 S     0.0  0.0 napi/phy0-0     [napi/phy0-0]
+    987       2 I<    0.0  0.0 kworker/15:1H-k [kworker/15:1H-kblockd]
+    997       2 I<    0.0  0.0 kworker/1:1H-kb [kworker/1:1H-kblockd]
+   1005       2 I<    0.0  0.0 kworker/10:1H-k [kworker/10:1H-kblockd]
+   1017       2 I<    0.0  0.0 kworker/R-amdgp [kworker/R-amdgpu-reset-dev]
+   1038       2 I<    0.0  0.0 kworker/R-ttm   [kworker/R-ttm]
+   1291       2 I<    0.0  0.0 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1292       2 I<    0.0  0.0 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1293       2 I<    0.0  0.0 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1294       2 I<    0.0  0.0 kworker/R-dm_vb [kworker/R-dm_vblank_control_workqueue]
+   1295       2 S     0.0  0.0 card1-crtc0     [card1-crtc0]
+   1296       2 S     0.0  0.0 card1-crtc1     [card1-crtc1]
+   1297       2 S     0.0  0.0 card1-crtc2     [card1-crtc2]
+   1298       2 S     0.0  0.0 card1-crtc3     [card1-crtc3]
+   1299       2 I<    0.0  0.0 kworker/R-gfx_0 [kworker/R-gfx_0.0.0]
+   1300       2 I<    0.0  0.0 kworker/R-gfx_0 [kworker/R-gfx_0.1.0]
+   1301       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.0.0]
+   1302       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.1.0]
+   1303       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.2.0]
+   1304       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.3.0]
+   1305       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.0.1]
+   1306       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.1.1]
+   1307       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.2.1]
+   1308       2 I<    0.0  0.0 kworker/R-comp_ [kworker/R-comp_1.3.1]
+   1309       2 I<    0.0  0.0 kworker/R-sdma0 [kworker/R-sdma0]
+   1310       2 I<    0.0  0.0 kworker/R-vcn_d [kworker/R-vcn_dec_0]
+   1311       2 I<    0.0  0.0 kworker/R-vcn_e [kworker/R-vcn_enc_0.0]
+   1312       2 I<    0.0  0.0 kworker/R-vcn_e [kworker/R-vcn_enc_0.1]
+   1313       2 I<    0.0  0.0 kworker/R-jpeg_ [kworker/R-jpeg_dec]
+   1541       2 S     0.0  0.0 UVM global queu [UVM global queue]
+   1542       2 S     0.0  0.0 UVM deferred re [UVM deferred release queue]
+   1543       2 S     0.0  0.0 UVM Tools Event [UVM Tools Event Queue]
+   1680       2 S     0.0  0.0 mt76-tx phy0    [mt76-tx phy0]
+   1740       1 Ss    0.0  0.0 avahi-daemon    avahi-daemon: running [mikers-MS-7E71.local]
+   1741       1 Ss    0.0  0.0 bluetoothd      /usr/libexec/bluetooth/bluetoothd
+   1742       1 Ss    0.0  0.0 chronyd-starter /bin/sh /usr/lib/systemd/scripts/chronyd-starter.sh -n -F 1
+   1744       1 Ss    0.0  0.0 dbus-daemon     @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   1746       2 I<    0.0  0.0 kworker/2:1H-kb [kworker/2:1H-kblockd]
+   1751       1 Ss    0.0  0.0 networkd-dispat /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1758       1 Ssl   0.0  0.0 polkitd         /usr/lib/polkit-1/polkitd --no-debug --log-level=notice
+   1768       1 Ss    0.0  0.0 nvidia-persiste /usr/bin/nvidia-persistenced --user nvidia-persistenced --no-persistence-mode --verbose
+   1771       1 Ssl   0.0  0.0 accounts-daemon /usr/libexec/accounts-daemon
+   1774       1 Ss    0.0  0.0 cron            /usr/sbin/cron -f -P
+   1775       1 Ssl   0.0  0.0 switcheroo-cont /usr/libexec/switcheroo-control
+   1778       1 Ss    0.0  0.0 systemd-logind  /usr/lib/systemd/systemd-logind
+   1780       1 Ssl   0.0  0.0 udisksd         /usr/libexec/udisks2/udisksd
+   1801    1740 S     0.0  0.0 avahi-daemon    avahi-daemon: chroot helper
+   1838    1742 S     0.0  0.0 chronyd         /usr/sbin/chronyd -n -F 1
+   1839       1 Ssl   0.0  0.0 rsyslogd        /usr/sbin/rsyslogd -n -iNONE
+   1890    1838 S     0.0  0.0 chronyd         /usr/sbin/chronyd -n -F 1
+   1892       2 I<    0.0  0.0 kworker/13:1H-k [kworker/13:1H-kblockd]
+   1894       2 I<    0.0  0.0 kworker/11:1H-k [kworker/11:1H-kblockd]
+   1901       1 Ssl   0.0  0.0 NetworkManager  /usr/sbin/NetworkManager --no-daemon
+   1902       1 Ss    0.0  0.0 wpa_supplicant  /usr/sbin/wpa_supplicant -u -s -O DIR=/run/wpa_supplicant GROUP=netdev
+   1943       1 Ssl   0.0  0.0 ModemManager    /usr/sbin/ModemManager
+   1953       2 I<    0.0  0.0 kworker/12:1H-k [kworker/12:1H-kblockd]
+   2073       2 I<    0.0  0.0 kworker/9:1H-kb [kworker/9:1H-kblockd]
+   2104       1 Ssl   0.0  0.0 unattended-upgr /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+   2123       1 Ssl   0.0  0.0 gdm3            /usr/sbin/gdm3
+   2131    2123 Sl    0.0  0.0 gdm-session-wor gdm-session-worker [pam/gdm-autologin]
+   2148       1 Ss    0.0  0.0 systemd         /usr/lib/systemd/systemd --user --deserialize=65
+   2175    2148 S     0.0  0.0 (sd-pam)        (sd-pam)
+   2205    2148 Ss    0.0  0.0 dbus-daemon     /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   2206    2148 S<sl  0.0  0.0 pipewire        /usr/bin/pipewire
+   2226       1 SNsl  0.0  0.0 rtkit-daemon    /usr/libexec/rtkit-daemon
+   2227    2148 Ss    0.0  0.0 mpris-proxy     /usr/bin/mpris-proxy
+   2228    2148 S<sl  0.0  0.0 wireplumber     /usr/bin/wireplumber
+   2229    2148 Ssl   0.0  0.0 pipewire        /usr/bin/pipewire -c filter-chain.conf
+   2230    2148 S<sl  0.0  0.0 pipewire-pulse  /usr/bin/pipewire-pulse
+   2232    2131 Ssl+  0.0  0.0 gdm-wayland-ses /usr/libexec/gdm-wayland-session /usr/bin/gnome-session --session=ubuntu
+   2236    2232 Sl+   0.0  0.0 gnome-session-i /usr/libexec/gnome-session-init-worker ubuntu
+   2335    2148 Ssl   0.0  0.0 xdg-document-po /usr/libexec/xdg-document-portal
+   2397    2148 Ssl   0.0  0.0 xdg-permission- /usr/libexec/xdg-permission-store
+   2415    2335 Ss    0.0  0.0 fusermount3     fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc
+   2446    2148 Ssl   0.0  0.0 gcr-ssh-agent   /usr/libexec/gcr-ssh-agent --base-dir /run/user/1000/gcr
+   2447    2148 Ssl   0.0  0.0 gnome-session-c /usr/libexec/gnome-session-ctl --monitor
+   2448    2148 Ss    0.0  0.0 ssh-agent       /usr/bin/ssh-agent -D
+   2470    2148 Ssl   0.0  0.0 gvfsd           /usr/libexec/gvfsd
+   2478    2148 Sl    0.0  0.0 gvfsd-fuse      /usr/libexec/gvfsd-fuse /run/user/1000/gvfs -f
+   2481    2148 Ssl   0.0  0.0 gnome-session-s /usr/libexec/gnome-session-service --session=ubuntu
+   2499    2148 Ssl   0.5  1.3 gnome-shell     /usr/bin/gnome-shell --mode=ubuntu
+   2611       2 S     0.0  0.0 nvidia-drm/time [nvidia-drm/timeline-111]
+   2644    2148 Ssl   0.0  0.0 at-spi-bus-laun /usr/libexec/at-spi-bus-launcher
+   2651    2644 S     0.0  0.0 dbus-daemon     /usr/bin/dbus-daemon --config-file=/usr/share/defaults/at-spi2/accessibility.conf --nofork --print-address 11 --address=unix:path=/run/user/1000/at-spi/bus
+   2653    2148 Sl    0.0  0.0 at-spi2-registr /usr/libexec/at-spi2-registryd --use-gnome-session
+   2654       1 Ssl   0.0  0.0 colord          /usr/libexec/colord
+   2687    2148 Sl    0.0  0.0 gnome-shell-cal /usr/libexec/gnome-shell-calendar-server
+   2697    2148 Ssl   0.0  0.0 evolution-sourc /usr/libexec/evolution-source-registry
+   2699    2148 Sl    0.0  0.0 gjs             /usr/bin/gjs -m /usr/share/gnome-shell/org.gnome.Shell.Notifications
+   2715       1 Ssl   0.0  0.0 upowerd         /usr/libexec/upowerd
+   2716    2148 Ssl   0.0  0.0 ibus-daemon     /usr/bin/ibus-daemon --panel disable
+   2718    2148 Ssl   0.0  0.0 gsd-a11y-settin /usr/libexec/gsd-a11y-settings
+   2719    2148 Ssl   0.0  0.0 gsd-color       /usr/libexec/gsd-color
+   2723    2148 Ssl   0.0  0.0 gsd-datetime    /usr/libexec/gsd-datetime
+   2724    2148 Ssl   0.0  0.0 gsd-housekeepin /usr/libexec/gsd-housekeeping
+   2725    2148 Ssl   0.0  0.0 gsd-keyboard    /usr/libexec/gsd-keyboard
+   2730    2148 Ssl   0.0  0.0 gsd-media-keys  /usr/libexec/gsd-media-keys
+   2732    2148 Ssl   0.0  0.0 gsd-power       /usr/libexec/gsd-power
+   2736    2148 Ssl   0.0  0.0 gsd-print-notif /usr/libexec/gsd-print-notifications
+   2738    2148 Ssl   0.0  0.0 gsd-rfkill      /usr/libexec/gsd-rfkill
+   2743    2148 Ssl   0.0  0.0 gsd-screensaver /usr/libexec/gsd-screensaver-proxy
+   2761    2148 Ssl   0.0  0.0 gsd-sharing     /usr/libexec/gsd-sharing
+   2765    2148 Sl    0.0  0.0 gsd-disk-utilit /usr/libexec/gsd-disk-utility-notify
+   2769    2148 Ssl   0.0  0.0 gsd-smartcard   /usr/libexec/gsd-smartcard
+   2771    2148 Ssl   0.0  0.0 gsd-sound       /usr/libexec/gsd-sound
+   2773    2148 Sl    0.0  0.0 evolution-alarm /usr/libexec/evolution-data-server/evolution-alarm-notify
+   2788    2148 Ssl   0.0  0.0 gsd-usb-protect /usr/libexec/gsd-usb-protection
+   2793    2148 Ssl   0.0  0.0 gsd-wwan        /usr/libexec/gsd-wwan
+   2808    2148 Sl    0.0  0.0 update-notifier /usr/bin/update-notifier
+   2871    2716 Sl    0.0  0.0 ibus-memconf    /usr/libexec/ibus-memconf
+   2873    2716 Sl    0.0  0.0 ibus-extension- /usr/libexec/ibus-extension-gtk3
+   2881    2148 Sl    0.0  0.0 ibus-portal     /usr/libexec/ibus-portal
+   2895    2148 Ssl   0.0  0.0 gvfs-udisks2-vo /usr/libexec/gvfs-udisks2-volume-monitor
+   2899    2148 Sl    0.0  0.0 gjs             /usr/bin/gjs -m /usr/share/gnome-shell/org.gnome.ScreenSaver
+   2943    2148 Ssl   0.0  0.0 gvfs-afc-volume /usr/libexec/gvfs-afc-volume-monitor
+   2951    2148 Ssl   0.0  0.0 gvfs-gphoto2-vo /usr/libexec/gvfs-gphoto2-volume-monitor
+   2960    2148 Ssl   0.0  0.0 xdg-desktop-por /usr/libexec/xdg-desktop-portal
+   2974    2148 Sl    0.0  0.0 goa-daemon      /usr/libexec/goa-daemon
+   2986    2148 Ssl   0.0  0.0 gvfs-mtp-volume /usr/libexec/gvfs-mtp-volume-monitor
+   2987    2148 Ssl   0.0  0.0 xdg-desktop-por /usr/libexec/xdg-desktop-portal-gnome
+   2993    2148 Ssl   0.0  0.0 gvfs-goa-volume /usr/libexec/gvfs-goa-volume-monitor
+   3005    2148 Sl    0.0  0.0 goa-identity-se /usr/libexec/goa-identity-service
+   3014    2148 Ssl   0.0  0.0 evolution-calen /usr/libexec/evolution-calendar-factory
+   3026    2716 Sl    0.0  0.0 ibus-engine-sim /usr/libexec/ibus-engine-simple
+   3040    2148 Ssl   0.0  0.0 evolution-addre /usr/libexec/evolution-addressbook-factory
+   3083    2148 Ssl   0.0  0.0 dconf-service   /usr/libexec/dconf-service
+   3093    2470 Sl    0.0  0.0 gvfsd-trash     /usr/libexec/gvfsd-trash --spawner :1.20 /org/gtk/gvfs/exec_spaw/0
+   3148    2148 Ssl   0.0  0.0 xdg-desktop-por /usr/libexec/xdg-desktop-portal-gtk
+   3170    2148 Sl    0.0  0.0 gsd-printer     /usr/libexec/gsd-printer
+   3217    2148 Ssl   0.0  0.0 user-session-he /snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+   3280    3217 Sl    0.0  0.0 snapd-desktop-i /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+   3396       1 Ssl   0.0  0.0 power-profiles- /usr/libexec/power-profiles-daemon
+   3418       2 S<    0.0  0.0 krfcommd        [krfcommd]
+   3448    2148 Ssl   0.0  0.0 gvfsd-metadata  /usr/libexec/gvfsd-metadata
+   3459    2148 Ssl   0.0  0.0 ubuntu-insights /usr/bin/ubuntu-insights collect -p=2629743
+   4644       1 Ss    0.3  6.6 tmux: server    tmux
+   4645    4644 Ss    0.0  0.0 bash            -bash
+  12562       2 I     0.0  0.0 kworker/6:0-mm_ [kworker/6:0-mm_percpu_wq]
+ 135177       2 I     0.0  0.0 kworker/0:1-eve [kworker/0:1-events]
+ 158697       1 Ss    0.0  0.0 sshd            sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+ 186093    4644 Ss    0.0  0.0 bash            -bash
+ 236788       1 Ssl   0.0  0.0 fwupd           /usr/libexec/fwupd/fwupd
+ 239885    2148 Sl    0.0  0.0 snap            /snap/snapd/current/usr/bin/snap userd
+ 401319       2 I     0.0  0.0 kworker/3:2-eve [kworker/3:2-events]
+ 442220       2 I     0.0  0.0 kworker/1:2-eve [kworker/1:2-events]
+ 562156       2 I     0.0  0.0 kworker/5:2-eve [kworker/5:2-events]
+ 635493    4645 Sl+   0.0  0.0 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox resume npm_***
+ 635506  635493 S+    0.0  0.0 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 635507  635506 Sl+   0.0  0.0 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 635514  635507 Sl+   0.5  0.1 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 636713  635514 Sl    0.0  0.0 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 641695  186093 Sl+   0.0  0.0 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 641706  641695 S+    0.0  0.0 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 641707  641706 Sl+   0.0  0.0 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 641714  641707 Sl+   0.2  0.1 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 642973  641714 Sl    0.0  0.0 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 702881    4644 Ss    0.0  0.0 bash            -bash
+ 702975  702881 Sl+   0.0  0.0 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 702986  702975 S+    0.0  0.0 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 702987  702986 Sl+   0.0  0.0 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 702994  702987 Sl+   0.2  0.2 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 704105  702994 Sl    0.0  0.0 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 725816       2 I     0.0  0.0 kworker/12:0-mm [kworker/12:0-mm_percpu_wq]
+ 739805       2 I     0.0  0.0 kworker/11:1-mm [kworker/11:1-mm_percpu_wq]
+ 776184 1957054 Sl+   0.0  0.0 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 776227  776184 S+    0.0  0.0 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 776228  776227 Sl+   0.0  0.0 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 776235  776228 Sl+   0.0  0.2 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 887712       2 I     0.0  0.0 kworker/10:2-cg [kworker/10:2-cgroup_free]
+ 916715       2 I     0.0  0.0 kworker/8:0-eve [kworker/8:0-events]
+ 934988       2 I     0.0  0.0 kworker/9:2-cgr [kworker/9:2-cgroup_free]
+ 938177    2148 Ss    0.0  0.0 update-notifier /bin/sh /usr/lib/update-notifier/update-notifier-crash
+ 938196  938177 Sl    0.0  0.0 apport-gtk      /usr/bin/python3 /usr/share/apport/apport-gtk
+ 949893       2 I     0.0  0.0 kworker/15:0    [kworker/15:0]
+ 963091       2 I     0.0  0.0 kworker/13:0-cg [kworker/13:0-cgroup_free]
+ 972272       2 I     0.0  0.0 kworker/4:2-mm_ [kworker/4:2-mm_percpu_wq]
+ 976869       2 I     0.0  0.0 kworker/10:0-mm [kworker/10:0-mm_percpu_wq]
+ 982310       2 I     0.0  0.0 kworker/u64:1-e [kworker/u64:1-events_unbound]
+ 998901       2 I     0.0  0.0 kworker/2:0-eve [kworker/2:0-events]
+1001201       2 I     0.0  0.0 kworker/14:0    [kworker/14:0]
+1008734       2 I     0.0  0.0 kworker/u64:7-e [kworker/u64:7-ext4-rsv-conversion]
+1010668       2 I     0.0  0.0 kworker/7:2-cgr [kworker/7:2-cgroup_free]
+1012189       2 I     0.0  0.0 kworker/13:1-ev [kworker/13:1-events]
+1018184       2 I     0.0  0.0 kworker/12:1-cg [kworker/12:1-cgroup_free]
+1025833       2 I     0.0  0.0 kworker/7:0-mm_ [kworker/7:0-mm_percpu_wq]
+1027350       2 I     0.0  0.0 kworker/4:0-mem [kworker/4:0-memcg]
+1031397       2 I     0.0  0.0 kworker/0:2-cgr [kworker/0:2-cgroup_free]
+1034908       2 I     0.0  0.0 kworker/3:0-cgr [kworker/3:0-cgroup_free]
+1036635       2 I     0.0  0.0 kworker/u64:4-m [kworker/u64:4-mt76]
+1039541       2 I     0.0  0.0 kworker/6:1-cgr [kworker/6:1-cgroup_free]
+1040084       2 I     0.0  0.0 kworker/2:2-cgr [kworker/2:2-cgroup_free]
+1040095       2 I     0.0  0.0 kworker/9:0-mm_ [kworker/9:0-mm_percpu_wq]
+1040998       2 I     0.0  0.0 kworker/8:1-cgr [kworker/8:1-cgroup_free]
+1044828       2 I     0.0  0.0 kworker/1:0-cgr [kworker/1:0-cgroup_free]
+1044845       2 I     0.0  0.0 kworker/u64:2-f [kworker/u64:2-flush-259:0]
+1045002       2 I     0.0  0.0 kworker/5:1-cgr [kworker/5:1-cgroup_free]
+1049848       2 I     0.0  0.0 kworker/11:2-cg [kworker/11:2-cgroup_free]
+1050424       2 I     0.0  0.0 kworker/12:2-cg [kworker/12:2-cgroup_free]
+1051675       2 I     0.0  0.0 kworker/1:1-cgr [kworker/1:1-cgroup_free]
+1052387       2 I     0.0  0.0 kworker/3:1     [kworker/3:1]
+1052420       2 I     0.0  0.0 kworker/u64:0-i [kworker/u64:0-ipv6_addrconf]
+1052421       2 I     0.0  0.0 kworker/u64:3-e [kworker/u64:3-events_power_efficient]
+1053236       2 I     0.0  0.0 kworker/u64:5-e [kworker/u64:5-events_unbound]
+1053237       2 I     0.0  0.0 kworker/u64:6   [kworker/u64:6]
+1053522       2 I     0.0  0.0 kworker/6:2-cgr [kworker/6:2-cgroup_free]
+1053858       2 I     0.0  0.0 kworker/5:0     [kworker/5:0]
+1055402       2 I     0.0  0.0 kworker/10:1-cg [kworker/10:1-cgroup_free]
+1057231  158697 Ss    0.0  0.0 sshd-session    sshd-session: mikers [priv]
+1057272 1057231 S     0.0  0.0 sshd-session    sshd-session: mikers@notty
+1057273 1057272 Ss    2.3  0.0 python3         python3 /home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015/run_clean_cost_v1.py
+1057636 1057273 R     0.0  0.0 ps              ps -eo pid,ppid,stat,pcpu,pmem,comm,args
+1130414       2 S     0.0  0.0 psimon          [psimon]
+1130690       2 S     0.0  0.0 psimon          [psimon]
+1195087    4644 Ss    0.0  0.0 bash            -bash
+1195196 1195087 S+    0.0  0.0 sudo            sudo su
+1195263 1195196 Ss    0.0  0.0 sudo            sudo su
+1195264 1195263 S     0.0  0.0 su              su
+1195268       1 Ss    0.0  0.0 systemd         /usr/lib/systemd/systemd --user
+1195270 1195268 S     0.0  0.0 (sd-pam)        (sd-pam)
+1195292 1195268 Ss    0.0  0.0 dbus-daemon     /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+1195294 1195268 Ssl   0.0  0.0 user-session-he /snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+1195295 1195264 S+    0.0  0.0 bash            bash
+1195369 1195268 Ssl   0.0  0.0 xdg-document-po /usr/libexec/xdg-document-portal
+1195376 1195268 Ssl   0.0  0.0 xdg-permission- /usr/libexec/xdg-permission-store
+1195384 1195369 Ss    0.0  0.0 fusermount3     fusermount3 --auto-unmount -- /run/user/0/doc
+1199661       1 Ssl   0.0  0.0 containerd      /usr/bin/containerd
+1200019       1 Ssl   0.0  0.1 dockerd         /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+1394925       2 I     0.0  0.0 kworker/15:2-mm [kworker/15:2-mm_percpu_wq]
+1435980       1 Ssl   0.0  0.1 snapd           /snap/snapd/current/usr/lib/snapd/snapd
+1766386 2972898 Sl+   0.0  0.0 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+1766397 1766386 S+    0.0  0.0 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+1766398 1766397 Sl+   0.0  0.0 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+1766405 1766398 Sl+   0.0  0.1 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+1957054    4644 Ss    0.0  0.0 bash            -bash
+2246472    2148 Sl    0.0  0.0 gnome-keyring-d /usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+2246474    2148 Ssl   0.0  0.0 gnome-keyring-d /usr/bin/gnome-keyring-daemon --foreground --components=pkcs11,secrets --control-directory=/run/user/1000/keyring
+2516367       2 I<    0.0  0.0 kworker/u65:2-t [kworker/u65:2-ttm]
+2566163       2 I<    0.0  0.0 kworker/u65:5-t [kworker/u65:5-ttm]
+2718639    2499 Sl    0.0  0.0 Xwayland        /usr/bin/Xwayland :0 -rootless -noreset -accessx -core -auth /run/user/1000/.mutter-Xwaylandauth.LV86U3 -listenfd 4 -listenfd 5 -displayfd 6 -initfd 7 -byteswappedclients -enable-ei-portal
+2718654    2148 Ssl   0.0  0.0 gsd-xsettings   /usr/libexec/gsd-xsettings
+2718667    2499 Sl    0.0  0.0 mutter-x11-fram /usr/libexec/mutter-x11-frames
+2718677    2148 Sl    0.0  0.0 ibus-x11        /usr/libexec/ibus-x11
+2971628       1 Ssl   0.3  0.7 codex           /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --managed-daemon
+2972898    4644 Ss    0.0  0.0 bash            -bash
+2977748 2971628 Sl    0.0  0.1 codex-code-mode /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex-code-mode-host
+3036473    4644 Ss    0.0  0.0 bash            -bash
+3036614 3036473 S+    0.0  0.0 sudo            sudo su
+3036617 3036614 Ss    0.0  0.0 sudo            sudo su
+3036618 3036617 S     0.0  0.0 su              su
+3036620 3036618 S+    0.0  0.0 bash            bash
+3112332    4644 Ss+   0.0  0.0 bash            -bash
+3728903       1 Ss    0.0  0.0 cupsd           /usr/sbin/cupsd -l
+3728904       1 Ssl   0.0  0.0 cups-browsed    /usr/sbin/cups-browsed
+3728951 3728903 S     0.0  0.0 dbus            /usr/lib/cups/notifier/dbus dbus://
+3728952 3728903 S     0.0  0.0 dbus            /usr/lib/cups/notifier/dbus dbus://
+3845816    4644 Ss    0.0  0.0 bash            -bash
+3845893 3845816 S+    0.1  0.1 top             top
+3971444    4644 Ss+   0.0  0.0 bash            -bash
+4037386       2 I     0.0  0.0 kworker/14:1-ev [kworker/14:1-events]
+4101847    4644 Ss    0.0  0.0 bash            -bash
+4101956 4101847 S+    0.0  0.0 ssh             ssh mikers@192.168.0.185

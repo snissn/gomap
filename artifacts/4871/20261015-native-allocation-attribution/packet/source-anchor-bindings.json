@@ -1,0 +1,72 @@
+[
+  {
+    "path": "attribution-v2/sources/TreeDB/internal/valuelog/cow_leaf_continuation.go",
+    "bytes": 20266,
+    "sha256": "18c5b39355aa3eb48758f1c273ce97a0af5f28291d63340de55d656f0263dd63",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/cow_leaf_continuation.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/internal/valuelog/cow_template_continuation.go",
+    "bytes": 10824,
+    "sha256": "767a70fadb9cdc720d6ba7fbb519c51ca95989e9e26f23cb946185283f790271",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/cow_template_continuation.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/internal/valuelog/cow_zstd_continuation.go",
+    "bytes": 11840,
+    "sha256": "5c76dfe04af3775063fd97a5af2f3f996145b8c66dcab417fae6cdf9a265a987",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/cow_zstd_continuation.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/internal/valuelog/leaf_append_work.go",
+    "bytes": 2737,
+    "sha256": "0cb7d45d0bc71eaeed8efbe363040c4ff65f1a1ab834b133a7e81cf7b2fb8187",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/leaf_append_work.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/mvcc/native_production_cost_v6_test.go",
+    "bytes": 16028,
+    "sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/native_production_cost_v6_test.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 15733,
+    "sha256": "0cdb23c86b34f1e8591d78a0c8aef8624f1fd6f168968b91e93267488f55b44d",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 25153,
+    "sha256": "45fcb568bc7c798d6911130cdc96ac6198545b79bf600ca48577e16430b6060a",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/prune_cursor_v6.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/tree/charged_projection.go",
+    "bytes": 30772,
+    "sha256": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/charged_projection.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/tree/tree.go",
+    "bytes": 55888,
+    "sha256": "c9319602ea6b027cd1053a725ed564527de859693a97a4f72892e4f90e116d81",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/tree.go",
+    "matches_effective_census": true
+  },
+  {
+    "path": "attribution-v2/sources/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 21647,
+    "sha256": "af5f7831fa00961f144f1d9c14a6161bf1af5d3343230a3dcc4c6dd6d6cb9ebc",
+    "measured_source_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_write_work.go",
+    "matches_effective_census": true
+  }
+]

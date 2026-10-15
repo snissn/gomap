@@ -1,0 +1,15 @@
+{
+  "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "CGO_ENABLED": "1",
+  "GOMAXPROCS": "4",
+  "GOGC": null,
+  "GOMEMLIMIT": null,
+  "GODEBUG": null,
+  "GOFLAGS": null,
+  "GOCACHE": null,
+  "GOMODCACHE": null,
+  "GOENV": null,
+  "GOEXPERIMENT": null
+}

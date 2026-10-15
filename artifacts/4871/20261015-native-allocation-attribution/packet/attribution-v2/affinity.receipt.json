@@ -1,0 +1,13 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "taskset",
+    "-pc",
+    "1059973"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.0012095523998141289,
+  "started_utc": "2026-10-15T03:54:08.523878+00:00",
+  "raw_sha256": "acf69610b14ee16750057fae51b1aa0ce1507d139dab7dee386152d60ed744e6"
+}

@@ -1,0 +1,25 @@
+{
+  "at_utc": "2026-10-15T04:03:04.237458+00:00",
+  "stage": "verified_frozen_allowlist",
+  "base": "973a2acc18ab68ab7d838deb911548adae3fb3f1",
+  "effective_source_census_rows": 3997,
+  "packet_members": 73,
+  "packet_bytes": 16837689,
+  "packet_manifest_sha256": "7831b464001457c7c94311a831b1c297103fdca467b5a5f8e51cf71ac0dcb860",
+  "report_sha256": "38c3002a95e2d5a9e308e851840a564b16a5430ef1977b0a1cd4cc885fc8397d",
+  "scope": "Artifact only; no native source checkpoint or production performance acceptance. Production ACK0/refusal; allocation NOT_COLLECTED. Explicit diagnostic attribution only. Ten source anchors plus input census do not reconstruct every dirty compiled source. Both binaries retained; no deletion release.",
+  "production": "479495ns to refusal, not ACK; checked Close RED",
+  "diagnostic": {
+    "all_bytes": 2690888,
+    "all_objects": 1199,
+    "prune_bytes": 2674568,
+    "prune_objects": 1102,
+    "write_bytes": 9344,
+    "write_objects": 81,
+    "unclassified_bytes": 6976,
+    "unclassified_objects": 16,
+    "three_workspace_families_bytes": 1908736,
+    "proven_public_bytes": 2683912
+  },
+  "normal_index_sha256": "cd0d544d9c03d73b08d2fe0a9a231d4ffb32b27565efad0cb33bd12185197f37"
+}

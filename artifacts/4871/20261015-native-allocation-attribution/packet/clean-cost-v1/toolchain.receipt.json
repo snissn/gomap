@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "version"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.00326739065349102,
+  "started_utc": "2026-10-15T03:52:47.986584+00:00",
+  "raw_sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7"
+}

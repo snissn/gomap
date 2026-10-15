@@ -1,0 +1,11 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "lscpu"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.0032455110922455788,
+  "started_utc": "2026-10-15T03:54:08.525153+00:00",
+  "raw_sha256": "01a2b06471abac1b1deedb4d3570fe5038eed6b90c829e2cb652a0d87d72bf81"
+}

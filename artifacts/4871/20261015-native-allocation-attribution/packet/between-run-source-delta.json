@@ -1,0 +1,19 @@
+{
+  "effective_rows_each": 3997,
+  "delta": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/native_production_cost_v6_test.go",
+      "before": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/native_production_cost_v6_test.go",
+        "bytes": 15604,
+        "sha256": "865b340c31a207c795d23f00f159917202fd57b46c7da967f899f5f59a5702c4"
+      },
+      "after": {
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/native_production_cost_v6_test.go",
+        "bytes": 16028,
+        "sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc"
+      }
+    }
+  ],
+  "production_sources_equal": true
+}

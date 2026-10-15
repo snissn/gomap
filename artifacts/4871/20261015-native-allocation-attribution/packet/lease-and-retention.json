@@ -1,0 +1,24 @@
+{
+  "new_file_lease_finished": true,
+  "leased_path": "TreeDB/mvcc/native_production_cost_v6_test.go",
+  "measured_final_new_file_sha256": "efc065bbbe16258db79947d0cca0b130185c8194740f01f6490de29d48faf0fc",
+  "source_go_hold_released_to_native_owner": true,
+  "no_further_go_or_edits_by_this_lane": true,
+  "measured_source_stable_each_run": true,
+  "head_index_metadata_stable_each_run": true,
+  "binary_evidence_retained": [
+    {
+      "path": "clean-cost-v1/native-cost.test",
+      "bytes": 30361651,
+      "sha256": "87e9f50938c75663a80b005c6625b7d2509ebfc2bc52879dea8df9537c3d9462"
+    },
+    {
+      "path": "attribution-v2/native-cost.test",
+      "bytes": 30366907,
+      "sha256": "7a65051cb771c98309c9f7673ce0f7d68dafc2acfd77a274cb1f82e819e0e271"
+    }
+  ],
+  "disposable_release_paths": [],
+  "reconstruction_limitation": "3997 exact effective-input hashes and selected source snapshots are retained; this packet alone does not reconstruct all dirty compiled inputs. Retain both binaries until root establishes full-source reconstruction and explicitly releases them.",
+  "no_cleanup_performed": true
+}

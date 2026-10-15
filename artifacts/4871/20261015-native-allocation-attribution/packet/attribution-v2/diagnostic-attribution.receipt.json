@@ -1,0 +1,24 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "tool",
+    "test2json",
+    "-t",
+    "-p",
+    "github.com/snissn/gomap/TreeDB/mvcc",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015/attribution-v2/native-cost.test",
+    "-test.v=test2json",
+    "-test.count=1",
+    "-test.timeout=90s",
+    "-test.run=^TestNativePruneCOWRetainedOutputDiagnosticAllocationAttribution$/^pointertrue$"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.2637785696424544,
+  "started_utc": "2026-10-15T03:54:10.329226+00:00",
+  "raw_sha256": "7105afdab28c158748edf5ca020c45c3f887da2ba5ebe7bbbfe1de8df32dede2"
+}

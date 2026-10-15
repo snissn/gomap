@@ -1,0 +1,14 @@
+/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015/clean-cost-v1/native-cost.test: go1.26.3
+	path	github.com/snissn/gomap/TreeDB/mvcc.test
+	mod	github.com/snissn/gomap	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-tags=treedb_test
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1

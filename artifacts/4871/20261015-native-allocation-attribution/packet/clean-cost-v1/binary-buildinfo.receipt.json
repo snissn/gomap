@@ -1,0 +1,14 @@
+{
+  "exit_code": 0,
+  "timeout": false,
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "version",
+    "-m",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015/clean-cost-v1/native-cost.test"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "elapsed_seconds": 0.0034615034237504005,
+  "started_utc": "2026-10-15T03:52:55.172302+00:00",
+  "raw_sha256": "0bed32bc09962a1918058b09d436009ef125de42310040c990a3b6c4cb390d11"
+}

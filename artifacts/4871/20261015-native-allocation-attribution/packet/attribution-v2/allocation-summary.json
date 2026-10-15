@@ -1,0 +1,2566 @@
+{
+  "categories": {
+    "diagnostic_prune": {
+      "alloc_bytes": 2674568,
+      "alloc_objects": 1102
+    },
+    "unclassified_window_unproven": {
+      "alloc_bytes": 6976,
+      "alloc_objects": 16
+    },
+    "ordinary_CommitAt": {
+      "alloc_bytes": 9344,
+      "alloc_objects": 81
+    }
+  },
+  "sites": [
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/prune_cursor_v6.go:118",
+      "alloc_bytes": 737280,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.(*Tree).NewChargedProjection /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/charged_projection.go:117",
+      "alloc_bytes": 630784,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.(*MaterializedWriteWork).newFrame /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_write_work.go:126",
+      "alloc_bytes": 360448,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.(*MaterializedWriteWork).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_write_work.go:495",
+      "alloc_bytes": 180224,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*blockCodecScratch).lz4 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/block_codec.go:74",
+      "alloc_bytes": 139264,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:235",
+      "alloc_bytes": 61440,
+      "alloc_objects": 15,
+      "stack_rows": 15
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.(*Tree).OwnedPointerProjectionIterator /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/owned_iterator.go:39",
+      "alloc_bytes": 57344,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.PrimaryBankMetadataEdgesOwnedV5 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go:54",
+      "alloc_bytes": 57344,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/leafrefscan.init.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/leafrefscan/walk.go:127",
+      "alloc_bytes": 36992,
+      "alloc_objects": 6,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/iterator.go:515",
+      "alloc_bytes": 32768,
+      "alloc_objects": 4,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.newCOWGeneration /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_budget.go:266",
+      "alloc_bytes": 31872,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:244",
+      "alloc_bytes": 28536,
+      "alloc_objects": 9,
+      "stack_rows": 9
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.NewMaterializedInputWorkV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_input_work_v6.go:54",
+      "alloc_bytes": 21760,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).stepNativeMVCCMaterializedOutputV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go:72",
+      "alloc_bytes": 20480,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/reader.go:146",
+      "alloc_bytes": 16384,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/mvcc.(*Store).pruneNativeV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/prune_cursor_v6.go:97",
+      "alloc_bytes": 15904,
+      "alloc_objects": 142,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.allocatePrimaryPromotionStorageV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:258",
+      "alloc_bytes": 13312,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/node.init.func4 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/builder.go:129",
+      "alloc_bytes": 12288,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:256",
+      "alloc_bytes": 12288,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*valueLogRefDelta).addPositive /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/vlog_gc_incremental.go:240",
+      "alloc_bytes": 9904,
+      "alloc_objects": 8,
+      "stack_rows": 8
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadWorkspace).codec /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read_workspace.go:261",
+      "alloc_bytes": 9312,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*leafPageReadCacheSlot).storeLockedWithRecordChecksumState /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_page_read_cache.go:528",
+      "alloc_bytes": 8192,
+      "alloc_objects": 2,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.init.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/iterator.go:22",
+      "alloc_bytes": 6912,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourceAllocation /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_allocation.go:40",
+      "alloc_bytes": 6720,
+      "alloc_objects": 84,
+      "stack_rows": 46
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.newCOWGenerationResourcesWithWorkV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_resources.go:69",
+      "alloc_bytes": 6384,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Get /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/pools.go:85",
+      "alloc_bytes": 5632,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "sync.(*Pool).pinSlow /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/sync/pool.go:241",
+      "alloc_bytes": 5120,
+      "alloc_objects": 10,
+      "stack_rows": 10
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.encodeBlockPayloadWithScratch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/block_codec.go:106",
+      "alloc_bytes": 4864,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_tree.go:43",
+      "alloc_bytes": 4608,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedStableResourceToken /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_token_allocation.go:158",
+      "alloc_bytes": 4224,
+      "alloc_objects": 6,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2416",
+      "alloc_bytes": 4224,
+      "alloc_objects": 6,
+      "stack_rows": 6
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "os.(*File).Stat /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/os/stat_unix.go:19",
+      "alloc_bytes": 4160,
+      "alloc_objects": 20,
+      "stack_rows": 14
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.materializePrimaryManifestV5 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_primary_runtime_v5.go:273",
+      "alloc_bytes": 4128,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.getCompactLeafLogPayloadScratch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/leaf_page_log.go:583",
+      "alloc_bytes": 4120,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/node.init.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/builder.go:97",
+      "alloc_bytes": 4120,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).CloneReadRootForPromotionV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_v6.go:342",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go:141",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.materializePrimaryManifestV5 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_primary_runtime_v5.go:274",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:295",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.reservationDigest /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:156",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:117",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).commitPrimarySealV5 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_primary_runtime_v5.go:720",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:186",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).writeBundleLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/bundle.go:275",
+      "alloc_bytes": 4096,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_tree.go:125",
+      "alloc_bytes": 3840,
+      "alloc_objects": 20,
+      "stack_rows": 20
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:248",
+      "alloc_bytes": 2880,
+      "alloc_objects": 12,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_tree.go:140",
+      "alloc_bytes": 2880,
+      "alloc_objects": 15,
+      "stack_rows": 15
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/batch.newPooledBatch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/batch/batch.go:116",
+      "alloc_bytes": 2688,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_tree.go:143",
+      "alloc_bytes": 2304,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareCapsuleSealV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/primary_capsule_runtime_v6.go:220",
+      "alloc_bytes": 2152,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*recordingSink).write /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:624",
+      "alloc_bytes": 2144,
+      "alloc_objects": 6,
+      "stack_rows": 6
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newPrimaryConstructionTransactionV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:62",
+      "alloc_bytes": 1944,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.cloneStateNode /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_tree.go:125",
+      "alloc_bytes": 1920,
+      "alloc_objects": 10,
+      "stack_rows": 10
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:470",
+      "alloc_bytes": 1792,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).NewTraversal /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_traversal.go:65",
+      "alloc_bytes": 1680,
+      "alloc_objects": 7,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newStableResourceSetFromKindViews /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_set_allocation.go:20",
+      "alloc_bytes": 1584,
+      "alloc_objects": 11,
+      "stack_rows": 11
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).beginRootPublicationBuildGroup /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:103",
+      "alloc_bytes": 1536,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.appendIDExtents /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:664",
+      "alloc_bytes": 1488,
+      "alloc_objects": 5,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourceEntryBacking /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_entry_allocation.go:34",
+      "alloc_bytes": 1408,
+      "alloc_objects": 8,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedDependencyManifestEntryV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_manifest_allocation.go:150",
+      "alloc_bytes": 1408,
+      "alloc_objects": 4,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/stringslite.Clone /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/stringslite/strings.go:147",
+      "alloc_bytes": 1304,
+      "alloc_objects": 70,
+      "stack_rows": 45
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38372",
+      "alloc_bytes": 1152,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38367",
+      "alloc_bytes": 1152,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:168",
+      "alloc_bytes": 1056,
+      "alloc_objects": 3,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "os.newFile /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/os/file_unix.go:145",
+      "alloc_bytes": 1040,
+      "alloc_objects": 20,
+      "stack_rows": 16
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/leafrefscan.init.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/leafrefscan/walk.go:126",
+      "alloc_bytes": 1024,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourcePinnedBacking /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_token_allocation.go:49",
+      "alloc_bytes": 960,
+      "alloc_objects": 6,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.New /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/tree.go:299",
+      "alloc_bytes": 960,
+      "alloc_objects": 4,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.duplicateStableFile /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_identity_unix.go:111",
+      "alloc_bytes": 960,
+      "alloc_objects": 8,
+      "stack_rows": 6
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*IdentityPinRegistry).Pin /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/pin_registry.go:217",
+      "alloc_bytes": 960,
+      "alloc_objects": 10,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).markReplacedPath /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:265",
+      "alloc_bytes": 936,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:116",
+      "alloc_bytes": 936,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).newCOWBatch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:57",
+      "alloc_bytes": 896,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableNamespaceCreationProof).bindWithMetadata /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_token.go:1768",
+      "alloc_bytes": 896,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func3 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:365",
+      "alloc_bytes": 864,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2409",
+      "alloc_bytes": 864,
+      "alloc_objects": 6,
+      "stack_rows": 6
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedDependencyManifestEntryV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_manifest_allocation.go:149",
+      "alloc_bytes": 848,
+      "alloc_objects": 4,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.cloneOwnedResourcePhysical /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_physical_allocation.go:27",
+      "alloc_bytes": 832,
+      "alloc_objects": 16,
+      "stack_rows": 6
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*nativeRolloverWorkV6).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_rollover_work_v6.go:108",
+      "alloc_bytes": 784,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.(*MaterializedInputWorkV6).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_input_work_v6.go:112",
+      "alloc_bytes": 768,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.ensureFrameBody /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/frame_preparer.go:274",
+      "alloc_bytes": 768,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.cloneOwnedResourceLogical /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_logical_allocation.go:19",
+      "alloc_bytes": 768,
+      "alloc_objects": 8,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:374",
+      "alloc_bytes": 720,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2378",
+      "alloc_bytes": 704,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2378",
+      "alloc_bytes": 704,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedStableResourceEntryLeaf /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_rope_allocation.go:34",
+      "alloc_bytes": 704,
+      "alloc_objects": 8,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.combineResourceFieldCells /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_field_allocation.go:69",
+      "alloc_bytes": 704,
+      "alloc_objects": 12,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.mergeOwnedResourceKindBackings /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_kind_merge_allocation.go:80",
+      "alloc_bytes": 672,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[...]).IsoCopy /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:130",
+      "alloc_bytes": 672,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:213",
+      "alloc_bytes": 664,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedResourceEntry /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go:74",
+      "alloc_bytes": 640,
+      "alloc_objects": 4,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB.newCommandWALPublicBatch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/command_wal_public_cached.go:590",
+      "alloc_bytes": 640,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*nativeFrozenDeltaWorkV6).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_frozen_delta_work_v6.go:55",
+      "alloc_bytes": 640,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.AcquireRIDFrontierMetadata /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_rid_allocation.go:31",
+      "alloc_bytes": 576,
+      "alloc_objects": 4,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.copyResourceKindBacking /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_kind_allocation.go:94",
+      "alloc_bytes": 576,
+      "alloc_objects": 10,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.init.func12 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/vlog_gc_incremental.go:121",
+      "alloc_bytes": 576,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.normalizeExtents /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:53",
+      "alloc_bytes": 560,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).notifyLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/coordinator.go:1292",
+      "alloc_bytes": 560,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.newCOWGeneration /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_budget.go:265",
+      "alloc_bytes": 528,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).Acquire /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_view.go:40",
+      "alloc_bytes": 528,
+      "alloc_objects": 22,
+      "stack_rows": 8
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/bytealg.MakeNoZero /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/runtime/slice.go:437",
+      "alloc_bytes": 512,
+      "alloc_objects": 7,
+      "stack_rows": 7
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowTable).NewIterator /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_table.go:107",
+      "alloc_bytes": 480,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewOriginalCleanupCustody /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_original_cleanup.go:104",
+      "alloc_bytes": 480,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedDependencyManifestEntryV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_manifest_allocation.go:51",
+      "alloc_bytes": 448,
+      "alloc_objects": 4,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*primaryArenaOwnerV5).releaseWithOutcome /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/primary_arena_owner_v5.go:88",
+      "alloc_bytes": 448,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWRoot).CursorWithExtraBytes /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_view.go:166",
+      "alloc_bytes": 432,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*maintenanceRootAccumulator).add /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_roots.go:62",
+      "alloc_bytes": 416,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceSetBuilderWithMetadata /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_builder_allocation.go:37",
+      "alloc_bytes": 416,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/pager.NewGrowth /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/grow_work.go:58",
+      "alloc_bytes": 384,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:230",
+      "alloc_bytes": 384,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newImportedEntryFieldBacking /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_field_allocation.go:353",
+      "alloc_bytes": 384,
+      "alloc_objects": 8,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/merging.NewMergingIteratorWithFixedHeap /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/merging/merging.go:175",
+      "alloc_bytes": 368,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWBudget).AcquireExternal /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_budget.go:123",
+      "alloc_bytes": 360,
+      "alloc_objects": 15,
+      "stack_rows": 13
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.getSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/snapshot.go:77",
+      "alloc_bytes": 352,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.concatOwnedAdmittedStableResourceEntryNodes /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_rope_allocation.go:58",
+      "alloc_bytes": 352,
+      "alloc_objects": 4,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.newStablePagerOwnedOperations /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/stable_pager_owned_operations.go:60",
+      "alloc_bytes": 352,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.NewMap[...] /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:59",
+      "alloc_bytes": 336,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.NewMaterializedWriteWork /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/materialized_write_work.go:101",
+      "alloc_bytes": 320,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).rebindCandidateValueLogSetWithLimitsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:729",
+      "alloc_bytes": 320,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).PrepareExternalCommandWALPublication /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch.go:65",
+      "alloc_bytes": 304,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:831",
+      "alloc_bytes": 288,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.NewFramePreparer /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/frame_preparer.go:52",
+      "alloc_bytes": 288,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:206",
+      "alloc_bytes": 288,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowCache).prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:392",
+      "alloc_bytes": 288,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowCache).installCOWBasis /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_flush.go:91",
+      "alloc_bytes": 288,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:156",
+      "alloc_bytes": 288,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2402",
+      "alloc_bytes": 288,
+      "alloc_objects": 6,
+      "stack_rows": 6
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:261",
+      "alloc_bytes": 256,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:261",
+      "alloc_bytes": 256,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).CloneWithPagerAllocator /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/zipper/zipper.go:1328",
+      "alloc_bytes": 256,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowAddEntry /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:136",
+      "alloc_bytes": 256,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.NewPreparedPrimaryReadRootCertificateV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_data_certificate_v6.go:86",
+      "alloc_bytes": 256,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:196",
+      "alloc_bytes": 256,
+      "alloc_objects": 4,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "sync.(*Pool).pinSlow /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/sync/pool.go:237",
+      "alloc_bytes": 248,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).CurrentValueLogSegmentsSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/value_log_appender.go:474",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:374",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).CloneReadRootForPromotionV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_v6.go:351",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).PrepareConstructedReadRootV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_v6.go:101",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1697",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).finalizeCOWPublication /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch.go:203",
+      "alloc_bytes": 240,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:173",
+      "alloc_bytes": 240,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1198",
+      "alloc_bytes": 224,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.openStableChildFile /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_identity_unix.go:45",
+      "alloc_bytes": 224,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[...]).IsoCopy /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:130",
+      "alloc_bytes": 224,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/reflectlite.Swapper /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/reflectlite/swapper.go:55",
+      "alloc_bytes": 224,
+      "alloc_objects": 7,
+      "stack_rows": 7
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "os.statNolog /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/os/stat_unix.go:30",
+      "alloc_bytes": 208,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/batch.newPooledBatch /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/batch/batch.go:115",
+      "alloc_bytes": 208,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowCache).prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:380",
+      "alloc_bytes": 208,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.generationDigest /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:321",
+      "alloc_bytes": 192,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.combineResourceObligationBackings /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_obligation_allocation.go:71",
+      "alloc_bytes": 192,
+      "alloc_objects": 6,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).CurrentLeafPageLogSegmentsSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/leaf_page_log_lanes.go:184",
+      "alloc_bytes": 192,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).CreatedLeafPageLogSegmentsSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/leaf_page_log_lanes.go:155",
+      "alloc_bytes": 192,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*nativeRolloverWorkV6).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_rollover_work_v6.go:107",
+      "alloc_bytes": 192,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWBudget).AcquireExternal /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_budget.go:123",
+      "alloc_bytes": 192,
+      "alloc_objects": 8,
+      "stack_rows": 8
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.preparePrimaryDataCertificateV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_data_certificate_v6.go:89",
+      "alloc_bytes": 176,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/node.(*Builder).addLeafEntryColumnarPrefixV2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/builder.go:779",
+      "alloc_bytes": 160,
+      "alloc_objects": 2,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newPreparedRootCandidateWithExtensions /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/types.go:156",
+      "alloc_bytes": 160,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/reflectlite.unsafe_New /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/runtime/malloc.go:2183",
+      "alloc_bytes": 160,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.collectMaintenanceRootsWithContext /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_roots.go:111",
+      "alloc_bytes": 160,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.NewCOWWriterWithWorkV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:96",
+      "alloc_bytes": 144,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:855",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowReserve /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:92",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:211",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go:88",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2370",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newDependencyManifestV1FromEncoded /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/durable_format_v1.go:144",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).reservationExtents /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:709",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.sortedUnique /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:472",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2370",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:245",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:232",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:280",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:879",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:832",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:116",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.newPrimaryBankConstructionV5 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/primary_bank_construction_v5.go:41",
+      "alloc_bytes": 144,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.admitCOWBackendBasis /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_basis_completion.go:35",
+      "alloc_bytes": 144,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:129",
+      "alloc_bytes": 144,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func3 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:311",
+      "alloc_bytes": 144,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "time.NewTimer /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/time/sleep.go:144",
+      "alloc_bytes": 136,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "github.com/snissn/go-crc32-asm.zeroAppendOperator /home/mikers/go/pkg/mod/github.com/snissn/go-crc32-asm@v0.0.0-20260522204125-08945951423a/crc32.go:225",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "sync.(*poolChain).pushHead /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/sync/poolqueue.go:226",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/allocator_cow.go:447",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.makeRawKVCommandWALRIDCache /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:2006",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).sealDirectoryConstructedV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/arena.go:588",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/coordinator.go:897",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "syscall.ByteSliceFromString /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/syscall/syscall.go:52",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*valueLogRefCounts).reserve /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/vlog_ref_counts_owned.go:89",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/go-crc32-asm.zeroAppendOperator /home/mikers/go/pkg/mod/github.com/snissn/go-crc32-asm@v0.0.0-20260522204125-08945951423a/crc32.go:225",
+      "alloc_bytes": 128,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/pager.(*Pager).PreparePrimaryReadRootOwnerV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/primary_read_root_v6.go:94",
+      "alloc_bytes": 128,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:375",
+      "alloc_bytes": 120,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics.(*StableResourceSet).AcquirePhysicalDiagnostics.(*resourceKindBacking).all.func4.(*StableResourceSet).AcquirePhysicalDiagnostics-range2.func6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:171",
+      "alloc_bytes": 120,
+      "alloc_objects": 6,
+      "stack_rows": 4
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).requireDurableValueLogReferencesRegisteredV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:774",
+      "alloc_bytes": 120,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "time.newTimer /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/runtime/time.go:390",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.newCOWReadWorkspace /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read_workspace.go:68",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*nativeRolloverWorkV6).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_rollover_work_v6.go:109",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Snapshot).buildCOWIteratorLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read.go:290",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go:240",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).finishOrdinaryPrimaryWithScopeV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/ordinary_finish_v6.go:12",
+      "alloc_bytes": 112,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.newCOWFrameCapture /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_producer.go:40",
+      "alloc_bytes": 112,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.vacuumDescriptorPrefixEnd /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/vacuum_collection_roots.go:153",
+      "alloc_bytes": 112,
+      "alloc_objects": 4,
+      "stack_rows": 4
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint.func2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1640",
+      "alloc_bytes": 96,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).PrepareExternalCommandWALPublication /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch.go:79",
+      "alloc_bytes": 96,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*IdentityPinRegistry).Pin /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/pin_registry.go:217",
+      "alloc_bytes": 96,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:391",
+      "alloc_bytes": 96,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowIteratorSources /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read.go:312",
+      "alloc_bytes": 96,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:240",
+      "alloc_bytes": 96,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*ReservationLedger).reserveTail /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:452",
+      "alloc_bytes": 96,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:125",
+      "alloc_bytes": 96,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*maintenanceRootAccumulator).add /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_roots.go:56",
+      "alloc_bytes": 96,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.NewStringCursor[...] /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/string_cursor.go:83",
+      "alloc_bytes": 96,
+      "alloc_objects": 6,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/reflectlite.Swapper /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/reflectlite/swapper.go:68",
+      "alloc_bytes": 96,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/retainedalloc.(*Owner).Enroll /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/retainedalloc/owner.go:271",
+      "alloc_bytes": 96,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics.(*StableResourceSet).AcquirePhysicalDiagnostics.(*resourceKindBacking).all.func4.(*StableResourceSet).AcquirePhysicalDiagnostics-range2.func6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:172",
+      "alloc_bytes": 88,
+      "alloc_objects": 4,
+      "stack_rows": 3
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:241",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:246",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/mvcc.(*PruneCursor).step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/prune_cursor_v6.go:216",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/commitlog.writeRawKVBatchPayloadTo /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/commitlog/command_frame.go:2466",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:238",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1.func1.1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:629",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/mvcc.go:218",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateValueLogReferencesWithCountsAndLimitsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:584",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).allValueLogWriterLanesSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_root_value_log_lanes.go:158",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:619",
+      "alloc_bytes": 80,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).requireDurableValueLogReferencesRegisteredV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:770",
+      "alloc_bytes": 80,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.currentGoroutineID /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/db.go:3618",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:262",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/commitlog.encodeRawKVBatchPayloadPlannedTo /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/commitlog/command_frame.go:2384",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).rawKVCommandWALOperationScannerFromEntryScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1924",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:262",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:254",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).AppendFrameWithStatsInto /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/writer.go:1615",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*AppendWork).Step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/append_work.go:74",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint.(*DB).rawKVCommandWALOperationScannerFromEntryScan.func6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1928",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadCut).buildDomains /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_cut.go:254",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[...]).copyWithWork /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:84",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/strconv.FormatUint /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/strconv/itoa.go:19",
+      "alloc_bytes": 64,
+      "alloc_objects": 4,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:859",
+      "alloc_bytes": 64,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*IdentityPinRegistry).stateLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/pin_registry.go:734",
+      "alloc_bytes": 64,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedDependencyManifestEntryV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_manifest_allocation.go:129",
+      "alloc_bytes": 64,
+      "alloc_objects": 4,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.NewCandidatePageSinkV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:103",
+      "alloc_bytes": 56,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).EnqueueBuilt /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/admission.go:128",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:230",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "sync.(*poolChain).pushHead /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/sync/poolqueue.go:225",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/sync.newEntryNode[...] /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/sync/hashtriemap.go:572",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).publishSnapshotView /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/db.go:5249",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.(*MapIter[...]).Seek /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:1063",
+      "alloc_bytes": 48,
+      "alloc_objects": 3,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2365",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[...]).copyWithWork /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/cowbtree/map.go:81",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1776",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.NewCOWBlockDecoder /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/cow_reader.go:393",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:898",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:623",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSubsetNoRefresh /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2365",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:209",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:243",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).pinBatchValueLogSegmentsLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:227",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:864",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.newAllocTracker /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/alloc_tracker.go:29",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.ReadAtWithDict /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/reader.go:980",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "unclassified_window_unproven",
+      "allocation_site": "internal/sync.newEntryNode[...] /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/sync/hashtriemap.go:572",
+      "alloc_bytes": 48,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*resourceFieldBacking).reachableFields /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_field_allocation.go:223",
+      "alloc_bytes": 48,
+      "alloc_objects": 3,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).filterLeafGenerationRegistrableRawFileIDs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_generation_manifest.go:1014",
+      "alloc_bytes": 48,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).CurrentLeafPageLogSegmentsSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/leaf_page_log.go:119",
+      "alloc_bytes": 48,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.dedupeLeafPageLogSegments /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_page_log.go:899",
+      "alloc_bytes": 48,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "bytes.Clone /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/bytes/bytes.go:1388",
+      "alloc_bytes": 48,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.sortedUnique /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_format.go:473",
+      "alloc_bytes": 48,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowAdmitStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:76",
+      "alloc_bytes": 48,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "weak.runtime_registerWeakPointer /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/runtime/mheap.go:2411",
+      "alloc_bytes": 48,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:375",
+      "alloc_bytes": 40,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "golang.org/x/sys/unix.ByteSliceFromString /home/mikers/go/pkg/mod/golang.org/x/sys@v0.41.0/unix/syscall.go:40",
+      "alloc_bytes": 40,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).leafLogAppendLanesSnapshot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:3438",
+      "alloc_bytes": 40,
+      "alloc_objects": 5,
+      "stack_rows": 5
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/reflectlite.Swapper /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/reflectlite/swapper.go:52",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).AcquireBuilder /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/admission.go:64",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:242",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "internal/reflectlite.Swapper /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/internal/reflectlite/swapper.go:42",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/memtable.(*COWWriter).Prepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/memtable/cow_tree.go:391",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1832",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).ownedDependencyManifestV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/resource_manifest_allocation.go:275",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38680",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:785",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:243",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/leafrefscan.init.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/leafrefscan/walk.go:125",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).stepNativeMVCCMaterializedOutputV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go:71",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:987",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:929",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "crypto/internal/fips140/sha256.(*Digest).Sum /home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/src/crypto/internal/fips140/sha256/sha256.go:208",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1838",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/tree.(*projectionBase).step /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/tree/charged_projection.go:830",
+      "alloc_bytes": 32,
+      "alloc_objects": 2,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:1102",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:945",
+      "alloc_bytes": 32,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).AcquireBuilder /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/admission.go:66",
+      "alloc_bytes": 32,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).snapshotLeafGenerationPendingFileIDsWithLimit /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_generation_manifest.go:454",
+      "alloc_bytes": 32,
+      "alloc_objects": 2,
+      "stack_rows": 2
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/command_wal_public_cached.go:1157",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/mvcckey.grow /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/mvcckey/codec.go:329",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.ReadAtWithDict /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/reader.go:855",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).registerLeafPageLogSegmentsForPublish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_page_log.go:1083",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).captureRegisteredDurableValueLogResourcesWithMetadataV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:1298",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1811",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.newDependencyManifestV1FromEncoded /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/durable_format_v1.go:131",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1626",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38660",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:970",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:400",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/command_wal_public_cached.go:1513",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentWritableFileIDs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2276",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.getVlogPreparedFrameBody /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:2297",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).stashDecodeScratchLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:320",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).adoptPrimaryCandidateV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:488",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/batch.(*Batch).TouchedValueLogSegments /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/batch/batch.go:1180",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowCache).captureBackendBasis /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_flush.go:39",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/node.init.func4 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/node/builder.go:128",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_reservation.go:110",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/batch.(*Batch).SortedEntries /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/batch/batch.go:960",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.init.func2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/reader.go:42",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38659",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/commitlog.PlanRawKVBatchPayloadScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/commitlog/command_frame.go:2286",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:443",
+      "alloc_bytes": 24,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*PreparedRootCandidate).DurableRootGroup /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/types.go:233",
+      "alloc_bytes": 24,
+      "alloc_objects": 3,
+      "stack_rows": 3
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:840",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).LockCommandWALPublishWithBarriers /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_barrier.go:273",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*primaryBankConstructionV5).ensureCapacity /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/primary_bank_construction_v5.go:62",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/mvcc/mvcc.go:246",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).cowPrepareWriteStorage /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:244",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/commitlog.writeRawKVBatchPayloadTo /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/commitlog/command_frame.go:2464",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1635",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.maintenanceRootIDs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_roots.go:168",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/pager.(*dirtyChunkBits).takeFrom /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/pager/dirty_chunks.go:47",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*DB).PublishNativeMVCCUnboundedDiagnosticV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go:230",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadWorkspace).addCodecSlot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read_workspace.go:101",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.newCOWFrameCapture /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_producer.go:41",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:2709",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Snapshot).cowIteratorSources /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read.go:320",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).ExternalCommandWALFinalizer /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch.go:176",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).filterLeafGenerationRegistrableRawFileIDs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_generation_manifest.go:988",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.cowValueLogPtrs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_batch_storage.go:251",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).captureRegisteredDurableValueLogResourcesWithMetadataV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:1294",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1826",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*allocTracker).Pages /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/alloc_tracker.go:49",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go:138",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentWritableFileIDs /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/valuelog/manager.go:2267",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).forEachLane /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/leaf_page_log_lanes.go:294",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).reservationExtents /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:707",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*Snapshot).newStablePagerResourceToken /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/stable_resource.go:652",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).Publish /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1812",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).stagedLeafGenerationManifestWithPendingResultAndLimit.func1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/leaf_generation_manifest.go:648",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).maintenanceReachabilityScan.func6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/maintenance_reachability.go:460",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).enqueueLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/coordinator.go:315",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1076",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/db.go:38426",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_build_group.go:412",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/root_publication_activation.go:1077",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/commitlog.PlanRawKVBatchPayloadScan /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/commitlog/command_frame.go:2290",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).captureRegisteredDurableValueLogResourcesWithMetadataV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:1284",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).BindReadRootDependencyV6 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/primaryarena/read_root_v6.go:147",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1623",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*NativeMVCCCurrentDeleteV6).PublishNativeMVCCUnboundedDiagnosticV6.func2 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go:109",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/freelist/generation_v1_txn.go:207",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).scanCandidateExternalReferencesWithCountsAndLimitsV1 /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/durable_root_runtime.go:660",
+      "alloc_bytes": 16,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/internal/rootpublication.DurableRootGroup.Members /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/internal/rootpublication/durable_root_transaction.go:684",
+      "alloc_bytes": 8,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowCache).captureBackendBasis /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_flush.go:38",
+      "alloc_bytes": 8,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/caching.(*cowReadWorkspace).addCodecSlot /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/caching/cow_read_workspace.go:98",
+      "alloc_bytes": 8,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "ordinary_CommitAt",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).newRawKVCommandWALIntentFromEntryScanWithHint /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/command_wal_raw.go:1625",
+      "alloc_bytes": 8,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    },
+    {
+      "category": "diagnostic_prune",
+      "allocation_site": "github.com/snissn/gomap/TreeDB/db.(*DB).prepareFinalizeCommitDurability /home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/finalize_commit_prepare.go:146",
+      "alloc_bytes": 8,
+      "alloc_objects": 1,
+      "stack_rows": 1
+    }
+  ]
+}

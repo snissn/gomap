@@ -1,0 +1,35 @@
+{
+  "results": [
+    {
+      "cell": "production-latency",
+      "exit_code": 1,
+      "timeout": false,
+      "argv": [
+        "taskset",
+        "-c",
+        "0-3",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "tool",
+        "test2json",
+        "-t",
+        "-p",
+        "github.com/snissn/gomap/TreeDB/mvcc",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015/clean-cost-v1/native-cost.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=90s",
+        "-test.run=^TestNativePruneCOWRetainedOutputProductionLatency$/^pointertrue$"
+      ],
+      "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+      "elapsed_seconds": 0.11359056923538446,
+      "started_utc": "2026-10-15T03:52:55.183515+00:00",
+      "raw_sha256": "2637f6d10e90b1a987b64ac0105787ab06a7c35e26b03c4336aa4d3d296aeb12"
+    }
+  ],
+  "source_rows": 3997,
+  "source_unchanged": true,
+  "state_unchanged": true,
+  "binary_sha256_after": "87e9f50938c75663a80b005c6625b7d2509ebfc2bc52879dea8df9537c3d9462",
+  "binary_retained": true,
+  "no_production_acceptance": true
+}

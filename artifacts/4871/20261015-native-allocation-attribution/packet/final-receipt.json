@@ -1,0 +1,22 @@
+{
+  "artifact_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-production-cost-20261015",
+  "manifest": {
+    "path": "manifest.json",
+    "bytes": 13216,
+    "sha256": "7831b464001457c7c94311a831b1c297103fdca467b5a5f8e51cf71ac0dcb860"
+  },
+  "report": {
+    "path": "report.md",
+    "bytes": 7044,
+    "sha256": "38c3002a95e2d5a9e308e851840a564b16a5430ef1977b0a1cd4cc885fc8397d"
+  },
+  "members": 73,
+  "publishable_bytes": 16837689,
+  "source_hold_released": true,
+  "new_file_lease_released": true,
+  "go_quiet_this_lane": true,
+  "binaries_retained_no_release": true,
+  "production_terminal_kind": "refusal",
+  "production_allocation_collected": false,
+  "diagnostic_only": true
+}
