@@ -49,12 +49,12 @@ func (t *Tree) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(p
 	it.leafState.keyScratch = storage.combinedKey[:0]
 	it.leafState.fixedScratch = true
 	it.resetStack()
-	if selected, err := t.initPrimaryIterator(&storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, false, readLeaf, storage.deltaLeaf[:], true); selected || err != nil {
+	if p, err := t.initPrimaryIterator(&storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, false, readLeaf, storage.deltaLeaf[:], true); p != nil || err != nil {
 		if err != nil {
 			it.err = err
 			return it
 		}
-		return &storage.primary
+		return p
 	}
 	it.Seek(start)
 	return it

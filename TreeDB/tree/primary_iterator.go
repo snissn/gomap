@@ -27,27 +27,32 @@ type primaryIterator struct {
 	bounded                                      bool
 }
 
-func (t *Tree) initPrimaryIterator(p *primaryIterator, base *Iterator, start, end []byte, opts IteratorOptions, reverse bool, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (bool, error) {
+func (t *Tree) initPrimaryIterator(p *primaryIterator, base *Iterator, start, end []byte, opts IteratorOptions, reverse bool, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (*primaryIterator, error) {
 	var root node.Node
 	if err := t.loadNodeViewWithLoadKindInto(&root, t.rootPageID, true, true); err != nil {
-		return false, err
+		return nil, err
 	}
 	if root.Type() != page.PageTypePrimaryDirectory {
-		return false, nil
+		return nil, nil
 	}
 	directory, err := node.DecodePrimaryDirectory(root.Data())
 	if err != nil {
-		return true, err
+		return nil, err
 	}
 	op, _ := directory.Base()
 	if err = t.validatePrimaryBase(root.Data()); err != nil {
-		return true, err
+		return nil, err
+	}
+	// Ordinary roots use only the pooled base iterator. Allocate the PRIMARY
+	// wrapper after selection and validation; owned callers supply its storage.
+	if p == nil {
+		p = new(primaryIterator)
 	}
 	*p = primaryIterator{baseTree: *t, base: base, directory: directory, start: start, end: end, opts: opts, reverse: reverse, readLeaf: readLeaf, leafScratch: leafScratch, bounded: bounded}
 	p.baseTree.SetRoot(op.Ref.Page)
 	p.base.tree = &p.baseTree
 	p.Seek(nil)
-	return true, nil
+	return p, nil
 }
 
 func (p *primaryIterator) Seek(key []byte) {

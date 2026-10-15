@@ -512,8 +512,7 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
-	p := new(primaryIterator)
-	if selected, err := t.initPrimaryIterator(p, it, start, end, opts, false, nil, nil, false); selected || err != nil {
+	if p, err := t.initPrimaryIterator(nil, it, start, end, opts, false, nil, nil, false); p != nil || err != nil {
 		if err != nil {
 			it.err = err
 			return it
@@ -539,8 +538,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
-	p := new(primaryIterator)
-	if selected, err := t.initPrimaryIterator(p, it, start, end, opts, true, nil, nil, false); selected || err != nil {
+	if p, err := t.initPrimaryIterator(nil, it, start, end, opts, true, nil, nil, false); p != nil || err != nil {
 		if err != nil {
 			it.err = err
 			return it
