@@ -2240,10 +2240,7 @@ func Open(opts Options) (*DB, error) {
 			_ = lock.Close()
 			return nil, gateErr
 		}
-		cfg, configErr := formatConfigFromOptionsPreservingRequiredFeatures(opts)
-		if configErr == nil {
-			configErr = SaveFormatConfig(opts.Dir, cfg)
-		}
+		configErr := saveFreshFreelistFormatConfig(opts)
 		if configErr != nil {
 			_ = lock.Close()
 			return nil, configErr

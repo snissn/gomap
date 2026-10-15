@@ -116,7 +116,7 @@ func TestIngestSourcesAtomicTypedColumnReplacementReopen(t *testing.T) {
 	if err := setup.Close(); err != nil {
 		t.Fatalf("Close setup: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 

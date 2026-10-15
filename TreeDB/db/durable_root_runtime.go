@@ -283,6 +283,25 @@ func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublica
 	return pages, nil
 }
 
+// appendDurableRootSlotRetirementsV1 separates a slot's manifest from its
+// root record. Recovery validates the immediate parent of each selectable slot,
+// so the record remains reachable through its surviving successor's actual
+// commit sequence, which may skip logical commits between durable seals.
+func appendDurableRootSlotRetirementsV1(retirements []freelist.COWRetirementV1, meta page.DurableMetaV1, record, successor rootpublication.DurableRootRecordV1) ([]freelist.COWRetirementV1, error) {
+	pages, err := durableRootSlotAuxiliaryPagesV1(meta, record)
+	if err != nil || len(pages) == 0 {
+		return retirements, err
+	}
+	if manifest := pages[:len(pages)-1]; len(manifest) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: manifest, LastReachableCommitSeq: meta.CommitSeq})
+	}
+	lastReachable := meta.CommitSeq
+	if successor.ParentRecordPageID == meta.RootRecordPageID {
+		lastReachable = max(lastReachable, successor.CommitSeq)
+	}
+	return append(retirements, freelist.COWRetirementV1{PageIDs: pages[len(pages)-1:], LastReachableCommitSeq: lastReachable}), nil
+}
+
 func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
 	// Logical counts alone cannot describe raw outer-leaf dependencies. The
 	// bounded reuse planner composes them explicitly when it has certified
@@ -1460,7 +1479,8 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if current.slot == MetaPage0ID {
 		target = MetaPage1ID
 	}
-	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(current.slotMeta[target], current.slotRecord[target])
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], current.slotMeta[target], current.slotRecord[target], current.record)
 	if err != nil {
 		return nil, err
 	}
@@ -1473,10 +1493,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		next.CommitSeq,
 		durableRootCandidateIDV1(current, next),
 		capability,
-		[]freelist.COWRetirementV1{
-			{PageIDs: overwrittenPages, LastReachableCommitSeq: current.slotCommit[target]},
-			{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq},
-		},
+		append(retirements, freelist.COWRetirementV1{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq}),
 		auxiliaryCount,
 		freelist.NewCandidatePageSinkV1(),
 	)

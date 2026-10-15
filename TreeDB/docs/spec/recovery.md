@@ -786,3 +786,11 @@ candidates independently validate version 2; a version-1 allocator cannot become
 a fallback when the newest candidate is corrupt. A valid version-2 older
 candidate remains eligible for normal recovery. Pre-alpha version-1 stores
 require rebuilding, not in-place migration.
+
+Durable-root record retirement includes immediate recovery lineage. When a meta
+slot is replaced, its dependency manifest is retired at that slot's own commit.
+Its root record remains reachable through the actual commit of a surviving
+successor that names it as parent. Commit sequences may jump between durable
+seals; the boundary is the successor's recorded commit, not the old commit plus
+one. The strict reuse boundary must preserve both selectable slots and their
+immediate parent records until the replacement seal is durable.

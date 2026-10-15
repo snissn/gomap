@@ -31,10 +31,11 @@ const (
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
 //
-// This file is best-effort and pre-alpha; callers should tolerate it being
-// absent. Versioned files written by SaveFormatConfig are expected to be fully
-// populated; if new fields are added in the future, the version should be
-// bumped so older binaries do not accidentally apply zero-values.
+// Ordinary options are best-effort and pre-alpha. Required features describe
+// physical storage contracts: a nonempty index requires its persisted freelist
+// marker even when ordinary format options are ignored. Versioned files written
+// by SaveFormatConfig are expected to be fully populated; new ordinary fields
+// require a version bump so older binaries do not apply zero-values.
 type FormatConfig struct {
 	Version int `json:"version"`
 
@@ -417,6 +418,9 @@ func requiredFormatFeatureEnabled(dir, wanted string) (bool, error) {
 // that already requires command_wal_v2 does not re-run activation validation
 // because command-WAL segments are expected after activation. The incremental
 // dependency directory is a new-store opt-in and cannot be removed once saved.
+// This replaces the configuration; callers updating an existing store must load
+// its config first and preserve required features. In particular, the persisted
+// freelist_patricia_v2 physical-format requirement cannot be removed.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	existing, ok, err := LoadFormatConfig(dir)
 	if err != nil {
@@ -508,6 +512,48 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 		return false, err
 	}
 	return !requiresCommandWAL, nil
+}
+
+// saveFreshFreelistFormatConfig runs under the store lock, before creating the
+// first index page. IgnoreFormatConfig may replace malformed ordinary options,
+// but never bypass a required-feature or durability contract.
+func saveFreshFreelistFormatConfig(opts Options) error {
+	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+	if err == nil {
+		return SaveFormatConfig(opts.Dir, cfg)
+	}
+	if !opts.IgnoreFormatConfig {
+		return err
+	}
+	if gateErr := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); gateErr != nil {
+		return gateErr
+	}
+	if gateErr := ValidateFormatRequiredFeatureGate(opts.Dir); gateErr != nil {
+		return gateErr
+	}
+	if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
+		return gateErr
+	}
+	raw, readErr := os.ReadFile(formatConfigPath(opts.Dir))
+	if readErr != nil {
+		return readErr
+	}
+	var gate struct {
+		RequiredFeatures []string `json:"required_features"`
+	}
+	if decodeErr := json.Unmarshal(raw, &gate); decodeErr != nil && bytes.Contains(raw, []byte("required_features")) {
+		return err
+	}
+	cfg = formatConfigFromOptions(opts)
+	for _, feature := range gate.RequiredFeatures {
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, feature)
+	}
+	if cfg.RequiresCommandWALV1() {
+		if activationErr := ValidateCommandWALActivationClean(opts.Dir); activationErr != nil {
+			return activationErr
+		}
+	}
+	return writeFormatConfig(opts.Dir, cfg)
 }
 
 // saveOpenFormatConfig is an openWithLock post-open refresh hook. It must not

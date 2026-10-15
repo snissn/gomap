@@ -603,7 +603,7 @@ func TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument(t *te
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{
@@ -999,7 +999,7 @@ func TestCollectionCommandWALUpdateByIDReplayTemplateV1StoredDocument(t *testing
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{
@@ -2548,7 +2548,7 @@ func TestCollectionCommandWALPreparedAsyncPublishWaitsForCoordinatorHandoff(t *t
 
 func TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -3317,7 +3317,7 @@ func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testi
 
 func TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -3388,7 +3388,7 @@ func TestCollectionCommandWALCreateCollectionPinsIndexNamespaceThroughPublish(t 
 	if err := seed.Close(); err != nil {
 		t.Fatalf("Close seed DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 
@@ -3472,7 +3472,7 @@ func TestCollectionCommandWALCreateCollectionPinsIndexNamespaceThroughPublish(t 
 
 func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -3550,7 +3550,7 @@ func TestCollectionCommandWALNoIndexInsertRefreshesVacuumedSnapshot(t *testing.T
 
 func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -3638,7 +3638,7 @@ func TestCreateCollectionWithPreparedCommandWALIntentRejectsUnusableIntent(t *te
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+			if err := saveCollectionCommandWALFormat(dir); err != nil {
 				t.Fatalf("SaveFormatConfig: %v", err)
 			}
 			d := openCollectionCommandWALDB(t, dir)
@@ -3669,7 +3669,7 @@ func TestCreateCollectionWithPreparedCommandWALIntentRejectsUnusableIntent(t *te
 
 func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	meta := CollectionMeta{
@@ -3824,7 +3824,7 @@ func TestCollectionCommandWALCreateCollectionReplaySameColumnMetadataAdvancesBef
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, meta))
@@ -4012,7 +4012,7 @@ func TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClos
 
 func TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	rawPayload, err := commitlog.EncodeRawKVBatchPayload(nil)
@@ -4147,7 +4147,7 @@ func prepareDurableColumnStoreCommandReplayDir(t *testing.T) (string, uint64) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	return dir, baseLSN
@@ -4187,7 +4187,7 @@ func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts .
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	return dir
@@ -4653,4 +4653,17 @@ func TestCollectionCommandWALSameSchemaForeignDrainDoesNotRetainAdmission(t *tes
 	if applied, next := reopen.State().AppliedCommandLSN, reopen.CommandWALNextLSN(); applied != 2 || next != 3 {
 		t.Fatalf("reopened covered prefix applied=%d next=%d, want 2,3", applied, next)
 	}
+}
+
+// Activation updates preserve the physical format and ordinary options of the
+// seeded store. SaveFormatConfig intentionally rejects removing its V2 marker.
+func saveCollectionCommandWALFormat(dir string) error {
+	cfg, _, err := backenddb.LoadFormatConfig(dir)
+	if err != nil {
+		return err
+	}
+	if !cfg.RequiresCommandWALV1() {
+		cfg.RequiredFeatures = append(cfg.RequiredFeatures, backenddb.RequiredFeatureCommandWALV1)
+	}
+	return backenddb.SaveFormatConfig(dir, cfg)
 }

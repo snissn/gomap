@@ -303,6 +303,14 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 		t.Fatalf("cut lost shared directory lock: %v", err)
 	}
 	destination := t.TempDir()
+	format, err := os.ReadFile(filepath.Join(dir, formatConfigFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, formatConfigFileName), format, 0600); err != nil {
+		t.Fatal(err)
+	}
+
 	output, err := os.Create(filepath.Join(destination, indexFileName))
 	if err != nil {
 		t.Fatal(err)
