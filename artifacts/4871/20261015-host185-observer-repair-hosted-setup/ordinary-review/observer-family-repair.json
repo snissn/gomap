@@ -1,0 +1,57 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_manual_review_requested": false,
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the required gpt-6.1-sol model; this explicitly routed independent internal review was used.",
+  "disposition": "ACCEPT",
+  "scope": "Frozen two-test observer-family repair plus generated CI discovery hash, atop 72e01efd767ef5d766f070e531fb53ea3f22674d; prospective commit not assigned at review time.",
+  "base_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "patch_sha256": "d3413fa1846c840a409385933e1945c20440533cac2685a061b3d12c0346fa26",
+  "files": {
+    ".github/ci/ci_impact.json": "8de48891cb518c626fc07f3eb44a84682424566efa655a84dd18684341b042db",
+    "TreeDB/cow_power_loss_test.go": "9a2e7b733cd528e6cd027d7e6249f53f5e04b3dbd2247ce56c1f213ab25f8c3b",
+    "TreeDB/power_loss_oracle_test.go": "77eecf3b9f13cda788dd3cbcf18661d7ab42607e555cca06fe1c765bc2e3a54a"
+  },
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_files_verified": 10246,
+  "source_manifest_mismatches_before": [],
+  "source_manifest_mismatches_after": [],
+  "blockers": [],
+  "evidence_bindings": {
+    "root-freeze-final.json": "ae1f6a56c354ce29572070c4e0499500844bd61fe3c41c40a5a63e5c31b91e2d",
+    "root-final.patch": "d3413fa1846c840a409385933e1945c20440533cac2685a061b3d12c0346fa26",
+    "freeze-final.json": "7e3a2b3096224bf71a62d3c248016040a9ee2a49e1ba970e056629dded148da2",
+    "final.patch": "744b133775952f9058f1b35752bd64da07132f3762c826ee85b35730ffa8418a",
+    "validation-final.json": "dc2ae9e138c48d3fa6a969a18773484b2afb58902d176c55b9d4afb6c51bd14e",
+    "oracle-equivalence.json": "76a4ddde681a8755d40a5f4704402209c5fd76362311b8d56661002a83f5e216",
+    "sibling-dispositions.md": "8d644fc0b7f92b1b87c23562f1a4e57a5f0b002e282ba1d10b1df46889b3a759",
+    "observer-inventory.json": "0c9c1cea765bb334dfd2c4c97289cb3a075717b1b7e123c6b1b16f65a62d3b94",
+    "causal-disposition.json": "8445b33fe3ef8ec71189a38091eeaceecf9f9bd166f02db7c395ed4e46d5e705"
+  },
+  "checks_actually_executed": [
+    "Read-only Python SHA256 checks of every 10246 frozen source files, before and after semantic inspection.",
+    "In-memory reverse application of both test diffs verified exact parent file hashes and byte-identical complete recovery-oracle tails.",
+    "Read-only inspection of exact tests, callback/model/poison producer and readiness paths, observer caller dispositions, all causal overlay diffs, retained raw/results/commands, metadata diff and check logs."
+  ],
+  "runtime_executed_by_reviewer": false,
+  "retained_evidence": {
+    "original_race": "PASS 36 cells; not a hosted scheduling reproduction",
+    "same_handle_original": "Expected RED 16 cells: 10 typed poison aliases and 6 nil second admissions",
+    "same_handle_fixed": "PASS 36 cells plus 3 chunked variants; second admission overlay only, first-image fingerprint and trace immutable",
+    "negative_controls": "4 expected RED runs: missing successful-cut latch and refused capture, each fixture",
+    "coherent_normal": "PASS 9 top-level, 52 subtests; one preexisting selector-gated skip",
+    "coherent_race": "PASS 9 top-level, 52 subtests, zero data race reports; same preexisting selector-gated skip",
+    "explicit_failure_class_replays": "Before-meta and after-meta race selectors PASS without skip",
+    "windows": "TreeDB and TreeDB/db compilation PASS; no Windows runtime claim",
+    "metadata": "Root retained refresh/check logs PASS; only discovery_source_sha256 changes"
+  },
+  "limits": [
+    "Scoped test/metadata source acceptance, not whole-PR final review or merge authorization.",
+    "Local same-handle control demonstrates the readiness alias, not reproduction of hosted asynchronous scheduling.",
+    "Fresh successor hosted correctness, raw/PRIMARY/M0 performance and Windows runtime remain root-owned gates.",
+    "No native/Q32 or final Dgraph qualification; no runtime or numeric allowance granted."
+  ],
+  "lease": "RELEASED; reviewer idle after report"
+}

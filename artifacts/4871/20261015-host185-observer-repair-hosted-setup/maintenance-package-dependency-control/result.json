@@ -1,0 +1,5 @@
+{
+  "source_unchanged": true,
+  "scope": "actual-package dependency metadata only; no build or test/benchmark body",
+  "candidate_binding": "harness worktree package files inherited exactly from72e01; source differences only diagnostic workflow/scripts"
+}

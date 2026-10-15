@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-15T21:17:11.335770+00:00",
+  "head": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "tree": "99a4fd505a32e57cd99abb27fa086ced14e03f03",
+  "parent": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "review_sha256": "140b9fe61b1873e38b80fd9f3031d9442b28c18eb2f70ae7f59955e4ca6efafc",
+  "freeze_sha256": "ae1f6a56c354ce29572070c4e0499500844bd61fe3c41c40a5a63e5c31b91e2d",
+  "all_source_count": 10246,
+  "changed_files": {
+    ".github/ci/ci_impact.json": "8de48891cb518c626fc07f3eb44a84682424566efa655a84dd18684341b042db",
+    "TreeDB/cow_power_loss_test.go": "9a2e7b733cd528e6cd027d7e6249f53f5e04b3dbd2247ce56c1f213ab25f8c3b",
+    "TreeDB/power_loss_oracle_test.go": "77eecf3b9f13cda788dd3cbcf18661d7ab42607e555cca06fe1c765bc2e3a54a"
+  },
+  "remote_verified": true,
+  "source_scope": "two test fixtures and generated discovery hash; all production and benchmark bytes unchanged",
+  "hosted_successor_status": "not yet verified",
+  "mergeability": false
+}

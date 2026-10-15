@@ -1,0 +1,64 @@
+{
+  "jobs": {
+    "diagnostic": {
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "if": "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/4871-maintenance-diagnostic-185-20261015'",
+      "name": "fixed 5bca / 72e01 fourteen-call diagnostic",
+      "runs-on": "ubuntu-24.04",
+      "steps": [
+        {
+          "name": "Checkout reviewed diagnostic harness",
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "with": {
+            "fetch-depth": "0",
+            "persist-credentials": "false",
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "name": "Initialize retained attempt packet",
+          "run": "mkdir \"$RUNNER_TEMP/mvcc-maintenance-setup\"\nprintf '%s\\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' \"harness=$GITHUB_SHA\" \"run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT\" > \"$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt\"\n"
+        },
+        {
+          "name": "Setup exact Go 1.26.3",
+          "uses": "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+          "with": {
+            "cache": "false",
+            "check-latest": "false",
+            "go-version": "1.26.3"
+          }
+        },
+        {
+          "name": "Check syntax, receipts and fixed workflow contract (no Go execution)",
+          "run": "python3 -B .github/scripts/mvcc_maintenance_test.py"
+        },
+        {
+          "name": "Prepare exact inputs and collect once",
+          "run": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py"
+        },
+        {
+          "if": "always()",
+          "name": "Upload complete attempt, including failure/refusal",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "with": {
+            "if-no-files-found": "error",
+            "include-hidden-files": "true",
+            "name": "bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "${{ runner.temp }}/mvcc-maintenance-72e01/*.json\n${{ runner.temp }}/mvcc-maintenance-72e01/*.log\n${{ runner.temp }}/mvcc-maintenance-72e01/compiler\n${{ runner.temp }}/mvcc-maintenance-72e01/go1.26.3-linux-amd64.tar.gz\n${{ runner.temp }}/mvcc-maintenance-72e01/harness\n${{ runner.temp }}/mvcc-maintenance-72e01/performance-185\n${{ runner.temp }}/mvcc-maintenance-setup\n",
+            "retention-days": "14"
+          }
+        }
+      ],
+      "timeout-minutes": "120"
+    }
+  },
+  "name": "TreeDB: bounded maintenance diagnostic (manual only)",
+  "on": {
+    "workflow_dispatch": ""
+  },
+  "permissions": {
+    "contents": "read"
+  }
+}

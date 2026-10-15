@@ -1,0 +1,12 @@
+{
+  "race-check-1.log": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/72e01-ci/race-check-1.log",
+    "sha256": "efdacdee0402c65bc03865d96748d8d352ef94a9c8fedf9e318054059ac96370",
+    "size": 3664136
+  },
+  "race-check-1-failure-context.txt": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/72e01-ci/race-check-1-failure-context.txt",
+    "sha256": "93c94a9414060dd7365a7009d299257d157e3a7a5a1755e3c106165058f8b95e",
+    "size": 61897
+  }
+}

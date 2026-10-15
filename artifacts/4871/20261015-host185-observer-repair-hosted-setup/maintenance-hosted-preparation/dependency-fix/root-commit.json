@@ -1,0 +1,23 @@
+{
+  "at_utc": "2026-10-15T21:13:48.237994+00:00",
+  "head": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "tree": "4fff8169613a366e662be1d6e8632324bd0a977f",
+  "parent": "a9682385caca9d86cf0bf0144f0de4e0fd1311a2",
+  "review_sha256": "fbc1348a02f96aa762705ee3cfc71244ca3ba440b59e6c5cbe329e11d5690ba0",
+  "freeze_sha256": "dcbe806e3c8dadae6bbe311de1d18d53a2f23b8fc6c6561ada2b6e26c409b047",
+  "all_source_count": 10251,
+  "files": {
+    ".github/scripts/mvcc_maintenance_README.md": "e07c9cafa3c417647072da489f01a378d24fa8e1ce840be112ab260e5e004cbf",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "2e2f598865eb398f0625990dcfa461272af831af7ab15d23c2ee913aba83da73",
+    ".github/scripts/mvcc_maintenance_collect.py": "d32652bc03ca021ded59848411a91afbbd4495ffb59f2c1e7674f321c465834a",
+    ".github/scripts/mvcc_maintenance_prepare.py": "1d9330aaa83ed4e64ed01a4af3e25bc99c545812c5c6cb3d47d15e0d1a2b31cc",
+    ".github/scripts/mvcc_maintenance_test.py": "90978cb1b551cd146a95f66c11bdc36eca75c06cac4422bacb5372e9060ed919",
+    ".github/workflows/treedb-vacuum-m0.yml": "0e51e1fb1365008f344bb022a7119129f36624f6bd60ca18591101bd756ca874"
+  },
+  "product_heads": {
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+  },
+  "remote_verified": true,
+  "dispatch_authorized": false
+}

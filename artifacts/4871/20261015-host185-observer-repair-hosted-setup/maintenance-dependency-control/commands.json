@@ -1,0 +1,43 @@
+[
+  {
+    "label": "default-download",
+    "argv": [
+      "mod",
+      "download"
+    ],
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 61.01007067784667,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_unchanged": true
+  },
+  {
+    "label": "original-offline-list",
+    "argv": [
+      "list",
+      "-m",
+      "-json",
+      "all"
+    ],
+    "exit": 1,
+    "expected_exit": 1,
+    "elapsed_s": 0.015729743987321854,
+    "log_sha256": "27d95fdfe249767aba3c97362e8239e87e840370e3061e1817ae19e28eec51ed",
+    "source_unchanged": true
+  },
+  {
+    "label": "prefill-readonly-graph",
+    "argv": [
+      "list",
+      "-mod=readonly",
+      "-m",
+      "-json",
+      "all"
+    ],
+    "exit": 1,
+    "expected_exit": 0,
+    "elapsed_s": 21.3480683718808,
+    "log_sha256": "96df9229fb4c6f2179a87102703df5a43f2df5c5221fd1057c8ad36af85d6161",
+    "source_unchanged": true
+  }
+]

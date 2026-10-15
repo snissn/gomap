@@ -1,0 +1,62 @@
+{
+  "created_utc": "2026-10-15T20:59:29.647033+00:00",
+  "disposition": "ACCEPT",
+  "scope": "exact frozen six-path hosted harness only; pre-run differential review",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "harness_parent": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "harness_commit": null,
+  "harness_commit_pending_root": true,
+  "baseline_product": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate_product": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "patch_sha256": "4304536c3c8fc46da850d7f54c545725e359d5908f756c841c8f1747af714204",
+  "freeze_sha256": "6ec719483b6678479eff0643f456fcd21460ae99cae4ad8f970f7923c3aa459f",
+  "changed_files": {
+    ".github/scripts/mvcc_maintenance_README.md": "b68edf61a07cf721cc2c5dfa2c0de0feaccfab94b8a45a6209609eafeb4a93f0",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "b2d65769635e0159d58e37240f288a1b124e2eb2d450648cfd533eee9cd28e6f",
+    ".github/scripts/mvcc_maintenance_collect.py": "d32652bc03ca021ded59848411a91afbbd4495ffb59f2c1e7674f321c465834a",
+    ".github/scripts/mvcc_maintenance_prepare.py": "1d9330aaa83ed4e64ed01a4af3e25bc99c545812c5c6cb3d47d15e0d1a2b31cc",
+    ".github/scripts/mvcc_maintenance_test.py": "90978cb1b551cd146a95f66c11bdc36eca75c06cac4422bacb5372e9060ed919",
+    ".github/workflows/treedb-vacuum-m0.yml": "0e51e1fb1365008f344bb022a7119129f36624f6bd60ca18591101bd756ca874"
+  },
+  "all_source_files_independently_hashed_before_and_after": 10251,
+  "source_mismatches": [],
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "git_github_network_go_build_benchmark_or_test_body_operations": false,
+  "pure_controls": {
+    "argv": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "exit": 0,
+    "groups": 7,
+    "seconds_reported": 0.008,
+    "parser_positive_and_six_negative": "PASS"
+  },
+  "worker_yaml_parse_receipt_inspected": true,
+  "reviewed_inputs": {
+    "collect-02.py": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+    "prepare-02.py": "b7d0d11dd7f308d939a65a14da7fc46e6aa4e00bdf6ebea0d502736fe70563ab"
+  },
+  "collector_exactly_two_substitutions_verified": true,
+  "preparer_adaptation": "path relocation + process group timeout/interruption kill/join and failure receipts; argv/environment/build semantics unchanged",
+  "blocking_findings": [],
+  "runtime_grant": false,
+  "dispatch_authorized_by_review": false,
+  "product_or_final_review": false,
+  "performance_or_ci_qualification": false,
+  "hosted_manual_review_unavailability": "Cannot pin required gpt-6.1-sol model; not requested.",
+  "limits": [
+    "Actual harness commit pending; must preserve frozen bytes",
+    "Separate root runtime grant required before dispatch",
+    "Bounded14-call diagnostics only; no timing collected by reviewer",
+    "Quietness sampling and hardware limits retained",
+    "No full vacuum digest/physical bytes/shrink measurement invented",
+    "No ordinary final acceptance/native/Q32/#4878/Dgraph qualification"
+  ],
+  "review_lease": "complete; idle",
+  "report_sha256": "ba8a79bd0826591ec403aa093c2cc1ef38cb175d2c79a9ee8f8d064320c8ec7b"
+}

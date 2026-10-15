@@ -1,0 +1,32 @@
+{
+  "authority": "user execute-and-merge task; root coordinator explicit bounded premerge diagnostic grant",
+  "at_utc": "2026-10-15T21:14:33.711773+00:00",
+  "harness_head": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "product_baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "product_candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "review_sha256": "fbc1348a02f96aa762705ee3cfc71244ca3ba440b59e6c5cbe329e11d5690ba0",
+  "collector_sha256": "d32652bc03ca021ded59848411a91afbbd4495ffb59f2c1e7674f321c465834a",
+  "workflow_sha256": "0e51e1fb1365008f344bb022a7119129f36624f6bd60ca18591101bd756ca874",
+  "runtime_authorized": true,
+  "maximum_dispatches": 1,
+  "maximum_benchmark_calls": 14,
+  "schedule": "three AB/BA/AB pairs checkpoint16x; three AB/BA/AB pairs production vacuum1x; candidate cohort8/16 one128x each",
+  "constraints": [
+    "exactreviewedfrozenbytes",
+    "ephemeralubuntu24.04only",
+    "pinnedGo1.26.3hash",
+    "samequiet2pct10spreflight250mssamples",
+    "no retries or accepted subset",
+    "retainallattemptsraw4ELFscompiler/harness/sourcebindings",
+    "rootcostdisposition required; no general qualification"
+  ],
+  "infrastructure": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: no dedicated high-capacity runner available for this task; use isolated ephemeral GitHub-hosted ubuntu24.04",
+    "INFRASTRUCTURE_UNAVAILABLE: cache: no persistent task cache on ephemeral runner; use fresh task cache after verified dependency fetch",
+    "Durable evidence fallback: hosted artifacts retained14days then root downloads to task-owned fastdisk and publishes source/raw/hash packet"
+  ],
+  "superseded_consumed_grant": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-preparation/root-dispatch-authorization.json",
+  "prior_attempt": 38806554344,
+  "prior_attempt_disposition": "dependency setup failure before compile/preflight/benchmark;0 measured calls",
+  "new_dispatch_reason": "source-corrected actual-package dependency inventory; exact independent source acceptance and fresh-cache controls"
+}

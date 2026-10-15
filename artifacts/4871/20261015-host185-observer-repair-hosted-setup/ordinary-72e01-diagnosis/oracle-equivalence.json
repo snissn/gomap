@@ -1,0 +1,6 @@
+{
+  "TestPowerLossOracleCounterexampleNewMetaMissingClosure": true,
+  "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck": true,
+  "all_chunked_three_variant_oracles_exact": true,
+  "all_36_reopen_group_durability_oracles_exact": true
+}

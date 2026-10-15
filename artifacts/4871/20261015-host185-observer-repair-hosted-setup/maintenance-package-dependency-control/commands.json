@@ -1,0 +1,132 @@
+[
+  {
+    "label": "baseline-download",
+    "argv": [
+      "mod",
+      "download"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 59.103768901433796,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "original-offline-list",
+    "argv": [
+      "list",
+      "-m",
+      "-json",
+      "all"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "exit": 1,
+    "expected_exit": 1,
+    "elapsed_s": 0.015604694839566946,
+    "log_sha256": "27d95fdfe249767aba3c97362e8239e87e840370e3061e1817ae19e28eec51ed"
+  },
+  {
+    "label": "baseline-packages-prefill",
+    "argv": [
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 1.4659961350262165,
+    "log_sha256": "8de0a115ca1d4543a2aa2bf47cc1fbfb0fa7c9ff0ed9adfa8002b2aeb57f6390"
+  },
+  {
+    "label": "baseline-verify",
+    "argv": [
+      "mod",
+      "verify"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 1.4159948755986989,
+    "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd"
+  },
+  {
+    "label": "baseline-packages-offline",
+    "argv": [
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 1.2157188011333346,
+    "log_sha256": "8de0a115ca1d4543a2aa2bf47cc1fbfb0fa7c9ff0ed9adfa8002b2aeb57f6390"
+  },
+  {
+    "label": "candidate-packages-download",
+    "argv": [
+      "mod",
+      "download"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 3.21881905477494,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "candidate-packages-packages-prefill",
+    "argv": [
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 0.31420530658215284,
+    "log_sha256": "2a0efd180a82bdb5503bf9617d024fbef2ed021e8832947cd5288dbac14ad1da"
+  },
+  {
+    "label": "candidate-packages-verify",
+    "argv": [
+      "mod",
+      "verify"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 1.4160099099390209,
+    "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd"
+  },
+  {
+    "label": "candidate-packages-packages-offline",
+    "argv": [
+      "list",
+      "-mod=readonly",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+    "exit": 0,
+    "expected_exit": 0,
+    "elapsed_s": 0.2640806529670954,
+    "log_sha256": "2a0efd180a82bdb5503bf9617d024fbef2ed021e8832947cd5288dbac14ad1da"
+  }
+]

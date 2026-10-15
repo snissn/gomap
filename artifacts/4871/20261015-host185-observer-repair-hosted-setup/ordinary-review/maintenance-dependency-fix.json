@@ -1,0 +1,52 @@
+{
+  "created_utc": "2026-10-15T21:12:55.460263+00:00",
+  "disposition": "ACCEPT",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "scope": "two-path frozen dependency setup correction only",
+  "harness_parent": "a9682385caca9d86cf0bf0144f0de4e0fd1311a2",
+  "harness_commit": null,
+  "patch_sha256": "6fbd8959350492f73fe4d4ffa9563bfeaacf6b75bda39326483413f9e2e5888d",
+  "freeze_sha256": "dcbe806e3c8dadae6bbe311de1d18d53a2f23b8fc6c6561ada2b6e26c409b047",
+  "changed_files": {
+    ".github/scripts/mvcc_maintenance_README.md": "e07c9cafa3c417647072da489f01a378d24fa8e1ce840be112ab260e5e004cbf",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "2e2f598865eb398f0625990dcfa461272af831af7ab15d23c2ee913aba83da73"
+  },
+  "unchanged_harness_files": {
+    ".github/scripts/mvcc_maintenance_collect.py": "d32652bc03ca021ded59848411a91afbbd4495ffb59f2c1e7674f321c465834a",
+    ".github/scripts/mvcc_maintenance_prepare.py": "1d9330aaa83ed4e64ed01a4af3e25bc99c545812c5c6cb3d47d15e0d1a2b31cc",
+    ".github/scripts/mvcc_maintenance_test.py": "90978cb1b551cd146a95f66c11bdc36eca75c06cac4422bacb5372e9060ed919",
+    ".github/workflows/treedb-vacuum-m0.yml": "0e51e1fb1365008f344bb022a7119129f36624f6bd60ca18591101bd756ca874"
+  },
+  "product_heads": {
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+  },
+  "all_frozen_file_hashes_independently_verified": 10251,
+  "source_mismatches": [],
+  "pure_controls": {
+    "groups": 7,
+    "exit": 0,
+    "seconds_reported": 0.008
+  },
+  "package_inventory_online_offline_byte_equal": {
+    "baseline": true,
+    "candidate": true
+  },
+  "original_offline_failure_sha256": "27d95fdfe249767aba3c97362e8239e87e840370e3061e1817ae19e28eec51ed",
+  "first_hosted_attempt": 38806554344,
+  "first_attempt_outcome": "dependency failure before builds or samples; preserved",
+  "blocking_findings": [],
+  "candidate_edits_by_reviewer": false,
+  "runtime_grant": false,
+  "dispatch_grant": false,
+  "reviewer_go_build_testbody_benchmark_network_git_github_operations": false,
+  "hosted_manual_review_unavailability": "Cannot pin required gpt-6.1-sol; not requested.",
+  "limits": [
+    "Exact successor harness commit pending root",
+    "No fresh hosted compile/collection claim",
+    "No performance/final product or native qualification"
+  ],
+  "report_sha256": "05d142d90888d27eff222fdee67dcd506cf98430e0d05f28ce499ad1b5324576"
+}

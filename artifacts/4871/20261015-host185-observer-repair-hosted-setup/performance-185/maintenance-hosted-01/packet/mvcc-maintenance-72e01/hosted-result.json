@@ -1,0 +1,8 @@
+{
+  "available_artifacts_retained": true,
+  "error": "RuntimeError('baseline-modules failed: exit 1; see baseline-modules.log')",
+  "phase": "dependency-preparation",
+  "status": "FAILED_OR_REFUSED",
+  "timings_qualify": false,
+  "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/gomap/gomap/.github/scripts/mvcc_maintenance_bootstrap.py\", line 166, in main\n    command(label + '-modules', [go, 'list', '-m', '-json', 'all'], cwd=source, env=offline)\n  File \"/home/runner/work/gomap/gomap/.github/scripts/mvcc_maintenance_bootstrap.py\", line 74, in command\n    raise RuntimeError(f'{label} failed: exit {code}; see {path.name}')\nRuntimeError: baseline-modules failed: exit 1; see baseline-modules.log\n"
+}

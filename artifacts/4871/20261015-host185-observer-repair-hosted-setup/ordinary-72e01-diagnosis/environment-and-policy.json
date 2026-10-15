@@ -1,0 +1,25 @@
+{
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "version": "go version go1.26.3 linux/amd64",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOAMD64": "v1",
+    "GOARCH": "amd64",
+    "GODEBUG": "",
+    "GOFLAGS": "",
+    "GOMAXPROCS": "",
+    "GOMEMLIMIT": "",
+    "GOOS": "linux",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOVERSION": "go1.26.3",
+    "GOWORK": "off"
+  },
+  "policies": {
+    "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "CONTRIBUTING.md": "7842035e4e975b6010532c52ebf55a562f92a5d379f14fa0f2a0de91c5744b9b"
+  },
+  "routing": "parent explicit gpt-6.1-sol high, sole ordinary writer, no children/Git mutations/GitHub/benchmarks",
+  "policy_caps": "No repository review caps added. Root retains review/CI/publication. Task scoped normal/race150s Go timeout,180s outer cap; no broad suite/performance; no product changes."
+}

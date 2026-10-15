@@ -1,0 +1,38 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/windows-build/TreeDB.test.exe",
+    "bytes": 56436736,
+    "sha256": "8d8873ec1f4e62650aa417f3355ab1010ced11b098fc6d53b4b71574939f616d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/windows-build/db.test.exe",
+    "bytes": 61083136,
+    "sha256": "150aa439a4b72eb9a98dff5a3c30d5b681d779f4b24823d9639383c846707be2",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-01/packet/mvcc-maintenance-72e01/compiler/compile",
+    "bytes": 25774723,
+    "sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-01/packet/mvcc-maintenance-72e01/compiler/go",
+    "bytes": 15434598,
+    "sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-01/packet/mvcc-maintenance-72e01/compiler/link",
+    "bytes": 6680481,
+    "sha256": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-01/packet/mvcc-maintenance-72e01/go1.26.3-linux-amd64.tar.gz",
+    "bytes": 67701106,
+    "sha256": "3e0696163abc3ed3a356a4f85621d027b751b916a5b3e2ecce3a5870f740ba8d",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  }
+]

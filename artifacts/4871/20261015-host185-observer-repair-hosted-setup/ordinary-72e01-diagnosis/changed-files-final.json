@@ -1,0 +1,10 @@
+{
+  "TreeDB/cow_power_loss_test.go": {
+    "before": "088343c58b21022b886e350f8a3859c8f5b7af1c3fb24021caf12cb3677b5455",
+    "after": "9a2e7b733cd528e6cd027d7e6249f53f5e04b3dbd2247ce56c1f213ab25f8c3b"
+  },
+  "TreeDB/power_loss_oracle_test.go": {
+    "before": "66a1ee1c478bb60139e66baaec1e56adcdc8381f79d05902fa9daff874b63f54",
+    "after": "77eecf3b9f13cda788dd3cbcf18661d7ab42607e555cca06fe1c765bc2e3a54a"
+  }
+}

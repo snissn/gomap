@@ -1,0 +1,36 @@
+{
+  "created_utc": "2026-10-15T20:55:52.756619+00:00",
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    ".github/scripts/mvcc_maintenance_test.py"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-hosted-runner",
+  "exit": 0,
+  "raw_sha256": "dc515a59ad3a69d929deae64f1b1c55a56b3523383a176a0484ecc927e643986",
+  "source_before_after_equal": true,
+  "seven_pure_check_groups_PASS": true,
+  "independent_YAML_structure_PASS": true,
+  "diff_check_PASS": true,
+  "equivalence": {
+    "collector_only_two_path_substitutions": true,
+    "collector_schedule_parser_selftest_AST_equal": true,
+    "preparer_sources_heads_roots_environment_AST_equal": true,
+    "reviewed": {
+      "collect-02.py": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+      "prepare-02.py": "b7d0d11dd7f308d939a65a14da7fc46e6aa4e00bdf6ebea0d502736fe70563ab"
+    },
+    "local_allowed_checks_only": true,
+    "go_executions": 0,
+    "test_or_benchmark_body_executions": 0,
+    "network_or_remote_dispatches": 0
+  },
+  "remote_execution_authorized": false,
+  "source_runtime_lease_released": true,
+  "limits": [
+    "root exact harness commit + independent review + explicit dispatch grant pending",
+    "no local Go/build/test/benchmark/remote execution",
+    "ephemeral infrastructure differs; hosted quietness still required",
+    "no cost/CI/native acceptance claim"
+  ]
+}

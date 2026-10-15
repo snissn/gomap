@@ -1,0 +1,54 @@
+{
+  "typed_alias_conversions": [
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+      "outcome": "cow_power_loss_test.go:248: SAME handle original=modeled COW interruption at before-dependency-file-sync second_admission=collectionwal: recovery required: command wal post-append failure; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+      "outcome": "cow_power_loss_test.go:248: SAME handle original=modeled COW interruption at after-dependency-file-sync second_admission=collectionwal: recovery required: command wal post-append failure; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+      "outcome": "cow_power_loss_test.go:248: SAME handle original=modeled COW interruption at before-dependency-file-sync second_admission=collectionwal: recovery required: command wal post-append failure; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+      "outcome": "cow_power_loss_test.go:248: SAME handle original=modeled COW interruption at after-dependency-file-sync second_admission=collectionwal: recovery required: command wal post-append failure; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    },
+    {
+      "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+      "outcome": "collectionwal: recovery required second_admission=collectionwal: recovery required: root publication cannot safely progress; reopen required"
+    }
+  ],
+  "successful_second_admissions": [
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+    "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync"
+  ],
+  "control_label": "Same interrupted handle and exact hosted error strings; not a reproduction of hosted asynchronous scheduling. Original unconditional second-admission overlay expected RED16 includes6 independently successful directory second calls, which remain invalid as interruption results. Positive overlay retains first error only when second returns nil.",
+  "production_changes": false
+}

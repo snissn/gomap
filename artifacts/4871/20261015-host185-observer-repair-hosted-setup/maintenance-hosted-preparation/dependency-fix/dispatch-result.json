@@ -1,0 +1,16 @@
+{
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "harness_head": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "argv": [
+    "gh",
+    "workflow",
+    "run",
+    "treedb-vacuum-m0.yml",
+    "--repo",
+    "snissn/gomap",
+    "--ref",
+    "codex/4871-maintenance-diagnostic-185-20261015"
+  ]
+}

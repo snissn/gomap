@@ -1,0 +1,519 @@
+{
+  "head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "source_frozen": true,
+  "source_runtime_leases_released": true,
+  "checks": {
+    "certification-post-meta-race-01": {
+      "exit": 0,
+      "elapsed": 2.7679567872546613,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationPublicationFailureClassPublicReopen$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1",
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-post-meta-poison-stable-image/after-meta-write/000",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-post-meta-poison-stable-image",
+          "TREEDB_POWERLOSS_SEED": "3674"
+        }
+      },
+      "top_level_pass": 1,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "704a0f18fd4586a4e0f877124d7305ca8c2deca2f51736f794b2229c69da5813",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/certification-post-meta-race-01/raw.txt"
+    },
+    "certification-pre-meta-race-01": {
+      "exit": 0,
+      "elapsed": 2.567714969161898,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossCertificationPublicationFailureClassPublicReopen$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1",
+          "TREEDB_POWERLOSS_PROFILE": "no_wal_fast",
+          "TREEDB_POWERLOSS_CUT_ID": "cut/public-retryable-pre-meta-failure-stable-image/before-meta-write/000",
+          "TREEDB_POWERLOSS_VARIANT_ID": "public-retryable-pre-meta-failure-stable-image",
+          "TREEDB_POWERLOSS_SEED": "3674"
+        }
+      },
+      "top_level_pass": 1,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "58afd7edcc76bc54745c11b421215a1770241795b1c1d46b03e3948e23697fe2",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/certification-pre-meta-race-01/raw.txt"
+    },
+    "coherent-normal-01": {
+      "exit": 0,
+      "elapsed": 15.18869847105816,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "./TreeDB",
+          "./TreeDB/db",
+          "-run",
+          "^TestCOWPublicModeled(StableImageCheckpointAndNoWALVolatileAck|InterruptedDependencyAndRootPublicationCuts)$|^TestPowerLossOracleCounterexample(NewMetaMissingClosure|ChunkedSyncIntermediateRoot)$|^TestPowerLossCertificationPublicationFailureClassPublicReopen$|^TestPowerLossOraclePostMetaFailurePoisonsPublicHandle$|^TestPowerLossCertificationGrouped(DependencyFailure|DependencyFailureDirty|AmbiguousFailure|AmbiguousFailureDirty)PublicReopen$",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 9,
+      "subtest_pass": 52,
+      "top_level_skip": 1,
+      "data_race_reports": 0,
+      "raw_sha256": "494e8368995aeb5d11f04ff5185ae0c91489927c0559357fac0789a3ec1aaf33",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/coherent-normal-01/raw.txt"
+    },
+    "coherent-race-01": {
+      "exit": 0,
+      "elapsed": 54.65784147102386,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB",
+          "./TreeDB/db",
+          "-run",
+          "^TestCOWPublicModeled(StableImageCheckpointAndNoWALVolatileAck|InterruptedDependencyAndRootPublicationCuts)$|^TestPowerLossOracleCounterexample(NewMetaMissingClosure|ChunkedSyncIntermediateRoot)$|^TestPowerLossCertificationPublicationFailureClassPublicReopen$|^TestPowerLossOraclePostMetaFailurePoisonsPublicHandle$|^TestPowerLossCertificationGrouped(DependencyFailure|DependencyFailureDirty|AmbiguousFailure|AmbiguousFailureDirty)PublicReopen$",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 9,
+      "subtest_pass": 52,
+      "top_level_skip": 1,
+      "data_race_reports": 0,
+      "raw_sha256": "24645b3be5293e51beae7217d1b7cb6ce203a883ee84bd47ce1e4787bce5ffd1",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/coherent-race-01/raw.txt"
+    },
+    "coherent-windows-build-01": {
+      "exit": 0,
+      "elapsed": 3.7198020541109145,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-c",
+          "-p=1",
+          "-o",
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/windows-build/",
+          "./TreeDB",
+          "./TreeDB/db"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "0",
+          "GOOS": "windows",
+          "GOARCH": "amd64"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/coherent-windows-build-01/raw.txt"
+    }
+  },
+  "causal_controls": {
+    "failed-capture-chunked-01": {
+      "exit": 1,
+      "elapsed": 1.4661333840340376,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/failed-capture.json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "5f921dfbc7c4c9736a3e7f3cea2a78a2e8c00029ff0770f5aa54ba1242d38ce7",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/failed-capture-chunked-01/raw.txt"
+    },
+    "failed-capture-cow-01": {
+      "exit": 1,
+      "elapsed": 3.4201867491938174,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/failed-capture.json",
+          "./TreeDB",
+          "-run",
+          "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$/^command_wal_durable$/^before-dependency-file-sync$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "30c28dcd302375dce2894f37b831281f00a6a0a7b425375dc6a7baee1c98bbdf",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/failed-capture-cow-01/raw.txt"
+    },
+    "missing-latch-chunked-01": {
+      "exit": 1,
+      "elapsed": 1.5159539822489023,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/missing-latch.json",
+          "./TreeDB",
+          "-run",
+          "^TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "0f97f6d47d20fc4bc10f54a360f87b52fab7ad05c538673518938652f8d11b3d",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/missing-latch-chunked-01/raw.txt"
+    },
+    "missing-latch-cow-01": {
+      "exit": 1,
+      "elapsed": 3.619758966844529,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/missing-latch.json",
+          "./TreeDB",
+          "-run",
+          "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$/^command_wal_durable$/^before-dependency-file-sync$",
+          "-count=1",
+          "-timeout=90s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 0,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "c17e77cc30d2c9859070926d379b1f97fb98ed500d745291da4a17578e2d8637",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/missing-latch-cow-01/raw.txt"
+    },
+    "original-race-01": {
+      "exit": 0,
+      "elapsed": 38.979724324308336,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": false,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB",
+          "-run",
+          "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 1,
+      "subtest_pass": 36,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "e785526cde294b6009bcaaaca54da60d7eb4c6f7eba9252ec45e517b4ea80d6d",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/original-race-01/raw.txt"
+    },
+    "same-handle-fixed-01": {
+      "exit": 0,
+      "elapsed": 42.686431725975126,
+      "expected_exit": 0,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/same-handle-fixed.json",
+          "./TreeDB",
+          "-run",
+          "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$|^TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot$",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 2,
+      "subtest_pass": 39,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "de2733a2bdeb9eddf5eec29114c010ba2866a0589f8b69e55966ce75e91c68e5",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/same-handle-fixed-01/raw.txt"
+    },
+    "same-handle-original-01": {
+      "exit": 1,
+      "elapsed": 44.641052993014455,
+      "expected_exit": 1,
+      "source_before_after_equal": true,
+      "source_matches_final_freeze": false,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "-overlay=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/overlays/same-handle-original.json",
+          "./TreeDB",
+          "-run",
+          "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$",
+          "-count=1",
+          "-timeout=150s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "top_level_pass": 0,
+      "subtest_pass": 20,
+      "top_level_skip": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "c98ac4470a931a2750557c468e45e17e9fcc2462d92526514ccf743a5067da1f",
+      "raw_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/logs/same-handle-original-01/raw.txt"
+    }
+  },
+  "binaries": {
+    "TreeDB.test.exe": "8d8873ec1f4e62650aa417f3355ab1010ced11b098fc6d53b4b71574939f616d",
+    "db.test.exe": "150aa439a4b72eb9a98dff5a3c30d5b681d779f4b24823d9639383c846707be2"
+  },
+  "gofmt_clean": true,
+  "diff_check_clean": true,
+  "all_10246_source_before_after_exact": true,
+  "production_benchmark_and_CI_harness_bytes_unchanged": true,
+  "oracle_equivalence": {
+    "TestPowerLossOracleCounterexampleNewMetaMissingClosure": true,
+    "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck": true,
+    "all_chunked_three_variant_oracles_exact": true,
+    "all_36_reopen_group_durability_oracles_exact": true
+  },
+  "no_benchmarks_no_broad_suite_no_Git_mutations_no_GitHub": true
+}
