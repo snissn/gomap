@@ -17,6 +17,7 @@ import (
 // retention. The caller's existing index/generation/slot owners must retain
 // these operands; a certificate cannot replace those owners or a completed cut.
 type PrimaryDataCertificateV6 struct {
+	membership   freelist.CandidateRootMembershipV1
 	generation   *freelist.FreelistGenerationV1
 	source       *pager.Pager
 	base         node.PrimaryOperand
@@ -72,10 +73,10 @@ func NewPreparedPrimaryReadRootCertificateV6(cert *primaryarena.ReadRootCertific
 	}()
 	physical, _ := data.(*pager.Pager)
 	proof := previous
-	if proof == nil || physical == nil || proof.source != physical || proof.generation != generation || proof.base != base || proof.baseSequence != seq || proof.systemID != frontier.systemRootPageID {
+	if proof == nil || physical == nil || proof.source != physical || proof.generation != generation || proof.base != base || proof.baseSequence != seq || proof.systemID != frontier.systemRootPageID || (cow != nil && !proof.membership.Matches(cow, generation, base.Ref.Page, frontier.systemRootPageID)) {
 		var ready bool
 		var err error
-		proof, ready, err = preparePrimaryDataCertificateV6(data, physical, generation, base, seq, frontier.systemRootPageID, w)
+		proof, ready, err = preparePrimaryDataCertificateV6(data, physical, generation, cow, base, seq, frontier.systemRootPageID, w)
 		if !ready || err != nil {
 			return nil, ready, err
 		}
@@ -84,13 +85,25 @@ func NewPreparedPrimaryReadRootCertificateV6(cert *primaryarena.ReadRootCertific
 	adopted = true
 	return &PreparedPrimaryRootV5{arena: a, bundle: primaryarena.PublicationBundle{Directory: cert.Reference()}, generation: generation, cow: cow, frontier: frontier, projection: projection, dataCertificate: proof, readCertificate: cert}, true, nil
 }
-func preparePrimaryDataCertificateV6(data freelist.PageSource, physical *pager.Pager, generation *freelist.FreelistGenerationV1, base node.PrimaryOperand, sequence, systemID uint64, w *iterator.OrdinalScanWork) (*PrimaryDataCertificateV6, bool, error) {
+func preparePrimaryDataCertificateV6(data freelist.PageSource, physical *pager.Pager, generation *freelist.FreelistGenerationV1, cow *freelist.PreparedCOWCandidateV1, base node.PrimaryOperand, sequence, systemID uint64, w *iterator.OrdinalScanWork) (*PrimaryDataCertificateV6, bool, error) {
 	proof := &PrimaryDataCertificateV6{generation: generation, source: physical, base: base, baseSequence: sequence, systemID: systemID}
+	if cow != nil {
+		membership, ready, err := cow.CertifyRootMembershipV1(base.Ref.Page, systemID, w)
+		if !ready || err != nil {
+			return nil, ready, err
+		}
+		proof.membership = membership
+	}
 	for _, root := range []struct {
 		id     uint64
 		digest [32]byte
 	}{{base.Ref.Page, base.Digest}, {systemID, [32]byte{}}} {
-		unused, ready, err := generation.SnapshotPageUnusedWithWorkV1(root.id, generation.CommitSeq()+1, w)
+		var unused bool
+		ready := true
+		var err error
+		if cow == nil {
+			unused, ready, err = generation.SnapshotPageUnusedWithWorkV1(root.id, generation.CommitSeq()+1, w)
+		}
 		if !ready && err == nil {
 			return nil, false, nil
 		}
