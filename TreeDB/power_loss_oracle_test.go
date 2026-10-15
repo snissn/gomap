@@ -563,7 +563,14 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	var actualSnapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
 	dependencyPaths := make(map[string]bool)
+	var observeMu sync.Mutex
+	observing := true
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if !observing {
+			return nil
+		}
 		if err := observed.Observe(dir, event); err != nil {
 			return err
 		}
@@ -604,6 +611,10 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	}
 	err = db.Checkpoint()
 	restore()
+	// Exclude a callback that loaded the observer before restoration too.
+	observeMu.Lock()
+	observing = false
+	observeMu.Unlock()
 	if !errors.Is(err, cutErr) || snapshot == nil || actualSnapshot == nil {
 		t.Fatalf("actual relaxed finalize did not stop at AfterMetaWrite: err=%v", err)
 	}
@@ -1324,6 +1335,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
 		t.Fatal(err)
 	}
@@ -1344,9 +1356,13 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	var snapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
 	var observeMu sync.Mutex
+	observing := true
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		observeMu.Lock()
 		defer observeMu.Unlock()
+		if !observing {
+			return nil
+		}
 		if snapshot != nil {
 			return cutErr
 		}
@@ -1362,10 +1378,15 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	err = db.Checkpoint()
 	restore()
 	observeMu.Lock()
+	observing = false
 	capturedSnapshot, capturedMeta := snapshot, meta
 	observeMu.Unlock()
 	snapshot, meta = capturedSnapshot, capturedMeta
-	if !errors.Is(err, cutErr) || snapshot == nil {
+	// The SAME actual post-meta interruption may reach the checkpoint through
+	// its poisoned admission gate after the asynchronous publisher records it.
+	observedMetaPoison := snapshot != nil && meta.Point == durabilitycut.AfterMetaWrite &&
+		meta.Resource == durabilitycut.ResourceMeta && errors.Is(err, backenddb.ErrRecoveryRequired)
+	if snapshot == nil || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)
 	}
 	_ = db.Close()

@@ -40,6 +40,13 @@ func TestOriginalStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) {
 	if !errors.Is(lockErr, lockfile.ErrLocked) {
 		t.Fatalf("startup LOCK escaped actual cleanup refusal: %v", lockErr)
 	}
+	// Model process shutdown only after the fatal-custody oracle finishes.
+	// This OS LOCK release does not retry failed cleanup or refund its charge.
+	defer func() {
+		if err := original.startupLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if receipt.Close() != receipt.Unwrap() || original.close() != &original.closeFailure {
 		t.Fatal("fatal observation replayed physical action")
 	}
@@ -104,6 +111,13 @@ func TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) 
 			if !errors.Is(lockErr, lockfile.ErrLocked) {
 				t.Fatalf("lost actual namespace LOCK: %v", lockErr)
 			}
+			// Model process shutdown only after the fatal-custody oracle finishes.
+			// This OS LOCK release does not retry failed cleanup or refund its charge.
+			defer func() {
+				if err := original.startupLock.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			charged := original.metadata.Bytes()
 			if receipt.Close() != receipt.Unwrap() || original.close() != &original.closeFailure || original.metadata.Bytes() != charged {
 				t.Fatal("repeat retried or refunded refused cleanup")

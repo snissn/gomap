@@ -828,6 +828,9 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
 func (p *Pager) Get(pageID uint64) ([]byte, error) {
+	if pageID < PrimaryReadRootLocalBaseV6 && pageID >= p.pageIDBase && p.immutableReadRoots.retention == nil {
+		return p.getLocalMapping(pageID, pageID-p.pageIDBase)
+	}
 	data, _, err := p.GetWithWork(pageID, nil)
 	return data, err
 }
@@ -892,9 +895,16 @@ func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]by
 		p.metadataReadMu.RLock()
 		defer p.metadataReadMu.RUnlock()
 	}
+	data, err := p.getLocalMapping(pageID, localID)
+	return data, err == nil, err
+}
+
+// getLocalMapping reads one original local DATA mapping after routing and any
+// required metadata guard. Both finite and ordinary calls share this lookup.
+func (p *Pager) getLocalMapping(pageID, localID uint64) ([]byte, error) {
 	limit := p.numPages.Load()
 	if pageID >= limit {
-		return nil, false, ErrPageOutOfBounds
+		return nil, ErrPageOutOfBounds
 	}
 
 	byteOffset := int64(localID) * int64(page.PageSize)
@@ -903,16 +913,16 @@ func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]by
 
 	cl := p.atomicChunks.Load()
 	if cl == nil {
-		return nil, false, ErrPageOutOfBounds
+		return nil, ErrPageOutOfBounds
 	}
 	chunks := cl.data
 
 	if chunkIdx >= len(chunks) {
-		return nil, false, ErrPageOutOfBounds
+		return nil, ErrPageOutOfBounds
 	}
 
 	chunk := chunks[chunkIdx]
-	return chunk[offsetInChunk : offsetInChunk+page.PageSize], true, nil
+	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
 // PrefetchPage issues a best-effort prefetch hint for the chunk containing

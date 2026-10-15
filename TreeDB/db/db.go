@@ -1792,7 +1792,12 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 	state := view.state
 	vm := view.vlogManager
 	vlogSet := state.ValueLogSet
-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	vlogNeedsPin := vlogSet != nil
+	if oneShot && vlogSet != nil {
+		if sizes, known := vlogSet.RetentionSizes(); known && sizes.FileCount == 0 {
+			vlogNeedsPin = false
+		}
+	}
 	if oneShot && !vlogNeedsPin {
 		vm = nil
 	}
@@ -1871,7 +1876,14 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 	managerBorrowAdopted = true
 	snap.vlogPinned = vlogNeedsPin
 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
-	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+	if oneShot && !vlogNeedsPin {
+		// The reader must not access the empty Set after publication releases it.
+		// state still retains the legacy DBState/empty wrapper until putRead;
+		// it supplies scalar root state, not value-log reads or a Manager edge.
+		snap.reader.reconfigure(nil, db.leafPageReadCache)
+	} else {
+		snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+	}
 	for i := range snap.rootTrees {
 		snap.rootTrees[i].root = 0
 		snap.rootTrees[i].tree.Reset(nil, nil, 0)
@@ -1976,7 +1988,7 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
 	vlogSet := state.ValueLogSet
-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	vlogNeedsPin := vlogSet != nil
 	if vlogNeedsPin {
 		if vm == nil {
 			return nil, ErrClosed
@@ -3593,6 +3605,16 @@ func (db *DB) closeAfterHooks() error {
 	}
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
+	}
+	if rootRuntime != nil {
+		// Current/slot/parent roots still carry the cached proof allowance here.
+		// Terminal root withdrawal must not leave a runtime alias after refund.
+		rootRuntime.mu.Lock()
+		rootRuntime.primaryDataCertificateV6 = nil
+		rootRuntime.mu.Unlock()
+		if testHookPrimaryDataCertificateV6 != nil {
+			testHookPrimaryDataCertificateV6("terminal-detached", rootRuntime, nil)
+		}
 	}
 	if err := db.releaseDurableRootResourcesV1(); err != nil {
 		errs = append(errs, err)
@@ -5328,6 +5350,9 @@ func (db *DB) RefreshValueLogSet() error {
 	if err := db.publicationPoisonedError(); err != nil {
 		return err
 	}
+	// Capture pins the selected Set while holding the reader side of this gate.
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -5367,6 +5392,9 @@ func (db *DB) RefreshValueLogSet() error {
 // publishValueLogSetNoRefresh publishes a new DBState using the currently
 // registered value-log set, avoiding a filesystem scan when possible.
 func (db *DB) publishValueLogSetNoRefresh() error {
+	// Capture pins the selected Set while holding the reader side of this gate.
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

@@ -103,16 +103,13 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	s.tree.Reset(nil, nil, 0)
 	s.treePager = nil
 	s.treeRoot = 0
-	for i := range s.rootTrees {
-		s.rootTrees[i].tree.Reset(nil, nil, 0)
-		s.rootTrees[i].root = 0
-	}
 	clear(s.rootTrees)
 	s.rootTrees = nil
 	// Overflow may have moved the active cache away from its first inline
-	// entry; scrub that original alias too before cleanup completion.
-	s.rootTreeFirst[0].tree.Reset(nil, nil, 0)
-	s.rootTreeFirst[0].root = 0
+	// entry. Only a populated entry carries an alias that still needs scrubbing.
+	if s.rootTreeFirst[0].root != 0 {
+		s.rootTreeFirst[0] = snapshotRootTree{}
+	}
 	s.db = nil
 	s.idx = nil
 	s.state = nil

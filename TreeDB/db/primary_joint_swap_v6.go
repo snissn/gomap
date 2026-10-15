@@ -377,8 +377,15 @@ func recoverPrimaryJointSwapWithRegistryV6(dir string, readOnly bool, registry *
 	if e != nil {
 		return true, e
 	}
-	image, e := io.ReadAll(io.LimitReader(proof.marker, 4141))
-	proof.image = image
+	// One fixed preadmitted backing, including the oversize sentinel byte.
+	// ReadAll may retain chunks and a final copy simultaneously on Go1.26.
+	proof.image = make([]byte, primaryJointMarkerReadLimitV6)
+	n, e := io.ReadFull(proof.marker, proof.image)
+	if errors.Is(e, io.EOF) || errors.Is(e, io.ErrUnexpectedEOF) {
+		e = nil
+	}
+	proof.image = proof.image[:n]
+	image := proof.image
 	if testHookPrimaryJointRecoveryProofV6 != nil {
 		testHookPrimaryJointRecoveryProofV6("before-marker-close", proof)
 	}

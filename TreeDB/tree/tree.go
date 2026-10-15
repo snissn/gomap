@@ -367,6 +367,10 @@ func NewWithLocalPrimaryBankExtent(p *pager.Pager, root, extent uint64) *Tree {
 
 // Reset re-initializes the tree with new parameters for reuse.
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
+	if sr == nil {
+		*t = Tree{pager: p, rootPageID: root}
+		return
+	}
 	t.negativeFilter = nil
 	t.pager = p
 	t.pageLimit = 0

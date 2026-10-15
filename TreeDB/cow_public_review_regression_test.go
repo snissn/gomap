@@ -346,6 +346,17 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 				}
 			}
 			compaction, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
+			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("leaf pack platform refusal: %v", err)
+				}
+				cowPublicContractSnapshotValue(t, old, "a", value, true)
+				if _, statErr := os.Stat(unusedLeaf); statErr != nil {
+					t.Fatalf("refused pack changed unused leaf: %v", statErr)
+				}
+				t.Log("exact-parent pack unavailable; verified typed refusal and retained old cut, reclamation remains unqualified")
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

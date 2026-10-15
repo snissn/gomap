@@ -467,6 +467,13 @@ func TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock(t *testing.T) {
 	if !errors.Is(lockErr, lockfile.ErrLocked) {
 		t.Fatalf("setup/source refusal released original LOCK: %v", lockErr)
 	}
+	// Model process shutdown only after the fatal-custody oracle finishes.
+	// This OS LOCK release does not retry failed cleanup or refund its charge.
+	defer func() {
+		if err := original.startupLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	charge := original.metadata.Bytes()
 	if receipt.Close() != receipt.Unwrap() || attempts != 1 || original.metadata.Bytes() != charge {
 		t.Fatal("repeated refusal replayed physical cleanup or refunded original source")
@@ -543,6 +550,13 @@ func TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource(t *testin
 			metadata, charge, attempts, source, receipt, source.wrapperBorrowCountV6(), borrows, refusal)
 	}
 	registry.Close()
+	// Model process shutdown only after the fatal-custody oracle finishes.
+	// This OS LOCK release does not retry failed cleanup or refund its charge.
+	defer func() {
+		if err := source.startupLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	charged := owner.Bytes()
 	if againMetadata, againCharge, again := source.finishOfflineSourceV1(nil); again != receipt ||
 		againMetadata != nil || againCharge != 0 || attempts != 1 || owner.Bytes() != charged {

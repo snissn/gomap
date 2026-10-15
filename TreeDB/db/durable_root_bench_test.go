@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -698,6 +699,31 @@ func TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup(t *te
 	for _, files := range []int{2, 8, 16} {
 		t.Run(fmt.Sprintf("files=%d", files), func(t *testing.T) {
 			f := newPrimaryBorrowedCohort(t, files)
+			if runtime.GOOS == "windows" {
+				loan := f.capture(t)
+				defer loan.wrapper.Close()
+				defer loan.resources.Release()
+				defer loan.snapshot.Close()
+				if !primaryOnlinePlatformRefusal(t, f.db, context.Background()) {
+					t.Fatal("missing platform refusal")
+				}
+				if value, e := loan.snapshot.Get(f.keys[0]); e != nil || !bytes.Equal(value, f.value) {
+					t.Fatalf("platform refusal lost borrowed cohort: %v", e)
+				}
+				if e := loan.snapshot.Close(); e != nil {
+					t.Fatal(e)
+				}
+				loan.resources.Release()
+				loan.wrapper.Close()
+				if e := f.db.Close(); e != nil {
+					t.Fatal(e)
+				}
+				if f.budget.Stats().ExternalBytes != 0 || f.budget.Stats().ExternalLeases != 0 {
+					t.Fatal("platform refusal retained cohort custody")
+				}
+				return
+			}
+
 			cost := f.retention(t)
 			if cost["held-cohort-files"] != int64(files) || cost["held-cohort-bytes"] == 0 || cost["held-old-data-bytes"] == 0 || cost["held-old-primary-bytes"] == 0 {
 				t.Fatal("cohort did not observe original physical owners", cost)

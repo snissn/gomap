@@ -677,6 +677,12 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		}()
 	}
 	database := snapshot.db
+	// A read-only reopened owner cannot mint Windows create-only persistence
+	// evidence by upgrading its retained read handle to a writable sync handle.
+	// Ordinary reads/physical inspection remain available without that authority.
+	if database.readOnly && !rootpublication.StableRelativeNamespaceSupported() {
+		return nil, rootpublication.ErrNamespacePersistenceUnsupported
+	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
 	if spec.MetadataOwner == nil || (snapshot.idx.primary != nil && spec.MetadataOwner == snapshot.idx.primary.MetadataOwner()) {

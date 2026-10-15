@@ -179,6 +179,10 @@ func TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	if primaryOfflineScopePlatformRefusal(t, d) {
+		return
+	}
+
 	roots, err := d.CaptureRecoverableRootSetForInspection(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +231,21 @@ func TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement(t *testing.T
 	original, err := os.Stat(filepath.Join(dir, indexFileName))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before := primaryPairImages(t, dir)
+		err = VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("offline platform refusal: %v", err)
+		}
+		current, e := os.Stat(filepath.Join(dir, indexFileName))
+		if e != nil || !os.SameFile(original, current) {
+			t.Fatal("platform refusal changed canonical identity")
+		}
+		requirePrimaryPairImages(t, dir, before)
+		requireNoPrivatePrimaryPair(t, dir)
+		assertPrimaryJointRecoveredV6(t, dir, prior)
+		return
 	}
 	testHookPrimaryJointSwapV6 = func(phase string) error {
 		if phase != "before-data-rename" {
@@ -727,6 +746,10 @@ func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	if primaryOfflineScopePlatformRefusal(t, d) {
+		return
+	}
+
 	scope, err := d.captureOfflinePrimaryScopeV6()
 	if err != nil {
 		t.Fatal(err)
@@ -773,6 +796,10 @@ func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer d.Close()
+			if primaryOfflineScopePlatformRefusal(t, d) {
+				return
+			}
+
 			metadata := d.idx.Load().primary.MetadataOwner()
 			idx, err := d.captureOfflinePrimaryScopeV6()
 			if err != nil {

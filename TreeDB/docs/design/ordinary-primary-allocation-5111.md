@@ -528,3 +528,54 @@ still retains the same source generation, typed fatal receipt, LOCK and charge.
 Semantic operation errors with successful physical cleanup drain normally.
 The selected normal/race batch covers these distinctions against identical
 tested Go/module bytes; complete candidate qualification remains open.
+
+
+## Review completion custody boundaries
+
+The runtime DATA certificate cache borrows only from a successfully activated
+root's existing conservative proof allowance. Preparation does not publish that
+borrow. A queued PRIMARY zipper result transfers its same original construction
+owner into the existing abort custody before fallible descriptor preparation;
+late refusal uses the original phase-aware Abort. Terminal runtime shutdown
+clears the cache before withdrawing the last root that supplies its allowance.
+The per-root admission and both eligible slots and parent proof edges remain
+unchanged.
+
+Closed PRIMARY iterators clear their directory, projected/leaf scratch,
+callbacks, tree and pooled child aliases before closing the child and allowing
+last-owner completion. Snapshot iterator wrappers detach the child too. Domain,
+sticky error and repeated-Close behavior survive; retaining the closed public
+handle does not retain those private allocation graphs. Snapshot root-tree
+cleanup clears the active backing once and independently clears a populated
+inline entry after overflow. Nil-reader Tree reset clears the same containing
+Tree in one assignment. Ordinary local DATA Get and finite GetWithWork share
+the same mapping kernel; bank, immutable-root, overlay and metadata-owned routes
+retain their original routing, guarding and work accounting.
+
+Joint-recovery marker reads use one fixed admitted 4141-byte buffer. The first
+4140 bytes are the largest accepted marker and the extra byte is the oversize
+sentinel. Short reads normalize EOF/UnexpectedEOF before decoding. This avoids
+Go 1.26.3 ReadAll's overlapping chunks, final copy and vector without increasing
+the original allowance or dropping original physical cleanup.
+
+Exported, admitted and native snapshots pin every nonnil value-log Set,
+including an explicitly refreshed owned empty Set. Set replacement excludes
+pre-pin capture through the existing root-reuse gate. Private synchronous
+one-shot reads may omit Manager/Set custody only for a producer-stamped empty
+closure and install a nil value-log reader. Their existing legacy DBState still
+keeps the empty Set wrapper GC reachable until private completion; it is not a
+claim that every wrapper alias disappears at Set release. That original
+DBState/Set allocation is outside selected metadata admission, its mutable map
+is never read through this private path, and putRead clears the state alias.
+Admitted basis/exported captures retain and charge their original Set instead.
+
+Platform refusal fixtures exercise the actual unavailable namespace or online
+swap call and require its typed error before checking unchanged pair bytes,
+publication state, original metadata, retained readers and absent private files.
+Supported-platform shrink, reopen, physical-failure and deletion oracles remain
+in place. The empty-checkpoint reclamation path requires relative namespace and
+cross-parent no-replace support; other platforms qualify only typed refusal and
+retained-cut safety. Windows Raft deadlines remain unchanged; failure-only
+fixture status history supplies attribution if hosted execution fails again.
+These controls and source changes do not establish performance, platform, full
+allocation-group or graph acceptance.

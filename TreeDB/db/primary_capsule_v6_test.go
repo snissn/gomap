@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -268,7 +269,11 @@ func TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6(t *testing.T) {
 	}
 	defer cut.Close()
 	seq := db.State().CommitSeq
-	if e = db.VacuumIndexOnline(context.Background()); !errors.Is(e, rootpublication.ErrResourcePinned) {
+	wantRefusal := rootpublication.ErrResourcePinned
+	if runtime.GOOS == "windows" {
+		wantRefusal = ErrVacuumUnsupported
+	}
+	if e = db.VacuumIndexOnline(context.Background()); !errors.Is(e, wantRefusal) {
 		t.Fatalf("vacuum %v", e)
 	}
 	after, e := os.ReadFile(filepath.Join(dir, "index.db"))

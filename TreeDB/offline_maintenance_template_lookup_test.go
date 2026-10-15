@@ -197,7 +197,11 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 	verifyDecoded("before-vacuum")
 
 	if err := VacuumIndexOffline(OptionsFor(ProfileNoWALFast, dir)); err != nil {
-		t.Fatalf("VacuumIndexOffline: %v", err)
+		if rootpublication.StableRelativeNamespaceSupported() || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("VacuumIndexOffline: %v", err)
+		}
+		verifyDecoded("after-platform-refusal")
+		return
 	}
 
 	verifyDecoded("after-vacuum")

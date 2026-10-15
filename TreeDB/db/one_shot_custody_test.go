@@ -126,3 +126,57 @@ func TestOneShotLiveValueLogReadSurvivesConcurrentDBClose(t *testing.T) {
 		t.Fatal("last private read did not complete original wrapper")
 	}
 }
+
+func TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err = d.SetSync([]byte("inline"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err = d.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	original := d.state.Load().ValueLogSet
+	sizes, known := original.RetentionSizes()
+	if original == nil || !known || sizes.FileCount != 0 {
+		t.Fatal("fixture has no owned empty Set")
+	}
+	r, err := d.acquireOneShotReadOrErr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = r.close()
+		}
+	}()
+	if r.snapshot.state.ValueLogSet != original || r.snapshot.reader.vlogs != nil || r.snapshot.vlogManager != nil || r.snapshot.vlogPinned {
+		t.Fatal("private read retained an active empty Set/Manager edge")
+	}
+	if err = d.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	if original.RefCount.Load() != 0 || original.Files != nil {
+		t.Fatal("fixture did not complete original empty Set release")
+	}
+	// The existing unadmitted DBState/Set wrapper remains GC reachable, but the
+	// read uses only its scalar root state and the reader has no Set interface.
+	if r.snapshot.state.ValueLogSet != original {
+		t.Fatal("legacy state alias changed")
+	}
+	got, _, err := r.snapshot.GetVersioned([]byte("inline"))
+	if err != nil || !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("released-empty inline read: %q %v", got, err)
+	}
+	if err = r.close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	if r.snapshot.state != nil || r.snapshot.reader.vlogs != nil {
+		t.Fatal("private completion did not scrub legacy state")
+	}
+}

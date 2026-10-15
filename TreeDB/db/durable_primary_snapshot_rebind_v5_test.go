@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,7 +83,7 @@ func TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot(t *testing.T) {
 			})
 			err = RebindDurableRootSnapshotV1(target)
 			restore()
-			if !errors.Is(err, cutErr) {
+			if !errors.Is(err, cutErr) && (rootpublication.StableRelativeNamespaceSupported() || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported)) {
 				t.Fatalf("rebind cut %v", err)
 			}
 			for i, path := range paths {
@@ -98,6 +99,18 @@ func TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot(t *testing.T) {
 			if copied, e := Open(Options{Dir: target, ReadOnly: true}); e == nil {
 				_ = copied.Close()
 				t.Fatal("copied dependency admitted without rebind")
+			}
+			if !rootpublication.StableRelativeNamespaceSupported() {
+				if err = RebindDurableRootSnapshotV1(target); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("repeated platform refusal: %v", err)
+				}
+				for i, path := range paths {
+					actual, e := os.ReadFile(path)
+					if e != nil || !bytes.Equal(actual, original[i]) {
+						t.Fatalf("refusal changed file %d: %v", i, e)
+					}
+				}
+				return
 			}
 			if err = RebindDurableRootSnapshotV1(target); err != nil {
 				t.Fatal(err)

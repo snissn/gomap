@@ -242,9 +242,14 @@ func (p *primaryIterator) Close() error {
 	if p.closed {
 		return nil
 	}
-	p.closed = true
-	p.valid = false
-	return p.base.Close()
+	base := p.base
+	// The exported closed handle may outlive the original root allowance. Drop
+	// every private borrowed image/callback before returning a child to its pool.
+	*p = primaryIterator{start: p.start, end: p.end, err: p.err, closed: true}
+	if base != nil {
+		return base.Close()
+	}
+	return nil
 }
 func (p *primaryIterator) Domain() ([]byte, []byte) { return p.start, p.end }
 

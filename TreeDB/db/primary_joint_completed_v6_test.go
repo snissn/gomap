@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 	"path/filepath"
 	"testing"
@@ -221,6 +222,18 @@ func TestPrimaryJointCompletedV6RejectsPhysicalChange(t *testing.T) {
 	for _, change := range []string{"DATA-incarnation", "PRIMARY-capsules", "missing-dependency"} {
 		t.Run(change, func(t *testing.T) {
 			dir := t.TempDir()
+			if !rootpublication.StableRelativeNamespaceSupported() {
+				prior := preparePrimaryJointCrashV6(t, dir)
+				before := primaryPairImages(t, dir)
+				e := VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+				if !errors.Is(e, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("completed-pair platform refusal: %v", e)
+				}
+				requirePrimaryPairImages(t, dir, before)
+				requireNoPrivatePrimaryPair(t, dir)
+				assertPrimaryJointRecoveredV6(t, dir, prior)
+				return
+			}
 			opts, _ := prepareAdvancedCompletedJointDecisionV6(t, dir)
 			marker, err := os.ReadFile(filepath.Join(dir, indexReadyFileName))
 			if err != nil {

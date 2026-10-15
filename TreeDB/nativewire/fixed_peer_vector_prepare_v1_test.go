@@ -381,10 +381,12 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	client := nodes[0].client
+	observeStatus, reportStatus := fixedPeerFailureStatusRecorder(t, nodes)
+	defer reportStatus()
 	var leader raftcluster.NodeID
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, node := range nodes {
-			status, err := node.Status(ctx)
+			status, err := observeStatus(ctx, node)
 			if err == nil && status.CatalogRaft.State == "Leader" {
 				leader = node.config.NodeID
 				return true
@@ -406,7 +408,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	group := configs[0].Groups[0]
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, node := range nodes {
-			status, err := node.Status(ctx)
+			status, err := observeStatus(ctx, node)
 			if err != nil || status.Catalog.Epoch != 1 || len(status.Groups) != 1 || status.Groups[0].LeaderID == "" {
 				return false
 			}

@@ -30,6 +30,8 @@ import (
 // owns queued logical candidates and their resource closures. This runtime
 // owns only the independently cloned visible closure and publisher-time seals
 // needed to turn an ordered visible prefix into one recovery-selectable root.
+var testHookPrimaryDataCertificateV6 func(string, *rootPublicationRuntimeV1, *rootpublication.PreparedPrimaryRootV5)
+
 type rootPublicationRuntimeV1 struct {
 	db      *DB
 	idx     *indexGen
@@ -52,7 +54,8 @@ type rootPublicationRuntimeV1 struct {
 	seals              []*rootPublicationSealV1
 	activeSeal         *rootPublicationSealV1
 	poison             error
-	// Borrowed immutable proof; runtime.idx and live generation own its physical lifetime.
+	// Borrowed immutable proof; only a successfully installed current root supplies
+	// its allowance. Detach before terminal withdrawal of that root.
 	primaryDataCertificateV6 *rootpublication.PrimaryDataCertificateV6
 }
 
@@ -792,11 +795,6 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			previous := runtime.primaryDataCertificateV6
 			runtime.mu.Unlock()
 			primary, ok, e = rootpublication.NewPreparedPrimaryReadRootCertificateV6(cert, generation, prepared, rootPublicationFrontierV1(next), runtime.idx.pager, previous, nil)
-			if ok && e == nil {
-				runtime.mu.Lock()
-				runtime.primaryDataCertificateV6 = primary.DataCertificateV6()
-				runtime.mu.Unlock()
-			}
 		} else {
 			bundle, ok, e = runtime.idx.primary.TakePublicationBundle(next.UserRootPageID, nil)
 			if !ok || e != nil {
@@ -815,6 +813,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil, false, e
 		}
 		if runtime.idx.primary.CapsuleFormatV6() {
+			if testHookPrimaryDataCertificateV6 != nil {
+				testHookPrimaryDataCertificateV6("prepared", runtime, primary)
+			}
 			if e = runtime.idx.primary.AdmitRootMetadata(bundle.Directory, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))); e != nil {
 				return nil, false, e
 			}
@@ -874,6 +875,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				return err
 			}
 			runtime.mu.Lock()
+			// The SAME transaction has installed its current root and allowance.
+			// Refused preparation/activation must never replace this borrowed cache.
+			if member.primary != nil && member.primary.ReadCertificateV6() != nil {
+				runtime.primaryDataCertificateV6 = member.primary.DataCertificateV6()
+			}
 			previousResources := runtime.visibleResources
 			runtime.visibleResources = member.resources
 			runtime.visibleMembers = append(runtime.visibleMembers, member)
@@ -1082,6 +1088,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			id, err = z.CopyPrimaryRoot(next.UserRootPageID)
 		case !primaryarena.IsPage(next.UserRootPageID):
 			id, err = z.BuildPrimaryRoot(next.UserRootPageID, next.CommitSeq)
+		case idx.primary.CapsuleFormatV6():
+			// The zipper already produced this exact private construction. Retain
+			// its original abort edge through fallible preparation, before Bind
+			// transfers disposal to the candidate. Copy/Build fill the same cell.
+			work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+			var ready bool
+			copied.root, ready, err = idx.primary.ReadRootConstructionOwnerV6(next.UserRootPageID, work)
+			if original, ok := copied.root.(*rootpublication.DurableRootTransaction); !ready || !ok || original == nil {
+				err = errors.Join(err, rootpublication.ErrDurableRootOwnership)
+			}
 		}
 		if err != nil {
 			return post, prePublishErr(err)
@@ -1944,6 +1960,8 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	}
 	runtime.disposalAttempted = true
 	runtime.mu.Lock()
+	// Withdraw borrowed aliases before releasing any supplying root/resource.
+	runtime.primaryDataCertificateV6 = nil
 	seals, visibleResources := runtime.seals, runtime.visibleResources
 	runtime.mu.Unlock()
 	var first error

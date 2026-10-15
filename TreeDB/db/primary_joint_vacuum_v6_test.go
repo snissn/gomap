@@ -30,6 +30,9 @@ func TestPrimaryJointVacuumV6SuccessfulReplacement(t *testing.T) {
 	if e = d.SetSync([]byte("second"), []byte("two")); e != nil {
 		t.Fatal(e)
 	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		return
+	}
 	old := d.idx.Load()
 	if e = d.VacuumIndexOnline(context.Background()); e != nil {
 		t.Fatal(e)
@@ -483,8 +486,13 @@ func TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision(t *testing.T
 	if e != nil {
 		t.Fatal(e)
 	}
+	defer d.Close()
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		return
+	}
 	prior := d.State().CommitSeq
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testHookPrimaryJointSwapV6 = func(p string) error {
 		if p == "after-commit" {
 			cancel()
@@ -531,6 +539,9 @@ func TestPrimaryJointVacuumV6CommandFrontierAndRevisions(t *testing.T) {
 		if e = d.Checkpoint(); e != nil {
 			t.Fatal(e)
 		}
+	}
+	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
+		return
 	}
 	prior := d.durableRoot.slotRecord
 	priorSeq := d.State().CommitSeq

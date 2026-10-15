@@ -38,6 +38,8 @@ func recoveryCleanupOwnsLockV6(err error, lock *lockfile.Lock) bool {
 			(receipt.generation != nil && receipt.generation.startupLock == lock))
 }
 
+const primaryJointMarkerReadLimitV6 = 4141
+
 var testHookPrimaryJointRecoveryProofV6 func(string, *primaryJointRecoveryProofV6)
 
 type primaryJointRecoveryProofV6 struct {
@@ -56,7 +58,7 @@ type primaryJointRecoveryProofV6 struct {
 
 func newPrimaryJointRecoveryProofV6(registry *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (*primaryJointRecoveryProofV6, error) {
 	owner := registry.MetadataOwner()
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryJointRecoveryProofV6{}))) + 6*retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(os.File{}))) + retainedalloc.AllocationCharge(4141) + 2*retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6)
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryJointRecoveryProofV6{}))) + 6*retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(os.File{}))) + retainedalloc.AllocationCharge(primaryJointMarkerReadLimitV6) + 2*retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6)
 	if err := owner.AddPending(charge); err != nil {
 		return nil, err
 	}

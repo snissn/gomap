@@ -141,6 +141,8 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 		{name: "outer exhaustive owner", goos: "linux", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
 		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
 		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
+		{name: "windows offline namespace", goos: "windows", fixture: inline, lane: indexVacuumM4Lane{name: "offline-vacuum"}, err: ErrNamespacePersistenceUnsupported, want: true},
+		{name: "linux offline namespace", goos: "linux", fixture: inline, lane: indexVacuumM4Lane{name: "offline-vacuum"}, err: ErrNamespacePersistenceUnsupported},
 		{name: "untyped", fixture: outer, lane: full, err: errors.New("promotion failed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -160,7 +162,8 @@ func TestIndexVacuumM4PlatformSupportsLane(t *testing.T) {
 	}{
 		{name: "linux online", goos: "linux", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: true},
 		{name: "windows online", goos: "windows", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: false},
-		{name: "windows offline", goos: "windows", lane: indexVacuumM4Lane{}, want: true},
+		{name: "windows offline", goos: "windows", lane: indexVacuumM4Lane{name: "offline-vacuum"}, want: false},
+		{name: "linux offline", goos: "linux", lane: indexVacuumM4Lane{name: "offline-vacuum"}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := indexVacuumM4PlatformSupportsLane(test.goos, test.lane); got != test.want {
@@ -590,7 +593,11 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 		if err := database.Close(); err != nil {
 			return "error", 0, true, err
 		}
-		return "supported", 0, true, VacuumIndexOffline(opts)
+		err := VacuumIndexOffline(opts)
+		if runtime.GOOS == "windows" && errors.Is(err, ErrNamespacePersistenceUnsupported) {
+			return string(CompactStoragePhaseStatusUnsupported), 0, true, err
+		}
+		return "supported", 0, true, err
 	case "close-opt-in-vacuum":
 		t.Setenv(envCloseVacuumIndexOnline, "1")
 		t.Setenv(envCloseVacuumTimeout, "2m")
@@ -627,7 +634,7 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 }
 
 func indexVacuumM4PlatformSupportsLane(goos string, lane indexVacuumM4Lane) bool {
-	return !lane.expectsOnlineSwap || goos != "windows"
+	return goos != "windows" || !lane.expectsOnlineSwap && lane.name != "offline-vacuum"
 }
 
 func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, status string, err error) bool {
@@ -635,6 +642,9 @@ func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, sta
 }
 
 func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
+	if goos == "windows" && lane.name == "offline-vacuum" {
+		return errors.Is(err, ErrNamespacePersistenceUnsupported)
+	}
 	if fixture.name != "outer-leaf" {
 		return false
 	}
