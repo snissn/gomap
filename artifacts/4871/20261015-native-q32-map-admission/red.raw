@@ -1,0 +1,14 @@
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/page-list-record-and-byte-boundary
+    generation_v1_tree_work_test.go:236: fitting map insertion starved across fresh Q32 allowances
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/pending-path-record-boundary
+    generation_v1_tree_work_test.go:236: fitting map insertion starved across fresh Q32 allowances
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/oversized-page-list
+    generation_v1_tree_work_test.go:236: fitting map insertion starved across fresh Q32 allowances
+--- FAIL: TestCandidateBeginMapAdmissionQ32BoundaryV1 (0.00s)
+    --- FAIL: TestCandidateBeginMapAdmissionQ32BoundaryV1/page-list-record-and-byte-boundary (0.00s)
+    --- FAIL: TestCandidateBeginMapAdmissionQ32BoundaryV1/pending-path-record-boundary (0.00s)
+    --- FAIL: TestCandidateBeginMapAdmissionQ32BoundaryV1/oversized-page-list (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/freelist	0.001s
+FAIL

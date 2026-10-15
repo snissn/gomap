@@ -172,3 +172,85 @@ func TestCanonicalMutationRejectsOpaqueAndPreservesFirstErrorV1(t *testing.T) {
 		t.Fatal("original failed callback replayed")
 	}
 }
+
+// This is an actual BeginCandidate boundary, including each caller's page/path
+// observation. Each retry receives a fresh quantum; a fitting insertion must
+// eventually run, while a genuinely oversized map-growth unit must refuse.
+func TestCandidateBeginMapAdmissionQ32BoundaryV1(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pages     int
+		pending   bool
+		byteLimit uint64
+		oversized bool
+	}{
+		{"page-list-record-and-byte-boundary", 31, false, 4352, false},
+		{"pending-path-record-boundary", 29, true, 1 << 20, false},
+		{"oversized-page-list", 32, false, 1 << 20, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := MustNewFreelistGenerationV1(9, 4096, []uint64{2, 258}, nil)
+			base.ref.HeaderPageID = 900
+			base.root.pageID = 700
+			lookupChunk(base.root, 1).pageID = 701
+			for i := 0; i < tc.pages; i++ {
+				base.record.pageIDs = append(base.record.pageIDs, uint64(100+i))
+			}
+			if tc.pending {
+				base.record.Extents = []ReservationExtentV1{{StartPageID: 260, Count: 1, Kind: ReservationPendingMetadataRetirement, LastReachableCommitSeq: 7}}
+			}
+			ledger := NewReservationLedger()
+			var work candidateBeginWorkV1
+			var txn *FreelistTxn
+			calls := 0
+			for ; calls < 256; calls++ {
+				w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: tc.byteLimit}
+				var ready bool
+				var err error
+				txn, ready, err = work.step(base, base.ref, ledger, &w)
+				if w.Records > 32 || w.Bytes > tc.byteLimit {
+					t.Fatal("work exceeded fresh allowance")
+				}
+				if err != nil {
+					var tooLarge *iterator.OrdinalUnitTooLarge
+					if !tc.oversized || !errors.As(err, &tooLarge) {
+						t.Fatal(err)
+					}
+					if txn != nil || len(work.txn.replacedMetadata) != 32 {
+						t.Fatal("oversized insertion changed original map")
+					}
+					if _, exists := work.txn.replacedMetadata[131]; exists {
+						t.Fatal("oversized key inserted")
+					}
+					t.Logf("explicit oversized-unit refusal after %d calls", calls+1)
+					return
+				}
+				if !ready && txn != nil {
+					t.Fatal("unfinished original successor escaped")
+				}
+				if ready {
+					break
+				}
+			}
+			if calls == 256 {
+				t.Fatal("fitting map insertion starved across fresh Q32 allowances")
+			}
+			if tc.oversized {
+				t.Fatal("oversized insertion accepted")
+			}
+			if txn.base != base || txn.ledger != ledger || len(txn.replacedMetadata) != tc.pages+1+2*boolIntV1(tc.pending) {
+				t.Fatalf("original successor custody/metadata lost: metadata=%d", len(txn.replacedMetadata))
+			}
+			if tc.pending && (lookupChunk(txn.root, 1).retired[4] != 7 || lookupChunk(base.root, 1).retired[4] != 0) {
+				t.Fatal("retained path did not preserve private retirement/base")
+			}
+			t.Logf("fitting original successor completed in %d calls; replaced=%d", calls+1, len(txn.replacedMetadata))
+		})
+	}
+}
+func boolIntV1(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}

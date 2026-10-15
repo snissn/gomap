@@ -18,6 +18,12 @@ type candidateBeginWorkV1 struct {
 	detach        stateDetachWorkV1
 	mutation      stateMutationWorkV1
 	markNode      *stateNode
+	markNext      *stateNode
+	markID        uint64
+	markLoaded    bool
+	pageID        uint64
+	pageLoaded    bool
+	mapInsert     stateMapInsertWorkV1
 	pageIndex     int
 	chunkNo       uint64
 	phase         uint8
@@ -25,25 +31,50 @@ type candidateBeginWorkV1 struct {
 	pending       pendingRetirementCursorV1
 }
 
-func reserveStateMapInsertV1(m map[uint64]struct{}, key uint64, w *iterator.OrdinalScanWork) (bool, error) {
+// stateMapInsertWorkV1 retains an admitted lookup until the exact original
+// map/key insertion has completed. In particular, a fresh quantum can fund the
+// whole backing-growth bound without repeatedly paying a preceding lookup.
+// The owner pointer binds the actual map field; unrelated insertions cannot
+// reuse the observation. The candidate privately owns these maps while paused.
+type stateMapInsertWorkV1 struct {
+	owner *map[uint64]struct{}
+	key   uint64
+	count uint64
+	phase uint8
+}
+
+func (s *stateMapInsertWorkV1) step(owner *map[uint64]struct{}, key uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	if owner == nil || *owner == nil {
+		return false, ErrGenerationFormat
+	}
 	if w == nil {
-		m[key] = struct{}{}
+		(*owner)[key] = struct{}{}
 		return true, nil
 	}
-	if ok, e := appendReserve(w, 1, 16); !ok || e != nil {
+	if s.phase != 0 && (s.owner != owner || s.key != key) {
+		return false, ErrGenerationFormat
+	}
+	if s.phase == 0 {
+		if ok, e := appendReserve(w, 1, 16); !ok || e != nil {
+			return false, e
+		}
+		if _, exists := (*owner)[key]; exists {
+			return true, nil
+		}
+		s.owner, s.key, s.count, s.phase = owner, key, uint64(len(*owner)), 1
+	}
+	if uint64(len(*owner)) != s.count {
+		return false, ErrGenerationFormat
+	}
+	// A Go map insertion may grow its original backing. Admit the same
+	// conservative full live-entry rehash/storage before the actual insertion.
+	// If this indivisible bound exceeds a fresh allowance, appendReserve reports
+	// UnitTooLarge rather than claiming resumable progress forever.
+	if ok, e := appendReserve(w, 1+s.count, 256+128*(s.count+1)); !ok || e != nil {
 		return false, e
 	}
-	if _, exists := m[key]; exists {
-		return true, nil
-	}
-	// A Go map insertion may grow its original backing. Admit a conservative
-	// full live-entry rehash and old/new storage before insertion; large maps
-	// honestly require a retained backing-growth seam instead of hiding it.
-	count := uint64(len(m))
-	if ok, e := appendReserve(w, 1+count, 256+128*(count+1)); !ok || e != nil {
-		return false, e
-	}
-	m[key] = struct{}{}
+	(*owner)[key] = struct{}{}
+	*s = stateMapInsertWorkV1{}
 	return true, nil
 }
 
@@ -117,38 +148,31 @@ func (s *pendingRetirementCursorV1) applyRetired(c *stateChunk, w *iterator.Ordi
 }
 func (s *candidateBeginWorkV1) markPath(w *iterator.OrdinalScanWork) (bool, error) {
 	for s.markNode != nil {
-		n := s.markNode
-		if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(stateNode{}))); !ok || e != nil {
-			return false, e
-		}
-		if n.freeCount+n.retiredCount == 0 {
-			if n.pageID != 0 {
-				if ok, e := reserveStateMapInsertV1(s.txn.replacedMetadata, n.pageID, w); !ok || e != nil {
-					return false, e
-				}
+		if !s.markLoaded {
+			if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(stateNode{}))); !ok || e != nil {
+				return false, e
 			}
-			s.markNode = nil
-			return true, nil
-		}
-		if n.chunk != nil {
-			if n.chunk.chunkNo == s.chunkNo && n.chunk.pageID != 0 {
-				if ok, e := reserveStateMapInsertV1(s.txn.replacedMetadata, n.chunk.pageID, w); !ok || e != nil {
-					return false, e
+			n := s.markNode
+			s.markID, s.markNext = 0, nil
+			switch {
+			case n.freeCount+n.retiredCount == 0:
+				s.markID = n.pageID
+			case n.chunk != nil:
+				if n.chunk.chunkNo == s.chunkNo {
+					s.markID = n.chunk.pageID
 				}
+			case chunkPrefixV1(s.chunkNo, int(n.depth)) == n.prefix:
+				s.markID = n.pageID
+				s.markNext = n.child[chunkNibble(s.chunkNo, int(n.depth))]
 			}
-			s.markNode = nil
-			return true, nil
+			s.markLoaded = true
 		}
-		if chunkPrefixV1(s.chunkNo, int(n.depth)) != n.prefix {
-			s.markNode = nil
-			return true, nil
-		}
-		if n.pageID != 0 {
-			if ok, e := reserveStateMapInsertV1(s.txn.replacedMetadata, n.pageID, w); !ok || e != nil {
+		if s.markID != 0 {
+			if ok, e := s.mapInsert.step(&s.txn.replacedMetadata, s.markID, w); !ok || e != nil {
 				return false, e
 			}
 		}
-		s.markNode = n.child[chunkNibble(s.chunkNo, int(n.depth))]
+		s.markNode, s.markNext, s.markID, s.markLoaded = s.markNext, nil, 0, false
 	}
 	return true, nil
 }
@@ -192,21 +216,25 @@ func (s *candidateBeginWorkV1) step(base *FreelistGenerationV1, parent Generatio
 			s.phase = 2
 		case 2:
 			if s.base.ref.HeaderPageID != 0 {
-				if ok, e := reserveStateMapInsertV1(s.txn.replacedMetadata, s.base.ref.HeaderPageID, w); !ok || e != nil {
+				if ok, e := s.mapInsert.step(&s.txn.replacedMetadata, s.base.ref.HeaderPageID, w); !ok || e != nil {
 					return nil, false, e
 				}
 			}
 			s.phase = 3
 		case 3:
 			for s.pageIndex < len(s.base.record.pageIDs) {
-				if ok, e := appendReserve(w, 1, 8); !ok || e != nil {
-					return nil, false, e
+				if !s.pageLoaded {
+					if ok, e := appendReserve(w, 1, 8); !ok || e != nil {
+						return nil, false, e
+					}
+					s.pageID = s.base.record.pageIDs[s.pageIndex]
+					s.pageLoaded = true
 				}
-				id := s.base.record.pageIDs[s.pageIndex]
-				if ok, e := reserveStateMapInsertV1(s.txn.replacedMetadata, id, w); !ok || e != nil {
+				if ok, e := s.mapInsert.step(&s.txn.replacedMetadata, s.pageID, w); !ok || e != nil {
 					return nil, false, e
 				}
 				s.pageIndex++
+				s.pageID, s.pageLoaded = 0, false
 			}
 			s.phase = 4
 		case 4:
@@ -245,7 +273,7 @@ func (s *candidateBeginWorkV1) step(base *FreelistGenerationV1, parent Generatio
 			s.pending = s.mutation.pending
 			s.phase = 7
 		case 7:
-			if ok, e := reserveStateMapInsertV1(s.txn.changedChunks, s.chunkNo, w); !ok || e != nil {
+			if ok, e := s.mapInsert.step(&s.txn.changedChunks, s.chunkNo, w); !ok || e != nil {
 				return nil, false, e
 			}
 			s.txn.root = s.mutation.result

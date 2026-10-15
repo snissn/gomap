@@ -1,0 +1,71 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Bounded changed-seam review ONLY of the frozen two-file Q32 split map-admission repair. Closes F1 in review.json; original rejection artifact preserved.",
+  "evidence_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-canonical-map-admission-20261015",
+  "prior_frozen_owned_manifest_sha256": "c3c64fc25f75dca31309b3c9e9b0f1a6c95c9583bae2f3e0c6655a004985496a",
+  "files": [
+    {
+      "repo_path": "TreeDB/freelist/generation_v1_begin_work.go",
+      "frozen_file": "generation_v1_begin_work.go.corrected",
+      "bytes": 9067,
+      "sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+      "preimage_sha256": "21652881f4a32f1bd215f76576b6457d9f1ac92b4f739aab8ca234541db944d8"
+    },
+    {
+      "repo_path": "TreeDB/freelist/generation_v1_tree_work_test.go",
+      "frozen_file": "generation_v1_tree_work_test.go",
+      "bytes": 8523,
+      "sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8"
+    }
+  ],
+  "finding_disposition": {
+    "F1": "CLOSED for these exact corrected bytes. Retained admitted lookup and retained caller observations allow a fresh quantum to fund a fitting insertion; genuinely oversized insertion returns UnitTooLarge before mutation."
+  },
+  "checks": [
+    "stateMapInsertWorkV1 lines34-78 binds the exact private transaction map-field address, key and observed entry count; rejects inconsistent continuation inputs; resets after admitted insertion.",
+    "Header insertion lines217-223, reservation-page insertion224-238, all markPath cases149-177 and changedChunks insertion275-278 use the SAME embedded cursor.",
+    "Reservation-page IDs and markPath ID/next observations remain retained across insertion yields, so repeating caller prefixes cannot consume each fresh growth allowance.",
+    "The byte4352 boundary admits the exact len31 growth bound256+128*32 on a fresh call; the prior lookup and operand bytes are not charged again.",
+    "Ordinary nil execution completes synchronously on the SAME private maps. Finite callers expose no unfinished successor; no new arena, pool, allocator or durable-output lifetime is introduced.",
+    "TestCandidateBeginMapAdmissionQ32BoundaryV1 exercises actual BeginCandidate page-list, pending-path and oversized branches; checks work limits, no premature successor escape, unchanged base retirement and no oversized insertion."
+  ],
+  "verified_existing_execution_evidence": {
+    "reviewer_reran_go": false,
+    "selector": "^TestCandidateBeginMapAdmissionQ32BoundaryV1$",
+    "red": {
+      "exit": 1,
+      "result": "All three cases fail with starvation under rejected preimage.",
+      "raw_sha256": "16f6dc2cacb42c4edad0a5f316524366f191c84481938b39ba304525eae9521a",
+      "before_and_after_census_sha256": "35db930d1528dd26adb6165a34bd5fb036ba41758f799cc74dc0791daf547b9f"
+    },
+    "green": {
+      "exit": 0,
+      "result": "Page-list record/byte boundary completes24 calls; pending path completes34 calls; oversized growth explicitly refuses after25 calls.",
+      "raw_sha256": "438d17dd8fc18524c1162bbe7a28d1d23e84b56623501e284bbe4a7bcc447cad",
+      "before_and_after_census_sha256": "73eca2c1eebb655f54e40db8f1cfbb882f9d040a273dc012f3a9de4e9fcc6be5"
+    },
+    "rows_per_census": 4424,
+    "per_run_before_after_equal": true,
+    "red_green_census_delta": [
+      "TreeDB/freelist/generation_v1_begin_work.go"
+    ],
+    "frozen_file_hashes_match_execution_censuses": true
+  },
+  "additional_findings": [],
+  "limits": [
+    "Source-only independent review plus inspection of existing raw logs/receipts/censuses; no Go, benchmarks, source edits or Git/GitHub writes.",
+    "Acceptance is scoped to this exact two-file repair and F1 disposition, not a new whole-candidate audit.",
+    "Original frozen80 rejection remains preserved; later live materialization changes are excluded.",
+    "Native ACK remains0; no public ACK, full Q32 completion or performance qualification claimed."
+  ],
+  "checkpoint_reconstruction": {
+    "frozen_census_sha256": "1cf3c5c14a72903a2e9499f563789ee2756317965c05305135869825b73685b4",
+    "green_census_sha256": "73eca2c1eebb655f54e40db8f1cfbb882f9d040a273dc012f3a9de4e9fcc6be5",
+    "rows_each": 4424,
+    "only_changed_paths": [
+      "TreeDB/freelist/generation_v1_begin_work.go",
+      "TreeDB/freelist/generation_v1_tree_work_test.go"
+    ],
+    "conclusion": "Exact two-file source delta from frozen80 compiler census to GREEN compiler census; all other4422 entries identical."
+  }
+}

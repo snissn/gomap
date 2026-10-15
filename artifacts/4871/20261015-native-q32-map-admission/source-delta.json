@@ -1,0 +1,40 @@
+{
+  "prior_commit": "514dab33ef07ab09cacb89efd862043a59f15318",
+  "prior_frozen_manifest_sha256": "c3c64fc25f75dca31309b3c9e9b0f1a6c95c9583bae2f3e0c6655a004985496a",
+  "prior_full_census_sha256": "1cf3c5c14a72903a2e9499f563789ee2756317965c05305135869825b73685b4",
+  "green_full_census_sha256": "73eca2c1eebb655f54e40db8f1cfbb882f9d040a273dc012f3a9de4e9fcc6be5",
+  "rows": 4424,
+  "source_delta": [
+    {
+      "path": "TreeDB/freelist/generation_v1_begin_work.go",
+      "before": {
+        "path": "TreeDB/freelist/generation_v1_begin_work.go",
+        "bytes": 8054,
+        "sha256": "21652881f4a32f1bd215f76576b6457d9f1ac92b4f739aab8ca234541db944d8"
+      },
+      "after": {
+        "path": "TreeDB/freelist/generation_v1_begin_work.go",
+        "bytes": 9067,
+        "sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01"
+      }
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_tree_work_test.go",
+      "before": {
+        "path": "TreeDB/freelist/generation_v1_tree_work_test.go",
+        "bytes": 5655,
+        "sha256": "058647fbd621128fa12850705be58519edcfab94744073735f705fd730a00063"
+      },
+      "after": {
+        "path": "TreeDB/freelist/generation_v1_tree_work_test.go",
+        "bytes": 8523,
+        "sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8"
+      }
+    }
+  ],
+  "red_to_green_delta": [
+    "TreeDB/freelist/generation_v1_begin_work.go"
+  ],
+  "foreign2_unchanged_and_excluded": true,
+  "qualification": "Component-only Q32 map-admission correction; original frozen80 REJECT retained; native ACK=0, no final qualification."
+}

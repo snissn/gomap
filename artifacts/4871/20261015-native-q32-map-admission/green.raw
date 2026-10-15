@@ -1,0 +1,13 @@
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/page-list-record-and-byte-boundary
+    generation_v1_tree_work_test.go:247: fitting original successor completed in 24 calls; replaced=32
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/pending-path-record-boundary
+    generation_v1_tree_work_test.go:247: fitting original successor completed in 34 calls; replaced=32
+=== RUN   TestCandidateBeginMapAdmissionQ32BoundaryV1/oversized-page-list
+    generation_v1_tree_work_test.go:225: explicit oversized-unit refusal after 25 calls
+--- PASS: TestCandidateBeginMapAdmissionQ32BoundaryV1 (0.00s)
+    --- PASS: TestCandidateBeginMapAdmissionQ32BoundaryV1/page-list-record-and-byte-boundary (0.00s)
+    --- PASS: TestCandidateBeginMapAdmissionQ32BoundaryV1/pending-path-record-boundary (0.00s)
+    --- PASS: TestCandidateBeginMapAdmissionQ32BoundaryV1/oversized-page-list (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.001s

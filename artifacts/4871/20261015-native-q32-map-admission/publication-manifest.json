@@ -1,0 +1,120 @@
+{
+  "base": "514dab33ef07ab09cacb89efd862043a59f15318",
+  "branch": "codex/4878-canonical-activation-checkpoint-20261015",
+  "source_delta_count": 2,
+  "qualification": "Component ACCEPT only; native ACK=0; original frozen80 rejection retained",
+  "source_delta": [
+    {
+      "path": "TreeDB/freelist/generation_v1_begin_work.go",
+      "bytes": 9067,
+      "sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_tree_work_test.go",
+      "bytes": 8523,
+      "sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8"
+    }
+  ],
+  "members": [
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/README.md",
+      "bytes": 977,
+      "sha256": "a25b670dfe3c7c7bded2abb10f10bb53b33299894db640dd713f4595538f7871"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/generation_v1_begin_work.go.corrected",
+      "bytes": 9067,
+      "sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/generation_v1_begin_work.go.preimage",
+      "bytes": 8054,
+      "sha256": "21652881f4a32f1bd215f76576b6457d9f1ac92b4f739aab8ca234541db944d8"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/generation_v1_tree_work_test.go",
+      "bytes": 8523,
+      "sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/green.after.json",
+      "bytes": 796010,
+      "sha256": "73eca2c1eebb655f54e40db8f1cfbb882f9d040a273dc012f3a9de4e9fcc6be5"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/green.before.json",
+      "bytes": 796010,
+      "sha256": "73eca2c1eebb655f54e40db8f1cfbb882f9d040a273dc012f3a9de4e9fcc6be5"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/green.command.json",
+      "bytes": 617,
+      "sha256": "dc2c8a050fcaf01e08f930070e59c13ac77126a96cf7571b81ac89dcc5c97296"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/green.exit.json",
+      "bytes": 203,
+      "sha256": "6f7eccd015120be0090a08a22964f4935111291c0b0e42c938794d1e463636a4"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/green.raw",
+      "bytes": 995,
+      "sha256": "438d17dd8fc18524c1162bbe7a28d1d23e84b56623501e284bbe4a7bcc447cad"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/independent-review/fix-review.json",
+      "bytes": 4527,
+      "sha256": "6a0b8c29a15cb909e07cde0b23c75df22b29e8d667886a993e0a588c100d7b2e"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/independent-review/fix-review.md",
+      "bytes": 1836,
+      "sha256": "ca29731709c00bd9b90c8a0686bda90bceaa9fe7f80ce4b2784a7ababcb92c11"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/independent-review/pr-classification.json",
+      "bytes": 344,
+      "sha256": "ffc5e1d21f7a6fccb86a12d648380a870894cf9c094dc7a687cb1aad2b60f260"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/protected-before.json",
+      "bytes": 1869,
+      "sha256": "eea953eba29350d1aec396548b9bd393be5ac1f07a9c2778fd8c87bd79320756"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/red.after.json",
+      "bytes": 796010,
+      "sha256": "35db930d1528dd26adb6165a34bd5fb036ba41758f799cc74dc0791daf547b9f"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/red.before.json",
+      "bytes": 796010,
+      "sha256": "35db930d1528dd26adb6165a34bd5fb036ba41758f799cc74dc0791daf547b9f"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/red.command.json",
+      "bytes": 617,
+      "sha256": "404d51787f8a82b572fc26489136badbdbe8ead7cabe63e8d6c1fd59a4b293d1"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/red.exit.json",
+      "bytes": 201,
+      "sha256": "5ced97f2150538d3e55da92bc6c84579e6dc281c63c2d1d7c18f3e0cabed4eb3"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/red.raw",
+      "bytes": 1003,
+      "sha256": "16f6dc2cacb42c4edad0a5f316524366f191c84481938b39ba304525eae9521a"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/source-delta.json",
+      "bytes": 1615,
+      "sha256": "e9aa787031d5e2f5704767a944f8bf5639222d14115057518ea73c7d6da463aa"
+    },
+    {
+      "path": "artifacts/4871/20261015-native-q32-map-admission/source-edit.json",
+      "bytes": 192,
+      "sha256": "c67175a9dc62228d0d5f876609c0fd54cce297469deebd1e3bb69b3b8b6f69ab"
+    }
+  ]
+}
