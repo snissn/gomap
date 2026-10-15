@@ -54,16 +54,24 @@ type PruneCursor struct {
 	logicalSize, previousSize, selectedSize   int
 	selectedBytes                             uint64
 	selectedPending, haveAnchor, recordActive bool
+	anchorKey, resumeKey                      [mvcckey.MaxEncodedKeySize]byte
+	anchorSize, resumeSize                    int
+	anchorBytes                               uint64
+	anchorTombstone, resumeAfterAnchor        bool
+	namespaceEnd                              bool
 	timestamp                                 uint64
 	record                                    node.LeafEntry
 	requestCaptured                           bool
 	request                                   mvccadmission.Request
 	preparation                               *backenddb.NativeMVCCCurrentDeleteV6
 	prepared                                  backenddb.NativeMVCCCurrentDeleteV6
-	loadingFloor, integrityDone               bool
-	phase, closePhase                         uint8
-	closed, complete                          bool
-	failure                                   error
+	loadingFloor                              bool
+	// integrityDone certifies the floor, retained anchor and exact selected
+	// key/value integrity for ONE deletion, not global namespace validation.
+	integrityDone     bool
+	phase, closePhase uint8
+	closed, complete  bool
+	failure           error
 }
 
 func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error) {
@@ -159,6 +167,9 @@ func (c *PruneCursor) ReleaseCodecBytes(n uint64) {
 }
 
 func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {
+	if c.complete {
+		return nil
+	}
 	for {
 		switch c.phase {
 		case 0:
@@ -265,9 +276,19 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 				return err
 			}
 			if !valid || !mvcckey.InNamespace(record.Key) {
-				c.integrityDone = true
-				c.phase = 12
-				continue
+				if c.anchorTombstone {
+					if !w.Reserve(1, uint64(c.anchorSize)+128) {
+						return nil
+					}
+					copy(c.selected[:], c.anchorKey[:c.anchorSize])
+					c.selectedSize, c.selectedBytes = c.anchorSize, c.anchorBytes
+					c.selectedPending, c.integrityDone = true, true
+					c.resumeAfterAnchor, c.namespaceEnd = true, true
+					c.phase = 12
+					continue
+				}
+				c.complete = true
+				return nil
 			}
 			if !w.Reserve(1, 3*uint64(len(record.Key))) {
 				return nil
@@ -307,7 +328,7 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 				c.phase = 10
 			}
 		case 10:
-			if !w.Reserve(1, 2*uint64(c.logicalSize)+uint64(len(c.record.Value))+uint64(len(c.record.Key))+128) {
+			if !w.Reserve(1, 2*uint64(c.logicalSize)+uint64(len(c.record.Value))+3*uint64(len(c.record.Key))+uint64(c.anchorSize)+128) {
 				return nil
 			}
 			state, err := validateRecord(c.record.Value)
@@ -315,6 +336,20 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 				return err
 			}
 			same := c.previousSize == c.logicalSize && bytes.Equal(c.previous[:c.previousSize], c.logical[:c.logicalSize])
+			if !same && c.anchorTombstone {
+				// All older versions were individually fenced and ACKed before
+				// advancing here. Only now may their tombstone anchor disappear.
+				// Keep the next logical key as a seek boundary, not a second scan.
+				copy(c.resumeKey[:], c.record.Key)
+				c.resumeSize = len(c.record.Key)
+				copy(c.selected[:], c.anchorKey[:c.anchorSize])
+				c.selectedSize, c.selectedBytes = c.anchorSize, c.anchorBytes
+				c.selectedPending, c.integrityDone = true, true
+				c.resumeAfterAnchor = true
+				c.record = node.LeafEntry{}
+				c.phase = 12
+				continue
+			}
 			if !same {
 				copy(c.previous[:], c.logical[:c.logicalSize])
 				c.previousSize = c.logicalSize
@@ -327,19 +362,25 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 				stats.Retained++
 				stats.RetainedBytes += size
 			} else if c.haveAnchor {
-				if !c.selectedPending {
-					copy(c.selected[:], c.record.Key)
-					c.selectedSize = len(c.record.Key)
-					c.selectedBytes = size
-					c.selectedPending = true
-				}
+				// The retained newest-at-floor anchor and this exact record have
+				// passed key/envelope/CRC validation. Select while the original
+				// projection is stationary; unrelated later keys are not prerequisites.
+				copy(c.selected[:], c.record.Key)
+				c.selectedSize, c.selectedBytes = len(c.record.Key), size
+				c.selectedPending, c.integrityDone = true, true
+				c.record = node.LeafEntry{}
+				c.phase = 14
+				continue
 			} else {
 				c.haveAnchor = true
-				// Tombstone anchor disposal follows all of its older physical records.
-				// Selection of that last anchor is a separate current-output iteration.
-				_ = state
-				stats.Retained++
-				stats.RetainedBytes += size
+				c.anchorTombstone = state == Tombstone
+				if c.anchorTombstone {
+					copy(c.anchorKey[:], c.record.Key)
+					c.anchorSize, c.anchorBytes = len(c.record.Key), size
+				} else {
+					stats.Retained++
+					stats.RetainedBytes += size
+				}
 			}
 			c.record = node.LeafEntry{}
 			c.phase = 11
@@ -447,8 +488,44 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			stats.Pruned++
 			stats.PrunedBytes += c.selectedBytes
 			stats.Batches++
-			c.complete = true
+			// ACK covers this exact finished transaction only. The retained scan
+			// still owns later history and may subsequently report a real error.
+			c.phase = 20
 			return nil
+		case 20:
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))+128) {
+				return nil
+			}
+			ready, err := c.preparation.CloseNativeMVCCCurrentDeleteStepV6(w)
+			if !ready || err != nil {
+				return err
+			}
+			c.preparation = nil
+			c.prepared = backenddb.NativeMVCCCurrentDeleteV6{}
+			c.selectedPending, c.integrityDone = false, false
+			c.selectedSize, c.selectedBytes = 0, 0
+			if c.resumeAfterAnchor {
+				c.resumeAfterAnchor, c.anchorTombstone, c.haveAnchor = false, false, false
+				c.anchorSize, c.anchorBytes = 0, 0
+				if c.namespaceEnd {
+					c.complete = true
+					return nil
+				}
+				c.phase = 21
+			} else {
+				c.phase = 11
+			}
+		case 21:
+			if !w.Reserve(1, uint64(c.resumeSize)+64) {
+				return nil
+			}
+			if err := c.capture.BeginNativeProjectionV6(c.projection, tree.ProjectionSeekGE, c.resumeKey[:c.resumeSize], w); err != nil {
+				if errors.Is(err, cowbtree.ErrWork) {
+					return nil
+				}
+				return err
+			}
+			c.phase = 6
 		default:
 			return nil
 		}

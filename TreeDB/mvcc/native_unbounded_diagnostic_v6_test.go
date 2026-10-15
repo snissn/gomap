@@ -113,23 +113,40 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				t.Fatal("overlay winner", e, oldBytes)
 			}
 			var cursor *PruneCursor
-			var ack, writes, prepared, cut uint64
+			var ack, writes, prepared, cut, visited uint64
 			var pruneErr error
+			var firstACKComplete, firstACKIntegrity bool
 			var elapsed time.Duration
 			var allocBytes, allocCount uint64
+			// Entry-phase buckets include all work performed by that public call.
+			// A call may advance through multiple phases; these are not inner-phase timings.
+			var phaseCalls, phaseNS, phaseBytes, phaseAllocs [256]uint64
 			for call := 0; call < 4096; call++ {
+				phase := uint8(0)
+				if cursor != nil {
+					phase = cursor.phase
+				}
 				var before, after runtime.MemStats
 				runtime.ReadMemStats(&before)
 				started := time.Now()
 				x, e := s.PruneVersionsUnboundedDiagnosticForTest(PruneOptions{BatchSize: 1, Mode: CommitDurable, WorkRecords: 32, WorkBytes: 1 << 20, Cursor: cursor})
-				elapsed += time.Since(started)
+				callElapsed := time.Since(started)
+				elapsed += callElapsed
 				runtime.ReadMemStats(&after)
 				allocBytes += after.TotalAlloc - before.TotalAlloc
 				allocCount += after.Mallocs - before.Mallocs
+				phaseCalls[phase]++
+				phaseNS[phase] += uint64(callElapsed.Nanoseconds())
+				phaseBytes[phase] += after.TotalAlloc - before.TotalAlloc
+				phaseAllocs[phase] += after.Mallocs - before.Mallocs
 				if x.Cursor != nil {
 					cursor = x.Cursor
 				}
+				visited += x.Visited
 				ack += x.Pruned
+				if x.Pruned != 0 {
+					firstACKComplete, firstACKIntegrity = x.Complete, cursor.integrityDone
+				}
 				if cursor != nil && cursor.preparation != nil {
 					_, p, c, _ := cursor.preparation.MaintenanceCurrentDeleteScalarsForTest()
 					if p {
@@ -173,6 +190,11 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 				}
 			}
 			t.Logf("UNBOUNDED_INCREMENTAL_CURRENT_DELTA public_ns=%d alloc_bytes=%d alloc_count=%d cursor_cleanup_ns=%d work_counters_incomplete=true", elapsed.Nanoseconds(), allocBytes, allocCount, time.Since(cleanupStarted).Nanoseconds())
+			for phase, calls := range phaseCalls {
+				if calls != 0 {
+					t.Logf("NATIVE_PUBLIC_ENTRY_PHASE phase=%d calls=%d ns=%d alloc_bytes=%d alloc_count=%d", phase, calls, phaseNS[phase], phaseBytes[phase], phaseAllocs[phase])
+				}
+			}
 			t.Logf("COW_NATIVE_UNBOUNDED_DIAGNOSTIC pointers=%t overlayBytes=%d ACK=%d writes=%d nativePrepared=%d nativeCut=%d error=%v", pointers, mutable, ack, writes, prepared, cut, pruneErr)
 			if ack == 1 {
 				got, e := d.Get(selectedKey)
@@ -240,6 +262,12 @@ func runNativePruneCOWDiagnostic(t *testing.T, multileaf bool) {
 			}
 			if e = reopened.Close(); e != nil {
 				t.Fatal(e)
+			}
+			if multileaf {
+				t.Logf("STREAMING_FIRST_ACK visited=%d expected_anchor_and_obsolete=2 namespace_complete=%t selection_integrity=%t", visited, firstACKComplete, firstACKIntegrity)
+				if ack == 1 && (visited != 2 || firstACKComplete || !firstACKIntegrity) {
+					t.Fatalf("first selected deletion waited for unrelated future namespace: visited=%d complete=%t selected_integrity=%t", visited, firstACKComplete, firstACKIntegrity)
+				}
 			}
 			if multileaf && sharedChildren == 0 {
 				t.Fatal("incremental publication replaced every unrelated backend ChildRef")
