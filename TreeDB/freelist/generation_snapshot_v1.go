@@ -1,9 +1,8 @@
 package freelist
 
 import (
-	"unsafe"
-
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"unsafe"
 )
 
 // SnapshotPageUnusedV1 classifies bytes that an export must not read from a
@@ -33,30 +32,42 @@ func (g *FreelistGenerationV1) pageUnavailableWithWorkV1(id, oldestCommit uint64
 		return false, false, ErrGenerationFormat
 	}
 	key := id >> freelistChunkShift
-	for n := g.root; n != nil; {
+	n := g.root
+	for n != nil {
 		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateNode{}))) {
 			return false, false, nil
 		}
+		// Compressed branches select their own stored depth. A direct terminal
+		// may share the selected nibble with an absent key; reject from the
+		// already-admitted node summary before touching its chunk payload.
 		if n.chunk != nil {
-			// Mutation and decode recompute canonical leaf summaries; generation
-			// validation checks the same invariant. Reject other keys using this
-			// already charged node before admitting the chunk.
 			if n.minChunk != key {
 				break
 			}
 			if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateChunk{}))) {
 				return false, false, nil
 			}
+			chunk := n.chunk
+			if chunk.chunkNo != key {
+				return false, false, ErrGenerationFormat
+			}
 			offset := id & (freelistChunkSize - 1)
-			if n.chunk.isFree(offset) || (n.chunk.retired[offset] != 0 && (live || n.chunk.retired[offset] < oldestCommit)) {
+			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && (live || chunk.retired[offset] < oldestCommit)) {
 				return true, true, nil
 			}
 			break
 		}
-		if n.freeCount+n.retiredCount == 0 || chunkPrefixV1(key, int(n.depth)) != n.prefix {
+		if n.freeCount+n.retiredCount == 0 {
 			break
 		}
-		n = n.child[chunkNibble(key, int(n.depth))]
+		depth := int(n.depth)
+		if depth >= chunkTrieDepth {
+			return false, false, ErrGenerationFormat
+		}
+		if chunkPrefixV1(key, depth) != n.prefix {
+			break
+		}
+		n = n.child[chunkNibble(key, depth)]
 	}
 	lo, hi := 0, len(g.record.Extents)
 	for lo < hi {

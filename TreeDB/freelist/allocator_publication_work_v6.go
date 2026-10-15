@@ -1,0 +1,149 @@
+package freelist
+
+import (
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+)
+
+// PublishActivatedCOWPrefixWithWorkV6 consumes the SAME original ledger prefix
+// exactly once. Unlike preparation, publication cannot yield after its first
+// ledger effect. The actual whole prefix/ledger geometry is therefore admitted
+// under the allocator and ledger locks before canonical publication begins.
+// An unsupported geometry refuses without changing the ledger or allocator.
+// This is an explicit finite geometry limit, not history-independent progress.
+//
+// Eager mutation of the live successor is unnecessary at this fence. Both
+// ordinary PrepareCOWCandidateRetiringWithLimitsV1 and COWPreparationWorkV6
+// already prune their own staged transaction with the current durable reuse
+// capability before materialization. Keeping retired bits until that existing
+// stage delays reuse conservatively; no mutable-txn callback enters Finish and
+// no native continuation is delegated to an ordinary writer.
+// COWPublicationScopeV6 is call-local lock custody. It must be closed in the
+// SAME nonyielding authority call, before disposition, Consume or Finish. Its
+// identity guard rejects copying the scope while its original locks are held.
+type COWPublicationScopeV6 struct {
+	allocator *Allocator
+	self      *COWPublicationScopeV6
+	prefix    []*PreparedCOWCandidateV1
+	active    bool
+}
+
+func (a *Allocator) PublishActivatedCOWPrefixWithWorkV6(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability, w *iterator.OrdinalScanWork) (bool, error) {
+	var scope COWPublicationScopeV6
+	ready, err := a.BeginCOWPublicationScopeV6(&scope, prefix, w)
+	if !ready || err != nil {
+		return false, err
+	}
+	defer scope.Close()
+	err = scope.Commit(nextCapability)
+	return err == nil, err
+}
+
+// BeginCOWPublicationScopeV6 admits the current canonical publication geometry
+// while BOTH original locks exclude private rollback and ordinary edits. False
+// returns release every lock without a ledger or allocator mutation. A true
+// return transfers these call-local locks to scope; callers must not yield.
+func (a *Allocator) BeginCOWPublicationScopeV6(scope *COWPublicationScopeV6, prefix []*PreparedCOWCandidateV1, w *iterator.OrdinalScanWork) (ready bool, err error) {
+	if a == nil || scope == nil || scope.active || scope.self != nil || len(prefix) == 0 || w == nil {
+		return false, ErrGenerationFormat
+	}
+	a.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			a.mu.Unlock()
+		}
+	}()
+	if a.cow == nil || a.cow.ledger == nil || len(prefix) > len(a.cow.activated) {
+		return false, ErrCandidateConsumed
+	}
+	if a.cow.waitErr != nil {
+		return false, a.cow.waitErr
+	}
+	if ok, e := appendReserve(w, 1+uint64(len(prefix)), 2*uint64(unsafe.Sizeof(*scope))+uint64(len(prefix))*(uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))+32)); !ok || e != nil {
+		return false, e
+	}
+	l := a.cow.ledger
+	l.mu.Lock()
+	ledgerLocked := true
+	defer func() {
+		if ledgerLocked {
+			l.mu.Unlock()
+		}
+	}()
+	// Eight visits per prefix cover validation, ID construction, map lookup and
+	// insertion, actual ledger publication, and final marking. Map bytes are an
+	// explicit conservative work bound, not exact Go heap allocation admission.
+	records := uint64(3) + 8*uint64(len(prefix)) + uint64(len(a.cow.activated))
+	bytes := uint64(unsafe.Sizeof(*a.cow)) + 256 + uint64(len(prefix))*(uint64(unsafe.Sizeof(CandidateIDV1{}))+128) + uint64(len(a.cow.activated))*16
+	add := func(r, b uint64) bool {
+		if r > ^uint64(0)-records || b > ^uint64(0)-bytes {
+			return false
+		}
+		records += r
+		bytes += b
+		return true
+	}
+	for i, prepared := range prefix {
+		if prepared == nil || prepared.candidate == nil || !prepared.activated || prepared.published || a.cow.activated[i] != prepared {
+			return false, ErrCandidateConsumed
+		}
+		r := l.candidates[prepared.candidateID]
+		if r == nil {
+			return false, ErrGenerationFormat
+		}
+		n := uint64(len(r.ids))
+		if n > ^uint64(0)/32 || !add(n, n*32) {
+			return false, ErrGenerationFormat
+		}
+		if len(r.abandonedCoverage) != 0 {
+			burned, coverage := uint64(len(l.burnedTails)), uint64(len(r.abandonedCoverage))
+			width := uint64(unsafe.Sizeof(reservationInterval{}))
+			if coverage > ^uint64(0)/width-2 || burned != 0 && (2+coverage > ^uint64(0)/burned || (2+coverage)*width > ^uint64(0)/burned) {
+				return false, ErrGenerationFormat
+			}
+			if !add(burned*(2+coverage), burned*(2+coverage)*width) {
+				return false, ErrGenerationFormat
+			}
+		}
+	}
+	generation := prefix[len(prefix)-1].candidate.Generation()
+	if generation == nil {
+		return false, ErrGenerationFormat
+	}
+	if err := a.validateCOWPhysicalTailLockedV1(generation.HighWater()); err != nil {
+		return false, err
+	}
+	if ok, e := appendReserve(w, records, bytes); !ok || e != nil {
+		return false, e
+	}
+	scope.allocator, scope.self, scope.prefix, scope.active = a, scope, prefix, true
+	locked, ledgerLocked = false, false
+	return true, nil
+}
+
+// Commit consumes the original canonical ledger exactly once without further
+// work admission or lock acquisition. The scope remains locked until Close so
+// the enclosing SAME durable install can complete before exposing successors.
+func (scope *COWPublicationScopeV6) Commit(nextCapability ReuseCapability) error {
+	if scope == nil || scope.self != scope || !scope.active || scope.allocator == nil || len(scope.prefix) == 0 {
+		return ErrCandidateConsumed
+	}
+	a := scope.allocator
+	err := a.publishActivatedCOWPrefixPolicyLockedV1(scope.prefix, nextCapability, false, true)
+	if err == nil {
+		scope.prefix = nil
+	}
+	return err
+}
+
+func (scope *COWPublicationScopeV6) Close() {
+	if scope == nil || scope.self != scope || !scope.active {
+		return
+	}
+	a := scope.allocator
+	scope.allocator, scope.self, scope.prefix, scope.active = nil, nil, nil, false
+	a.cow.ledger.mu.Unlock()
+	a.mu.Unlock()
+}

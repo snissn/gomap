@@ -152,6 +152,10 @@ func (p *Pager) WritePrimaryCapsuleViewWithWork(first uint64, image []byte, work
 }
 
 func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	return p.writeOwnedSpanWithEffectWorkV6(first, images, durable, publication, sealOffset, sealLength, beforeFence, work, nil)
+}
+
+func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {
 	if isPrimaryBankID(first) {
 		if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {
 			return nil, false, e
@@ -160,7 +164,7 @@ func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, p
 		if companion == nil {
 			return nil, false, ErrPageOutOfBounds
 		}
-		return companion.writeOwnedSpanWithWork(first-page.PrimaryBankNamespace, images, durable, publication, sealOffset, sealLength, beforeFence, work)
+		return companion.writeOwnedSpanWithEffectWorkV6(first-page.PrimaryBankNamespace, images, durable, publication, sealOffset, sealLength, beforeFence, work, mutation)
 	}
 	if p.readOnly {
 		return nil, false, ErrReadOnly
@@ -239,6 +243,9 @@ func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, p
 			return nil, false, err
 		}
 	}
+	if mutation != nil {
+		*mutation = true
+	}
 	for i, image := range images {
 		copy(destination[i*page.PageSize:(i+1)*page.PageSize], image)
 	}
@@ -288,4 +295,16 @@ func (p *Pager) WritePrimaryCapsuleWithFenceV6(first uint64, image []byte, befor
 		return nil, false, ErrPageOutOfBounds
 	}
 	return p.writeOwnedSpanWithWork(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, beforeFence, w)
+}
+
+// WritePrimaryCapsuleWithFenceStatusV6 reports whether the actual slot copy
+// began, including failures from the original durability observers or fence.
+// A work refusal before that point is retryable and never ambiguous authority.
+func (p *Pager) WritePrimaryCapsuleWithFenceStatusV6(first uint64, image []byte, beforeFence func() error, w *iterator.OrdinalScanWork) ([]byte, bool, bool, error) {
+	if len(image) != 3*page.PageSize || (first != 2 && first != 5) {
+		return nil, false, false, ErrPageOutOfBounds
+	}
+	mutated := false
+	view, ready, err := p.writeOwnedSpanWithEffectWorkV6(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, beforeFence, w, &mutated)
+	return view, ready, mutated, err
 }

@@ -28,6 +28,9 @@ func (b *Builder) AddLeafEntryWithRevisionWithWork(key, value []byte, flags byte
 	if b.pType != page.PageTypeLeaf {
 		return false, ErrInvalidType
 	}
+	if b.leafColumnar && b.leafPrefixCompression {
+		return b.addColumnarPrefixWithWork(key, value, flags, ptr, revision, 0, w)
+	}
 	if w != nil {
 		if b.leafColumnar || (b.leafPrefixCompression && len(key) > len(b.leafPrevKeyBuf)) {
 			return false, ErrBuilderWorkFormat
@@ -52,6 +55,17 @@ func (b *Builder) AddLeafEntryWithRevisionWithWork(key, value []byte, flags byte
 // FinishNoNodeWithWork shares the original header and checksum writer, without
 // allocating a Node or performing a columnar scratch pass.
 func (b *Builder) FinishNoNodeWithWork(w *iterator.OrdinalScanWork) (bool, error) {
+	if b.pType == page.PageTypeLeaf && b.leafColumnar && b.leafPrefixCompression {
+		ready, e := b.packLeafColumnarPrefixV2(w)
+		if !ready || e != nil {
+			return false, e
+		}
+		if ok, e := builderReserve(w, 2, uint64(len(b.data)+NodeHeaderSize)); !ok || e != nil {
+			return false, e
+		}
+		b.finalizeHeader(false)
+		return true, nil
+	}
 	if w != nil && (b.pType != page.PageTypeLeaf || b.leafColumnar) {
 		return false, ErrBuilderWorkFormat
 	}
@@ -60,4 +74,20 @@ func (b *Builder) FinishNoNodeWithWork(w *iterator.OrdinalScanWork) (bool, error
 	}
 	b.finalize()
 	return true, nil
+}
+
+// AddLeafEntryWithRevisionWithWorkAndReserve preserves the zipper's ordinary
+// soft-fill reserve after the same admitted prefix comparison, without a hidden
+// second prefix scan. The first entry always uses the ordinary hard capacity.
+func (b *Builder) AddLeafEntryWithRevisionWithWorkAndReserve(key, value []byte, flags byte, ptr page.ValuePtr, revision page.EntryRevision, reserveBytes int, w *iterator.OrdinalScanWork) (bool, error) {
+	if b.pType != page.PageTypeLeaf {
+		return false, ErrInvalidType
+	}
+	if b.leafColumnar && b.leafPrefixCompression {
+		return b.addColumnarPrefixWithWork(key, value, flags, ptr, revision, reserveBytes, w)
+	}
+	if reserveBytes != 0 && b.count != 0 {
+		return false, ErrBuilderWorkFormat
+	}
+	return b.AddLeafEntryWithRevisionWithWork(key, value, flags, ptr, revision, w)
 }

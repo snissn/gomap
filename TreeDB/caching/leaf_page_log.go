@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"sync"
 	"time"
 
@@ -678,4 +679,48 @@ func (l *cachingLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
 		return "", 0, false
 	}
 	return path, fileID, true
+}
+
+func (l *cachingLeafPageLog) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
+	if l == nil || l.db == nil || l.lane == nil || s == nil {
+		return page.LeafLogPtr{}, false, errWALUnavailable
+	}
+	if s.Err != nil {
+		return s.Ptr, true, s.Err
+	}
+	if s.Phase >= 3 {
+		return s.Ptr, true, nil
+	}
+	ready, e := s.Compact(leaf, w)
+	if !ready || e != nil {
+		return page.LeafLogPtr{}, false, e
+	}
+	if s.RID == 0 {
+		if w != nil && !w.Reserve(1, 8) {
+			return page.LeafLogPtr{}, false, nil
+		}
+		s.RID = l.db.nextRID.Add(1)
+	}
+	ptr, path, e := l.db.appendValueLogOneInternalWork(l.lane, 0, nil, s.RID, s.Value, journalDurabilityNone, false, s, w)
+	if e == errLeafAppendWorkPending {
+		return page.LeafLogPtr{}, false, nil
+	}
+	if path != "" {
+		l.db.markValueLogRetain(path)
+	}
+	if e != nil {
+		s.Err = e
+		return page.LeafLogPtr{}, true, e
+	}
+	s.Ptr, e = page.LeafLogPtrFromValuePtr(ptr)
+	s.Err = e
+	s.Phase = 3
+	return s.Ptr, true, e
+}
+func (g *cachingLeafPageLogGroup) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return page.LeafLogPtr{}, false, errWALUnavailable
+	}
+	return log.AppendLeafPageWithWork(leaf, s, w)
 }

@@ -191,28 +191,9 @@ func encodeChunkPage(id, generationID uint64, chunk *stateChunk) []byte {
 }
 
 func encodeChunkPageInto(b []byte, id, generationID uint64, chunk *stateChunk) error {
-	if len(b) != page.PageSize || chunk == nil || generationID == 0 || chunk.chunkNo >= 1<<56 {
-		return ErrGenerationFormat
-	}
-	clear(b)
-	encodePageHeader(b, id, page.PageTypeFreelistChunk, freelistChunkSize)
-	copy(b[16:24], chunkMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 2)
-	binary.LittleEndian.PutUint16(b[26:28], chunkHeaderSize)
-	binary.LittleEndian.PutUint64(b[32:40], generationID)
-	binary.LittleEndian.PutUint64(b[40:48], chunk.chunkNo)
-	binary.LittleEndian.PutUint32(b[48:52], uint32(chunk.freeCount()))
-	retiredCount, minSeq := chunk.retiredSummary()
-	binary.LittleEndian.PutUint32(b[52:56], uint32(retiredCount))
-	binary.LittleEndian.PutUint64(b[56:64], minSeq)
-	for i, word := range chunk.free {
-		binary.LittleEndian.PutUint64(b[64+i*8:], word)
-	}
-	for i, seq := range chunk.retired {
-		binary.LittleEndian.PutUint64(b[chunkHeaderSize+i*8:], seq)
-	}
-	finishPage(b)
-	return nil
+	var work statePageEncodeWorkV1
+	_, err := work.chunkPage(b, id, generationID, chunk, nil)
+	return err
 }
 
 func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk, error) {
@@ -256,58 +237,18 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 // encodeIndexPageInto overwrites the complete destination, including reserved
 // bytes and unused entries, so a reused buffer encodes the same canonical page.
 func encodeIndexPageInto(b []byte, id, generationID uint64, n *stateNode, _ int) error {
-	if len(b) != page.PageSize || n == nil || n.chunk != nil || int(n.depth) >= chunkTrieDepth || generationID == 0 {
-		return ErrGenerationFormat
-	}
-	clear(b)
-	count := 0
-	for _, child := range n.child {
-		if child == nil {
-			continue
-		}
-		if child.pageID == 0 || child.freeCount+child.retiredCount == 0 {
-			return ErrGenerationFormat
-		}
-		count++
-	}
-	if count == 1 || (count == 0 && (n.depth != 0 || n.prefix != 0 || n.freeCount+n.retiredCount != 0)) {
-		return ErrGenerationFormat
-	}
-	encodePageHeader(b, id, page.PageTypeFreelistIndex, uint16(count))
-	copy(b[16:24], indexMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 2)
-	binary.LittleEndian.PutUint16(b[26:28], indexHeaderSize)
-	b[28] = n.depth
-	if count == 0 {
-		b[29] = 1
-	} // sole empty exact-generation root sentinel
-	binary.LittleEndian.PutUint16(b[30:32], indexEntrySize)
-	binary.LittleEndian.PutUint64(b[32:40], generationID)
-	binary.LittleEndian.PutUint64(b[40:48], n.freeCount)
-	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
-	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
-	binary.LittleEndian.PutUint64(b[64:72], n.prefix)
-	o := indexHeaderSize
-	for slot, child := range n.child {
-		if child == nil {
-			continue
-		}
-		if child.freeCount > uint64(^uint32(0)) || child.retiredCount > uint64(^uint32(0)) {
-			return ErrGenerationFormat
-		}
-		b[o], b[o+1] = byte(slot), stateNodeKindV2(child)
-		binary.LittleEndian.PutUint32(b[o+2:o+6], child.checksum)
-		binary.LittleEndian.PutUint64(b[o+8:o+16], child.pageID)
-		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(child.freeCount))
-		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(child.retiredCount))
-		binary.LittleEndian.PutUint64(b[o+24:o+32], child.minRetiredSeq)
-		o += indexEntrySize
-	}
-	finishPage(b)
-	return nil
+	var work statePageEncodeWorkV1
+	_, err := work.indexPage(b, id, generationID, n, nil)
+	return err
 }
 
 func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []byte {
+	return encodeGenerationPageWithPendingCountV1(id, g, rootCRC, g.record.pendingMetadataCount())
+}
+
+// Construction has already visited each normalized extent. Reuse that exact
+// accumulated count instead of expanding or rescanning retirement ranges.
+func encodeGenerationPageWithPendingCountV1(id uint64, g *FreelistGenerationV1, rootCRC uint32, pendingCount uint64) []byte {
 	b := make([]byte, page.PageSize)
 	encodePageHeader(b, id, page.PageTypeFreelistGeneration, 1)
 	copy(b[16:24], generationMagic[:])
@@ -325,7 +266,7 @@ func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []
 	binary.LittleEndian.PutUint64(b[88:96], g.root.retiredCount)
 	binary.LittleEndian.PutUint64(b[96:104], g.record.pageID)
 	binary.LittleEndian.PutUint32(b[104:108], uint32(len(g.metadataPages)))
-	binary.LittleEndian.PutUint32(b[108:112], uint32(len(g.record.pendingMetadata())))
+	binary.LittleEndian.PutUint32(b[108:112], uint32(pendingCount))
 	binary.LittleEndian.PutUint32(b[112:116], rootCRC)
 	copy(b[120:152], g.record.digest[:])
 	digest := generationDigest(b)
@@ -381,7 +322,7 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 		return nil, ErrGenerationDigest
 	}
 	g.record = record
-	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(len(record.pendingMetadata())) != binary.LittleEndian.Uint32(b[108:112]) {
+	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(record.pendingMetadataCount()) != binary.LittleEndian.Uint32(b[108:112]) {
 		return nil, ErrGenerationFormat
 	}
 	var target ReservationExtentV1

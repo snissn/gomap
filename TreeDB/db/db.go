@@ -3491,6 +3491,14 @@ func (db *DB) closeAfterHooks() error {
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
 
+	// Native Finish retains its original dispatch join after publication turn
+	// release. Join outside teardownMu and writer/publication locks.
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		if err := runtime.coordinator.JoinNativePublicationsV6(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("join native root publication: %w", err))
+		}
+	}
+
 	// A root producer releases writeMu after transferring its immutable build to
 	// the durable publisher, but it keeps teardownMu for reading until enqueue,
 	// admission, and ordered post-work have completed. Cross the teardown gate
@@ -5276,34 +5284,14 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		db.snapshotViewRO.Store(nil)
 		return
 	}
-	old := db.snapshotViewRO.Load()
-	var negativeFilter *tree.NegativeFilter
-	if old != nil && old.idx == idx && old.state != nil {
-		if old.state.CommitSeq == state.CommitSeq && old.state.RootPageID == state.RootPageID {
-			negativeFilter = old.negativeFilter
-		}
-		if len(coverage) == 1 && coverage[0].matches(old, idx, state) {
-			negativeFilter = coverage[0].filter
-		}
+	var selected *negativeRootCoverage
+	if len(coverage) == 1 {
+		selected = coverage[0]
 	}
-	coherentRootChanged := old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID
-	publishEpoch := db.systemRootPublishEpoch.Load()
-	if coherentRootChanged {
-		publishEpoch = db.systemRootPublishEpoch.Add(1)
-	}
-	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
-		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
-	}
-	db.snapshotViewRO.Store(&snapshotView{
-		negativeFilter:         negativeFilter,
-		idx:                    idx,
-		state:                  state,
-		vlogManager:            vm,
-		systemRootPublishEpoch: publishEpoch,
-	})
-	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
-		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
-	}
+	scope, _ := db.beginSnapshotPublicationV6(state, nil)
+	scope.commitPins()
+	db.publishSnapshotViewWithHeaderV6(&snapshotView{}, idx, state, vm, selected)
+	scope.finish(true)
 }
 
 func (db *DB) clearSnapshotView() {

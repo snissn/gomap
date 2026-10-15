@@ -424,6 +424,10 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
 type PruneOptions struct {
 	BatchSize int
 	Mode      CommitMode
+	// Native bounded work is opt-in. Cursor retains the SAME Request and its
+	// original physical operands; callers close it on completion or error.
+	WorkRecords, WorkBytes uint64
+	Cursor                 *PruneCursor
 }
 
 // PruneStats accounts for the snapshot scanned and successfully committed
@@ -440,6 +444,9 @@ type PruneStats struct {
 	RetainedBytes, PrunedBytes         uint64
 	DeleteWriteBytes                   uint64
 	Batches                            uint64
+	WorkRecords, WorkBytes             uint64
+	Cursor                             *PruneCursor
+	Complete                           bool
 }
 
 // PruneVersions removes versions made obsolete by the persisted floor using a
@@ -449,6 +456,9 @@ type PruneStats struct {
 // Durable mode re-syncs the floor before the first delete, so interruption and
 // restart are idempotent and cannot recover pruned data without its floor.
 func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
+	if options.Cursor != nil || options.WorkRecords != 0 || options.WorkBytes != 0 {
+		return s.pruneNativeV6(options)
+	}
 	if options.Mode != CommitRelaxed && options.Mode != CommitDurable {
 		return stats, ErrInvalidCommitMode
 	}

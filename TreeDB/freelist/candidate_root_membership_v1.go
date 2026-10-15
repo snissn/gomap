@@ -13,14 +13,16 @@ type CandidateRootMembershipV1 struct {
 }
 
 func (m CandidateRootMembershipV1) Matches(c *PreparedCOWCandidateV1, g *FreelistGenerationV1, user, system uint64) bool {
-	return c != nil && (c.activated || c.published || c.rollbackTxn != nil) && m.candidate == c && m.generation == g && c.candidate != nil && c.candidate.generation == g && m.user == user && m.system == system
+	return c != nil && (c.activated || c.published || c.rollbackTxn != nil || c.privatePrepared) && m.candidate == c && m.generation == g && c.candidate != nil && c.candidate.generation == g && m.user == user && m.system == system
 }
 
 // CertifyRootMembershipV1 inspects the materialized candidate's own immutable
 // allocation state. Unlike a pinned export, ANY retired root is inadmissible.
+// A privately prepared descriptor permits this proof before slot adoption; it
+// still grants no activation authority and cancellation revokes its eligibility.
 // Under-admission returns no proof and changes no candidate state.
 func (c *PreparedCOWCandidateV1) CertifyRootMembershipV1(user, system uint64, w *iterator.OrdinalScanWork) (CandidateRootMembershipV1, bool, error) {
-	if c == nil || c.candidate == nil || c.candidate.generation == nil || (!c.activated && !c.published && c.rollbackTxn == nil) {
+	if c == nil || c.candidate == nil || c.candidate.generation == nil || (!c.activated && !c.published && c.rollbackTxn == nil && !c.privatePrepared) {
 		return CandidateRootMembershipV1{}, false, ErrGenerationFormat
 	}
 	g := c.candidate.generation

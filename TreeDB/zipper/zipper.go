@@ -2603,13 +2603,19 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 	return page.ChildRef{}, nil, page.ErrInvalidPageType
 }
 
+func leafEntrySizeWithRevision(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
+	entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
+	if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
+		entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
+	}
+	return entrySize, prefixLen, suffixLen
+}
+
 func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool, cacheOwnedOuterLeafPages bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperLeafMerges++
 	}
-	oldIdx := uint16(0)
-	oldCount := oldNode.Count()
-	opIdx := 0
+	selection := newLeafMergeCursor(oldNode, ops, ranges, nil)
 	if oldNode.LeafEntryRevisionsEnabled() {
 		z.enableLeafBuilderEntryRevisions(builder, ops)
 	}
@@ -2738,124 +2744,27 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 	}
-	leafEntrySizeWithRevision := func(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
-		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
-		if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
-			entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
-		}
-		return entrySize, prefixLen, suffixLen
-	}
 
 	for {
-		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
-		var useBatch bool
-		var oldLoaded bool
-		var oldKey, oldVal []byte
-		var oldPtr page.ValuePtr
-		var oldRevision page.EntryRevision
-		var oldFlags byte
-
-		if oldIdx >= oldCount && opIdx >= len(ops) {
+		event, _, err := selection.next(nil)
+		if err != nil {
+			return page.ChildRef{}, nil, err
+		}
+		if event.done {
 			break
 		}
-
-		if oldIdx >= oldCount {
-			useBatch = true
-		} else if opIdx >= len(ops) {
-			// useOld = true
-		} else {
-			// Compare
-			// Optimization: decode old entry once; reuse it below when we
-			// consume from oldNode in the same loop iteration.
-			k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
-			if err != nil {
-				return page.ChildRef{}, nil, err
-			}
-			oldLoaded = true
-			oldKey = k
-			oldVal = v
-			oldPtr = ptr
-			oldRevision = rev
-			oldFlags = f
-			batchKey := ops[opIdx].Key
-
-			cmp := bytes.Compare(k, batchKey)
-			if cmp < 0 {
-				// useOld = true
-			} else if cmp > 0 {
-				useBatch = true
-			} else {
-				// Equal: Update (Batch wins). The old entry is being overwritten
-				// or deleted; if it was a pointer, track it as dead bytes.
-				recordRemovedEntry(f, ptr)
-
-				useBatch = true
-				oldIdx++ // Skip old
-			}
+		if event.removes {
+			recordRemovedEntry(event.removed.Flags, event.removed.ValuePtr)
 		}
-
-		// Key/Val to insert
-		var key, val []byte
-		var flags byte
-		var valPtr page.ValuePtr
-		revision := page.LegacyEntryRevision
-		insertedFromBatch := false
-
-		if useBatch {
-			op := ops[opIdx]
-			opIdx++
-			if op.Type == batch.OpDelete {
-				continue // Skip insert
-			}
-			insertedFromBatch = true
-			key = op.Key
-			revision = op.Revision
-			if op.IsPtr {
-				flags = node.FlagPointer
-				valPtr = op.ValuePtr
-			} else {
-				flags = node.FlagInline
-				val = op.Value
-			}
-		} else {
-			// useOld
-			if oldLoaded {
-				key = oldKey
-				flags = oldFlags
-				revision = oldRevision
-				if oldFlags&node.FlagPointer != 0 {
-					valPtr = oldPtr
-				} else {
-					val = oldVal
-				}
-			} else {
-				// Optimization: View
-				k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
-				if err != nil {
-					return page.ChildRef{}, nil, err
-				}
-				key = k
-				flags = f
-				revision = rev
-				if f&node.FlagPointer != 0 {
-					valPtr = ptr
-				} else {
-					val = v
-				}
-			}
-			oldIdx++
-			if flags&node.FlagTombstone != 0 {
-				continue // Skip tombstones
-			}
-			if batch.DeleteRangesContainKey(ranges, key) {
-				recordRemovedEntry(flags, valPtr)
-				continue
-			}
+		if !event.emit {
+			continue
 		}
+		key, val, flags, valPtr, revision := event.entry.Key, event.entry.Value, event.entry.Flags, event.entry.ValuePtr, event.entry.Revision
+		insertedFromBatch := event.fromBatch
 
 		// Insert into target builder
 		entrySize, prefixLen, suffixLen := leafEntrySizeWithRevision(target, key, val, flags, revision)
-		var err error
+		err = nil
 		if z.leafSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
 		} else {
@@ -2904,7 +2813,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			startIdx := opIdx
+			startIdx := selection.opIndex
 			if insertedFromBatch && startIdx > 0 {
 				startIdx--
 			}

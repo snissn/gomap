@@ -221,7 +221,14 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 		return empty, false, rootpublication.ErrResourceOwnership
 	}
 	if s.disposalPhase == 1 {
-		ready, err := continuePrimaryPublicationSealReleaseV6(s.primary, w, release)
+		ready, err := abandonPrimarySealCommitStorageV6(s, w)
+		if err != nil {
+			return fail(err)
+		}
+		if !ready {
+			return empty, false, nil
+		}
+		ready, err = continuePrimaryPublicationSealReleaseV6(s.primary, w, release)
 		if err != nil {
 			return fail(err)
 		}

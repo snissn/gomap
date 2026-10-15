@@ -67,6 +67,8 @@ type Builder struct {
 	internalBaseArenaH        *byteArenaHandle
 	internalBaseTotalKeyBytes int
 	internalBaseSharedPrefix  int
+
+	columnarWork columnarPrefixWork
 }
 
 const (
@@ -293,6 +295,9 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 
 // ResetWithOptions reinitializes an existing builder instance for reuse.
 func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
+	if b.columnarWork.packing || b.columnarWork.adding {
+		panic("node: reset during retained columnar packing; release scratch first")
+	}
 	b.ReleaseScratch()
 
 	leafPrefix := opts.LeafPrefixCompression
@@ -359,6 +364,7 @@ func (b *Builder) ReleaseScratch() {
 	b.releaseLeafColumnarV2Scratch()
 	b.releaseLeafColumnarPrefixV2Scratch()
 	b.releaseInternalBaseDeltaScratch()
+	b.columnarWork = columnarPrefixWork{}
 	b.data = nil
 	b.leafPrevKey = nil
 	b.internalFenceLow = nil
@@ -557,6 +563,9 @@ func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr
 }
 
 func (b *Builder) addLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
+	if b.columnarWork.packing {
+		return ErrBuilderPacking
+	}
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
@@ -784,6 +793,9 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 // AddLeafEntryWithPrefixRevision appends a native revision-bearing leaf entry
 // using precomputed size/prefix data.
 func (b *Builder) AddLeafEntryWithPrefixRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, entrySize, prefixLen, suffixLen int) error {
+	if b.columnarWork.packing || b.columnarWork.packed {
+		return ErrBuilderPacking
+	}
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
@@ -1076,6 +1088,10 @@ func (b *Builder) finalize() {
 	if b.pType == page.PageTypeLeaf && b.leafColumnarV2 && !b.leafPrefixCompression {
 		b.finishLeafColumnarV2()
 	}
+	b.finalizeHeader(internalBaseDeltaApplied)
+}
+
+func (b *Builder) finalizeHeader(internalBaseDeltaApplied bool) {
 	// Write Header
 	putUint64(b.data[0:8], b.pageID)
 	// Checksum at 8-12 (written by UpdateChecksum)
@@ -1209,270 +1225,11 @@ func (b *Builder) finishLeafColumnarV2() {
 }
 
 func (b *Builder) finishLeafColumnarPrefixV2() {
-	count := int(b.count)
-	if count == 0 {
-		b.dirEnd = NodeHeaderSize
-		b.heapStart = len(b.data)
-		b.releaseLeafColumnarPrefixV2Scratch()
-		return
+	// Synchronous callers drain the exact retained packing engine.
+	ready, err := b.packLeafColumnarPrefixV2(nil)
+	if err != nil || !ready {
+		panic("node: synchronous columnar packing failed")
 	}
-
-	valPtrSize := page.ValuePtrSize
-	if b.leafPackedValuePtr {
-		valPtrSize = page.PackedValuePtrSize
-	}
-
-	keyDirStart := NodeHeaderSize
-	valDirStart := keyDirStart + count*DirectoryEntrySize
-	flagsStart := valDirStart + count*DirectoryEntrySize
-	prefixStart := flagsStart + count
-	revisionsStart := prefixStart + count*DirectoryEntrySize
-	metaEnd := revisionsStart
-	if b.leafEntryRevisions {
-		metaEnd += count * page.EntryRevisionSize
-	}
-
-	suffixStart := len(b.data) - b.leafColumnarPrefixV2KeyBytes
-	valuesStart := suffixStart - b.leafColumnarPrefixV2ValBytes
-	if valuesStart < metaEnd {
-		panic("leaf columnar+prefix v2 packing overflow")
-	}
-
-	entries := b.leafColumnarPrefixV2Entries
-	suffixArena := b.leafColumnarV2Arena
-	valueArena := b.leafColumnarPrefixV2ValueArena
-	allInline := b.leafColumnarPrefixV2AllInline
-	allPointer := b.leafColumnarPrefixV2AllPointer
-	flagsCol := b.data[flagsStart:prefixStart]
-	prefixCol := b.data[prefixStart:revisionsStart]
-	writeRevision := func(i int, revision page.EntryRevision) {
-		if b.leafEntryRevisions {
-			binary.LittleEndian.PutUint64(b.data[revisionsStart+i*page.EntryRevisionSize:], uint64(revision))
-		}
-	}
-
-	if allInline {
-		if len(valueArena) != b.leafColumnarPrefixV2ValBytes || len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
-			panic("leaf columnar+prefix v2 inline arena size mismatch")
-		}
-		copy(b.data[valuesStart:suffixStart], valueArena)
-		copy(b.data[suffixStart:], suffixArena)
-
-		if builderNativeLittleEndian {
-			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
-			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
-			if prefixStart&1 == 0 {
-				prefixDirU16 := bytesAsUint16Slice(prefixCol)
-				for i := 0; i < count; i++ {
-					e := &entries[i]
-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
-					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
-					flagsCol[i] = e.flags
-					prefixDirU16[i] = e.prefixLen
-					writeRevision(i, e.revision)
-				}
-			} else {
-				for i := 0; i < count; i++ {
-					e := &entries[i]
-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
-					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
-					flagsCol[i] = e.flags
-					putUint16At(prefixCol, i*2, e.prefixLen)
-					writeRevision(i, e.revision)
-				}
-			}
-		} else {
-			for i := 0; i < count; i++ {
-				e := &entries[i]
-				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
-				putUint16At(b.data, valDirStart+i*2, uint16(valuesStart+int(e.valueOff)))
-				flagsCol[i] = e.flags
-				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
-				writeRevision(i, e.revision)
-			}
-		}
-
-		b.dirEnd = metaEnd
-		b.heapStart = valuesStart
-		b.releaseLeafColumnarPrefixV2Scratch()
-		return
-	}
-
-	if allPointer {
-		if len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
-			panic("leaf columnar+prefix v2 pointer arena size mismatch")
-		}
-		copy(b.data[suffixStart:], suffixArena)
-
-		valOff := valuesStart
-		if builderNativeLittleEndian {
-			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
-			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
-			if prefixStart&1 == 0 {
-				prefixDirU16 := bytesAsUint16Slice(prefixCol)
-				for i := 0; i < count; i++ {
-					e := &entries[i]
-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
-					valDirU16[i] = uint16(valOff)
-					flagsCol[i] = e.flags
-					prefixDirU16[i] = e.prefixLen
-					writeRevision(i, e.revision)
-					if b.leafPackedValuePtr {
-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-					} else {
-						encodeValuePtrAt(b.data, valOff, e.valPtr)
-					}
-					valOff += valPtrSize
-				}
-			} else {
-				for i := 0; i < count; i++ {
-					e := &entries[i]
-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
-					valDirU16[i] = uint16(valOff)
-					flagsCol[i] = e.flags
-					putUint16At(prefixCol, i*2, e.prefixLen)
-					writeRevision(i, e.revision)
-					if b.leafPackedValuePtr {
-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-					} else {
-						encodeValuePtrAt(b.data, valOff, e.valPtr)
-					}
-					valOff += valPtrSize
-				}
-			}
-		} else {
-			for i := 0; i < count; i++ {
-				e := &entries[i]
-				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
-				putUint16At(b.data, valDirStart+i*2, uint16(valOff))
-				flagsCol[i] = e.flags
-				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
-				writeRevision(i, e.revision)
-				if b.leafPackedValuePtr {
-					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-				} else {
-					encodeValuePtrAt(b.data, valOff, e.valPtr)
-				}
-				valOff += valPtrSize
-			}
-		}
-
-		if valOff != suffixStart {
-			panic("leaf columnar+prefix v2 pointer packing mismatch")
-		}
-
-		b.dirEnd = metaEnd
-		b.heapStart = valuesStart
-		b.releaseLeafColumnarPrefixV2Scratch()
-		return
-	}
-
-	valOff := valuesStart
-	keyOff := suffixStart
-
-	if builderNativeLittleEndian {
-		keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
-		valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
-
-		if prefixStart&1 == 0 {
-			prefixDirU16 := bytesAsUint16Slice(prefixCol)
-			for i := 0; i < count; i++ {
-				e := &entries[i]
-				keyDirU16[i] = uint16(keyOff)
-				valDirU16[i] = uint16(valOff)
-				flagsCol[i] = e.flags
-				prefixDirU16[i] = e.prefixLen
-				writeRevision(i, e.revision)
-
-				if e.flags&FlagPointer != 0 {
-					if b.leafPackedValuePtr {
-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-					} else {
-						encodeValuePtrAt(b.data, valOff, e.valPtr)
-					}
-					valOff += valPtrSize
-				} else if e.flags&FlagTombstone == 0 {
-					valueLen := int(e.valueLen)
-					valueStart := int(e.valueOff)
-					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
-					valOff += valueLen
-				}
-
-				suffixLen := int(e.suffixLen)
-				suffixStart := int(e.suffixOff)
-				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-				keyOff += suffixLen
-			}
-		} else {
-			for i := 0; i < count; i++ {
-				e := &entries[i]
-				keyDirU16[i] = uint16(keyOff)
-				valDirU16[i] = uint16(valOff)
-				flagsCol[i] = e.flags
-				putUint16At(prefixCol, i*2, e.prefixLen)
-				writeRevision(i, e.revision)
-
-				if e.flags&FlagPointer != 0 {
-					if b.leafPackedValuePtr {
-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-					} else {
-						encodeValuePtrAt(b.data, valOff, e.valPtr)
-					}
-					valOff += valPtrSize
-				} else if e.flags&FlagTombstone == 0 {
-					valueLen := int(e.valueLen)
-					valueStart := int(e.valueOff)
-					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
-					valOff += valueLen
-				}
-
-				suffixLen := int(e.suffixLen)
-				suffixStart := int(e.suffixOff)
-				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-				keyOff += suffixLen
-			}
-		}
-	} else {
-		for i := 0; i < count; i++ {
-			e := &entries[i]
-			keyDirPos := keyDirStart + i*2
-			valDirPos := valDirStart + i*2
-			prefixPos := prefixStart + i*2
-			putUint16At(b.data, keyDirPos, uint16(keyOff))
-			putUint16At(b.data, valDirPos, uint16(valOff))
-			flagsCol[i] = e.flags
-			putUint16At(b.data, prefixPos, e.prefixLen)
-			writeRevision(i, e.revision)
-
-			if e.flags&FlagPointer != 0 {
-				if b.leafPackedValuePtr {
-					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
-				} else {
-					encodeValuePtrAt(b.data, valOff, e.valPtr)
-				}
-				valOff += valPtrSize
-			} else if e.flags&FlagTombstone == 0 {
-				valueLen := int(e.valueLen)
-				valueStart := int(e.valueOff)
-				copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
-				valOff += valueLen
-			}
-
-			suffixLen := int(e.suffixLen)
-			suffixStart := int(e.suffixOff)
-			copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-			keyOff += suffixLen
-		}
-	}
-
-	if valOff != suffixStart || keyOff != len(b.data) {
-		panic("leaf columnar+prefix v2 packing mismatch")
-	}
-
-	b.dirEnd = metaEnd
-	b.heapStart = valuesStart
-
-	b.releaseLeafColumnarPrefixV2Scratch()
 }
 
 func bytesAsUint16Slice(buf []byte) []uint16 {

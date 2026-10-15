@@ -190,6 +190,8 @@ type PreparedCOWCandidateV1 struct {
 	rollbackStats Stats
 	activated     bool
 	published     bool
+	// Granted only by the original private preparer; not an installed slot.
+	privatePrepared bool
 }
 
 func (prepared *PreparedCOWCandidateV1) Candidate() *FreelistCandidateV1 {
@@ -494,34 +496,8 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 // consumes it. This split is what permits several visible COW generations to
 // accumulate behind one dependency-closed durable-root publication.
 func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
-	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
-		return ErrGenerationFormat
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
-		return ErrCandidateConsumed
-	}
-	if a.cow.waitErr != nil {
-		return a.cow.waitErr
-	}
-	generation := prepared.candidate.Generation()
-	next, err := BeginCandidateV1(generation, generation.GenerationRef(), a.cow.ledger)
-	if err != nil {
-		return err
-	}
-	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
-		return err
-	}
-	a.cow.generation = generation
-	a.cow.txn = next
-	a.cow.prepared = nil
-	a.cow.activated = append(a.cow.activated, prepared)
-	prepared.rollbackTxn = nil
-	prepared.activated = true
-	a.stats.FreeIDs = generation.FreeCount()
-	a.cow.ready.Broadcast()
-	return nil
+	_, err := a.ActivateCOWCandidateWithWorkV1(prepared, nil, nil)
+	return err
 }
 
 // PublishActivatedCOWPrefixV1 consumes exactly the caller-proven ordered
@@ -538,6 +514,10 @@ func (a *Allocator) PublishActivatedCOWPrefixV1(prefix []*PreparedCOWCandidateV1
 }
 
 func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+	return a.publishActivatedCOWPrefixPolicyLockedV1(prefix, nextCapability, true, false)
+}
+
+func (a *Allocator) publishActivatedCOWPrefixPolicyLockedV1(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability, eagerPrune, ledgerHeld bool) error {
 	if a.cow == nil {
 		return ErrCandidateConsumed
 	}
@@ -567,8 +547,14 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	for i, candidate := range prefix {
 		ids[i] = candidate.candidateID
 	}
-	if err := a.cow.ledger.PublishBatch(ids); err != nil {
-		return err
+	var publishErr error
+	if ledgerHeld {
+		publishErr = a.cow.ledger.publishBatchLockedV1(ids)
+	} else {
+		publishErr = a.cow.ledger.PublishBatch(ids)
+	}
+	if publishErr != nil {
+		return publishErr
 	}
 	for _, candidate := range prefix {
 		candidate.published = true
@@ -579,7 +565,9 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	// The live transaction may already be based on a newer visible generation.
 	// Pruning it with the newly advanced recovery horizon is conservative and
 	// does not alter any immutable activated generation.
-	a.cow.txn.PruneWithCapability(nextCapability)
+	if eagerPrune {
+		a.cow.txn.PruneWithCapability(nextCapability)
+	}
 	a.cow.ready.Broadcast()
 	return nil
 }

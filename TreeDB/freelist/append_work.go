@@ -15,13 +15,14 @@ var ErrAppendRangeContinuation = errors.New("freelist: append reservation gap ne
 // AppendWork is embedded in its producer's admitted containing control. It uses
 // the original allocator transaction and Pager Growth; it issues no second
 // reservation authority. Until installed, ordinary writers can still use the
-// allocator. A changed transaction/count invalidates this private operation.
+// allocator. A changed high-water/count cancels unpublished growth before selecting
+// again from the live allocator; installed IDs never retain a transaction.
 type AppendWork struct {
-	allocator   *Allocator
-	transaction *FreelistTxn
-	growth      *pager.Growth
-	id, count   uint64
-	phase       uint8
+	allocator  *Allocator
+	growth     *pager.Growth
+	id, count  uint64
+	phase      uint8
+	retirement appendRetirementWorkV6
 }
 
 func appendReserve(w *iterator.OrdinalScanWork, r, b uint64) (bool, error) {
@@ -64,15 +65,37 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
 	// Recheck on EVERY resumed step under the original lock: a reused-page
 	// allocation can consume backing capacity without moving highWater/count.
 	if len(t.allocated) == cap(t.allocated) {
-		return 0, false, ErrAppendCapacityContinuation
+		capacity := max(4, 2*cap(t.allocated))
+		n := uint64(unsafe.Sizeof(allocatedPage{}))
+		// Charge the actual original backing allocation, overlap and each copied
+		// slot before replacing it. This remains the live transaction's array.
+		if ok, e := appendReserve(w, 1+uint64(len(t.allocated)), uint64(capacity+len(t.allocated))*n); !ok || e != nil {
+			return 0, false, e
+		}
+		grown := make([]allocatedPage, len(t.allocated), capacity)
+		copy(grown, t.allocated)
+		t.allocated = grown
 	}
 	if s.phase == 0 {
 		// No Go append allocation is permitted in the guarded install callback.
 		if t.highWater == math.MaxUint64 || t.highWater < a.pager.PageCount() {
 			return 0, false, ErrGenerationFormat
 		}
-	} else if s.allocator != a || s.transaction != t || s.id != t.highWater || s.count != a.pager.PageCount() {
-		return 0, false, ErrGenerationParent
+	} else if s.allocator != a || s.id != t.highWater || s.count != a.pager.PageCount() {
+		// This private growth owns no transaction. Cancel its unpublished
+		// mapping before selecting from the current live allocator on retry.
+		if s.growth != nil {
+			ready, e := s.growth.Cancel(w)
+			if !ready || e != nil {
+				return 0, false, e
+			}
+			s.growth = nil
+		}
+		s.allocator = nil
+		s.id = 0
+		s.count = 0
+		s.phase = 0
+		return 0, false, nil
 	}
 	ledger := t.ledger
 	ledger.mu.Lock()
@@ -89,7 +112,7 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
 		if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {
 			return 0, false, e
 		}
-		s.allocator, s.transaction, s.id, s.count = a, t, t.highWater, a.pager.PageCount()
+		s.allocator, s.id, s.count = a, t.highWater, a.pager.PageCount()
 		s.phase = 1
 	}
 	if s.growth == nil {
@@ -114,32 +137,18 @@ func (s *AppendWork) Step(a *Allocator, w *iterator.OrdinalScanWork) (uint64, bo
 	return s.id, ready, e
 }
 
-// Cancel preserves original custody on every refusal. The original synchronous
-// trie retirement is NOT a bounded algorithm. Its proven summary-only lower
-// bound already exceeds Q32; larger policies also refuse until the actual
-// original trie mutation has a retained continuation. Nil is diagnostic teardown.
+// Cancel retires installed IDs through the same persistent trie engine. A
+// yielded private edit owns no allocator transaction and keeps original page
+// custody until adoption succeeds. Uninstalled pager growth is cancelled by
+// its original retained mapping owner.
 func (s *AppendWork) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	if s.allocator == nil {
 		return true, nil
 	}
 	a := s.allocator
 	if s.phase == 2 {
-		if w != nil {
-			r := uint64(chunkTrieDepth*16 + freelistChunkSize + chunkTrieDepth + 2)
-			b := uint64((chunkTrieDepth+1))*uint64(unsafe.Sizeof(stateNode{})) + uint64(unsafe.Sizeof(stateChunk{}))
-			if r > w.RecordLimit || b > w.ByteLimit {
-				return false, &iterator.OrdinalUnitTooLarge{Records: r, Bytes: b}
-			}
-			return false, ErrAppendRetireContinuation
-		}
-		a.mu.Lock()
-		if a.cow == nil || a.cow.txn == nil || a.cow.prepared != nil {
-			a.mu.Unlock()
-			return false, ErrGenerationParent
-		}
-		e := a.retireCOWLocked([]uint64{s.id}, a.cow.generation.commitSeq+1)
-		a.mu.Unlock()
-		if e != nil {
+		ready, e := s.retirement.step(a, s.id, w)
+		if !ready || e != nil {
 			return false, e
 		}
 		s.phase = 3

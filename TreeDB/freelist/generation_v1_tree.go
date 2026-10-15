@@ -136,21 +136,13 @@ func cloneStateNode(n *stateNode) *stateNode {
 // detachUnmaterialized clones only nodes that do not yet have durable page
 // identities. Nodes with identities are immutable and safe to share.
 func detachUnmaterialized(n *stateNode, _ int) *stateNode {
-	if n == nil || n.pageID != 0 {
-		return n
+	var work stateDetachWorkV1
+	work.begin(n)
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
 	}
-	out := *n
-	if n.chunk != nil {
-		if n.chunk.pageID == 0 {
-			chunk := *n.chunk
-			out.chunk = &chunk
-		}
-	} else {
-		for i, child := range n.child {
-			out.child[i] = detachUnmaterialized(child, 0)
-		}
-	}
-	return &out
+	return work.result
 }
 
 func chunkNibble(chunkNo uint64, depth int) int {
@@ -166,30 +158,10 @@ func firstDifferingDepthV1(a, b uint64) int {
 	return chunkTrieDepth - (bits.Len64(a^b)+3)/4
 }
 func recomputeStateNode(n *stateNode, _ int) {
-	n.freeCount, n.retiredCount, n.minRetiredSeq, n.minChunk, n.maxChunk = 0, 0, 0, 0, 0
-	if n.chunk != nil {
-		n.freeCount = n.chunk.freeCount()
-		n.retiredCount, n.minRetiredSeq = n.chunk.retiredSummary()
-		n.minChunk, n.maxChunk = n.chunk.chunkNo, n.chunk.chunkNo
-		return
-	}
-	first := true
-	for _, child := range n.child {
-		if child == nil {
-			continue
-		}
-		n.freeCount += child.freeCount
-		n.retiredCount += child.retiredCount
-		if seq := child.minRetiredSeq; seq != 0 && (n.minRetiredSeq == 0 || seq < n.minRetiredSeq) {
-			n.minRetiredSeq = seq
-		}
-		if first || child.minChunk < n.minChunk {
-			n.minChunk = child.minChunk
-		}
-		if first || child.maxChunk > n.maxChunk {
-			n.maxChunk = child.maxChunk
-		}
-		first = false
+	work := stateSummaryWorkV1{node: n}
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
 	}
 }
 
@@ -206,75 +178,13 @@ func mutatePrivateChunkWithStats(n *stateNode, key uint64, depth int, f func(*st
 	return mutateChunkMode(n, key, depth, f, true, stats)
 }
 func mutateChunkMode(n *stateNode, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats) *stateNode {
-	if n == nil || n.freeCount+n.retiredCount == 0 {
-		chunk := &stateChunk{chunkNo: key}
-		f(chunk)
-		out := &stateNode{chunk: chunk}
-		recomputeStateNode(out, 0)
-		if out.freeCount+out.retiredCount == 0 {
-			return &stateNode{}
-		}
-		return out
+	var work stateMutationWorkV1
+	work.begin(n, key, private, stats, f, nil)
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
 	}
-	// Split at the first differing nibble, including prefixes skipped by an
-	// existing branch. There is no unary physical or mutable index path.
-	split := firstDifferingDepthV1(n.minChunk, key)
-	if split < chunkTrieDepth && (n.chunk != nil || split < int(n.depth)) {
-		leaf := mutateChunkMode(nil, key, 0, f, private, stats)
-		if leaf.freeCount+leaf.retiredCount == 0 {
-			return n
-		}
-		out := &stateNode{depth: uint8(split), prefix: chunkPrefixV1(key, split)}
-		out.child[chunkNibble(n.minChunk, split)] = n
-		out.child[chunkNibble(key, split)] = leaf
-		recomputeStateNode(out, 0)
-		return out
-	}
-	out := n
-	if !private || n.pageID != 0 {
-		out = cloneStateNode(n)
-		// A durable synthetic parent can still contain unpublished children.
-		// Acquiring private permission for this copy must detach those children.
-		if private {
-			for i, child := range out.child {
-				out.child[i] = detachUnmaterialized(child, 0)
-			}
-		}
-	}
-	if n.chunk != nil {
-		if !private || n.pageID != 0 || n.chunk.pageID != 0 {
-			out.chunk = n.chunk.clone()
-		} else if stats != nil {
-			stats.PrivateChunkReuses++
-		}
-		f(out.chunk)
-		recomputeStateNode(out, 0)
-		if out.freeCount+out.retiredCount == 0 {
-			return &stateNode{}
-		}
-		return out
-	}
-	slot := chunkNibble(key, int(out.depth))
-	out.child[slot] = mutateChunkMode(out.child[slot], key, 0, f, private, stats)
-	if child := out.child[slot]; child.freeCount+child.retiredCount == 0 {
-		out.child[slot] = nil
-	}
-	count := 0
-	var only *stateNode
-	for _, child := range out.child {
-		if child != nil {
-			count++
-			only = child
-		}
-	}
-	if count == 0 {
-		return &stateNode{}
-	}
-	if count == 1 {
-		return only
-	}
-	recomputeStateNode(out, 0)
-	return out
+	return work.result
 }
 
 func lookupChunk(n *stateNode, key uint64) *stateChunk {

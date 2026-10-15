@@ -693,17 +693,29 @@ func (runtime *rootPublicationRuntimeV1) materializePrimarySealV5(seal *rootPubl
 }
 
 func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicationSealV1) (oldest uint64, err error) {
+	return runtime.commitPrimarySealScopedV6(seal, nil)
+}
+
+func (runtime *rootPublicationRuntimeV1) commitPrimarySealScopedV6(seal *rootPublicationSealV1, scope *nativeAuthorityScopeV6) (oldest uint64, err error) {
 	db, a := runtime.db, seal.idx.primary
-	db.durablePublishMu.Lock()
-	db.rootReuseMu.Lock()
-	runtime.mu.Lock()
+	if scope == nil {
+		db.durablePublishMu.Lock()
+		db.rootReuseMu.Lock()
+		runtime.mu.Lock()
+	} else if scope.runtime != runtime || !scope.active || scope.seal != seal {
+		return 0, rootpublication.ErrDurableRootOwnership
+	}
 	locked := true
 	unlock := func() {
 		if locked {
 			locked = false
-			runtime.mu.Unlock()
-			db.rootReuseMu.Unlock()
-			db.durablePublishMu.Unlock()
+			if scope != nil {
+				scope.Close()
+			} else {
+				runtime.mu.Unlock()
+				db.rootReuseMu.Unlock()
+				db.durablePublishMu.Unlock()
+			}
 		}
 	}
 	defer unlock()
@@ -723,11 +735,21 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if base.primary == nil || base.record.CommitSeq >= seal.latestSequence {
 		return 0, errDurableRootCandidateStale
 	}
+	native := member.transaction != nil && member.transaction.RequiresNativeCallbackWorkV6()
 	runtimeCharge := primaryRuntimeDescriptorChargeV5()
-	if e := a.MetadataOwner().AddPending(runtimeCharge); e != nil {
-		return 0, e
+	var primary *primaryDurableRuntimeV5
+	if native {
+		if !seal.commitStorageReady || seal.commitRuntime == nil || cap(seal.commitRetired) < len(runtime.seals) {
+			return 0, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+		}
+		primary, seal.commitRuntime = seal.commitRuntime, nil
+	} else {
+		if e := a.MetadataOwner().AddPending(runtimeCharge); e != nil {
+			return 0, e
+		}
+		primary = &primaryDurableRuntimeV5{}
 	}
-	primary := &primaryDurableRuntimeV5{
+	*primary = primaryDurableRuntimeV5{
 		projection: base.primary.projection, slots: base.primary.slots,
 		records: base.primary.records, proofs: base.primary.proofs,
 		closures: base.primary.closures, proofClosures: base.primary.proofClosures, capsuleCharges: base.primary.capsuleCharges,
@@ -798,17 +820,32 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	// Admit full capacity before allocation; concurrent producers can then
 	// replace the runtime array without prematurely refunding this backing.
 	retiredCharge := retainedalloc.AllocationCharge(uint64(len(runtime.seals)) * uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil))))
-	if e = a.MetadataOwner().AddPending(retiredCharge); e != nil {
-		return 0, e
+	var retired []*rootPublicationSealV1
+	if native {
+		retired, retiredCharge = seal.commitRetired, seal.commitRetiredCharge
+		seal.commitRetired, seal.commitRetiredCharge, seal.commitStorageReady = nil, 0, false
+	} else {
+		if e = a.MetadataOwner().AddPending(retiredCharge); e != nil {
+			return 0, e
+		}
+		retired = make([]*rootPublicationSealV1, 0, len(runtime.seals))
 	}
-	retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
+	retiredTransferred := false
 	defer func() {
+		if retiredTransferred {
+			return
+		}
 		clear(retired)
 		retired = nil
 		a.MetadataOwner().RemovePending(retiredCharge)
 	}()
 	if len(seal.prefix) != 0 {
-		if e = seal.idx.allocator.PublishActivatedCOWPrefixV1(seal.prefix, cap); e != nil {
+		if scope != nil {
+			e = scope.allocator.Commit(cap)
+		} else {
+			e = seal.idx.allocator.PublishActivatedCOWPrefixV1(seal.prefix, cap)
+		}
+		if e != nil {
 			return 0, e
 		}
 	}
@@ -858,6 +895,14 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	clear(runtime.seals[len(kept):])
 	runtime.seals = kept
 	runtime.activeSeal = nil
+	if native {
+		member.retiredPrimary = base.primary
+		member.retiredSeals = retired
+		member.retiredSealsOwner, member.retiredSealsCharge = a.MetadataOwner(), retiredCharge
+		retiredTransferred = true
+		unlock()
+		return oldest, nil
+	}
 	unlock()
 	// The SAME predecessor descriptor owns overwritten original physical
 	// operands until their root-before-resource completion has really succeeded.

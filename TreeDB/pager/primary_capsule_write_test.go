@@ -2,11 +2,58 @@ package pager
 
 import (
 	"bytes"
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"path/filepath"
 	"testing"
 )
+
+func TestPrimaryCapsuleFenceStatusDistinguishesActualMutationV6(t *testing.T) {
+	p, err := Open(filepath.Join(t.TempDir(), "status.primary"), 16*page.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err := p.GrowTo(9); err != nil {
+		t.Fatal(err)
+	}
+	p.SetPageCount(9)
+	image := bytes.Repeat([]byte{0x7b}, 3*page.PageSize)
+	before, err := p.Get(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := bytes.Clone(before)
+	work := iterator.OrdinalScanWork{RecordLimit: 6, ByteLimit: 1 << 20}
+	if _, ready, mutated, err := p.WritePrimaryCapsuleWithFenceStatusV6(2, image, nil, &work); ready || mutated || err == nil {
+		t.Fatal("work refusal became ambiguous authority", ready, mutated, err)
+	}
+	after, _ := p.Get(2)
+	if !bytes.Equal(saved, after) {
+		t.Fatal("work refusal changed actual slot")
+	}
+	injected := errors.New("native authority cut")
+	for _, point := range []durabilitycut.Point{durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite} {
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Point == point {
+				return injected
+			}
+			return nil
+		})
+		work := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+		_, ready, mutated, err := p.WritePrimaryCapsuleWithFenceStatusV6(2, image, nil, &work)
+		restore()
+		if ready || !errors.Is(err, injected) || mutated != (point == durabilitycut.AfterPublicationSealWrite) {
+			t.Fatal("cut classified wrong actual mutation", point, ready, mutated, err)
+		}
+	}
+	work = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if _, ready, mutated, err := p.WritePrimaryCapsuleWithFenceStatusV6(2, image, nil, &work); !ready || !mutated || err != nil {
+		t.Fatal("real authority fence failed", ready, mutated, err)
+	}
+}
 
 func TestPrimaryCapsuleFixedSpanDurabilityAndIndependentSlots(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db.primary")

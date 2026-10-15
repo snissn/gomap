@@ -103,7 +103,7 @@ func (db *DB) BeginNativeMVCCSnapshotV6(admit func(SnapshotAllocationSizes) erro
 	if sizes.ValueLog.FileCount > 17 {
 		return nil, false, ErrSnapshotCapacity
 	}
-	if !known || state.ValueLogSet != nil && len(state.ValueLogSet.Files) != 0 && view.vlogManager == nil {
+	if !known || state.ValueLogSet != nil && view.vlogManager == nil {
 		return nil, false, ErrSnapshotCapacity
 	}
 	// All fixed constructor/reference effects below are individually represented
@@ -118,7 +118,7 @@ func (db *DB) BeginNativeMVCCSnapshotV6(admit func(SnapshotAllocationSizes) erro
 		refRecords++
 		refBytes += 2 * uint64(unsafe.Sizeof(*leafPins))
 	}
-	if state.ValueLogSet != nil && len(state.ValueLogSet.Files) != 0 {
+	if state.ValueLogSet != nil {
 		refRecords++
 	}
 	if state.primaryRoot != nil {
@@ -161,7 +161,7 @@ func (db *DB) BeginNativeMVCCSnapshotV6(admit func(SnapshotAllocationSizes) erro
 		s.primaryRoot = root
 		root.arena.InitializeReleaseQueue(&s.primaryRelease)
 	}
-	if set := state.ValueLogSet; set != nil && len(set.Files) != 0 {
+	if set := state.ValueLogSet; set != nil {
 		view.vlogManager.Acquire(set)
 		s.vlogPinned = true
 	}
