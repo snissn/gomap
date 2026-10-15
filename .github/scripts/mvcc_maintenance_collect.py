@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-D = Path(os.environ['RUNNER_TEMP']) / 'mvcc-maintenance-72e01'
+D = Path(os.environ['RUNNER_TEMP']) / 'mvcc-maintenance-5027d'
 B = D / 'performance-185/maintenance-build-02'
 P = D / 'performance-185/maintenance-bounded-02'
 ROOTS = {'baseline': D / 'coordinator', 'candidate': D / 'ordinary-repair'}

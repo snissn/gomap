@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 
-D = Path(os.environ['RUNNER_TEMP']) / 'mvcc-maintenance-72e01'
+D = Path(os.environ['RUNNER_TEMP']) / 'mvcc-maintenance-5027d'
 P = D / 'performance-185/maintenance-build-02'
 P.mkdir()
 (P / 'tmp').mkdir()
@@ -16,7 +16,7 @@ GO = D / 'toolchains/go1.26.3/bin/go'
 assert hashlib.sha256(GO.read_bytes()).hexdigest() == 'd68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65'
 roots = {'baseline': D / 'coordinator', 'candidate': D / 'ordinary-repair'}
 heads = {'baseline': '5bca87ffe6e1bfba2d693264d2dc82936adc234f',
-         'candidate': '72e01efd767ef5d766f070e531fb53ea3f22674d'}
+         'candidate': '5027dc559f83dee04317910169c48d277fcce72f'}
 env = dict(os.environ)
 env.update(GOROOT=str(GO.parent.parent), GOTOOLCHAIN='local', GOENV='off',
            GOWORK='off', GOFLAGS='', GOAMD64='v1', CGO_ENABLED='1',

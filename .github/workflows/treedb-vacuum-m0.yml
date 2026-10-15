@@ -9,7 +9,7 @@ permissions:
 jobs:
   diagnostic:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/4871-maintenance-diagnostic-185-20261015'
-    name: fixed 5bca / 72e01 fourteen-call diagnostic
+    name: fixed 5bca / 5027d fourteen-call diagnostic
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -46,12 +46,12 @@ jobs:
         with:
           name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/mvcc-maintenance-72e01/*.json
-            ${{ runner.temp }}/mvcc-maintenance-72e01/*.log
-            ${{ runner.temp }}/mvcc-maintenance-72e01/compiler
-            ${{ runner.temp }}/mvcc-maintenance-72e01/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-72e01/harness
-            ${{ runner.temp }}/mvcc-maintenance-72e01/performance-185
+            ${{ runner.temp }}/mvcc-maintenance-5027d/*.json
+            ${{ runner.temp }}/mvcc-maintenance-5027d/*.log
+            ${{ runner.temp }}/mvcc-maintenance-5027d/compiler
+            ${{ runner.temp }}/mvcc-maintenance-5027d/go1.26.3-linux-amd64.tar.gz
+            ${{ runner.temp }}/mvcc-maintenance-5027d/harness
+            ${{ runner.temp }}/mvcc-maintenance-5027d/performance-185
             ${{ runner.temp }}/mvcc-maintenance-setup
           if-no-files-found: error
           include-hidden-files: true
