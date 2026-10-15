@@ -196,9 +196,10 @@ type Zipper struct {
 	maintenanceOpsPerCoalesce int
 	parallelMergePressure     ParallelMergePressureSource
 
-	scratchMu        sync.Mutex
-	applyScratch     *mergeScratch
-	applyScratchFree []*mergeScratch
+	// Allocator/pager clones borrow from the same bounded cache. The cache
+	// owns only reset scratch, never a pager, allocator, or in-flight leaf cache.
+	scratchCacheOnce sync.Once
+	scratchCache     *applyScratchCache
 }
 
 type ParallelMergePressureLevel uint8
@@ -377,8 +378,20 @@ func (s *mergeScratch) reset() {
 		clear(extra)
 		s.leafRefCachePages = s.leafRefCachePages[:mergeLeafRefCachePageKeep]
 	}
+	// A maintenance Apply can temporarily use far more pages than the retained
+	// limit. Clearing its pointers must also release oversized pointer backing
+	// arrays now that allocator clones keep this scratch owner alive.
+	if cap(s.leafRefCachePages) > mergeLeafRefCachePageKeep {
+		kept := make([]*leafRefCachePage, len(s.leafRefCachePages))
+		copy(kept, s.leafRefCachePages)
+		s.leafRefCachePages = kept
+	}
 	clear(s.leafRefCacheActivePages)
-	s.leafRefCacheActivePages = s.leafRefCacheActivePages[:0]
+	if cap(s.leafRefCacheActivePages) > mergeLeafRefCachePageKeep {
+		s.leafRefCacheActivePages = make([]*leafRefCachePage, 0, mergeLeafRefCachePageInit)
+	} else {
+		s.leafRefCacheActivePages = s.leafRefCacheActivePages[:0]
+	}
 	if n := len(s.childRefBatchScratch); n > mergeChildRefBatchKeep {
 		extra := s.childRefBatchScratch[mergeChildRefBatchKeep:]
 		for i := range extra {
@@ -1260,21 +1273,42 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 	}
 }
 
+// applyScratchCache belongs to one zipper clone family, rather than an
+// individual optimistic-write clone. Every borrower has exclusive ownership
+// until release; concurrent borrowers allocate independently once it is empty.
+// The existing retention limit and per-scratch capacity limits apply to the
+// whole family, including private-pager clones.
+type applyScratchCache struct {
+	mu     sync.Mutex
+	single *mergeScratch
+	free   []*mergeScratch
+}
+
+func (z *Zipper) sharedApplyScratchCache() *applyScratchCache {
+	z.scratchCacheOnce.Do(func() {
+		if z.scratchCache == nil {
+			z.scratchCache = &applyScratchCache{}
+		}
+	})
+	return z.scratchCache
+}
+
 func (z *Zipper) acquireApplyScratch() *mergeScratch {
 	if z == nil {
 		return newMergeScratch()
 	}
-	z.scratchMu.Lock()
+	cache := z.sharedApplyScratchCache()
+	cache.mu.Lock()
 	var s *mergeScratch
-	if n := len(z.applyScratchFree); n > 0 {
-		s = z.applyScratchFree[n-1]
-		z.applyScratchFree[n-1] = nil
-		z.applyScratchFree = z.applyScratchFree[:n-1]
+	if n := len(cache.free); n > 0 {
+		s = cache.free[n-1]
+		cache.free[n-1] = nil
+		cache.free = cache.free[:n-1]
 	} else {
-		s = z.applyScratch
-		z.applyScratch = nil
+		s = cache.single
+		cache.single = nil
 	}
-	z.scratchMu.Unlock()
+	cache.mu.Unlock()
 	if s == nil {
 		s = newMergeScratch()
 	}
@@ -1287,18 +1321,19 @@ func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 		return
 	}
 	s.reset()
-	z.scratchMu.Lock()
-	if len(z.applyScratchFree) < applyScratchKeep {
-		z.applyScratchFree = append(z.applyScratchFree, s)
-		z.scratchMu.Unlock()
+	cache := z.sharedApplyScratchCache()
+	cache.mu.Lock()
+	if len(cache.free) < applyScratchKeep {
+		cache.free = append(cache.free, s)
+		cache.mu.Unlock()
 		return
 	}
-	if z.applyScratch == nil {
-		z.applyScratch = s
-		z.scratchMu.Unlock()
+	if cache.single == nil {
+		cache.single = s
+		cache.mu.Unlock()
 		return
 	}
-	z.scratchMu.Unlock()
+	cache.mu.Unlock()
 }
 
 // CloneWithAllocator returns a zipper that shares config/pager with z but uses
@@ -1327,6 +1362,7 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
+		scratchCache: z.sharedApplyScratchCache(),
 	}
 }
 
