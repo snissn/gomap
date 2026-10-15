@@ -1,0 +1,2775 @@
+diff --git a/TreeDB/caching/cow_resources.go b/TreeDB/caching/cow_resources.go
+index 50e40eab6..957fcceb1 100644
+--- a/TreeDB/caching/cow_resources.go
++++ b/TreeDB/caching/cow_resources.go
+@@ -2,6 +2,7 @@ package caching
+ 
+ import (
+ 	"errors"
++	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"sync"
+@@ -48,6 +49,9 @@ type cowLiveResource struct {
+ }
+ 
+ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResources, error) {
++	return newCOWGenerationResourcesWithWorkV6(budget, nil)
++}
++func newCOWGenerationResourcesWithWorkV6(budget *memtable.COWBudget, work *iterator.OrdinalScanWork) (*cowGenerationResources, error) {
+ 	n := budget.Limits().MaxResources - 1 // the resolver itself occupies one C1 slot
+ 	if n < 0 {
+ 		return nil, memtable.ErrCOWCapacity
+@@ -55,6 +59,9 @@ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResour
+ 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowGenerationResources{}))) +
+ 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
+ 		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
++	if work != nil && !work.Reserve(3, 2*bytes) {
++		return nil, cowbtree.ErrWork
++	}
+ 	lease, err := budget.AcquireExternal(bytes)
+ 	if err != nil {
+ 		return nil, err
+diff --git a/TreeDB/caching/db.go b/TreeDB/caching/db.go
+index e6f91e325..ebe485fc6 100644
+--- a/TreeDB/caching/db.go
++++ b/TreeDB/caching/db.go
+@@ -3535,6 +3535,9 @@ func (db *DB) closeLeafValueLogLane(l *lane) error {
+ 	}
+ 	l.vlogMu.Lock()
+ 	defer l.vlogMu.Unlock()
++	if err := l.vlogBirth.close(); err != nil {
++		return err
++	}
+ 	if l.vlog != nil {
+ 		if err := l.vlog.Close(); err != nil {
+ 			return err
+@@ -18668,6 +18671,24 @@ func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint
+ }
+ 
+ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
++	return db.appendValueLogOneInternalWork(l, dictID, dict, rid, value, durability, allowQueue, nil, nil)
++}
++
++var errLeafAppendWorkPending = errors.New("cachingdb: outer-leaf append allowance exhausted")
++
++func (db *DB) appendValueLogOneInternalWork(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, state *valuelog.LeafAppendWork, work *iterator.OrdinalScanWork) (page.ValuePtr, string, error) {
++	if work != nil {
++		if state == nil || allowQueue || dictID != 0 || len(value) > page.PageSize || db.valueLogTemplateEnabled {
++			return page.ValuePtr{}, "", fmt.Errorf("outer-leaf unsupported input policy: %w", valuelog.ErrLeafAppendWorkUnsupported)
++		}
++		if work.RecordLimit < 12 || work.ByteLimit < uint64(4*len(value)+4096) {
++			return page.ValuePtr{}, "", &iterator.OrdinalUnitTooLarge{Records: 12, Bytes: uint64(4*len(value) + 4096)}
++		}
++		if !work.Reserve(12, uint64(4*len(value)+4096)) {
++			return page.ValuePtr{}, "", errLeafAppendWorkPending
++		}
++	}
++
+ 	if !db.splitValueLogEnabled() {
+ 		return page.ValuePtr{}, "", errWALUnavailable
+ 	}
+@@ -18846,7 +18867,25 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 
+ 	var preparedOneFrame preparedDictFrame
+ 	var preparedOnePrepNs int64
+-	if leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
++	if work != nil {
++		if !leafLogAppend || finalWriteMode != vlogWriteBlock || finalBlockCodec != valuelog.BlockCodecLZ4 || durability != journalDurabilityNone {
++			return page.ValuePtr{}, "", fmt.Errorf("outer-leaf configured selector mode=%v codec=%v durability=%v: %w", finalWriteMode, finalBlockCodec, durability, valuelog.ErrLeafAppendWorkUnsupported)
++		}
++		keepIo, keepEncode, keepSafety := db.valueLogKeepPolicy()
++		if forceBlockCompressionAttempt {
++			keepIo = 0
++			keepEncode = 0
++		}
++		ready, e := state.Prepare(rid, finalBlockCodec, keepIo, keepEncode, keepSafety, work)
++		if e != nil {
++			return page.ValuePtr{}, "", e
++		}
++		if !ready {
++			return page.ValuePtr{}, "", errLeafAppendWorkPending
++		}
++		preparedOneFrame = preparedDictFrame{body: state.Frame, stats: state.Stats}
++	}
++	if work == nil && leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
+ 		keepIoNs, keepEncodeNs, keepSafety := db.valueLogKeepPolicy()
+ 		if forceBlockCompressionAttempt {
+ 			keepIoNs = 0
+@@ -18876,6 +18915,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 			releasePreparedDictFrame(&preparedOneFrame)
+ 		}
+ 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
++			if work != nil && (l.vlog == nil || l.vlogPath == "" || l.vlogPath != l.vlogRetainedPath || (db.valueLogMaxSegmentBytesForLane(l) > 0 && l.vlog.Size() > db.valueLogMaxSegmentBytesForLane(l))) {
++				l.vlogMu.Unlock()
++				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf queued writer not installed: %w", valuelog.ErrLeafAppendWorkUnsupported)
++			}
+ 			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+ 				l.vlogMu.Unlock()
+ 				return page.ValuePtr{}, "", err
+@@ -19062,6 +19105,20 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 	if leafLogAppend {
+ 		lockHoldStart = time.Now()
+ 	}
++	if work != nil && l.vlog == nil {
++		ready, err := db.ensureLeafWriterWithWorkMuHeld(l, work)
++		if err != nil || !ready {
++			l.vlogMu.Unlock()
++			if err != nil {
++				return page.ValuePtr{}, "", err
++			}
++			return page.ValuePtr{}, "", errLeafAppendWorkPending
++		}
++	}
++	if work != nil && (db.valueLogMaxSegmentBytesForLane(l) > 0 && l.vlog.Size() > db.valueLogMaxSegmentBytesForLane(l)) {
++		l.vlogMu.Unlock()
++		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf current writer absent or rotation required: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
+ 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+ 		l.vlogMu.Unlock()
+ 		if preparedOneFrame.bodyBuf != nil {
+@@ -19105,7 +19162,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 	startSize := w.Size()
+ 	flushedBoundary := false
+ 	syncedBoundary := false
+-	usePreparedOneFrame := preparedOneFrame.bodyBuf != nil && caps.prepared != nil
++	usePreparedOneFrame := (preparedOneFrame.bodyBuf != nil || work != nil) && caps.prepared != nil
++	if work != nil && !usePreparedOneFrame {
++		l.vlogMu.Unlock()
++		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf writer lacks prepared-frame interface: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
+ 	if preparedOneFrame.bodyBuf != nil && caps.prepared == nil {
+ 		releasePreparedDictFrame(&preparedOneFrame)
+ 	}
+@@ -19117,11 +19178,34 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 		compressionResetter.ResetCompressionHints()
+ 	}
+ 
++	if work != nil && db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
++		l.vlogMu.Unlock()
++		return page.ValuePtr{}, "", fmt.Errorf("outer-leaf deferred flush transition required: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
+ 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
+ 	if usePreparedOneFrame {
+ 		pf := &preparedOneFrame
+ 		stats = pf.stats
+-		if oneAppender, ok := w.(interface {
++		if work != nil {
++			concrete, ok := w.(*valuelog.Writer)
++			if !ok {
++				l.vlogMu.Unlock()
++				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf writer implementation: %w", valuelog.ErrLeafAppendWorkUnsupported)
++			}
++			var ready bool
++			producer, supported := db.backend.(interface {
++				AppendLeafFrameWithWorkV6(*valuelog.Writer, []byte, *iterator.OrdinalScanWork) (page.ValuePtr, bool, error)
++			})
++			if !supported {
++				l.vlogMu.Unlock()
++				return page.ValuePtr{}, "", fmt.Errorf("outer-leaf backend work-bearing frame append: %w", valuelog.ErrLeafAppendWorkUnsupported)
++			}
++			ptr, ready, err = producer.AppendLeafFrameWithWorkV6(concrete, pf.body, work)
++			if err == nil && !ready {
++				l.vlogMu.Unlock()
++				return page.ValuePtr{}, "", errLeafAppendWorkPending
++			}
++		} else if oneAppender, ok := w.(interface {
+ 			AppendEncodedFrameOne([]byte) (page.ValuePtr, error)
+ 		}); ok && pf.stats.Records == 1 {
+ 			ptr, err = oneAppender.AppendEncodedFrameOne(pf.body)
+@@ -19136,7 +19220,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
+ 				ptr = ptrs[0]
+ 			}
+ 		}
+-		releasePreparedDictFrame(pf)
++		if work == nil {
++			releasePreparedDictFrame(pf)
++		}
+ 	} else if finalWriteMode == vlogWriteBlock {
+ 		if concrete, ok := w.(*valuelog.Writer); ok {
+ 			ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
+@@ -28884,6 +28970,17 @@ func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
+ 	if l.vlog != nil {
+ 		return nil
+ 	}
++	if db.isLeafLogAppendLane(l) {
++		for {
++			ready, err := db.ensureLeafWriterWithWorkMuHeld(l, nil)
++			if err != nil {
++				return err
++			}
++			if ready {
++				return nil
++			}
++		}
++	}
+ 	return db.rotateValueLogMuHeld(l)
+ }
+ 
+diff --git a/TreeDB/caching/lane.go b/TreeDB/caching/lane.go
+index b43bb6205..3bd64d739 100644
+--- a/TreeDB/caching/lane.go
++++ b/TreeDB/caching/lane.go
+@@ -32,6 +32,7 @@ type lane struct {
+ 	walCoalesceSeq           uint64
+ 	walZeroInlineKeyProvider zeroInlineBatchKeyProvider
+ 
++	vlogBirth                      leafLogWriterBirth
+ 	vlog                           valueWriter
+ 	vlogPath                       string
+ 	vlogSeq                        int
+diff --git a/TreeDB/caching/leaf_page_log.go b/TreeDB/caching/leaf_page_log.go
+index efb18be74..08cc5d5ee 100644
+--- a/TreeDB/caching/leaf_page_log.go
++++ b/TreeDB/caching/leaf_page_log.go
+@@ -6,6 +6,7 @@ import (
+ 	"time"
+ 
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	"github.com/snissn/gomap/TreeDB/page"
+@@ -679,3 +680,50 @@ func (l *cachingLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+ 	}
+ 	return path, fileID, true
+ }
++
++// AppendLeafPageWithWork retains only the original private payload/frame in its
++// caller's charged output frame. The original append engine selects the fresh
++// lane writer under its lock; no writer, offset or lane lock crosses a yield.
++func (l *cachingLeafPageLog) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
++	if l == nil || l.db == nil || l.lane == nil || s == nil {
++		return page.LeafLogPtr{}, false, errWALUnavailable
++	}
++	if s.Err != nil {
++		return s.Ptr, true, s.Err
++	}
++	if s.Phase >= 3 {
++		return s.Ptr, true, nil
++	}
++	ready, e := s.Compact(leaf, w)
++	if !ready || e != nil {
++		return page.LeafLogPtr{}, false, e
++	}
++	if s.RID == 0 {
++		if w != nil && !w.Reserve(1, 8) {
++			return page.LeafLogPtr{}, false, nil
++		}
++		s.RID = l.db.nextRID.Add(1)
++	}
++	ptr, path, e := l.db.appendValueLogOneInternalWork(l.lane, 0, nil, s.RID, s.Value, journalDurabilityNone, false, s, w)
++	if e == errLeafAppendWorkPending {
++		return page.LeafLogPtr{}, false, nil
++	}
++	if path != "" {
++		l.db.markValueLogRetain(path)
++	}
++	if e != nil {
++		s.Err = e
++		return page.LeafLogPtr{}, true, e
++	}
++	s.Ptr, e = page.LeafLogPtrFromValuePtr(ptr)
++	s.Err = e
++	s.Phase = 3
++	return s.Ptr, true, e
++}
++func (g *cachingLeafPageLogGroup) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
++	log := g.defaultLog()
++	if log == nil {
++		return page.LeafLogPtr{}, false, errWALUnavailable
++	}
++	return log.AppendLeafPageWithWork(leaf, s, w)
++}
+diff --git a/TreeDB/caching/native_mvcc_cow_merge_v6.go b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+index 418b39177..65b815b4c 100644
+--- a/TreeDB/caching/native_mvcc_cow_merge_v6.go
++++ b/TreeDB/caching/native_mvcc_cow_merge_v6.go
+@@ -45,6 +45,7 @@ type nativeCOWMergeV6 struct {
+ 	cutClosing                             bool
+ 	cutCloseIndex                          int
+ 	cutBasisReleased                       bool
++	frozenOnly, includeTombstones          bool
+ }
+ 
+ func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error) {
+@@ -86,7 +87,9 @@ func (db *DB) stepNativeCOWCaptureV6(c *NativeMVCCCaptureV6, w *iterator.Ordinal
+ 	for m.opened < m.count {
+ 		i := m.opened
+ 		var root *memtable.COWRoot
+-		if i < len(m.cut.shards) {
++		if m.frozenOnly {
++			root = m.cut.frozen[len(m.cut.frozen)-1-i].root
++		} else if i < len(m.cut.shards) {
+ 			root = m.cut.shards[len(m.cut.shards)-1-i].root
+ 		} else {
+ 			root = m.cut.frozen[len(m.cut.frozen)-1-(i-len(m.cut.shards))].root
+@@ -211,7 +214,7 @@ func (c *NativeMVCCCaptureV6) StepNativeProjectionV6(base *tree.ChargedProjectio
+ 			m.index++
+ 			m.phase = 0
+ 		case 3:
+-			if !m.baseAdvance {
++			if !m.baseAdvance || m.frozenOnly {
+ 				m.phase = 6
+ 				m.compare = 0
+ 				m.winner = -1
+@@ -263,7 +266,7 @@ func (c *NativeMVCCCaptureV6) StepNativeProjectionV6(base *tree.ChargedProjectio
+ 				m.key = nil
+ 				return true, nil
+ 			}
+-			if m.record.Flags&node.FlagTombstone != 0 {
++			if m.record.Flags&node.FlagTombstone != 0 && !m.includeTombstones {
+ 				// Advance ALL equal sources. A cached tombstone hides the older basis;
+ 				// omitting only its top source would resurrect the disk record.
+ 				m.operation, m.index, m.phase = tree.ProjectionNext, 0, 8
+@@ -316,7 +319,9 @@ func (c *NativeMVCCCaptureV6) NativePinnedValueLogFileV6(id uint32, w *iterator.
+ 	for m.lookupSource < m.count {
+ 		i := m.lookupSource
+ 		var resources *cowGenerationResources
+-		if i < len(m.cut.shards) {
++		if m.frozenOnly {
++			resources = m.cut.frozen[len(m.cut.frozen)-1-i].resources
++		} else if i < len(m.cut.shards) {
+ 			resources = m.cut.shards[len(m.cut.shards)-1-i].resources
+ 		} else {
+ 			resources = m.cut.frozen[len(m.cut.frozen)-1-(i-len(m.cut.shards))].resources
+@@ -495,3 +500,30 @@ func (c *NativeMVCCCaptureV6) NativeMVCCSelectedRecordV6(snapshot *backenddb.Sna
+ 	}
+ 	return m.record, true, nil
+ }
++
++// stepNativeFrozenInputV6 uses the SAME ordered cursor/merge engine for
++// physical output input. Winning tombstones must reach materialized DATA as
++// deletes; hiding them here would resurrect older backend values.
++func (db *DB) stepNativeFrozenInputV6(c *NativeMVCCCaptureV6, cut *cowReadCut, w *iterator.OrdinalScanWork) (bool, error) {
++	m := &c.composite
++	if m.cut == nil {
++		if cut == nil || len(cut.frozen) > len(m.sources) {
++			return false, ErrCOWUnsupported
++		}
++		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))) {
++			return false, nil
++		}
++		db.cow.cutMu.Lock()
++		if cut.refs <= 0 || cut.refs == int(^uint(0)>>1) {
++			db.cow.cutMu.Unlock()
++			return false, memtable.ErrCOWClosed
++		}
++		cut.refs++
++		db.cow.cutMu.Unlock()
++		m.cut, m.cache, m.count = cut, db.cow, len(cut.frozen)
++		m.frozenOnly, m.includeTombstones = true, true
++		c.cache, c.Snapshot = db, cut.basis.snapshot
++	}
++	_, ready, e := db.stepNativeCOWCaptureV6(c, w)
++	return ready, e
++}
+diff --git a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+index 42b9f99a0..5d5c1dc00 100644
+--- a/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go
+@@ -1,7 +1,6 @@
+ package caching
+ 
+ import (
+-	"bytes"
+ 	"errors"
+ 	"github.com/snissn/gomap/TreeDB/batch"
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
+@@ -14,20 +13,31 @@ import (
+ )
+ 
+ // nativePrivateOutputV6 is the SAME handoff's private pre-acceptance state.
+-// Its cut and normalized batch remain owned by the original handoff lease.
+-// Prefix collection/normalization and final adoption are explicit synchronous
+-// diagnostic stages; only materialized output Step uses the supplied work.
++// The constructor owns this containing lease from its first setup allocation;
++// no publication/group lock survives a Step return.
+ type nativePrivateOutputV6 struct {
+-	db          *DB
+-	handoff     *cowFlushHandoff
+-	prepared    *backenddb.NativeMVCCCurrentDeleteV6
+-	delta       *batch.Batch
+-	outputDelta *batch.Batch
+-	entries     []batch.Entry
++	db           *DB
++	handoff      *cowFlushHandoff
++	prepared     *backenddb.NativeMVCCCurrentDeleteV6
++	rollover     nativeRolloverWorkV6
++	prefix       nativeFrozenDeltaWorkV6
++	closing      NativeMVCCCaptureV6
++	phase        uint8
++	closingPhase uint8
+ }
+ 
+ func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
+-	if db == nil || db.cow == nil || prepared == nil {
++	return db.stepNativeMVCCMaterializedOutputV6(prepared, true, w)
++}
++
++// StepNativeMVCCMaterializedOutputV6 retains original rollover, ordered prefix
++// operands and materialized DATA frames. It does not enter allocator prepare,
++// visible install or publication. Those require the separate final caller.
++func (db *DB) StepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
++	return db.stepNativeMVCCMaterializedOutputV6(prepared, false, w)
++}
++func (db *DB) stepNativeMVCCMaterializedOutputV6(prepared *backenddb.NativeMVCCCurrentDeleteV6, diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
++	if db == nil || db.cow == nil || prepared == nil || w == nil {
+ 		return false, ErrCOWUnsupported
+ 	}
+ 	db.flushMu.Lock()
+@@ -36,143 +46,145 @@ func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(prepared *backenddb.Nati
+ 	if db.closing.Load() {
+ 		return false, backenddb.ErrClosed
+ 	}
+-	if c.handoff == nil {
+-		db.writeMu.Lock()
+-		defer db.writeMu.Unlock()
+-		backend, ok := db.backend.(interface{ NativeMVCCDiagnosticAwaitV6() error })
+-		if !ok {
++	var private *nativePrivateOutputV6
++	if scope := prepared.NativeMVCCPrivateOutputScopeV6(); scope != nil {
++		var ok bool
++		private, ok = scope.(*nativePrivateOutputV6)
++		if !ok || private.db != db || private.prepared != prepared {
+ 			return false, ErrCOWUnsupported
+ 		}
+-		if err := backend.NativeMVCCDiagnosticAwaitV6(); err != nil {
+-			return false, err
+-		}
+-		// The rollover uses the original source/retirement owner and successors.
+-		// No ordinary flush or checkpoint is invoked.
+-		c.writerMu.Lock()
+-		rollover, err := c.prepareRollover()
+-		if err == nil && rollover != nil {
+-			rollover.install()
+-		}
+-		c.writerMu.Unlock()
+-		if rollover != nil {
+-			// Checked drain of the SAME retirement. Retained read cuts keep every
+-			// covered root alive until the exact post-publication handoff.
+-			if rollover.installed {
+-				for i := range rollover.retired {
+-					err = errors.Join(err, rollover.retired[i].DrainWithError())
+-				}
+-				if rollover.old != nil {
+-					err = errors.Join(err, rollover.old.drain())
+-				}
+-				if err == nil {
+-					rollover.scratch.Close()
+-				}
+-			} else {
+-				rollover.drain()
+-			}
++	} else {
++		if c.handoff != nil {
++			return false, ErrCOWUnsupported
+ 		}
+-		if err != nil {
+-			return false, err
++		size := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) +
++			memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePrivateOutputV6{})))
++		// Binding is admitted before birth; its scalar write cannot then yield
++		// with an allocated but unrooted private preparation.
++		if !w.Reserve(4, 2*size+128) {
++			return false, nil
+ 		}
+-		cut := c.retainCut()
+-		if cut == nil {
+-			return false, backenddb.ErrClosed
++		lease, e := c.budget.AcquireExternal(size)
++		if e != nil {
++			return false, e
+ 		}
+-		lease, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePrivateOutputV6{}))))
+-		if err != nil {
+-			return false, errors.Join(err, c.releaseCut(cut))
++		handoff := &cowFlushHandoff{lease: lease}
++		private = &nativePrivateOutputV6{db: db, handoff: handoff, prepared: prepared}
++		handoff.native = private
++		if e := prepared.BindNativeMVCCPrivateOutputScopeV6(private); e != nil {
++			handoff.native = nil
++			*private = nativePrivateOutputV6{}
++			*handoff = cowFlushHandoff{}
++			lease.Close()
++			return false, e
+ 		}
+-		handoff := &cowFlushHandoff{cut: cut, lease: lease}
+-		// Exactly the original frozen prefix, oldest to newest. The batch copies
+-		// borrowed entry payloads before iterator advance; its final duplicate-key
+-		// normalization preserves the canonical winner without reading untouched DATA.
+-		delta := batch.New(nil, int(^uint(0)>>1))
+-		for _, root := range cut.frozen {
+-			it := root.NewIterator(nil, nil)
+-			metadata, ok := it.(iterator.RevisionUnsafeIterator)
+-			raw, rawOK := it.(iterator.UnsafeIterator)
+-			if !ok || !rawOK {
+-				err = errors.Join(ErrCOWUnsupported, it.Close())
+-				break
++	}
++	h := private.handoff
++	if h == nil || h.accepted || private.closingPhase != 0 {
++		return false, ErrCOWUnsupported
++	}
++	for {
++		switch private.phase {
++		case 0:
++			if c.handoff != nil && c.handoff != h {
++				return false, ErrCOWUnsupported
+ 			}
+-			for it.Valid() {
+-				v, p, f, r := metadata.UnsafeEntryWithRevision()
+-				op := batch.Entry{Type: batch.OpPut, Key: bytes.Clone(raw.UnsafeKey()), Value: bytes.Clone(v), ValuePtr: p, IsPtr: f&node.FlagPointer != 0, Revision: r}
+-				if f&node.FlagTombstone != 0 {
+-					op.Type = batch.OpDelete
+-					op.Value = nil
+-				}
+-				if err = delta.SetOps([]batch.Entry{op}); err != nil {
+-					break
+-				}
+-				it.Next()
++			ready, e := private.rollover.Step(db, w)
++			if !ready || e != nil {
++				return false, e
+ 			}
+-			err = errors.Join(err, it.Error(), it.Close())
+-			if err != nil {
+-				break
++			h.cut = private.rollover.TakeCut()
++			if h.cut == nil {
++				return false, ErrCOWUnsupported
+ 			}
++			// This exact immutable prefix is now original handoff custody.
++			// Ordinary point writes use its successor writers. Incompatible
++			// flush cannot consume a private (not accepted) prefix.
++			c.handoff = h
++			private.phase = 1
++		case 1:
++			ready, e := private.prefix.Step(db, h.cut, w)
++			if !ready || e != nil {
++				return false, e
++			}
++			private.phase = 2
++		case 2:
++			entries, ready, e := prepared.StepNativeMVCCMaterializedInputV6(h.cut.basis.snapshot, private.prefix.entries, w)
++			if !ready || e != nil {
++				return false, e
++			}
++			return prepared.StepNativeMVCCMaterializedOutputPolicyV6(h.cut.basis.snapshot, entries, private, diagnostic, w)
++		default:
++			return false, ErrCOWUnsupported
+ 		}
+-		if err != nil {
+-			lease.Close()
+-			delta.Close()
+-			return false, errors.Join(err, c.releaseCut(cut))
+-		}
+-		if err = prepared.AppendNativeMVCCDiagnosticDeletesV6(delta); err != nil {
+-			delta.Close()
+-			lease.Close()
+-			return false, errors.Join(err, c.releaseCut(cut))
+-		}
+-		// Normalize once in the explicitly synchronous setup, not inside an admitted
+-		// construction Step. The original batch owns all copied delta payloads.
+-		outputDelta, prepareErr := prepared.PrepareNativeMVCCMaterializedInputV6(cut.basis.snapshot, delta)
+-		if prepareErr != nil {
+-			delta.Close()
+-			lease.Close()
+-			return false, errors.Join(prepareErr, c.releaseCut(cut))
+-		}
+-		entries, ranges := outputDelta.ApplyPlan()
+-		if len(ranges) != 0 {
+-			delta.Close()
+-			lease.Close()
+-			return false, errors.Join(ErrCOWUnsupported, c.releaseCut(cut))
+-		}
+-
+-		private := &nativePrivateOutputV6{db: db, handoff: handoff, prepared: prepared, delta: delta, outputDelta: outputDelta, entries: entries}
+-		handoff.native = private
+-		c.handoff = handoff
+ 	}
+-	h := c.handoff
+-	if h.accepted || h.native == nil || h.native.prepared != prepared {
+-		return false, ErrCOWUnsupported
+-	}
+-	return prepared.StepNativeMVCCMaterializedOutputV6(h.cut.basis.snapshot, h.native.entries, h.native, w)
+ }
+ 
+-// ClosePrivateNativeOutputV6 does not authorize prefix removal. Its original
+-// lease is returned after producer aliases are detached; caller clears its
+-// scope alias before refunding the containing handoff/preparation.
++// ClosePrivateNativeOutputV6 is the ordinary synchronous driver of the SAME
++// checked stages. Native callers use ClosePrivateNativeOutputStepV6 directly.
+ func (p *nativePrivateOutputV6) ClosePrivateNativeOutputV6() (*memtable.COWExternalLease, error) {
++	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++	ready, lease, e := p.ClosePrivateNativeOutputStepV6(&w)
++	if !ready && e == nil {
++		return nil, ErrCOWUnsupported
++	}
++	return lease, e
++}
++func (p *nativePrivateOutputV6) ClosePrivateNativeOutputStepV6(w *iterator.OrdinalScanWork) (bool, *memtable.COWExternalLease, error) {
+ 	if p == nil || p.db == nil {
+-		return nil, nil
++		return true, nil, nil
+ 	}
+ 	db := p.db
+ 	db.flushMu.Lock()
+ 	defer db.flushMu.Unlock()
+-	c := db.cow
+-	h := p.handoff
+-	if c == nil || h == nil || c.handoff != h || h.accepted {
+-		return nil, ErrCOWUnsupported
++	c, h := db.cow, p.handoff
++	if c == nil || h == nil || h.accepted || (c.handoff != nil && c.handoff != h) {
++		return false, nil, ErrCOWUnsupported
++	}
++	if p.closingPhase == 0 {
++		p.closingPhase = 1
++	}
++	if p.closingPhase == 1 {
++		ready, lease, e := p.prefix.CloseStep(w)
++		if !ready || e != nil {
++			return false, nil, e
++		}
++		if lease != nil {
++			lease.Close()
++		}
++		p.closingPhase = 2
++	}
++	if p.closingPhase == 2 {
++		ready, e := p.rollover.CloseStep(w)
++		if !ready || e != nil {
++			return false, nil, e
++		}
++		p.closingPhase = 3
+ 	}
+-	if err := c.releaseCut(h.cut); err != nil {
+-		return nil, err
++	if p.closingPhase == 3 {
++		if h.cut != nil && p.closing.composite.cut == nil {
++			p.closing.composite.cut, p.closing.composite.cache = h.cut, c
++			p.closing.Snapshot = h.cut.basis.snapshot
++			h.cut = nil
++		}
++		if p.closing.composite.cut != nil {
++			ready, e := p.closing.closeNativeCOWCaptureV6(w)
++			if !ready || e != nil {
++				return false, nil, e
++			}
++		}
++		p.closingPhase = 4
++	}
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*p))+2*uint64(unsafe.Sizeof(*h))) || !h.lease.AdmitRetentionClose(w) {
++		return false, nil, nil
+ 	}
+-	p.delta.Close()
+-	p.outputDelta.Close()
+ 	lease := h.lease
+-	c.handoff = nil
++	if c.handoff == h {
++		c.handoff = nil
++	}
+ 	*h = cowFlushHandoff{}
+ 	*p = nativePrivateOutputV6{}
+-	return lease, nil
++	return true, lease, nil
+ }
+ 
+ // PublishNativeMVCCUnboundedDiagnosticV6 adopts the exact prepared materialized
+@@ -216,12 +228,23 @@ func (db *DB) PublishNativeMVCCUnboundedDiagnosticV6(prepared *backenddb.NativeM
+ 		return errors.Join(ErrCOWUnsupported, merged.Close())
+ 	}
+ 	raw := &nativeDiagnosticMergeV6{Iterator: owner.Iterator}
+-	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(h.cut.basis.snapshot, raw, h.native.delta)
++	delta := batch.New(nil, int(^uint(0)>>1))
++	defer delta.Close()
++	if err = delta.SetOps(h.native.prefix.entries); err != nil {
++		return errors.Join(err, merged.Close())
++	}
++	accepted, publishErr := prepared.PublishNativeMVCCUnboundedDiagnosticV6(h.cut.basis.snapshot, raw, delta)
+ 	closeErr := merged.Close()
+ 	if accepted {
+ 		h.accepted = true
+-		h.native.delta.Close()
+-		h.native.outputDelta.Close()
++		unlimited := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++		ready, lease, e := h.native.prefix.CloseStep(&unlimited)
++		if !ready || e != nil {
++			return errors.Join(publishErr, closeErr, e)
++		}
++		if lease != nil {
++			lease.Close()
++		}
+ 		*h.native = nativePrivateOutputV6{}
+ 		h.native = nil
+ 		prepared.DetachNativeMVCCPrivateOutputScopeV6()
+diff --git a/TreeDB/db/leaf_page_log.go b/TreeDB/db/leaf_page_log.go
+index 3aef0806f..9d457223b 100644
+--- a/TreeDB/db/leaf_page_log.go
++++ b/TreeDB/db/leaf_page_log.go
+@@ -7,6 +7,7 @@ import (
+ 	"path/filepath"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+@@ -1189,3 +1190,169 @@ func (db *DB) SetCurrentValueLogReadBarrierWithSize(fn func(fileID uint32) (int6
+ 	}
+ 	db.valueLogManager.SetCurrentWritableReadBarrierWithSize(fn)
+ }
++
++// AppendLeafPageWithWork keeps the original dependency hooks around the actual
++// append exactly once. The caller owns the immutable leaf and continuation.
++func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithWork(leaf []byte, s *valuelog.LeafAppendWork, w *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error) {
++	if l == nil || l.inner == nil || s == nil {
++		return page.LeafLogPtr{}, false, fmt.Errorf("leaf wrapper missing producer: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
++	producer, ok := l.inner.(interface {
++		AppendLeafPageWithWork([]byte, *valuelog.LeafAppendWork, *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error)
++	})
++	if !ok {
++		return page.LeafLogPtr{}, false, fmt.Errorf("leaf inner lacks work append (%T): %w", l.inner, valuelog.ErrLeafAppendWorkUnsupported)
++	}
++	if s.Err != nil {
++		return s.Ptr, true, s.Err
++	}
++	if !s.Before {
++		if w != nil && !w.Reserve(1, 64) {
++			return page.LeafLogPtr{}, false, nil
++		}
++		if e := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); e != nil {
++			s.Err = e
++			return page.LeafLogPtr{}, true, e
++		}
++		s.Before = true
++	}
++	ptr, ready, e := producer.AppendLeafPageWithWork(leaf, s, w)
++	if !ready || e != nil {
++		return ptr, ready, e
++	}
++	if !s.After {
++		if w != nil && !w.Reserve(4, uint64(2*len(leaf)+4096)) {
++			return page.LeafLogPtr{}, false, nil
++		}
++		if e := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); e != nil {
++			s.Err = e
++			return ptr, true, e
++		}
++		if l.db != nil {
++			l.db.storeLeafPageReadCache(ptr, leaf)
++			if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
++				l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
++			}
++		}
++		s.After = true
++	}
++	return ptr, true, nil
++}
++
++// AppendLeafFrameWithWorkV6 keeps the original record-length index update in
++// the same admitted append. Both index-vector growth and the original Writer's
++// actual buffer transition are admitted before their effects. No pointer is
++// returned before its original record-length entry is installed.
++func (db *DB) AppendLeafFrameWithWorkV6(writer *valuelog.Writer, body []byte, w *iterator.OrdinalScanWork) (page.ValuePtr, bool, error) {
++	if db == nil || writer == nil || w == nil {
++		return page.ValuePtr{}, false, fmt.Errorf("leaf frame missing writer/work: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
++	raw, ok := rawLeafGenerationFileID(writer.FileID())
++	size := writer.Size()
++	if !ok || size < 0 || uint64(size)+4 > uint64(^uint32(0)) {
++		return page.ValuePtr{}, false, fmt.Errorf("leaf frame identity %d size=%d: %w", writer.FileID(), size, valuelog.ErrLeafAppendWorkUnsupported)
++	}
++	offset := uint64(size) + 4
++	db.leafGenerationRecordLengthMu.Lock()
++	defer db.leafGenerationRecordLengthMu.Unlock()
++	idx := db.leafGenerationRecordLengthByFile[raw]
++	if db.leafGenerationRecordLengthByFile == nil || (idx != nil && (len(idx.offsets) != len(idx.lengths) || (len(idx.offsets) > 0 && uint64(idx.offsets[len(idx.offsets)-1]) >= offset))) {
++		return page.ValuePtr{}, false, fmt.Errorf("leaf record-length index identity: %w", valuelog.ErrLeafAppendWorkUnsupported)
++	}
++	n, capacity := 0, 8
++	if idx != nil {
++		n = len(idx.offsets)
++		capacity = cap(idx.offsets)
++		if cap(idx.lengths) < capacity {
++			capacity = cap(idx.lengths)
++		}
++		if n == capacity {
++			capacity *= 2
++			if capacity < 8 {
++				capacity = 8
++			}
++		}
++	}
++	grow := idx == nil || cap(idx.offsets) <= n || cap(idx.lengths) <= n
++	cost := uint64(16)
++	records := uint64(2)
++	if grow {
++		cost += uint64(8*capacity + 8*n + 128)
++		records += 3
++	}
++	if records > w.RecordLimit || cost > w.ByteLimit {
++		return page.ValuePtr{}, false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: cost}
++	}
++	if !w.Reserve(records, cost) {
++		return page.ValuePtr{}, false, nil
++	}
++	if grow {
++		offsets, lengths := make([]uint32, n, capacity), make([]uint32, n, capacity)
++		if idx == nil {
++			idx = &leafGenerationRecordLengthIndex{}
++			db.leafGenerationRecordLengthByFile[raw] = idx
++		} else {
++			copy(offsets, idx.offsets)
++			copy(lengths, idx.lengths)
++		}
++		idx.offsets, idx.lengths = offsets, lengths
++	}
++	ptr, ready, err := writer.AppendEncodedFrameOneWithWork(body, w)
++	if err != nil || !ready {
++		return ptr, ready, err
++	}
++	// Both capacity and monotone position remain protected through the append.
++	// No index entry exists for a refused or failed physical operation.
++	idx.add(ptr.Offset, page.ValuePtrRecordLength(ptr))
++	return ptr, true, nil
++}
++
++// RegisterLeafSegmentWithWorkV6 completes the SAME Manager registration and
++// original manifest admission before a cache lane installs its current writer.
++func (db *DB) RegisterLeafSegmentWithWorkV6(path string, id uint32, s *valuelog.CurrentSegmentRegistrationWork, w *iterator.OrdinalScanWork) (bool, error) {
++	if db == nil || db.valueLogManager == nil {
++		return false, fmt.Errorf("value-log manager unavailable")
++	}
++	if s.Phase < 2 {
++		ready, e := db.valueLogManager.RegisterCurrentSegmentWithWorkV6(path, id, 0, s, w)
++		if e != nil || !ready {
++			return false, e
++		}
++	}
++	if s.Phase >= 3 {
++		return true, nil
++	}
++	if db.isLeafGenerationSegmentPath(path) && db.leafGenerationManifest != nil {
++		raw, ok := rawLeafGenerationFileID(id)
++		if !ok {
++			return false, fmt.Errorf("invalid leaf file id")
++		}
++		db.leafGenerationPendingMu.Lock()
++		count := uint64(len(db.leafGenerationPendingSet) + len(db.leafGenerationPendingCommitSeq))
++		bytes := (count+2)*64 + uint64(len(db.leafGenerationPendingFileIDs)+1)*8 + 256
++		records := 2 + count
++		if w != nil {
++			if records > w.RecordLimit || bytes > w.ByteLimit {
++				db.leafGenerationPendingMu.Unlock()
++				return false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: bytes}
++			}
++			if !w.Reserve(records, bytes) {
++				db.leafGenerationPendingMu.Unlock()
++				return false, nil
++			}
++		}
++		if db.leafGenerationPendingSet == nil {
++			db.leafGenerationPendingSet = make(map[uint32]struct{})
++		}
++		if db.leafGenerationPendingCommitSeq == nil {
++			db.leafGenerationPendingCommitSeq = make(map[uint32]uint64)
++		}
++		if _, exists := db.leafGenerationPendingSet[raw]; !exists {
++			db.leafGenerationPendingSet[raw] = struct{}{}
++			db.leafGenerationPendingFileIDs = append(db.leafGenerationPendingFileIDs, raw)
++		}
++		db.leafGenerationPendingMu.Unlock()
++	}
++	s.Phase = 3
++	return true, nil
++}
+diff --git a/TreeDB/db/native_mvcc_current_delete_v6.go b/TreeDB/db/native_mvcc_current_delete_v6.go
+index b719078f7..3e83bad16 100644
+--- a/TreeDB/db/native_mvcc_current_delete_v6.go
++++ b/TreeDB/db/native_mvcc_current_delete_v6.go
+@@ -3,6 +3,7 @@ package db
+ import (
+ 	"bytes"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
+ 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+@@ -190,8 +191,10 @@ type NativeMVCCCurrentDeleteV6 struct {
+ 	output              *zipper.MaterializedWriteWork
+ 	outputSequence      uint64
+ 	outputInput         zipper.MaterializedInputV6
++	inputWork           *zipper.MaterializedInputWorkV6
+ 	outputInputReady    bool
+ 	outputAdoptionReady bool
++	outputDiagnostic    bool
+ 	outputScope         NativeMVCCPrivateOutputScopeV6
+ 	outputReader        *NativeMVCCFrameReaderV6
+ 	release             rootpublication.PrimaryConstructionReleaseWork
+@@ -384,17 +387,14 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 		c.outputReader = nil
+ 		return true, nil
+ 	}
+-	if c.outputReader != nil {
+-		ready, err := c.outputReader.CancelProjectionFrame(w)
+-		if !ready || err != nil {
+-			return false, err
+-		}
+-		c.outputReader = nil
+-	}
+ 	if c.output != nil {
+ 		// Explicit synchronous diagnostic teardown only. The bounded installed-page
+ 		// cancellation continuation remains a reported refusal, never hidden here.
+-		ready, err := c.output.Cancel(nil)
++		cleanupWork := w
++		if c.outputDiagnostic {
++			cleanupWork = nil
++		}
++		ready, err := c.output.Cancel(cleanupWork)
+ 		if !ready || err != nil {
+ 			return false, err
+ 		}
+@@ -402,11 +402,31 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
+ 		c.output = nil
+ 		owner.RemovePending(charge)
+ 	}
+-	if c.outputScope != nil {
+-		lease, err := c.outputScope.ClosePrivateNativeOutputV6()
+-		if err != nil {
++	if ready, err := c.closeMaterializedInputWorkV6(w); !ready || err != nil {
++		return false, err
++	}
++	if c.outputReader != nil {
++		ready, err := c.outputReader.CancelProjectionFrame(w)
++		if !ready || err != nil {
+ 			return false, err
+ 		}
++		c.outputReader = nil
++	}
++	if c.outputScope != nil {
++		var lease *memtable.COWExternalLease
++		var err error
++		if step, ok := c.outputScope.(NativeMVCCPrivateOutputStepScopeV6); ok {
++			var ready bool
++			ready, lease, err = step.ClosePrivateNativeOutputStepV6(w)
++			if !ready || err != nil {
++				return false, err
++			}
++		} else {
++			lease, err = c.outputScope.ClosePrivateNativeOutputV6()
++			if err != nil {
++				return false, err
++			}
++		}
+ 		c.outputScope = nil
+ 		if lease != nil {
+ 			lease.Close()
+diff --git a/TreeDB/db/native_mvcc_materialized_write_v6.go b/TreeDB/db/native_mvcc_materialized_write_v6.go
+index f2405a98a..22d3b4f6a 100644
+--- a/TreeDB/db/native_mvcc_materialized_write_v6.go
++++ b/TreeDB/db/native_mvcc_materialized_write_v6.go
+@@ -7,6 +7,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/zipper"
++	"unsafe"
+ )
+ 
+ // NativeMVCCPrivateOutputScopeV6 is the original cache handoff's checked
+@@ -14,6 +15,76 @@ import (
+ type NativeMVCCPrivateOutputScopeV6 interface {
+ 	ClosePrivateNativeOutputV6() (*memtable.COWExternalLease, error)
+ }
++type NativeMVCCPrivateOutputStepScopeV6 interface {
++	ClosePrivateNativeOutputStepV6(*iterator.OrdinalScanWork) (bool, *memtable.COWExternalLease, error)
++}
++
++// The preborn constructor owns partial setup as soon as the first private
++// allocation succeeds. No cache-global registry or independently issued owner.
++func (c *NativeMVCCCurrentDeleteV6) NativeMVCCPrivateOutputScopeV6() NativeMVCCPrivateOutputScopeV6 {
++	if c == nil {
++		return nil
++	}
++	return c.outputScope
++}
++
++// BindNativeMVCCPrivateOutputScopeV6 is the fixed transfer following the cache's
++// admitted containing birth. The caller funds this scalar with that allocation
++// before creating any object, so refusal cannot orphan a new private owner.
++func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCPrivateOutputScopeV6(scope NativeMVCCPrivateOutputScopeV6) error {
++	if c == nil || c.phase != 3 || scope == nil {
++		return ErrNativeMVCCSnapshotWork
++	}
++	if c.outputScope != nil && c.outputScope != scope {
++		return ErrNativeMVCCSnapshotWork
++	}
++	c.outputScope = scope
++	return nil
++}
++
++// Input metadata and borrowed payloads stay stationary through output frames.
++// Every selected row belongs to this original constructor's verified vector.
++func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedInputV6(basis *Snapshot, prefix []batch.Entry, w *iterator.OrdinalScanWork) ([]batch.Entry, bool, error) {
++	if c == nil || c.phase != 3 || basis == nil || c.snapshot.idx != basis.idx || c.outputReader == nil {
++		return nil, false, ErrNativeMVCCSnapshotWork
++	}
++	if c.inputWork == nil {
++		records := c.records
++		if len(records) == 0 {
++			records = unsafe.Slice(&c.record, 1)
++		}
++		c.outputReader.Snapshot = basis
++		input, ready, e := zipper.NewMaterializedInputWorkV6(basis.idx.metadata, c.outputReader, basis.treeRoot, prefix, records, w)
++		if input != nil {
++			c.inputWork = input
++		}
++		if !ready || e != nil {
++			return nil, false, e
++		}
++	}
++	ready, e := c.inputWork.Step(w)
++	if !ready || e != nil {
++		return nil, false, e
++	}
++	entries, state, ready := c.inputWork.Result()
++	if ready {
++		c.outputInput = state
++		c.outputInputReady = true
++	}
++	return entries, ready, nil
++}
++func (c *NativeMVCCCurrentDeleteV6) closeMaterializedInputWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
++	if c.inputWork == nil {
++		return true, nil
++	}
++	ready, owner, charge, e := c.inputWork.CloseStep(w)
++	if !ready || e != nil {
++		return false, e
++	}
++	c.inputWork = nil
++	owner.RemovePending(charge)
++	return true, nil
++}
+ 
+ // StepNativeMVCCMaterializedOutputV6 advances only private materialized DATA.
+ // The cache keeps the exact covered prefix/basis and sorted delta alive. No
+@@ -21,6 +92,12 @@ type NativeMVCCPrivateOutputScopeV6 interface {
+ // Initial diagnostic prefix collection and final publication remain explicitly
+ // synchronous; only this output producer claims admitted continuation work.
+ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputV6(basis *Snapshot, entries []batch.Entry, scope NativeMVCCPrivateOutputScopeV6, w *iterator.OrdinalScanWork) (bool, error) {
++	return c.StepNativeMVCCMaterializedOutputPolicyV6(basis, entries, scope, true, w)
++}
++
++// A diagnostic choice is fixed before the first output frame is born. Bounded
++// callers never acquire the ordinary unmetered append through this adapter.
++func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputPolicyV6(basis *Snapshot, entries []batch.Entry, scope NativeMVCCPrivateOutputScopeV6, diagnostic bool, w *iterator.OrdinalScanWork) (bool, error) {
+ 	if c == nil || c.phase != 3 || basis == nil || scope == nil || c.snapshot.idx != basis.idx {
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+@@ -28,6 +105,9 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputV6(basis *Sn
+ 		return false, ErrNativeMVCCSnapshotWork
+ 	}
+ 	c.outputScope = scope
++	if c.output != nil && c.outputDiagnostic != diagnostic {
++		return false, ErrNativeMVCCSnapshotWork
++	}
+ 	if c.output == nil {
+ 		if !c.outputInputReady {
+ 			return false, ErrNativeMVCCSnapshotWork
+@@ -35,7 +115,10 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedOutputV6(basis *Sn
+ 		output, ready, e := zipper.NewMaterializedWriteWork(basis.idx.zipper, basis.idx.metadata, c.outputInput.Base.Ref, entries, w)
+ 		if output != nil {
+ 			c.output = output
+-			output.EnableUnboundedLeafPersistenceDiagnosticV6()
++			c.outputDiagnostic = diagnostic
++			if diagnostic {
++				output.EnableUnboundedLeafPersistenceDiagnosticV6()
++			}
+ 			c.outputSequence = c.outputInput.Sequence + 1
+ 			output.BindMaterializedInputAccountingV6(&c.outputInput)
+ 			if c.outputReader == nil {
+diff --git a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+index f3b26c60f..f4263ab72 100644
+--- a/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go
+@@ -119,6 +119,9 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
+ 		c.output = nil
+ 		refs = nil
+ 		owner.RemovePending(charge)
++		if ready, e := c.closeMaterializedInputWorkV6(w); !ready || e != nil {
++			return false, e
++		}
+ 	} else {
+ 		base, sequence, retired, metrics, err = z.ApplyMaterializedPrimaryDeltaV6(group.currentRoot, delta, &oldPointerRefs, &oldEntriesRemoved)
+ 		if err != nil {
+diff --git a/TreeDB/internal/memtable/cow_tree.go b/TreeDB/internal/memtable/cow_tree.go
+index eac252cf1..b0221d4f8 100644
+--- a/TreeDB/internal/memtable/cow_tree.go
++++ b/TreeDB/internal/memtable/cow_tree.go
+@@ -2,6 +2,7 @@ package memtable
+ 
+ import (
+ 	"fmt"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"sync"
+ 	"unsafe"
+ 
+@@ -72,6 +73,12 @@ type COWWriter struct {
+ }
+ 
+ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
++	return NewCOWWriterWithWorkV6(b, nil)
++}
++
++// NewCOWWriterWithWorkV6 admits the original five empty-generation allocations.
++// NewMap initializes only its private header; it allocates no tree node.
++func NewCOWWriterWithWorkV6(b *COWBudget, work *iterator.OrdinalScanWork) (*COWWriter, error) {
+ 	if b == nil {
+ 		return nil, fmt.Errorf("nil COW budget")
+ 	}
+@@ -79,6 +86,9 @@ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
+ 		cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
+ 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(COWResourceID{}))) +
+ 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(cowResourceOwner{})))
++	if work != nil && !work.Reserve(5, 2*base) {
++		return nil, btree.ErrWork
++	}
+ 	g, err := newCOWGeneration(b, base)
+ 	if err != nil {
+ 		return nil, err
+@@ -86,6 +96,24 @@ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
+ 	return &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}, nil
+ }
+ 
++// PrepareEmptyWithWorkV6 is restricted to a private, never-published empty
++// successor. It admits the six allocations in the SAME Prepare engine: two
++// map headers, prepared/root headers and the one-slot ID/owner vectors. There
++// are no key probes, node copies or mutation callbacks on this empty route.
++func (w *COWWriter) PrepareEmptyWithWorkV6(work *iterator.OrdinalScanWork) (*COWPrepared, error) {
++	w.mu.Lock()
++	empty := !w.closed && w.pending == nil && w.private.Len() == 0 && len(w.generation.ids) == 0
++	w.mu.Unlock()
++	if !empty {
++		return nil, ErrCOWPending
++	}
++	bytes := 2 * (uint64(unsafe.Sizeof(COWPrepared{})) + uint64(unsafe.Sizeof(COWRoot{})) + 2*uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})) + uint64(unsafe.Sizeof(COWResourceID{})) + uint64(unsafe.Sizeof(cowResourceOwner{})))
++	if work != nil && !work.Reserve(6, bytes) {
++		return nil, btree.ErrWork
++	}
++	return w.Prepare(nil, COWPrepareOptions{ResourceSlots: 1})
++}
++
+ // COWPrepareOptions reserves the later pre-frame resource binding and C2's
+ // publication vector/cut/backend/retirement wrappers before allocating them.
+ // ResourceBytes includes caller-owned closure/lease capacities, not file size.
+diff --git a/TreeDB/internal/primaryarena/read_root_v6.go b/TreeDB/internal/primaryarena/read_root_v6.go
+index eec7446dd..189fca3c9 100644
+--- a/TreeDB/internal/primaryarena/read_root_v6.go
++++ b/TreeDB/internal/primaryarena/read_root_v6.go
+@@ -284,6 +284,27 @@ func (a *Arena) DetachReadRootConstructionV6(ref Ref, owner ReadRootConstruction
+ 	return true, nil
+ }
+ 
++// AcquireAndDetachReadRootConstructionV6 transfers constructor discoverability
++// to the publication edge in one admitted bank transition. Refusal leaves both
++// the constructor and reference count unchanged; no compensating Drop is needed.
++func (a *Arena) AcquireAndDetachReadRootConstructionV6(ref Ref, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (bool, error) {
++	bytes := 4 * uint64(unsafe.Sizeof(bank{}))
++	if !reserve(w, 2, bytes) {
++		return false, nil
++	}
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	b := a.valid(ref)
++	if b == nil || !b.sealed || b.refs == ^uint64(0) || b.construction != owner {
++		return false, ErrStale
++	}
++	b.refs++
++	b.construction = nil
++	a.counters.RootAcquires++
++	a.counters.Bytes += bytes
++	return true, nil
++}
++
+ // CloneReadRootForPromotionV6 owns a separate immutable RAM image and genuine
+ // group edges. The visible logical root and its admitted retention never grow.
+ // Capsule encoding still consumes the original constructor certificate; this
+diff --git a/TreeDB/internal/rootpublication/durable_root_transaction.go b/TreeDB/internal/rootpublication/durable_root_transaction.go
+index a66c2add7..57debb447 100644
+--- a/TreeDB/internal/rootpublication/durable_root_transaction.go
++++ b/TreeDB/internal/rootpublication/durable_root_transaction.go
+@@ -75,7 +75,15 @@ type DurableRootTransactionSpec struct {
+ 	PreparedPrimary         *PreparedPrimaryRootV5
+ 	Activate                func(DurableRootCallbackInput) error
+ 	Consume                 func(DurableRootCallbackInput) error
+-	Abort                   func(DurableRootCallbackInput) error
++	// Work callbacks run the SAME activation/consumption stages with the original
++	// caller's allowance. They must admit their own concrete effects before
++	// performing them. A false, nil result leaves that stage resumable.
++	// Native non-diagnostic construction requires BOTH callbacks. The caller
++	// must admit its entire enqueue/fence/consume/release window before a fence;
++	// callback types alone do not establish that the window fits an allowance.
++	ActivateWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
++	ConsumeWithWork  func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
++	Abort            func(DurableRootCallbackInput) error
+ 	// AbortComplete consumes callback payload only after BOTH original physical
+ 	// callback cleanup and constructor root cleanup have actually succeeded.
+ 	AbortComplete         func(DurableRootCallbackInput) error
+@@ -104,6 +112,8 @@ type DurableRootTransaction struct {
+ 	input                  DurableRootCallbackInput
+ 	activate               func(DurableRootCallbackInput) error
+ 	consume                func(DurableRootCallbackInput) error
++	activateWithWork       func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
++	consumeWithWork        func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+ 	abort                  func(DurableRootCallbackInput) error
+ 	abortComplete          func(DurableRootCallbackInput) error
+ 	physicalCleanupError   error
+@@ -196,7 +206,7 @@ func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next
+ 
+ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
+ 	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || (spec.PreparedCOW == nil && spec.PreparedPrimary == nil) ||
+-		spec.Abort == nil || spec.Fail == nil || (spec.Activate == nil || spec.Consume == nil) {
++		spec.Abort == nil || spec.Fail == nil || !spec.hasDurableRootCallbacksV6() {
+ 		return nil, fmt.Errorf("%w: incomplete durable-root transaction", ErrInvalidCandidate)
+ 	}
+ 	if err := validateDurableRootTransactionSpec(spec); err != nil {
+@@ -219,7 +229,9 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
+ 			Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload,
+ 			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
+ 		},
+-		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
++		activate: spec.Activate, consume: spec.Consume,
++		activateWithWork: spec.ActivateWithWork, consumeWithWork: spec.ConsumeWithWork,
++		abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
+ 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
+ 	}, nil
+ }
+@@ -408,7 +420,7 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
+ 		if node := transaction.terminalMetadataV6; node != nil {
+ 			transaction.terminalMetadataV6 = nil
+ 			transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
+-			transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
++			transaction.clearDurableRootCallbacksV6()
+ 			_, terminal = popPrimaryTerminalCompletionV6(node)
+ 		}
+ 		return nil
+@@ -447,45 +459,95 @@ func (transaction *DurableRootTransaction) activateFromCoordinator() error {
+ 	return transaction.activateFromCoordinatorWithWork(nil)
+ }
+ func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
++	ready, err := transaction.activateFromCoordinatorStepWithWorkV6(w)
++	if !ready && err == nil {
++		return ErrNativeMVCCRootWorkRequiredV6
++	}
++	return err
++}
++
++// This is a continuation of the original activation stage, before its effects.
++// The error-only coordinator adapter preserves its existing failure custody;
++// native pre-enqueue callers can observe ordinary allowance refusal separately.
++func (transaction *DurableRootTransaction) activateFromCoordinatorStepWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+ 	if transaction == nil {
+-		return nil
++		return true, nil
+ 	}
+ 	transaction.mu.Lock()
+ 	defer transaction.mu.Unlock()
+ 	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootPrepared {
+-		return ErrDurableRootOwnership
++		return false, ErrDurableRootOwnership
+ 	}
+-	if err := transaction.activate(transaction.input); err != nil {
+-		return err
++	if transaction.requiresNativeCallbackWorkV6() && (w == nil || transaction.activateWithWork == nil || transaction.consumeWithWork == nil) {
++		return false, ErrNativeMVCCRootWorkRequiredV6
++	}
++	if w != nil && !reserveDurableRootCallbackDispatchV6(w) {
++		return false, nil
++	}
++	if w != nil && transaction.activateWithWork != nil {
++		if ready, err := transaction.activateWithWork(transaction.input, w); !ready || err != nil {
++			return false, err
++		}
++	} else {
++		if transaction.activate == nil {
++			return false, ErrNativeMVCCRootWorkRequiredV6
++		}
++		if err := transaction.activate(transaction.input); err != nil {
++			return false, err
++		}
+ 	}
+ 	transaction.phase = durableRootActivated
+-	return nil
++	return true, nil
+ }
+ 
+ func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
+ 	return transaction.consumeFromCoordinatorWithWork(nil)
+ }
+ func (transaction *DurableRootTransaction) consumeFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
++	ready, err := transaction.consumeFromCoordinatorStepWithWorkV6(w)
++	if !ready && err == nil {
++		return ErrNativeMVCCRootWorkRequiredV6
++	}
++	return err
++}
++
++// The native driver must never yield here after a visible fence. Its fully
++// admitted window owns that guarantee; unexpected refusal/error remains on the
++// original coordinator ambiguity/failure edge through the error-only adapter.
++func (transaction *DurableRootTransaction) consumeFromCoordinatorStepWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+ 	if transaction == nil {
+-		return nil
++		return true, nil
+ 	}
+ 	transaction.mu.Lock()
+ 	defer transaction.mu.Unlock()
+ 	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootActivated {
+-		return ErrDurableRootOwnership
++		return false, ErrDurableRootOwnership
+ 	}
+-	{
+-		if err := transaction.consume(transaction.input); err != nil {
+-			return err
++	if transaction.requiresNativeCallbackWorkV6() && (w == nil || transaction.activateWithWork == nil || transaction.consumeWithWork == nil) {
++		return false, ErrNativeMVCCRootWorkRequiredV6
++	}
++	if w != nil && !reserveDurableRootCallbackDispatchV6(w) {
++		return false, nil
++	}
++	if w != nil && transaction.consumeWithWork != nil {
++		if ready, err := transaction.consumeWithWork(transaction.input, w); !ready || err != nil {
++			return false, err
++		}
++	} else {
++		if transaction.consume == nil {
++			return false, ErrNativeMVCCRootWorkRequiredV6
+ 		}
+-		if transaction.isConstructedPrimaryV6() || transaction.terminalMetadataV6 != nil {
+-			transaction.phase = durableRootFinishing
+-		} else {
+-			transaction.phase = durableRootConsumed
+-			transaction.releaseOwnerLockedV6()
++		if err := transaction.consume(transaction.input); err != nil {
++			return false, err
+ 		}
+ 	}
+-	return nil
++	if transaction.isConstructedPrimaryV6() || transaction.terminalMetadataV6 != nil {
++		transaction.phase = durableRootFinishing
++	} else {
++		transaction.phase = durableRootConsumed
++		transaction.releaseOwnerLockedV6()
++	}
++	return true, nil
+ }
+ 
+ func (transaction *DurableRootTransaction) failFromCoordinator(cause error) error {
+@@ -544,7 +606,7 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTermin
+ 	}
+ 	if transaction.ownerLockedV6() == ResourceOwnerRecovery {
+ 		transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
+-		transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
++		transaction.clearDurableRootCallbacksV6()
+ 		transaction.releaseOwnerLockedV6()
+ 		transaction.phase = durableRootConsumed
+ 		node := transaction.terminalMetadataV6
+diff --git a/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go b/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go
+index bb0457a16..57fe585ce 100644
+--- a/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go
++++ b/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go
+@@ -58,6 +58,8 @@ var ErrNativeMVCCRootWorkRequiredV6 = errors.New("native MVCC transaction requir
+ type PrimaryConstructionReleaseWork struct {
+ 	mu          sync.Mutex
+ 	transaction *DurableRootTransaction
++	terminal    *primaryTerminalCompletionV6
++	finishing   bool
+ 	removal     retainedalloc.RemovalWork
+ 	phase       uint8
+ }
+@@ -93,6 +95,9 @@ func (s *PrimaryConstructionReleaseWork) ContinueWork(w *iterator.OrdinalScanWor
+ 	}
+ 	s.mu.Lock()
+ 	defer s.mu.Unlock()
++	if s.finishing {
++		return false, ErrDurableRootOwnership
++	}
+ 	if s.phase == 2 {
+ 		return true, nil
+ 	}
+@@ -188,7 +193,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
+ 		c.certificate, c.promotion = nil, nil
+ 		c.candidate, c.members = PreparedRootCandidate{}, [1]*DurableRootTransaction{}
+ 		t.input = DurableRootCallbackInput{}
+-		t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
++		t.clearDurableRootCallbacksV6()
+ 		c.cleanupPhase = 4
+ 	}
+ 	for c.cleanupPhase == 4 {
+@@ -215,7 +220,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
+ 	}
+ 	t.constructionV6 = nil
+ 	t.input = DurableRootCallbackInput{}
+-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
++	t.clearDurableRootCallbacksV6()
+ 	*c = primaryTransactionConstructionV6{}
+ 	t.owner, t.phase = ResourceOwnerReleased, durableRootConsumed
+ 	terminal.owner, terminal.charge = owner, charge
+diff --git a/TreeDB/internal/rootpublication/pin_registry.go b/TreeDB/internal/rootpublication/pin_registry.go
+index ebf1e1f0c..36f4088cf 100644
+--- a/TreeDB/internal/rootpublication/pin_registry.go
++++ b/TreeDB/internal/rootpublication/pin_registry.go
+@@ -298,24 +298,8 @@ func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, er
+ func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
+ 
+ func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
+-	identity, err := validateRegistryIdentity(identity)
+-	if err != nil {
+-		return err
+-	}
+-	if registry == nil {
+-		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+-	}
+-	registry.mu.Lock()
+-	defer registry.mu.Unlock()
+-	state, err := registry.stateLocked(identity)
+-	if err != nil {
+-		return err
+-	}
+-	if state.retired || state.deleting {
+-		return ErrResourceConflict
+-	}
+-	state.observers++
+-	return nil
++ _, err := registry.ObserveWithWorkV6(identity,nil)
++ return err
+ }
+ 
+ func (registry *IdentityPinRegistry) Unobserve(identity StableIdentity) error {
+diff --git a/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go b/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
+index 4ed9d5c89..b4c16d4b7 100644
+--- a/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
++++ b/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
+@@ -104,7 +104,7 @@ func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTermina
+ 	node := t.terminalMetadataV6
+ 	t.terminalMetadataV6 = nil
+ 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
+-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
++	t.clearDurableRootCallbacksV6()
+ 	t.releaseOwnerLockedV6()
+ 	t.phase = durableRootConsumed
+ 	return node, nil
+diff --git a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+index 83a65c5be..8f7974fb9 100644
+--- a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
++++ b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+@@ -25,11 +25,13 @@ type primaryTransactionConstructionV6 struct {
+ 	metadataCharge     uint64
+ 	terminalCompletion *primaryTerminalCompletionV6
+ 	// This is custody on the SAME transaction, admitted in its containing allocation.
+-	nativeWorkOwned     bool
+-	unboundedDiagnostic bool
+-	cleanupPhase        uint8
+-	cleanupQueue        primaryarena.ReleaseQueue
+-	cleanupReceipt      *PrimaryConstructionReleaseWork
++	nativeWorkOwned      bool
++	unboundedDiagnostic  bool
++	cleanupPhase         uint8
++	cleanupQueue         primaryarena.ReleaseQueue
++	cleanupReceipt       *PrimaryConstructionReleaseWork
++	finishReleaseStarted bool
++	finishReleaseDone    bool
+ }
+ type PrimaryPromotionV6 struct {
+ 	Image        []byte
+@@ -130,12 +132,12 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
+ 	c := t.constructionV6
+ 	// Native visibility requires the work-bearing callback contract; the
+ 	// existing synchronous callback binding cannot claim its continuation.
+-	if c != nil && c.nativeWorkOwned && !c.unboundedDiagnostic {
++	if c != nil && c.nativeWorkOwned && !c.unboundedDiagnostic && (spec.ActivateWithWork == nil || spec.ConsumeWithWork == nil) {
+ 		return false, ErrNativeMVCCRootWorkRequiredV6
+ 	}
+ 	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate == nil || resources == nil || resources.Owner() != ResourceOwnerBuilder ||
+ 		spec.PreparedPrimary == nil || spec.PreparedPrimary.readCertificate != c.certificate || spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 ||
+-		spec.Abort == nil || spec.Fail == nil {
++		spec.Abort == nil || spec.Fail == nil || !spec.hasDurableRootCallbacksV6() {
+ 		return false, ErrDurableRootOwnership
+ 	}
+ 	if err := validateDurableRootTransactionSpec(spec); err != nil {
+@@ -143,19 +145,27 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
+ 	}
+ 	// The constructor retains its original root edge through Finish. Visibility
+ 	// acquires a distinct state edge: replacing that state must not free a still
+-	// pending transaction's immutable logical root.
+-	if ready, err := c.arena.Acquire(c.root, w); !ready || err != nil {
+-		return ready, err
+-	}
+-	// Private constructor discovery ends before publication. Runtime/coordinator
+-	// retain this SAME transaction; immutable readers need only its root edge.
+-	if ready, err := c.arena.DetachReadRootConstructionV6(c.root, t, w); !ready || err != nil {
+-		cleanup := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+-		_, dropErr := c.arena.Drop(c.root, cleanup)
+-		return false, errors.Join(err, dropErr)
++	// pending transaction's immutable logical root. Native admission covers BOTH
++	// arena stages atomically, before refcount or discovery effects.
++	if c.nativeWorkOwned && !c.unboundedDiagnostic {
++		if ready, err := c.arena.AcquireAndDetachReadRootConstructionV6(c.root, t, w); !ready || err != nil {
++			return ready, err
++		}
++	} else {
++		if ready, err := c.arena.Acquire(c.root, w); !ready || err != nil {
++			return ready, err
++		}
++		// Preserve ordinary compensation. Native binding never enters this
++		// unlimited rollback path when its actual allowance is exhausted.
++		if ready, err := c.arena.DetachReadRootConstructionV6(c.root, t, w); !ready || err != nil {
++			cleanup := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++			_, dropErr := c.arena.Drop(c.root, cleanup)
++			return false, errors.Join(err, dropErr)
++		}
+ 	}
+ 	t.input = DurableRootCallbackInput{Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload, PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection}
+ 	t.activate, t.consume, t.abort, t.abortComplete, t.fail = spec.Activate, spec.Consume, spec.Abort, spec.AbortComplete, spec.Fail
++	t.activateWithWork, t.consumeWithWork = spec.ActivateWithWork, spec.ConsumeWithWork
+ 	c.resources = resources
+ 	c.metadataCharge += spec.PrimaryMetadataBytesV6
+ 	t.phase = durableRootPrepared
+@@ -337,57 +347,117 @@ func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *
+ 	return true, nil
+ }
+ 
+-// The ordinary report owns this same synchronous Finish. Its actual ordinary
+-// release callbacks are deliberately NOT claimed as bounded native retirement.
++// The ordinary report drives the SAME Finish stages with its existing
++// synchronous resource callback. Native retirement supplies the original
++// receipt's work-bearing resource release to the ready-return core below.
+ func (t *DurableRootTransaction) finishOrdinaryPrimaryV6(w *iterator.OrdinalScanWork, activePins map[ResourceKind]uint64) (*primaryTerminalCompletionV6, error) {
+-	if w == nil {
+-		return nil, ErrDurableRootOwnership
++	completion, ready, err := t.finishPrimaryStepWithWorkV6(w, activePins, nil)
++	if !ready && err == nil {
++		return nil, ErrNativeMVCCRootWorkRequiredV6
++	}
++	return completion, err
++}
++
++// The SAME transaction retains all unfinished physical custody on false, nil.
++// release must resume its original Set/receipt and admit its concrete operations
++// with w. For native construction it must drain/check this SAME cleanupQueue
++// before reporting ready; only the ordinary path may use the synchronous nil callback. The
++// returned original terminal is consumed after callers detach aliases and leave
++// their callback/lock scopes. This helper does not refund containing metadata.
++func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.OrdinalScanWork, activePins map[ResourceKind]uint64, release func(*StableResourceSet, map[ResourceKind]uint64, *iterator.OrdinalScanWork) (bool, error)) (*primaryTerminalCompletionV6, bool, error) {
++	if t == nil || w == nil {
++		return nil, false, ErrDurableRootOwnership
+ 	}
+ 	t.mu.Lock()
+ 	if t.physicalCleanupError != nil {
+ 		err := t.physicalCleanupError
+ 		t.mu.Unlock()
+-		return nil, err
++		return nil, false, err
+ 	}
+ 	c := t.constructionV6
+-	if c == nil || c.resources == nil || t.phase != durableRootFinishing || c.resources.Owner() != ResourceOwnerCoordinator || t.finishBusy {
++	if c == nil || c.resources == nil || t.phase != durableRootFinishing || t.owner != ResourceOwnerCoordinator || t.finishBusy {
+ 		t.mu.Unlock()
+-		return nil, ErrDurableRootOwnership
++		return nil, false, ErrDurableRootOwnership
++	}
++	setOwner := c.resources.Owner()
++	if setOwner != ResourceOwnerCoordinator && !(c.finishReleaseStarted && setOwner == ResourceOwnerReleased) {
++		t.mu.Unlock()
++		return nil, false, ErrDurableRootOwnership
++	}
++	if c.nativeWorkOwned && !c.unboundedDiagnostic && release == nil {
++		t.mu.Unlock()
++		return nil, false, ErrNativeMVCCRootWorkRequiredV6
++	}
++	// Admit this call's original descriptor updates/scrub before physical work,
++	// so a completed Set release never needs replay for a later scrub refusal.
++	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
++		t.mu.Unlock()
++		return nil, false, nil
+ 	}
+ 	t.finishBusy = true
+ 	t.mu.Unlock()
+-	// Runtime/coordinator have been the sole mutable constructor owner since
+-	// Bind. Synchronous ordinary callbacks release its resources once; readers
+-	// have no backpointer to this pending graph.
++
+ 	ready, err := true, error(nil)
+ 	if c.root != (primaryarena.Ref{}) {
+-		ready, err = c.arena.Drop(c.root, w)
++		if c.nativeWorkOwned && !c.unboundedDiagnostic {
++			ready, err = c.arena.DropToReleaseQueue(c.root, &c.cleanupQueue, w)
++		} else {
++			ready, err = c.arena.Drop(c.root, w)
++		}
+ 		if ready && err == nil {
+ 			t.mu.Lock()
+ 			c.root = primaryarena.Ref{}
+ 			t.mu.Unlock()
+ 		}
+ 	}
+-	if ready && err == nil {
+-		err = c.resources.releaseFromWithActivePins(ResourceOwnerCoordinator, activePins)
++	if ready && err == nil && !c.finishReleaseDone {
++		t.mu.Lock()
++		c.finishReleaseStarted = true
++		t.mu.Unlock()
++		if release != nil {
++			ready, err = release(c.resources, activePins, w)
++		} else {
++			err = c.resources.releaseFromWithActivePins(ResourceOwnerCoordinator, activePins)
++		}
++		if ready && err == nil {
++			// Released alone cannot authorize containing descriptor disposal.
++			// Check the SAME Set's actual completion and first physical outcome.
++			if c.resources.Owner() != ResourceOwnerReleased {
++				err = ErrDurableRootOwnership
++			} else {
++				err = c.resources.releaseResult()
++			}
++			if err == nil {
++				t.mu.Lock()
++				c.finishReleaseDone = true
++				t.mu.Unlock()
++			}
++		}
+ 	}
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	t.finishBusy = false
+-	if !ready || err != nil || c.resources.Owner() != ResourceOwnerReleased {
+-		return nil, t.recordPhysicalCleanupFailureLocked(errors.Join(err, ErrDurableRootOwnership))
++	if err != nil {
++		return nil, false, t.recordPhysicalCleanupFailureLocked(err)
++	}
++	if !ready {
++		return nil, false, nil
++	}
++	if !c.finishReleaseDone || c.terminalCompletion == nil {
++		return nil, false, t.recordPhysicalCleanupFailureLocked(ErrDurableRootOwnership)
+ 	}
+ 	// Immutable state/slot/reader refs independently own the root. Scrub this
+-	// mutable constructor, then move its accounting custody out of this call.
++	// mutable constructor, then move its original accounting custody out of the
++	// call; defer unlock runs before the terminal can be consumed by its caller.
+ 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
+-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
++	t.clearDurableRootCallbacksV6()
+ 	t.constructionV6 = nil
+ 	completion := c.terminalCompletion
+ 	completion.charge = c.metadataCharge
+ 	*c = primaryTransactionConstructionV6{}
+ 	t.owner = ResourceOwnerReleased
+ 	t.phase = durableRootConsumed
+-	return completion, nil
++	return completion, true, nil
+ }
+ func (t *DurableRootTransaction) isConstructedPrimaryV6() bool {
+ 	return t != nil && t.constructionV6 != nil
+@@ -484,7 +554,7 @@ func (t *DurableRootTransaction) releasePrimaryRecoveryLockedV6() (*primaryTermi
+ 		c.promotion.View = PrimaryCapsuleViewV6{}
+ 	}
+ 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
+-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
++	t.clearDurableRootCallbacksV6()
+ 	t.constructionV6 = nil
+ 	completion := c.terminalCompletion
+ 	completion.charge = c.metadataCharge
+diff --git a/TreeDB/internal/valuelog/frame_preparer.go b/TreeDB/internal/valuelog/frame_preparer.go
+index 341c5c4b4..fadaf3ff3 100644
+--- a/TreeDB/internal/valuelog/frame_preparer.go
++++ b/TreeDB/internal/valuelog/frame_preparer.go
+@@ -3,7 +3,11 @@ package valuelog
+ import (
+ 	"encoding/binary"
+ 	"errors"
++	"github.com/pierrec/lz4/v4"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/page"
+ 	"time"
++	"unsafe"
+ 
+ 	"github.com/snissn/compress/zstd"
+ 	"github.com/snissn/gomap/TreeDB/internal/limits"
+@@ -274,6 +278,35 @@ func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Recor
+ 	return p.PrepareFrameInto(nil, dictID, dict, records)
+ }
+ 
++// PrepareLeafFrameIntoWithWork admits the original fixed-page block primitive,
++// scratch birth, keep/raw choice and frame copies before calling the SAME
++// preparer. Only the actual outer-leaf LZ4 policy is supported by this bounded
++// entry. Ordinary callers use PrepareFrameInto with no work overhead.
++func (p *FramePreparer) PrepareLeafFrameIntoWithWork(dst []byte, rid uint64, value []byte, w *iterator.OrdinalScanWork) ([]byte, FrameStats, bool, error) {
++	if p == nil {
++		return nil, FrameStats{}, false, ErrCorrupt
++	}
++	if w != nil {
++		if len(value) > page.PageSize || !p.blockCompression || normalizeBlockCodec(p.blockCodec) != BlockCodecLZ4 {
++			return nil, FrameStats{}, false, ErrLeafAppendWorkUnsupported
++		}
++		bound := lz4.CompressBlockBound(len(value))
++		// One fixed-page codec operation; its original caller-owned hash table,
++		// reset bitmap and bounded destination are included even on a cold pool.
++		// Frame construction owns a second destination and copies either raw or
++		// encoded payload. The original codec and keep policy remain unchanged.
++		bytes := uint64(unsafe.Sizeof(lz4.Compressor{})) + uint64(len(value)+3*bound+4*FrameHeaderSize+256)
++		ok, e := leafAppendReserve(w, 8, bytes)
++		if !ok || e != nil {
++			return nil, FrameStats{}, false, e
++		}
++	}
++	var records [1]Record
++	records[0] = Record{RID: rid, Value: value}
++	body, stats, e := p.PrepareFrameInto(dst, 0, nil, records[:])
++	return body, stats, e == nil, e
++}
++
+ // PrepareFrameInto behaves like PrepareFrame, but writes the frame body into dst
+ // when capacity allows. Callers can reuse large frame buffers across requests.
+ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte, records []Record) ([]byte, FrameStats, error) {
+diff --git a/TreeDB/internal/valuelog/manager.go b/TreeDB/internal/valuelog/manager.go
+index 4e4591651..932d35a17 100644
+--- a/TreeDB/internal/valuelog/manager.go
++++ b/TreeDB/internal/valuelog/manager.go
+@@ -204,55 +204,26 @@ func (f *File) appendMaybeDecodeLeafLogPayload(dst, payload []byte) ([]byte, err
+ }
+ 
+ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (result *File, retErr error) {
+-	// registerSegmentLocked admitted this exact original File and both bounded
+-	// parent operands before invoking the constructor. Standalone legacy users
+-	// retain the same payload through its actual error receipt.
+-	vf := &File{
+-		ID: id, Path: path, dictLookup: dictLookup, templateLookup: templateLookup,
+-		templateDecodeOpts: templateOpts, templateDefCache: templateCache,
+-		compactLeafPayloadAllowed:    allowsCompactLeafLogPayload(id, path),
+-		compactLeafPayloadAllowedSet: true,
+-		groupedFrameCacheEntries:     defaultGroupedFrameCacheEntries,
+-		groupedFrameCacheMaxRaw:      defaultGroupedFrameCacheMaxRawBytes,
+-		groupedFrameCacheMaxBytes:    defaultGroupedFrameCacheMaxBytes,
+-	}
+-	vf.mmapData.Store([]byte(nil))
+-	defer func() {
+-		var parentErr error
+-		for i := range vf.constructionParents {
+-			parentErr = errors.Join(parentErr, vf.closeConstructionParent(i))
+-		}
+-		retErr = errors.Join(retErr, parentErr)
+-		if retErr != nil {
+-			actual := vf.Close()
++	state := segmentOpenWork{path: path, id: id, dictLookup: dictLookup, templateLookup: templateLookup, templateOpts: templateOpts, templateCache: templateCache}
++	for {
++		ready, err := state.step(nil)
++		if err != nil {
++			var actual error
++			if state.file != nil {
++				for i := range state.file.constructionParents {
++					actual = errors.Join(actual, state.file.closeConstructionParent(i))
++				}
++				actual = errors.Join(actual, state.file.Close())
++			}
+ 			if actual != nil {
+-				result = vf
+-				retErr = errors.Join(retErr, actual)
+-			} else {
+-				result = nil
++				return state.file, errors.Join(err, actual)
+ 			}
+-		}
+-	}()
+-	parent, parentIdentity, err := openRegisteredSegmentParent(path)
+-	vf.constructionParents[0] = parent
+-	vf.registeredParentIdentity = parentIdentity
+-	if err != nil && !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+-		return nil, err
+-	}
+-	supportedParent := err == nil && parent != nil
+-	vf.File, err = openSegmentReadHandle(path)
+-	if err != nil {
+-		return nil, err
+-	}
+-	if supportedParent {
+-		if err := validateRegisteredSegmentParent(path, vf, parent, parentIdentity); err != nil {
+ 			return nil, err
+ 		}
++		if ready {
++			return state.file, nil
++		}
+ 	}
+-	if info, err := vf.File.Stat(); err == nil {
+-		vf.noteVerifiedFileSize(info.Size())
+-	}
+-	return vf, nil
+ }
+ 
+ func (f *File) noteVerifiedFileSize(size int64) {
+@@ -2178,10 +2149,7 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
+ 	}
+ 	m.fileAliases.Add(1)
+ 	f.manager = m
+-	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
+-	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
+-	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+-	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
++	configureRegisteredFile(m, f)
+ 	if err := m.observeStableFileLocked(f); err != nil {
+ 		closeErr := f.Close()
+ 		if closeErr == nil {
+@@ -2214,9 +2182,13 @@ func (m *Manager) PromoteCurrentWritableReplacing(fileID, previousFileID uint32)
+ 	if m == nil {
+ 		return nil
+ 	}
+-	lane, _ := DecodeFileID(fileID)
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
++	return m.promoteCurrentWritableReplacingLocked(fileID, previousFileID)
++}
++
++func (m *Manager) promoteCurrentWritableReplacingLocked(fileID, previousFileID uint32) error {
++	lane, _ := DecodeFileID(fileID)
+ 	if m.currentWritableByLane == nil {
+ 		m.currentWritableByLane = make(map[uint32]uint32)
+ 	}
+diff --git a/TreeDB/internal/valuelog/stable_resource.go b/TreeDB/internal/valuelog/stable_resource.go
+index 136ccc197..9999946f0 100644
+--- a/TreeDB/internal/valuelog/stable_resource.go
++++ b/TreeDB/internal/valuelog/stable_resource.go
+@@ -161,7 +161,7 @@ func (w *Writer) newStableCreationProof(parent, child *os.File, path string, met
+ 	}
+ 	if err != nil {
+ 		w.directorySyncErrors.Add(1)
+-		return nil, err
++		return proof, err
+ 	}
+ 	return proof, durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, resource, "", dir)
+ }
+diff --git a/TreeDB/internal/valuelog/writer.go b/TreeDB/internal/valuelog/writer.go
+index 005b85fa2..e63efc15e 100644
+--- a/TreeDB/internal/valuelog/writer.go
++++ b/TreeDB/internal/valuelog/writer.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/binary"
+ 	"errors"
+ 	"fmt"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"io"
+ 	"math/bits"
+ 	"os"
+@@ -13,7 +14,6 @@ import (
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+-	"unsafe"
+ 
+ 	"github.com/snissn/compress/zstd"
+ 	"github.com/snissn/gomap/TreeDB/internal/crc"
+@@ -449,6 +449,13 @@ func (w *Writer) ensureAppendBufCap(capacity int) {
+ }
+ 
+ func (w *Writer) writeBytes(buf []byte) error {
++	return w.writeBytesWithCapacity(buf, 0)
++}
++
++// capacity is an already admitted buffer target. Ordinary writers retain their
++// original full-buffer policy; work-bearing single-frame appends may grow the
++// SAME buffer only to the capacity their actual current append needs.
++func (w *Writer) writeBytesWithCapacity(buf []byte, capacity int) error {
+ 	if w == nil {
+ 		return errors.New("valuelog: nil writer")
+ 	}
+@@ -488,8 +495,12 @@ func (w *Writer) writeBytes(buf []byte) error {
+ 			return w.writeAllToFile(buf)
+ 		}
+ 	}
+-	if cap(w.appendBuf) < max {
+-		w.ensureAppendBufCap(max)
++	target := max
++	if capacity > 0 {
++		target = capacity
++	}
++	if cap(w.appendBuf) < target {
++		w.ensureAppendBufCap(target)
+ 	}
+ 	w.appendBuf = append(w.appendBuf, buf...)
+ 	if len(w.appendBuf) >= max {
+@@ -684,78 +695,23 @@ func NewStagingWriterWithMetadata(path string, fileID uint32, owner *retainedall
+ 	return newFileWriter(path, fileID, false, syncStagingFileData, nil, owner)
+ }
+ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry, explicitOwner ...*retainedalloc.Owner) (result *Writer, resultErr error) {
+-	var owner *retainedalloc.Owner
+-	if registry != nil {
+-		owner = registry.MetadataOwner()
+-	}
++	state := WriterCreationWork{Path: path, FileID: fileID, Registry: registry, SyncDirectory: syncDirectory, Sync: syncFn}
+ 	if len(explicitOwner) != 0 {
+-		owner = explicitOwner[0]
+-	}
+-	fileCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(path)))
+-	if err != nil {
+-		return nil, err
+-	}
+-	parentCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(filepath.Dir(path))))
+-	if err != nil {
+-		return nil, err
+-	}
+-	const prefixCapacity = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Writer{}))) + fileCharge + parentCharge + retainedalloc.AllocationCharge(uint64(prefixCapacity))
+-	if owner != nil {
+-		if err = owner.AddPending(charge); err != nil {
+-			return nil, err
+-		}
++		state.Owner = explicitOwner[0]
+ 	}
+-	w := &Writer{metadata: owner, metadataCharge: charge, fileMetadataCharge: fileCharge, parentMetadataCharge: parentCharge, syncFn: syncFn}
+-	w.cleanupFailure.writer = w
+-	defer func() {
+-		if resultErr != nil {
+-			if cleanupErr := w.Close(); cleanupErr != nil {
+-				w.cleanupFailure.LinkPriorCleanupError(resultErr)
+-				resultErr = cleanupErr
++	for {
++		ready, err := state.Step(nil)
++		if err != nil {
++			if cleanupErr := state.Close(); cleanupErr != nil {
++				state.Writer.cleanupFailure.LinkPriorCleanupError(err)
++				return nil, cleanupErr
+ 			}
++			return nil, err
+ 		}
+-	}()
+-	f, created, err := openLogFile(path)
+-	w.f = f
+-	if err != nil {
+-		return nil, err
+-	}
+-	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
+-	if w.stableParentErr != nil && w.stableParent != nil {
+-		w.parentCloseAttempted = true
+-		if closeErr := w.stableParent.Close(); closeErr != nil {
+-			w.closeMu.Lock()
+-			w.addCleanupFailureLocked(closeErr)
+-			w.closeMu.Unlock()
+-			return nil, w.stableParentErr
++		if ready {
++			return state.Writer, nil
+ 		}
+-		w.stableParent = nil
+ 	}
+-	if err = w.observeStableResourceFile(f, registry); err != nil {
+-		return nil, err
+-	}
+-	proof, unsupported, uncertified, err := w.prepareStableCreationProof(w.stableParent, f, path, created, syncDirectory, registry != nil)
+-	w.creationProof = proof
+-	if err != nil {
+-		return nil, err
+-	}
+-	w.creationUnsupported, w.creationUncertified = unsupported, uncertified
+-	info, err := f.Stat()
+-	if err != nil {
+-		return nil, err
+-	}
+-	w.size = info.Size()
+-	w.fileID = fileID
+-	w.appendMax = defaultBufferSize
+-	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes
+-	w.rawWritevMinBatchRecs = defaultRawWritevMinBatchRecords
+-	w.prefixBuf = make([]byte, 0, prefixCapacity)
+-	w.dictFrameEncodeLevel = zstd.SpeedFastest
+-	w.blockCodec = BlockCodecSnappy
+-	w.clock = RealClock{}
+-	w.keepSafetyMargin = DefaultKeepSafetyMargin
+-	return w, nil
+ }
+ 
+ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
+@@ -1409,6 +1365,86 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
+ // and returns its value pointer without requiring caller-owned pointer-slice
+ // scratch.
+ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
++	return w.appendEncodedFrameOne(body)
++}
++
++// AppendEncodedFrameOneWithWork admits the original CURRENT buffer, including
++// its actual growth/copy and any complete prior-buffer flush. The frame and
++// current buffer are never partially installed across a returned allowance
++// refusal. Segment creation/rotation remains the enclosing owner's transition.
++func (w *Writer) AppendEncodedFrameOneWithWork(body []byte, work *iterator.OrdinalScanWork) (page.ValuePtr, bool, error) {
++	capacity := 0
++	if work != nil {
++		if w == nil || w.f == nil || w.producedFrameObserver != nil {
++			return page.ValuePtr{}, false, fmt.Errorf("leaf writer nil=%t file=%t observer=%t: %w", w == nil, w != nil && w.f != nil, w != nil && w.producedFrameObserver != nil, ErrLeafAppendWorkUnsupported)
++		}
++		max := w.appendMax
++		if max <= 0 {
++			max = defaultBufferSize
++		}
++		n := HeaderSize + len(body)
++		threshold := max >> 10
++		if threshold < 8<<10 {
++			threshold = 8 << 10
++		}
++		if threshold > 256<<10 {
++			threshold = 256 << 10
++		}
++		buffered := len(w.appendBuf)
++		flush := 0
++		if n >= max || buffered+n > max {
++			flush, buffered = buffered, 0
++		}
++		direct := n >= max || (buffered == 0 && n >= threshold)
++		allocation := 0
++		if cap(w.scratch) < n {
++			allocation = n
++		}
++		copied := 0
++		if !direct {
++			capacity = buffered + n
++			if capacity < 8<<10 {
++				capacity = 8 << 10
++			}
++			// Geometric growth is shared with the original buffer owner, but
++			// never preallocates the unrelated full 4 MiB for one leaf.
++			target := 8 << 10
++			for target < capacity && target <= max/2 {
++				target *= 2
++			}
++			if target < capacity {
++				target = capacity
++			}
++			if target > max {
++				target = max
++			}
++			capacity = target
++			if cap(w.appendBuf) < capacity {
++				allocation += capacity
++				copied = buffered
++			}
++			if buffered+n == max {
++				flush += buffered + n
++			}
++		}
++		bytes := uint64(allocation + copied + 4*n + flush + 256)
++		records := uint64(8)
++		if flush != 0 {
++			records++
++		}
++		ok, e := leafAppendReserve(work, records, bytes)
++		if !ok || e != nil {
++			return page.ValuePtr{}, false, e
++		}
++	}
++	ptr, e := w.appendEncodedFrameOneCapacity(body, capacity)
++	return ptr, e == nil, e
++}
++
++func (w *Writer) appendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
++	return w.appendEncodedFrameOneCapacity(body, 0)
++}
++func (w *Writer) appendEncodedFrameOneCapacity(body []byte, capacity int) (page.ValuePtr, error) {
+ 	if w == nil {
+ 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+ 	}
+@@ -1450,7 +1486,7 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
+ 	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
+ 	binary.LittleEndian.PutUint32(buf[0:4], sum)
+ 
+-	if err := w.writeBytes(buf); err != nil {
++	if err := w.writeBytesWithCapacity(buf, capacity); err != nil {
+ 		return page.ValuePtr{}, err
+ 	}
+ 	w.size += int64(recordLen)
+diff --git a/TreeDB/mvcc/prune_cursor_v6.go b/TreeDB/mvcc/prune_cursor_v6.go
+index c0c531d70..a6d28f767 100644
+--- a/TreeDB/mvcc/prune_cursor_v6.go
++++ b/TreeDB/mvcc/prune_cursor_v6.go
+@@ -42,9 +42,9 @@ type PruneCursor struct {
+ 	projection                                          *tree.ChargedProjection
+ 	projectionAdmitted                                  bool
+ 	reader                                              backenddb.NativeMVCCFrameReaderV6
+- outputReader backenddb.NativeMVCCFrameReaderV6
+- outputLeaf valuelog.COWLeafProjectionReader
+- outputInput,outputRaw [64 << 10]byte
++	outputReader                                        backenddb.NativeMVCCFrameReaderV6
++	outputLeaf                                          valuelog.COWLeafProjectionReader
++	outputInput, outputRaw                              [64 << 10]byte
+ 	value                                               valuelog.COWLeafContinuation
+ 	codec                                               valuelog.COWZSTDContinuation
+ 	template                                            valuelog.COWTemplateContinuation
+@@ -121,8 +121,8 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
+ 		c.namespaceSize = len(mvcckey.AppendNamespaceLower(c.namespace[:0]))
+ 		c.leaf = valuelog.COWLeafProjectionReader{Input: c.leafInput[:], Raw: c.leafRaw[:], Limits: valuelog.COWReadLimits{MaxRecordBytes: uint64(len(c.leafInput)), MaxRawBytes: uint64(len(c.leafRaw)), MaxValueBytes: 4096}, VerifyCRC: true, ZSTD: &c.codec, Template: &c.template}
+ 		c.reader.Leaf = &c.leaf
+- c.outputLeaf=valuelog.COWLeafProjectionReader{Input:c.outputInput[:],Raw:c.outputRaw[:],Limits:valuelog.COWReadLimits{MaxRecordBytes:uint64(len(c.outputInput)),MaxRawBytes:uint64(len(c.outputRaw)),MaxValueBytes:4096},VerifyCRC:true,ZSTD:&c.codec,Template:&c.template}
+- c.outputReader.Leaf=&c.outputLeaf
++		c.outputLeaf = valuelog.COWLeafProjectionReader{Input: c.outputInput[:], Raw: c.outputRaw[:], Limits: valuelog.COWReadLimits{MaxRecordBytes: uint64(len(c.outputInput)), MaxRawBytes: uint64(len(c.outputRaw)), MaxValueBytes: 4096}, VerifyCRC: true, ZSTD: &c.codec, Template: &c.template}
++		c.outputReader.Leaf = &c.outputLeaf
+ 	}
+ 	stats.Cursor = c
+ 	c.mu.Lock()
+@@ -584,14 +584,23 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
+ 			c.record = node.LeafEntry{}
+ 			c.phase = 5
+ 		case 16:
+-			if !c.diagnosticUnbounded {
+-				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+-			}
+ 			c.preparation.BindNativeMVCCOutputReaderV6(&c.outputReader)
+- ready, err := c.db.StepNativeMVCCUnboundedDiagnosticOutputV6(c.preparation, w)
++			var ready bool
++			var err error
++			if c.diagnosticUnbounded {
++				ready, err = c.db.StepNativeMVCCUnboundedDiagnosticOutputV6(c.preparation, w)
++			} else {
++				ready, err = c.db.StepNativeMVCCMaterializedOutputV6(c.preparation, w)
++			}
+ 			if !ready || err != nil {
+ 				return err
+ 			}
++			// Output construction is not publication. Keep the native final
++			// callback/authority guard until its genuine work-bearing stages
++			// can bind, fence, Consume and physically Finish.
++			if !c.diagnosticUnbounded {
++				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
++			}
+ 			if err := c.db.PublishNativeMVCCUnboundedDiagnosticV6(c.preparation); err != nil {
+ 				return err
+ 			}
+@@ -729,10 +738,15 @@ func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
+ 			}
+ 			c.record = node.LeafEntry{}
+ 			c.reader = backenddb.NativeMVCCFrameReaderV6{}
+-            ready,err=c.outputReader.CancelProjectionFrame(&w)
+-            if err!=nil { return nil,err };if !ready { continue }
+-            c.outputReader=backenddb.NativeMVCCFrameReaderV6{}
+-            c.outputLeaf=valuelog.COWLeafProjectionReader{}
++			ready, err = c.outputReader.CancelProjectionFrame(&w)
++			if err != nil {
++				return nil, err
++			}
++			if !ready {
++				continue
++			}
++			c.outputReader = backenddb.NativeMVCCFrameReaderV6{}
++			c.outputLeaf = valuelog.COWLeafProjectionReader{}
+ 			c.closePhase = 3
+ 		case 3:
+ 			if c.captureBegun {
+diff --git a/TreeDB/native_mvcc_unbounded_diagnostic_v6.go b/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
+index d2734bc19..7c066deca 100644
+--- a/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
++++ b/TreeDB/native_mvcc_unbounded_diagnostic_v6.go
+@@ -26,3 +26,14 @@ func (db *DB) StepNativeMVCCUnboundedDiagnosticOutputV6(c *backenddb.NativeMVCCC
+ 	}
+ 	return db.cached.StepNativeMVCCUnboundedDiagnosticOutputV6(c, w)
+ }
++
++// StepNativeMVCCMaterializedOutputV6 advances admitted construction only. It
++// grants no publication or acknowledgement authority.
++func (db *DB) StepNativeMVCCMaterializedOutputV6(c *backenddb.NativeMVCCCurrentDeleteV6, w *iterator.OrdinalScanWork) (bool, error) {
++	db.lifecycleMu.RLock()
++	defer db.lifecycleMu.RUnlock()
++	if db.cached == nil {
++		return false, ErrClosed
++	}
++	return db.cached.StepNativeMVCCMaterializedOutputV6(c, w)
++}
+diff --git a/TreeDB/node/builder.go b/TreeDB/node/builder.go
+index d71ccfff3..322816212 100644
+--- a/TreeDB/node/builder.go
++++ b/TreeDB/node/builder.go
+@@ -67,6 +67,8 @@ type Builder struct {
+ 	internalBaseArenaH        *byteArenaHandle
+ 	internalBaseTotalKeyBytes int
+ 	internalBaseSharedPrefix  int
++
++	columnarWork columnarPrefixWork
+ }
+ 
+ const (
+@@ -293,6 +295,9 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
+ 
+ // ResetWithOptions reinitializes an existing builder instance for reuse.
+ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
++	if b.columnarWork.packing || b.columnarWork.adding {
++		panic("node: reset during retained columnar packing; release scratch first")
++	}
+ 	b.ReleaseScratch()
+ 
+ 	leafPrefix := opts.LeafPrefixCompression
+@@ -359,6 +364,7 @@ func (b *Builder) ReleaseScratch() {
+ 	b.releaseLeafColumnarV2Scratch()
+ 	b.releaseLeafColumnarPrefixV2Scratch()
+ 	b.releaseInternalBaseDeltaScratch()
++	b.columnarWork = columnarPrefixWork{}
+ 	b.data = nil
+ 	b.leafPrevKey = nil
+ 	b.internalFenceLow = nil
+@@ -557,6 +563,9 @@ func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr
+ }
+ 
+ func (b *Builder) addLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
++	if b.columnarWork.packing {
++		return ErrBuilderPacking
++	}
+ 	if b.pType != page.PageTypeLeaf {
+ 		return ErrInvalidType
+ 	}
+@@ -784,6 +793,9 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
+ // AddLeafEntryWithPrefixRevision appends a native revision-bearing leaf entry
+ // using precomputed size/prefix data.
+ func (b *Builder) AddLeafEntryWithPrefixRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, entrySize, prefixLen, suffixLen int) error {
++	if b.columnarWork.packing || b.columnarWork.packed {
++		return ErrBuilderPacking
++	}
+ 	if b.pType != page.PageTypeLeaf {
+ 		return ErrInvalidType
+ 	}
+@@ -1076,6 +1088,10 @@ func (b *Builder) finalize() {
+ 	if b.pType == page.PageTypeLeaf && b.leafColumnarV2 && !b.leafPrefixCompression {
+ 		b.finishLeafColumnarV2()
+ 	}
++	b.finalizeHeader(internalBaseDeltaApplied)
++}
++
++func (b *Builder) finalizeHeader(internalBaseDeltaApplied bool) {
+ 	// Write Header
+ 	putUint64(b.data[0:8], b.pageID)
+ 	// Checksum at 8-12 (written by UpdateChecksum)
+@@ -1209,270 +1225,11 @@ func (b *Builder) finishLeafColumnarV2() {
+ }
+ 
+ func (b *Builder) finishLeafColumnarPrefixV2() {
+-	count := int(b.count)
+-	if count == 0 {
+-		b.dirEnd = NodeHeaderSize
+-		b.heapStart = len(b.data)
+-		b.releaseLeafColumnarPrefixV2Scratch()
+-		return
++	// Synchronous callers drain the exact retained packing engine.
++	ready, err := b.packLeafColumnarPrefixV2(nil)
++	if err != nil || !ready {
++		panic("node: synchronous columnar packing failed")
+ 	}
+-
+-	valPtrSize := page.ValuePtrSize
+-	if b.leafPackedValuePtr {
+-		valPtrSize = page.PackedValuePtrSize
+-	}
+-
+-	keyDirStart := NodeHeaderSize
+-	valDirStart := keyDirStart + count*DirectoryEntrySize
+-	flagsStart := valDirStart + count*DirectoryEntrySize
+-	prefixStart := flagsStart + count
+-	revisionsStart := prefixStart + count*DirectoryEntrySize
+-	metaEnd := revisionsStart
+-	if b.leafEntryRevisions {
+-		metaEnd += count * page.EntryRevisionSize
+-	}
+-
+-	suffixStart := len(b.data) - b.leafColumnarPrefixV2KeyBytes
+-	valuesStart := suffixStart - b.leafColumnarPrefixV2ValBytes
+-	if valuesStart < metaEnd {
+-		panic("leaf columnar+prefix v2 packing overflow")
+-	}
+-
+-	entries := b.leafColumnarPrefixV2Entries
+-	suffixArena := b.leafColumnarV2Arena
+-	valueArena := b.leafColumnarPrefixV2ValueArena
+-	allInline := b.leafColumnarPrefixV2AllInline
+-	allPointer := b.leafColumnarPrefixV2AllPointer
+-	flagsCol := b.data[flagsStart:prefixStart]
+-	prefixCol := b.data[prefixStart:revisionsStart]
+-	writeRevision := func(i int, revision page.EntryRevision) {
+-		if b.leafEntryRevisions {
+-			binary.LittleEndian.PutUint64(b.data[revisionsStart+i*page.EntryRevisionSize:], uint64(revision))
+-		}
+-	}
+-
+-	if allInline {
+-		if len(valueArena) != b.leafColumnarPrefixV2ValBytes || len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
+-			panic("leaf columnar+prefix v2 inline arena size mismatch")
+-		}
+-		copy(b.data[valuesStart:suffixStart], valueArena)
+-		copy(b.data[suffixStart:], suffixArena)
+-
+-		if builderNativeLittleEndian {
+-			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+-			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+-			if prefixStart&1 == 0 {
+-				prefixDirU16 := bytesAsUint16Slice(prefixCol)
+-				for i := 0; i < count; i++ {
+-					e := &entries[i]
+-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+-					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
+-					flagsCol[i] = e.flags
+-					prefixDirU16[i] = e.prefixLen
+-					writeRevision(i, e.revision)
+-				}
+-			} else {
+-				for i := 0; i < count; i++ {
+-					e := &entries[i]
+-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+-					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
+-					flagsCol[i] = e.flags
+-					putUint16At(prefixCol, i*2, e.prefixLen)
+-					writeRevision(i, e.revision)
+-				}
+-			}
+-		} else {
+-			for i := 0; i < count; i++ {
+-				e := &entries[i]
+-				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
+-				putUint16At(b.data, valDirStart+i*2, uint16(valuesStart+int(e.valueOff)))
+-				flagsCol[i] = e.flags
+-				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+-				writeRevision(i, e.revision)
+-			}
+-		}
+-
+-		b.dirEnd = metaEnd
+-		b.heapStart = valuesStart
+-		b.releaseLeafColumnarPrefixV2Scratch()
+-		return
+-	}
+-
+-	if allPointer {
+-		if len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
+-			panic("leaf columnar+prefix v2 pointer arena size mismatch")
+-		}
+-		copy(b.data[suffixStart:], suffixArena)
+-
+-		valOff := valuesStart
+-		if builderNativeLittleEndian {
+-			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+-			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+-			if prefixStart&1 == 0 {
+-				prefixDirU16 := bytesAsUint16Slice(prefixCol)
+-				for i := 0; i < count; i++ {
+-					e := &entries[i]
+-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+-					valDirU16[i] = uint16(valOff)
+-					flagsCol[i] = e.flags
+-					prefixDirU16[i] = e.prefixLen
+-					writeRevision(i, e.revision)
+-					if b.leafPackedValuePtr {
+-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-					} else {
+-						encodeValuePtrAt(b.data, valOff, e.valPtr)
+-					}
+-					valOff += valPtrSize
+-				}
+-			} else {
+-				for i := 0; i < count; i++ {
+-					e := &entries[i]
+-					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+-					valDirU16[i] = uint16(valOff)
+-					flagsCol[i] = e.flags
+-					putUint16At(prefixCol, i*2, e.prefixLen)
+-					writeRevision(i, e.revision)
+-					if b.leafPackedValuePtr {
+-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-					} else {
+-						encodeValuePtrAt(b.data, valOff, e.valPtr)
+-					}
+-					valOff += valPtrSize
+-				}
+-			}
+-		} else {
+-			for i := 0; i < count; i++ {
+-				e := &entries[i]
+-				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
+-				putUint16At(b.data, valDirStart+i*2, uint16(valOff))
+-				flagsCol[i] = e.flags
+-				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+-				writeRevision(i, e.revision)
+-				if b.leafPackedValuePtr {
+-					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-				} else {
+-					encodeValuePtrAt(b.data, valOff, e.valPtr)
+-				}
+-				valOff += valPtrSize
+-			}
+-		}
+-
+-		if valOff != suffixStart {
+-			panic("leaf columnar+prefix v2 pointer packing mismatch")
+-		}
+-
+-		b.dirEnd = metaEnd
+-		b.heapStart = valuesStart
+-		b.releaseLeafColumnarPrefixV2Scratch()
+-		return
+-	}
+-
+-	valOff := valuesStart
+-	keyOff := suffixStart
+-
+-	if builderNativeLittleEndian {
+-		keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+-		valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+-
+-		if prefixStart&1 == 0 {
+-			prefixDirU16 := bytesAsUint16Slice(prefixCol)
+-			for i := 0; i < count; i++ {
+-				e := &entries[i]
+-				keyDirU16[i] = uint16(keyOff)
+-				valDirU16[i] = uint16(valOff)
+-				flagsCol[i] = e.flags
+-				prefixDirU16[i] = e.prefixLen
+-				writeRevision(i, e.revision)
+-
+-				if e.flags&FlagPointer != 0 {
+-					if b.leafPackedValuePtr {
+-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-					} else {
+-						encodeValuePtrAt(b.data, valOff, e.valPtr)
+-					}
+-					valOff += valPtrSize
+-				} else if e.flags&FlagTombstone == 0 {
+-					valueLen := int(e.valueLen)
+-					valueStart := int(e.valueOff)
+-					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+-					valOff += valueLen
+-				}
+-
+-				suffixLen := int(e.suffixLen)
+-				suffixStart := int(e.suffixOff)
+-				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+-				keyOff += suffixLen
+-			}
+-		} else {
+-			for i := 0; i < count; i++ {
+-				e := &entries[i]
+-				keyDirU16[i] = uint16(keyOff)
+-				valDirU16[i] = uint16(valOff)
+-				flagsCol[i] = e.flags
+-				putUint16At(prefixCol, i*2, e.prefixLen)
+-				writeRevision(i, e.revision)
+-
+-				if e.flags&FlagPointer != 0 {
+-					if b.leafPackedValuePtr {
+-						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-					} else {
+-						encodeValuePtrAt(b.data, valOff, e.valPtr)
+-					}
+-					valOff += valPtrSize
+-				} else if e.flags&FlagTombstone == 0 {
+-					valueLen := int(e.valueLen)
+-					valueStart := int(e.valueOff)
+-					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+-					valOff += valueLen
+-				}
+-
+-				suffixLen := int(e.suffixLen)
+-				suffixStart := int(e.suffixOff)
+-				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+-				keyOff += suffixLen
+-			}
+-		}
+-	} else {
+-		for i := 0; i < count; i++ {
+-			e := &entries[i]
+-			keyDirPos := keyDirStart + i*2
+-			valDirPos := valDirStart + i*2
+-			prefixPos := prefixStart + i*2
+-			putUint16At(b.data, keyDirPos, uint16(keyOff))
+-			putUint16At(b.data, valDirPos, uint16(valOff))
+-			flagsCol[i] = e.flags
+-			putUint16At(b.data, prefixPos, e.prefixLen)
+-			writeRevision(i, e.revision)
+-
+-			if e.flags&FlagPointer != 0 {
+-				if b.leafPackedValuePtr {
+-					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
+-				} else {
+-					encodeValuePtrAt(b.data, valOff, e.valPtr)
+-				}
+-				valOff += valPtrSize
+-			} else if e.flags&FlagTombstone == 0 {
+-				valueLen := int(e.valueLen)
+-				valueStart := int(e.valueOff)
+-				copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+-				valOff += valueLen
+-			}
+-
+-			suffixLen := int(e.suffixLen)
+-			suffixStart := int(e.suffixOff)
+-			copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+-			keyOff += suffixLen
+-		}
+-	}
+-
+-	if valOff != suffixStart || keyOff != len(b.data) {
+-		panic("leaf columnar+prefix v2 packing mismatch")
+-	}
+-
+-	b.dirEnd = metaEnd
+-	b.heapStart = valuesStart
+-
+-	b.releaseLeafColumnarPrefixV2Scratch()
+ }
+ 
+ func bytesAsUint16Slice(buf []byte) []uint16 {
+diff --git a/TreeDB/node/builder_work.go b/TreeDB/node/builder_work.go
+index c2aa0b798..1fa2c3205 100644
+--- a/TreeDB/node/builder_work.go
++++ b/TreeDB/node/builder_work.go
+@@ -28,6 +28,9 @@ func (b *Builder) AddLeafEntryWithRevisionWithWork(key, value []byte, flags byte
+ 	if b.pType != page.PageTypeLeaf {
+ 		return false, ErrInvalidType
+ 	}
++	if b.leafColumnar && b.leafPrefixCompression {
++		return b.addColumnarPrefixWithWork(key, value, flags, ptr, revision, 0, w)
++	}
+ 	if w != nil {
+ 		if b.leafColumnar || (b.leafPrefixCompression && len(key) > len(b.leafPrevKeyBuf)) {
+ 			return false, ErrBuilderWorkFormat
+@@ -52,6 +55,17 @@ func (b *Builder) AddLeafEntryWithRevisionWithWork(key, value []byte, flags byte
+ // FinishNoNodeWithWork shares the original header and checksum writer, without
+ // allocating a Node or performing a columnar scratch pass.
+ func (b *Builder) FinishNoNodeWithWork(w *iterator.OrdinalScanWork) (bool, error) {
++	if b.pType == page.PageTypeLeaf && b.leafColumnar && b.leafPrefixCompression {
++		ready, e := b.packLeafColumnarPrefixV2(w)
++		if !ready || e != nil {
++			return false, e
++		}
++		if ok, e := builderReserve(w, 2, uint64(len(b.data)+NodeHeaderSize)); !ok || e != nil {
++			return false, e
++		}
++		b.finalizeHeader(false)
++		return true, nil
++	}
+ 	if w != nil && (b.pType != page.PageTypeLeaf || b.leafColumnar) {
+ 		return false, ErrBuilderWorkFormat
+ 	}
+@@ -61,3 +75,19 @@ func (b *Builder) FinishNoNodeWithWork(w *iterator.OrdinalScanWork) (bool, error
+ 	b.finalize()
+ 	return true, nil
+ }
++
++// AddLeafEntryWithRevisionWithWorkAndReserve preserves the zipper's ordinary
++// soft-fill reserve after the same admitted prefix comparison, without a hidden
++// second prefix scan. The first entry always uses the ordinary hard capacity.
++func (b *Builder) AddLeafEntryWithRevisionWithWorkAndReserve(key, value []byte, flags byte, ptr page.ValuePtr, revision page.EntryRevision, reserveBytes int, w *iterator.OrdinalScanWork) (bool, error) {
++	if b.pType != page.PageTypeLeaf {
++		return false, ErrInvalidType
++	}
++	if b.leafColumnar && b.leafPrefixCompression {
++		return b.addColumnarPrefixWithWork(key, value, flags, ptr, revision, reserveBytes, w)
++	}
++	if reserveBytes != 0 && b.count != 0 {
++		return false, ErrBuilderWorkFormat
++	}
++	return b.AddLeafEntryWithRevisionWithWork(key, value, flags, ptr, revision, w)
++}
+diff --git a/TreeDB/node/builder_work_test.go b/TreeDB/node/builder_work_test.go
+index 3b3948b90..b81d82f35 100644
+--- a/TreeDB/node/builder_work_test.go
++++ b/TreeDB/node/builder_work_test.go
+@@ -3,6 +3,7 @@ package node
+ import (
+ 	"bytes"
+ 	"errors"
++	"fmt"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"testing"
+@@ -37,3 +38,87 @@ func TestLeafBuilderWorkSharesEncoderAndRefusesBeforeEffects(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// The existing work-bearing API must encode the actual combined profile rather
++// than reject it or silently choose a plain leaf. Long common prefixes force a
++// real comparison continuation; final packing must also resume under Q32.
++func TestLeafBuilderCombinedWorkRetainsPacking(t *testing.T) {
++	for _, mode := range []string{"inline", "pointer", "mixed"} {
++		t.Run(mode, func(t *testing.T) {
++			var image, ordinary [page.PageSize]byte
++			opts := BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, PackedValuePtr: true, EntryRevisions: true}
++			b := NewBuilderWithOptions(image[:], page.PageTypeLeaf, opts)
++			ref := NewBuilderWithOptions(ordinary[:], page.PageTypeLeaf, opts)
++			rows := make([]LeafEntry, 12)
++			for i := range rows {
++				rows[i] = LeafEntry{Key: []byte(fmt.Sprintf("%s-%03d", bytes.Repeat([]byte("a"), 96), i)), Value: []byte(fmt.Sprintf("value-%d", i)), Revision: page.EntryRevision(i + 17)}
++				if mode == "pointer" || mode == "mixed" && i%3 == 0 {
++					rows[i].Flags = FlagPointer
++					rows[i].ValuePtr = page.ValuePtr{FileID: 3, Offset: uint64(37 + i*23), Length: 19}
++					rows[i].Value = nil
++				}
++				if mode == "mixed" && i%3 == 1 {
++					rows[i].Flags = FlagTombstone
++					rows[i].Value = nil
++				}
++			}
++			yields := 0
++			for _, r := range rows {
++				for tries := 0; ; tries++ {
++					if tries > 128 {
++						t.Fatal("entry did not progress")
++					}
++					work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
++					done, e := b.AddLeafEntryWithRevisionWithWork(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision, work)
++					if e != nil {
++						t.Fatal("actual combined work path", e)
++					}
++					if work.Records > 32 || work.Bytes > 1<<20 {
++						t.Fatal("overspent")
++					}
++					if done {
++						break
++					}
++					yields++
++				}
++				if e := ref.AddLeafEntryWithRevision(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision); e != nil {
++					t.Fatal(e)
++				}
++			}
++			paused := false
++			for tries := 0; ; tries++ {
++				if tries > 128 {
++					t.Fatal("finish did not progress")
++				}
++				done, e := b.FinishNoNodeWithWork(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
++				if e != nil {
++					t.Fatal(e)
++				}
++				if done {
++					break
++				}
++				paused = true
++				if b.leafColumnarPrefixV2Entries == nil {
++					t.Fatal("packing did not retain original scratch")
++				}
++				if e := b.AddLeafEntry([]byte("z"), nil, 0, page.ValuePtr{}); e == nil {
++					t.Fatal("packing allowed mutation", e)
++				}
++			}
++			ref.FinishNoNode()
++			if yields == 0 || !paused {
++				t.Fatal("missing real continuation", yields, paused)
++			}
++			if !bytes.Equal(image[:], ordinary[:]) || !page.VerifyChecksumNonMutating(image[:]) {
++				t.Fatal("original encoder bytes/checksum changed")
++			}
++			n := NewNodeView(image[:])
++			for i, r := range rows {
++				key, val, ptr, flags, e := n.GetLeafEntryView(uint16(i))
++				if e != nil || !bytes.Equal(key, r.Key) || !bytes.Equal(val, r.Value) || flags != r.Flags || r.Flags&FlagPointer != 0 && ptr != r.ValuePtr {
++					t.Fatalf("entry %d: %q %q %+v flags=%x err=%v", i, key, val, ptr, flags, e)
++				}
++			}
++		})
++	}
++}
+diff --git a/TreeDB/zipper/materialized_write_work.go b/TreeDB/zipper/materialized_write_work.go
+index 98c96ba14..c70a917a0 100644
+--- a/TreeDB/zipper/materialized_write_work.go
++++ b/TreeDB/zipper/materialized_write_work.go
+@@ -13,6 +13,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ )
+@@ -70,6 +71,8 @@ type materializedWriteFrame struct {
+ 	output                              [page.PageSize]byte
+ 	scratch, key, nextKey               [page.PageSize]byte
+ 	encoder                             node.Builder
++	leafAppend                          valuelog.LeafAppendWork
++	outputReserved                      bool
+ 	selectLeaf                          leafMergeCursor
+ 	event                               leafMergeEvent
+ 	haveEvent                           bool
+@@ -178,7 +181,10 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 				// Preserve the original configured/adaptive format and enclosing revision
+ 				// decision. Diagnostic codec selection/finalization is unbounded.
+ 				revisions := f.old.LeafEntryRevisionsEnabled() || batchHasEntryRevisions(f.ops)
+-				f.encoder.ResetWithOptions(f.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops, revisions))
++				ready, e := f.encoder.ResetWithOptionsWithWork(f.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops, revisions), w)
++				if !ready || e != nil {
++					return false, e
++				}
+ 				f.selectLeaf = newLeafMergeCursor(&f.old, f.ops, nil, f.scratch[:])
+ 				f.active = f
+ 				f.phase = 1
+@@ -231,7 +237,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 					}
+ 					ready = e == nil
+ 				} else {
+-					ready, e = f.active.encoder.AddLeafEntryWithRevisionWithWork(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision, w)
++					ready, e = f.active.encoder.AddLeafEntryWithRevisionWithWorkAndReserve(r.Key, r.Value, r.Flags, r.ValuePtr, r.Revision, s.z.leafReserveBytes, w)
+ 				}
+ 				if e == node.ErrNodeFull {
+ 					if f.active.encoder.Count() == 0 {
+@@ -371,7 +377,39 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 			}
+ 			if f.old.Type() == page.PageTypeLeaf && s.z.outerLeavesInValueLog {
+ 				if !s.unboundedLeafPersistenceDiagnostic {
+-					return false, ErrMaterializedWriteContinuation
++					producer, ok := s.z.leafPageLog.(interface {
++						AppendLeafPageWithWork([]byte, *valuelog.LeafAppendWork, *iterator.OrdinalScanWork) (page.LeafLogPtr, bool, error)
++					})
++					if !ok {
++						return false, ErrMaterializedWriteContinuation
++					}
++					if target.leafAppend.Phase == 0 {
++						target.encoder.SetPageID(0)
++						ready, e := target.encoder.FinishNoNodeWithWork(w)
++						if !ready || e != nil {
++							return false, e
++						}
++					}
++					if !target.outputReserved {
++						if ok, e := mergeReserve(w, 1, 8); !ok || e != nil {
++							return false, e
++						}
++						if e := s.z.outputPageLimit.reserve(1); e != nil {
++							return false, e
++						}
++						target.outputReserved = true
++					}
++					ptr, ready, e := producer.AppendLeafPageWithWork(target.output[:], &target.leafAppend, w)
++					if !ready || e != nil {
++						return false, e
++					}
++					if ok, e := mergeReserve(w, 2, uint64(2*page.PageSize+64)); !ok || e != nil {
++						return false, e
++					}
++					s.z.cachePersistedLeafPage(ptr, target.output[:], leafPageCacheClone)
++					target.result = page.LeafLogChildRef(ptr)
++					f.phase = 9
++					continue
+ 				}
+ 				target.encoder.SetPageID(0)
+ 				ready, e := target.encoder.FinishNoNodeWithWork(nil)
+@@ -462,8 +500,19 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
+ 			if f.event.fromBatch && start > 0 {
+ 				start--
+ 			}
+-			next.encoder.ResetWithOptions(next.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops[start:], f.active.encoder.LeafEntryRevisionsEnabled()))
++			_ = start // options are bound by the same immutable operation suffix below.
+ 			f.active.segmentNext = next
++			f.phase = 15
++		case 15:
++			next := f.active.segmentNext
++			start := f.selectLeaf.opIndex
++			if f.event.fromBatch && start > 0 {
++				start--
++			}
++			ready, e := next.encoder.ResetWithOptionsWithWork(next.output[:], page.PageTypeLeaf, s.z.leafBuilderOptionsWithEntryRevisions(f.ops[start:], f.active.encoder.LeafEntryRevisionsEnabled()), w)
++			if !ready || e != nil {
++				return false, e
++			}
+ 			f.active = next
+ 			f.splitPending = false
+ 			f.phase = 1

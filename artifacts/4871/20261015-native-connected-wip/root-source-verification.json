@@ -1,0 +1,87 @@
+{
+  "at_utc": "2026-10-15T04:10:30.010696+00:00",
+  "stage": "source_pushed_verified",
+  "parent": "973a2acc18ab68ab7d838deb911548adae3fb3f1",
+  "owned_paths": [
+    "TreeDB/caching/cow_resources.go",
+    "TreeDB/caching/db.go",
+    "TreeDB/caching/lane.go",
+    "TreeDB/caching/leaf_page_log.go",
+    "TreeDB/caching/leaf_writer_birth_work.go",
+    "TreeDB/caching/native_mvcc_cow_merge_v6.go",
+    "TreeDB/caching/native_mvcc_frozen_delta_work_v6.go",
+    "TreeDB/caching/native_mvcc_rollover_work_v6.go",
+    "TreeDB/caching/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/db/leaf_page_log.go",
+    "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "TreeDB/db/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/internal/memtable/cow_tree.go",
+    "TreeDB/internal/primaryarena/read_root_v6.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "TreeDB/internal/rootpublication/pin_registry.go",
+    "TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+    "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "TreeDB/internal/valuelog/frame_preparer.go",
+    "TreeDB/internal/valuelog/leaf_append_work.go",
+    "TreeDB/internal/valuelog/manager.go",
+    "TreeDB/internal/valuelog/segment_open_work.go",
+    "TreeDB/internal/valuelog/segment_registration_work.go",
+    "TreeDB/internal/valuelog/stable_resource.go",
+    "TreeDB/internal/valuelog/writer.go",
+    "TreeDB/internal/valuelog/writer_creation_work.go",
+    "TreeDB/mvcc/native_production_cost_v6_test.go",
+    "TreeDB/mvcc/prune_cursor_v6.go",
+    "TreeDB/native_mvcc_unbounded_diagnostic_v6.go",
+    "TreeDB/node/builder.go",
+    "TreeDB/node/builder_columnar_work.go",
+    "TreeDB/node/builder_work.go",
+    "TreeDB/node/builder_work_test.go",
+    "TreeDB/zipper/materialized_input_work_v6.go",
+    "TreeDB/zipper/materialized_write_work.go"
+  ],
+  "source_rows": 4398,
+  "freeze_receipt_sha256": "b1714b5d575d2eed0ce176346066e8da129b20c545b24a8ccef68b8a7105f94e",
+  "qualification": "FROZEN WIP; compilation and two affected original controls only; production ACK0; no bounded final publication acceptance",
+  "known_open": [
+    "typed Set physical release and synchronized pin completion",
+    "native typed visible-member/fresh capsule final binding and no-yield admitted final window",
+    "installed append cancellation trie retirement",
+    "new external Finish adapter compiled but not yet actual caller-connected",
+    "bounded final Q32 and production ACK/cost remain open"
+  ],
+  "foreign_preserved": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "status": " M",
+      "size": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "status": "??",
+      "size": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "size": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "compile_result": {
+    "exit": 0,
+    "timeout": false,
+    "wall_seconds": 7.924636363983154,
+    "source_rows": 4398,
+    "source_unchanged": true,
+    "raw_sha256": "63b31acafde6bc8ca670a0db47a13d9012dd6ad4dff70095e36a93da8b9345f8"
+  },
+  "source": "ff042aea741d165e816d6663322b142b36afb292",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014"
+}
