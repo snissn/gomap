@@ -1,0 +1,476 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "tool",
+    "trace",
+    "-d=parsed",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-multilevel-writer-trace-20261015/trace.out"
+  ],
+  "exit": 0,
+  "analysis_only": true,
+  "parsed_bytes": 6791989801,
+  "parsed_sha256": "787f28969f683019dbdc9fde95b1bf5bedf0ae65c930113112d08c137ed9bd30",
+  "all_trace_dup_entries": 1285,
+  "timed_CommitAt348_dup_intervals": 65,
+  "timed_dup_sum_ns": 7514752,
+  "timed_dup_max_ns": 7504768,
+  "timed_dup_over_100us": 1,
+  "unclosed_timed_dup": {},
+  "timed_intervals": [
+    {
+      "goid": 19,
+      "start_ns": 3525316187910656,
+      "end_ns": 3525316187910912,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316834829440,
+      "end_ns": 3525316834829952,
+      "duration_ns": 512,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316834969216,
+      "end_ns": 3525316834969536,
+      "duration_ns": 320,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835016064,
+      "end_ns": 3525316835016192,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835048064,
+      "end_ns": 3525316835048192,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835078592,
+      "end_ns": 3525316835078720,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835109056,
+      "end_ns": 3525316835109120,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835149952,
+      "end_ns": 3525316835150080,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835181056,
+      "end_ns": 3525316835181248,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835210240,
+      "end_ns": 3525316835210368,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835241664,
+      "end_ns": 3525316835241728,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835274432,
+      "end_ns": 3525316835274560,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835305792,
+      "end_ns": 3525316835305920,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835335936,
+      "end_ns": 3525316835336064,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835367744,
+      "end_ns": 3525316835367872,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835395776,
+      "end_ns": 3525316835395904,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835425728,
+      "end_ns": 3525316835425856,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835455872,
+      "end_ns": 3525316835456000,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835486976,
+      "end_ns": 3525316835487168,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316835518080,
+      "end_ns": 3525316843022848,
+      "duration_ns": 7504768,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843105024,
+      "end_ns": 3525316843105280,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843154048,
+      "end_ns": 3525316843154240,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843199040,
+      "end_ns": 3525316843199232,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843259328,
+      "end_ns": 3525316843259584,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843322176,
+      "end_ns": 3525316843322432,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843376192,
+      "end_ns": 3525316843376448,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843433920,
+      "end_ns": 3525316843434112,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843488576,
+      "end_ns": 3525316843488768,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843543744,
+      "end_ns": 3525316843543936,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843609472,
+      "end_ns": 3525316843609664,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843665024,
+      "end_ns": 3525316843665216,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843720960,
+      "end_ns": 3525316843721152,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843779072,
+      "end_ns": 3525316843779328,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843833472,
+      "end_ns": 3525316843833728,
+      "duration_ns": 256,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843889024,
+      "end_ns": 3525316843889216,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843944512,
+      "end_ns": 3525316843944704,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316843996096,
+      "end_ns": 3525316843996160,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844028800,
+      "end_ns": 3525316844028928,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844058944,
+      "end_ns": 3525316844059072,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844089408,
+      "end_ns": 3525316844089536,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844119168,
+      "end_ns": 3525316844119232,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844148992,
+      "end_ns": 3525316844149120,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844180608,
+      "end_ns": 3525316844180736,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844209856,
+      "end_ns": 3525316844209984,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844241792,
+      "end_ns": 3525316844241856,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844275840,
+      "end_ns": 3525316844275968,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844306432,
+      "end_ns": 3525316844306560,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844336576,
+      "end_ns": 3525316844336640,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844368576,
+      "end_ns": 3525316844368704,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844397632,
+      "end_ns": 3525316844397760,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844427648,
+      "end_ns": 3525316844427712,
+      "duration_ns": 64,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844456384,
+      "end_ns": 3525316844456512,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844486080,
+      "end_ns": 3525316844486208,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844515584,
+      "end_ns": 3525316844515712,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844545344,
+      "end_ns": 3525316844545536,
+      "duration_ns": 192,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844573952,
+      "end_ns": 3525316844574080,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844614144,
+      "end_ns": 3525316844614272,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844644096,
+      "end_ns": 3525316844644224,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844674816,
+      "end_ns": 3525316844674944,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844704064,
+      "end_ns": 3525316844704192,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844734784,
+      "end_ns": 3525316844734912,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844764608,
+      "end_ns": 3525316844764736,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844795200,
+      "end_ns": 3525316844795328,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844825600,
+      "end_ns": 3525316844825728,
+      "duration_ns": 128,
+      "return_state": "Running"
+    },
+    {
+      "goid": 66,
+      "start_ns": 3525316844856896,
+      "end_ns": 3525316844856960,
+      "duration_ns": 64,
+      "return_state": "Running"
+    }
+  ]
+}

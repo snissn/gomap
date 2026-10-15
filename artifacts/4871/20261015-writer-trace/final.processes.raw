@@ -1,0 +1,440 @@
+    PID    PPID COMMAND         COMMAND
+      1       0 systemd         /usr/lib/systemd/systemd --system --deserialize=93 splash
+      2       0 kthreadd        [kthreadd]
+      3       2 pool_workqueue_ [pool_workqueue_release]
+      4       2 kworker/R-rcu_g [kworker/R-rcu_gp]
+      5       2 kworker/R-sync_ [kworker/R-sync_wq]
+      6       2 kworker/R-kvfre [kworker/R-kvfree_rcu_reclaim]
+      7       2 kworker/R-slub_ [kworker/R-slub_flushwq]
+      8       2 kworker/R-netns [kworker/R-netns]
+     10       2 kworker/0:0H-kb [kworker/0:0H-kblockd]
+     13       2 kworker/R-mm_pe [kworker/R-mm_percpu_wq]
+     14       2 ksoftirqd/0     [ksoftirqd/0]
+     15       2 rcu_preempt     [rcu_preempt]
+     16       2 rcu_exp_par_gp_ [rcu_exp_par_gp_kthread_worker/0]
+     17       2 rcu_exp_gp_kthr [rcu_exp_gp_kthread_worker]
+     18       2 migration/0     [migration/0]
+     19       2 kprobe-optimize [kprobe-optimizer]
+     20       2 idle_inject/0   [idle_inject/0]
+     21       2 cpuhp/0         [cpuhp/0]
+     22       2 cpuhp/1         [cpuhp/1]
+     23       2 idle_inject/1   [idle_inject/1]
+     24       2 migration/1     [migration/1]
+     25       2 ksoftirqd/1     [ksoftirqd/1]
+     27       2 kworker/1:0H-kb [kworker/1:0H-kblockd]
+     28       2 cpuhp/2         [cpuhp/2]
+     29       2 idle_inject/2   [idle_inject/2]
+     30       2 migration/2     [migration/2]
+     31       2 ksoftirqd/2     [ksoftirqd/2]
+     33       2 kworker/2:0H-kb [kworker/2:0H-kblockd]
+     34       2 cpuhp/3         [cpuhp/3]
+     35       2 idle_inject/3   [idle_inject/3]
+     36       2 migration/3     [migration/3]
+     37       2 ksoftirqd/3     [ksoftirqd/3]
+     39       2 kworker/3:0H-kb [kworker/3:0H-kblockd]
+     40       2 cpuhp/4         [cpuhp/4]
+     41       2 idle_inject/4   [idle_inject/4]
+     42       2 migration/4     [migration/4]
+     43       2 ksoftirqd/4     [ksoftirqd/4]
+     45       2 kworker/4:0H-kb [kworker/4:0H-kblockd]
+     46       2 cpuhp/5         [cpuhp/5]
+     47       2 idle_inject/5   [idle_inject/5]
+     48       2 migration/5     [migration/5]
+     49       2 ksoftirqd/5     [ksoftirqd/5]
+     51       2 kworker/5:0H-kb [kworker/5:0H-kblockd]
+     52       2 cpuhp/6         [cpuhp/6]
+     53       2 idle_inject/6   [idle_inject/6]
+     54       2 migration/6     [migration/6]
+     55       2 ksoftirqd/6     [ksoftirqd/6]
+     57       2 kworker/6:0H-kb [kworker/6:0H-kblockd]
+     58       2 cpuhp/7         [cpuhp/7]
+     59       2 idle_inject/7   [idle_inject/7]
+     60       2 migration/7     [migration/7]
+     61       2 ksoftirqd/7     [ksoftirqd/7]
+     63       2 kworker/7:0H-kb [kworker/7:0H-kblockd]
+     64       2 cpuhp/8         [cpuhp/8]
+     65       2 idle_inject/8   [idle_inject/8]
+     66       2 migration/8     [migration/8]
+     67       2 ksoftirqd/8     [ksoftirqd/8]
+     69       2 kworker/8:0H-kb [kworker/8:0H-kblockd]
+     70       2 cpuhp/9         [cpuhp/9]
+     71       2 idle_inject/9   [idle_inject/9]
+     72       2 migration/9     [migration/9]
+     73       2 ksoftirqd/9     [ksoftirqd/9]
+     75       2 kworker/9:0H-kb [kworker/9:0H-kblockd]
+     76       2 cpuhp/10        [cpuhp/10]
+     77       2 idle_inject/10  [idle_inject/10]
+     78       2 migration/10    [migration/10]
+     79       2 ksoftirqd/10    [ksoftirqd/10]
+     81       2 kworker/10:0H-k [kworker/10:0H-kblockd]
+     82       2 cpuhp/11        [cpuhp/11]
+     83       2 idle_inject/11  [idle_inject/11]
+     84       2 migration/11    [migration/11]
+     85       2 ksoftirqd/11    [ksoftirqd/11]
+     87       2 kworker/11:0H-k [kworker/11:0H-kblockd]
+     88       2 cpuhp/12        [cpuhp/12]
+     89       2 idle_inject/12  [idle_inject/12]
+     90       2 migration/12    [migration/12]
+     91       2 ksoftirqd/12    [ksoftirqd/12]
+     93       2 kworker/12:0H-k [kworker/12:0H-kblockd]
+     94       2 cpuhp/13        [cpuhp/13]
+     95       2 idle_inject/13  [idle_inject/13]
+     96       2 migration/13    [migration/13]
+     97       2 ksoftirqd/13    [ksoftirqd/13]
+     99       2 kworker/13:0H-k [kworker/13:0H-kblockd]
+    100       2 cpuhp/14        [cpuhp/14]
+    101       2 idle_inject/14  [idle_inject/14]
+    102       2 migration/14    [migration/14]
+    103       2 ksoftirqd/14    [ksoftirqd/14]
+    105       2 kworker/14:0H-k [kworker/14:0H-kblockd]
+    106       2 cpuhp/15        [cpuhp/15]
+    107       2 idle_inject/15  [idle_inject/15]
+    108       2 migration/15    [migration/15]
+    109       2 ksoftirqd/15    [ksoftirqd/15]
+    111       2 kworker/15:0H-k [kworker/15:0H-kblockd]
+    112       2 kdevtmpfs       [kdevtmpfs]
+    113       2 kworker/R-inet_ [kworker/R-inet_frag_wq]
+    114       2 rcu_tasks_kthre [rcu_tasks_kthread]
+    115       2 rcu_tasks_rude_ [rcu_tasks_rude_kthread]
+    116       2 kauditd         [kauditd]
+    117       2 khungtaskd      [khungtaskd]
+    118       2 oom_reaper      [oom_reaper]
+    121       2 kworker/R-write [kworker/R-writeback]
+    122       2 kcompactd0      [kcompactd0]
+    123       2 ksmd            [ksmd]
+    124       2 khugepaged      [khugepaged]
+    125       2 kworker/R-kbloc [kworker/R-kblockd]
+    126       2 kworker/R-blkcg [kworker/R-blkcg_punt_bio]
+    127       2 kworker/R-kinte [kworker/R-kintegrityd]
+    128       2 irq/9-acpi      [irq/9-acpi]
+    131       2 kworker/R-tpm_d [kworker/R-tpm_dev_wq]
+    132       2 kworker/R-ata_s [kworker/R-ata_sff]
+    133       2 kworker/R-md_bi [kworker/R-md_bitmap]
+    134       2 kworker/R-md_ll [kworker/R-md_llbitmap_io]
+    135       2 kworker/R-md_ll [kworker/R-md_llbitmap_unplug]
+    136       2 kworker/R-edac- [kworker/R-edac-poller]
+    137       2 kworker/R-devfr [kworker/R-devfreq_wq]
+    139       2 watchdogd       [watchdogd]
+    141       2 kworker/R-quota [kworker/R-quota_events_unbound]
+    142       2 irq/26-AMD-Vi   [irq/26-AMD-Vi]
+    144       2 kswapd0         [kswapd0]
+    145       2 ecryptfs-kthrea [ecryptfs-kthread]
+    146       2 kworker/R-kthro [kworker/R-kthrotld]
+    148       2 kworker/R-acpi_ [kworker/R-acpi_thermal_pm]
+    149       2 kworker/R-mld   [kworker/R-mld]
+    150       2 kworker/R-ipv6_ [kworker/R-ipv6_addrconf]
+    151       2 kworker/R-kstrp [kworker/R-kstrp]
+    175       2 kworker/R-charg [kworker/R-charger_manager]
+    176       2 irq/27-ACPI:Eve [irq/27-ACPI:Event]
+    177       2 irq/28-ACPI:Eve [irq/28-ACPI:Event]
+    178       2 irq/29-ACPI:Eve [irq/29-ACPI:Event]
+    414       2 scsi_eh_0       [scsi_eh_0]
+    415       2 kworker/R-scsi_ [kworker/R-scsi_tmf_0]
+    416       2 scsi_eh_1       [scsi_eh_1]
+    417       2 kworker/R-scsi_ [kworker/R-scsi_tmf_1]
+    418       2 scsi_eh_2       [scsi_eh_2]
+    419       2 kworker/R-scsi_ [kworker/R-scsi_tmf_2]
+    420       2 scsi_eh_3       [scsi_eh_3]
+    421       2 kworker/R-scsi_ [kworker/R-scsi_tmf_3]
+    422       2 scsi_eh_4       [scsi_eh_4]
+    423       2 kworker/R-scsi_ [kworker/R-scsi_tmf_4]
+    424       2 scsi_eh_5       [scsi_eh_5]
+    425       2 kworker/R-scsi_ [kworker/R-scsi_tmf_5]
+    431       2 kworker/R-nvme- [kworker/R-nvme-wq]
+    432       2 kworker/R-nvme- [kworker/R-nvme-reset-wq]
+    433       2 kworker/R-nvme- [kworker/R-nvme-delete-wq]
+    434       2 kworker/R-nvme- [kworker/R-nvme-auth-wq]
+    456       2 kworker/14:1H-k [kworker/14:1H-kblockd]
+    459       2 jbd2/nvme1n1p2- [jbd2/nvme1n1p2-8]
+    460       2 kworker/R-ext4- [kworker/R-ext4-rsv-conversion]
+    469       2 kworker/4:1H-kb [kworker/4:1H-kblockd]
+    478       2 kworker/5:1H-kb [kworker/5:1H-kblockd]
+    518       1 systemd-journal /usr/lib/systemd/systemd-journald
+    554       2 kworker/3:1H-kb [kworker/3:1H-kblockd]
+    556       1 systemd-resolve /usr/lib/systemd/systemd-resolved
+    559       1 systemd-oomd    /usr/lib/systemd/systemd-oomd
+    560       2 kworker/7:1H-kb [kworker/7:1H-kblockd]
+    561       2 kworker/6:1H-kb [kworker/6:1H-kblockd]
+    563       1 systemd-udevd   /usr/lib/systemd/systemd-udevd
+    566       2 kworker/8:1H-kb [kworker/8:1H-kblockd]
+    569       2 psimon          [psimon]
+    622       2 kworker/0:1H-kb [kworker/0:1H-kblockd]
+    804       2 kworker/R-cfg80 [kworker/R-cfg80211]
+    912       2 nv_queue        [nv_queue]
+    913       2 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    914       2 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    915       2 nv_mem_pool_scr [nv_mem_pool_scrubber_queue]
+    916       2 nv_queue        [nv_queue]
+    917       2 nv_open_q       [nv_open_q]
+    931       2 nvidia-modeset/ [nvidia-modeset/kthread_q]
+    932       2 nvidia-modeset/ [nvidia-modeset/deferred_close_kthread_q]
+    934       2 irq/125-nvidia  [irq/125-nvidia]
+    935       2 irq/126-nvidia  [irq/126-nvidia]
+    936       2 irq/127-nvidia  [irq/127-nvidia]
+    937       2 irq/128-nvidia  [irq/128-nvidia]
+    938       2 irq/129-nvidia  [irq/129-nvidia]
+    939       2 irq/130-nvidia  [irq/130-nvidia]
+    940       2 irq/131-nvidia  [irq/131-nvidia]
+    941       2 irq/132-nvidia  [irq/132-nvidia]
+    942       2 nvidia          [nvidia]
+    943       2 nv_queue        [nv_queue]
+    965       2 napi/phy0-0     [napi/phy0-0]
+    966       2 napi/phy0-0     [napi/phy0-0]
+    967       2 napi/phy0-0     [napi/phy0-0]
+    987       2 kworker/15:1H-k [kworker/15:1H-kblockd]
+    997       2 kworker/1:1H-kb [kworker/1:1H-kblockd]
+   1005       2 kworker/10:1H-k [kworker/10:1H-kblockd]
+   1017       2 kworker/R-amdgp [kworker/R-amdgpu-reset-dev]
+   1038       2 kworker/R-ttm   [kworker/R-ttm]
+   1291       2 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1292       2 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1293       2 kworker/R-amdgp [kworker/R-amdgpu_dm_hpd_rx_offload_wq]
+   1294       2 kworker/R-dm_vb [kworker/R-dm_vblank_control_workqueue]
+   1295       2 card1-crtc0     [card1-crtc0]
+   1296       2 card1-crtc1     [card1-crtc1]
+   1297       2 card1-crtc2     [card1-crtc2]
+   1298       2 card1-crtc3     [card1-crtc3]
+   1299       2 kworker/R-gfx_0 [kworker/R-gfx_0.0.0]
+   1300       2 kworker/R-gfx_0 [kworker/R-gfx_0.1.0]
+   1301       2 kworker/R-comp_ [kworker/R-comp_1.0.0]
+   1302       2 kworker/R-comp_ [kworker/R-comp_1.1.0]
+   1303       2 kworker/R-comp_ [kworker/R-comp_1.2.0]
+   1304       2 kworker/R-comp_ [kworker/R-comp_1.3.0]
+   1305       2 kworker/R-comp_ [kworker/R-comp_1.0.1]
+   1306       2 kworker/R-comp_ [kworker/R-comp_1.1.1]
+   1307       2 kworker/R-comp_ [kworker/R-comp_1.2.1]
+   1308       2 kworker/R-comp_ [kworker/R-comp_1.3.1]
+   1309       2 kworker/R-sdma0 [kworker/R-sdma0]
+   1310       2 kworker/R-vcn_d [kworker/R-vcn_dec_0]
+   1311       2 kworker/R-vcn_e [kworker/R-vcn_enc_0.0]
+   1312       2 kworker/R-vcn_e [kworker/R-vcn_enc_0.1]
+   1313       2 kworker/R-jpeg_ [kworker/R-jpeg_dec]
+   1541       2 UVM global queu [UVM global queue]
+   1542       2 UVM deferred re [UVM deferred release queue]
+   1543       2 UVM Tools Event [UVM Tools Event Queue]
+   1680       2 mt76-tx phy0    [mt76-tx phy0]
+   1740       1 avahi-daemon    avahi-daemon: running [mikers-MS-7E71.local]
+   1741       1 bluetoothd      /usr/libexec/bluetooth/bluetoothd
+   1742       1 chronyd-starter /bin/sh /usr/lib/systemd/scripts/chronyd-starter.sh -n -F 1
+   1744       1 dbus-daemon     @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   1746       2 kworker/2:1H-kb [kworker/2:1H-kblockd]
+   1751       1 networkd-dispat /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1758       1 polkitd         /usr/lib/polkit-1/polkitd --no-debug --log-level=notice
+   1768       1 nvidia-persiste /usr/bin/nvidia-persistenced --user nvidia-persistenced --no-persistence-mode --verbose
+   1771       1 accounts-daemon /usr/libexec/accounts-daemon
+   1774       1 cron            /usr/sbin/cron -f -P
+   1775       1 switcheroo-cont /usr/libexec/switcheroo-control
+   1778       1 systemd-logind  /usr/lib/systemd/systemd-logind
+   1780       1 udisksd         /usr/libexec/udisks2/udisksd
+   1801    1740 avahi-daemon    avahi-daemon: chroot helper
+   1838    1742 chronyd         /usr/sbin/chronyd -n -F 1
+   1839       1 rsyslogd        /usr/sbin/rsyslogd -n -iNONE
+   1890    1838 chronyd         /usr/sbin/chronyd -n -F 1
+   1892       2 kworker/13:1H-k [kworker/13:1H-kblockd]
+   1894       2 kworker/11:1H-k [kworker/11:1H-kblockd]
+   1901       1 NetworkManager  /usr/sbin/NetworkManager --no-daemon
+   1902       1 wpa_supplicant  /usr/sbin/wpa_supplicant -u -s -O DIR=/run/wpa_supplicant GROUP=netdev
+   1943       1 ModemManager    /usr/sbin/ModemManager
+   1953       2 kworker/12:1H-k [kworker/12:1H-kblockd]
+   2073       2 kworker/9:1H-kb [kworker/9:1H-kblockd]
+   2104       1 unattended-upgr /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+   2123       1 gdm3            /usr/sbin/gdm3
+   2131    2123 gdm-session-wor gdm-session-worker [pam/gdm-autologin]
+   2148       1 systemd         /usr/lib/systemd/systemd --user --deserialize=65
+   2175    2148 (sd-pam)        (sd-pam)
+   2205    2148 dbus-daemon     /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   2206    2148 pipewire        /usr/bin/pipewire
+   2226       1 rtkit-daemon    /usr/libexec/rtkit-daemon
+   2227    2148 mpris-proxy     /usr/bin/mpris-proxy
+   2228    2148 wireplumber     /usr/bin/wireplumber
+   2229    2148 pipewire        /usr/bin/pipewire -c filter-chain.conf
+   2230    2148 pipewire-pulse  /usr/bin/pipewire-pulse
+   2232    2131 gdm-wayland-ses /usr/libexec/gdm-wayland-session /usr/bin/gnome-session --session=ubuntu
+   2236    2232 gnome-session-i /usr/libexec/gnome-session-init-worker ubuntu
+   2335    2148 xdg-document-po /usr/libexec/xdg-document-portal
+   2397    2148 xdg-permission- /usr/libexec/xdg-permission-store
+   2415    2335 fusermount3     fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc
+   2446    2148 gcr-ssh-agent   /usr/libexec/gcr-ssh-agent --base-dir /run/user/1000/gcr
+   2447    2148 gnome-session-c /usr/libexec/gnome-session-ctl --monitor
+   2448    2148 ssh-agent       /usr/bin/ssh-agent -D
+   2470    2148 gvfsd           /usr/libexec/gvfsd
+   2478    2148 gvfsd-fuse      /usr/libexec/gvfsd-fuse /run/user/1000/gvfs -f
+   2481    2148 gnome-session-s /usr/libexec/gnome-session-service --session=ubuntu
+   2499    2148 gnome-shell     /usr/bin/gnome-shell --mode=ubuntu
+   2611       2 nvidia-drm/time [nvidia-drm/timeline-111]
+   2644    2148 at-spi-bus-laun /usr/libexec/at-spi-bus-launcher
+   2651    2644 dbus-daemon     /usr/bin/dbus-daemon --config-file=/usr/share/defaults/at-spi2/accessibility.conf --nofork --print-address 11 --address=unix:path=/run/user/1000/at-spi/bus
+   2653    2148 at-spi2-registr /usr/libexec/at-spi2-registryd --use-gnome-session
+   2654       1 colord          /usr/libexec/colord
+   2687    2148 gnome-shell-cal /usr/libexec/gnome-shell-calendar-server
+   2697    2148 evolution-sourc /usr/libexec/evolution-source-registry
+   2699    2148 gjs             /usr/bin/gjs -m /usr/share/gnome-shell/org.gnome.Shell.Notifications
+   2715       1 upowerd         /usr/libexec/upowerd
+   2716    2148 ibus-daemon     /usr/bin/ibus-daemon --panel disable
+   2718    2148 gsd-a11y-settin /usr/libexec/gsd-a11y-settings
+   2719    2148 gsd-color       /usr/libexec/gsd-color
+   2723    2148 gsd-datetime    /usr/libexec/gsd-datetime
+   2724    2148 gsd-housekeepin /usr/libexec/gsd-housekeeping
+   2725    2148 gsd-keyboard    /usr/libexec/gsd-keyboard
+   2730    2148 gsd-media-keys  /usr/libexec/gsd-media-keys
+   2732    2148 gsd-power       /usr/libexec/gsd-power
+   2736    2148 gsd-print-notif /usr/libexec/gsd-print-notifications
+   2738    2148 gsd-rfkill      /usr/libexec/gsd-rfkill
+   2743    2148 gsd-screensaver /usr/libexec/gsd-screensaver-proxy
+   2761    2148 gsd-sharing     /usr/libexec/gsd-sharing
+   2765    2148 gsd-disk-utilit /usr/libexec/gsd-disk-utility-notify
+   2769    2148 gsd-smartcard   /usr/libexec/gsd-smartcard
+   2771    2148 gsd-sound       /usr/libexec/gsd-sound
+   2773    2148 evolution-alarm /usr/libexec/evolution-data-server/evolution-alarm-notify
+   2788    2148 gsd-usb-protect /usr/libexec/gsd-usb-protection
+   2793    2148 gsd-wwan        /usr/libexec/gsd-wwan
+   2808    2148 update-notifier /usr/bin/update-notifier
+   2871    2716 ibus-memconf    /usr/libexec/ibus-memconf
+   2873    2716 ibus-extension- /usr/libexec/ibus-extension-gtk3
+   2881    2148 ibus-portal     /usr/libexec/ibus-portal
+   2895    2148 gvfs-udisks2-vo /usr/libexec/gvfs-udisks2-volume-monitor
+   2899    2148 gjs             /usr/bin/gjs -m /usr/share/gnome-shell/org.gnome.ScreenSaver
+   2943    2148 gvfs-afc-volume /usr/libexec/gvfs-afc-volume-monitor
+   2951    2148 gvfs-gphoto2-vo /usr/libexec/gvfs-gphoto2-volume-monitor
+   2960    2148 xdg-desktop-por /usr/libexec/xdg-desktop-portal
+   2974    2148 goa-daemon      /usr/libexec/goa-daemon
+   2986    2148 gvfs-mtp-volume /usr/libexec/gvfs-mtp-volume-monitor
+   2987    2148 xdg-desktop-por /usr/libexec/xdg-desktop-portal-gnome
+   2993    2148 gvfs-goa-volume /usr/libexec/gvfs-goa-volume-monitor
+   3005    2148 goa-identity-se /usr/libexec/goa-identity-service
+   3014    2148 evolution-calen /usr/libexec/evolution-calendar-factory
+   3026    2716 ibus-engine-sim /usr/libexec/ibus-engine-simple
+   3040    2148 evolution-addre /usr/libexec/evolution-addressbook-factory
+   3083    2148 dconf-service   /usr/libexec/dconf-service
+   3093    2470 gvfsd-trash     /usr/libexec/gvfsd-trash --spawner :1.20 /org/gtk/gvfs/exec_spaw/0
+   3148    2148 xdg-desktop-por /usr/libexec/xdg-desktop-portal-gtk
+   3170    2148 gsd-printer     /usr/libexec/gsd-printer
+   3217    2148 user-session-he /snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+   3280    3217 snapd-desktop-i /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+   3396       1 power-profiles- /usr/libexec/power-profiles-daemon
+   3418       2 krfcommd        [krfcommd]
+   3448    2148 gvfsd-metadata  /usr/libexec/gvfsd-metadata
+   3459    2148 ubuntu-insights /usr/bin/ubuntu-insights collect -p=2629743
+   4644       1 tmux: server    tmux
+   4645    4644 bash            -bash
+  12562       2 kworker/6:0-eve [kworker/6:0-events]
+ 135177       2 kworker/0:1-mm_ [kworker/0:1-mm_percpu_wq]
+ 158697       1 sshd            sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+ 186093    4644 bash            -bash
+ 207155       2 kworker/8:1-eve [kworker/8:1-events]
+ 236788       1 fwupd           /usr/libexec/fwupd/fwupd
+ 239885    2148 snap            /snap/snapd/current/usr/bin/snap userd
+ 401319       2 kworker/3:2-eve [kworker/3:2-events]
+ 442220       2 kworker/1:2-eve [kworker/1:2-events]
+ 503291       2 kworker/10:0-mm [kworker/10:0-mm_percpu_wq]
+ 562156       2 kworker/5:2-mm_ [kworker/5:2-mm_percpu_wq]
+ 603735       2 kworker/7:1-mm_ [kworker/7:1-mm_percpu_wq]
+ 617180       2 kworker/9:2-mm_ [kworker/9:2-mm_percpu_wq]
+ 635493    4645 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox resume npm_***
+ 635506  635493 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 635507  635506 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 635514  635507 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b
+ 636713  635514 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 641695  186093 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 641706  641695 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 641707  641706 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 641714  641707 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 642973  641714 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 657453       2 kworker/13:1-mm [kworker/13:1-mm_percpu_wq]
+ 670619       2 kworker/11:2-mm [kworker/11:2-mm_percpu_wq]
+ 674512       2 kworker/4:2-cgr [kworker/4:2-cgroup_free]
+ 680904       2 kworker/u64:1-m [kworker/u64:1-mt76]
+ 682496       2 kworker/6:1     [kworker/6:1]
+ 687655       2 kworker/9:0-cgr [kworker/9:0-cgroup_free]
+ 688587       2 kworker/u64:2-e [kworker/u64:2-events_unbound]
+ 696836       2 kworker/u64:0-e [kworker/u64:0-events_unbound]
+ 698446       2 kworker/2:1-eve [kworker/2:1-events]
+ 702881    4644 bash            -bash
+ 702975  702881 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 702986  702975 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 702987  702986 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 702994  702987 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 704105  702994 codex-code-mode /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+ 708412       2 kworker/7:0-cgr [kworker/7:0-cgroup_free]
+ 709643       2 kworker/11:1-cg [kworker/11:1-cgroup_free]
+ 711445       2 kworker/4:0-mm_ [kworker/4:0-mm_percpu_wq]
+ 712234       2 kworker/u64:3-m [kworker/u64:3-mt76]
+ 713295       2 kworker/13:2-cg [kworker/13:2-cgroup_free]
+ 714182       2 kworker/12:2-cg [kworker/12:2-cgroup_free]
+ 718331       2 kworker/3:1-cgr [kworker/3:1-cgroup_free]
+ 721618       2 kworker/8:0     [kworker/8:0]
+ 721727       2 kworker/14:2-cg [kworker/14:2-cgroup_free]
+ 722263       2 kworker/0:0-cgr [kworker/0:0-cgroup_free]
+ 725816       2 kworker/12:0-ev [kworker/12:0-events]
+ 726448       2 kworker/2:0-cgr [kworker/2:0-cgroup_free]
+ 729622       2 kworker/1:1-cgr [kworker/1:1-cgroup_free]
+ 729995       2 kworker/15:1-ev [kworker/15:1-events]
+ 730234       2 kworker/5:0-cgr [kworker/5:0-cgroup_free]
+ 730376       2 kworker/10:1-cg [kworker/10:1-cgroup_free]
+ 731426       2 kworker/11:0-cg [kworker/11:0-cgroup_free]
+ 732099       2 kworker/u64:4-e [kworker/u64:4-events_unbound]
+ 734509       2 kworker/7:2     [kworker/7:2]
+ 735315       2 kworker/0:2-cgr [kworker/0:2-cgroup_free]
+ 735844       2 kworker/14:0-cg [kworker/14:0-cgroup_free]
+ 737965       2 kworker/13:0-ev [kworker/13:0-events_freezable]
+ 738062  158697 sshd-session    sshd-session: mikers [priv]
+ 738103  738062 sshd-session    sshd-session: mikers@notty
+ 738104  738103 bash            bash -c python3 - <<'PY' from pathlib import Path import json,hashlib,subprocess,time B=Path("/home/mikers/benchmarks/mvcc-4871-repair-20261013") e=B/"evidence/successor-4876-actual-multilevel-writer-trace-20261015" src=B/"evidence/successor-4876-actual-effect-20261014" def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest() def put(n,x):(e/n).write_text(json.dumps(x,indent=2)+"\n") raw=(e/"benchmark.raw").read_text() line=next(l for l in raw.splitlines() if l.startswith("BenchmarkSprintMVCC/") and " ns/op" in l) f=line.split();metrics={f[i+1]:float(f[i]) for i in range(2,len(f)-1,2)} assert int(f[1])==64 and raw.rstrip().endswith("PASS") for k in ("ack_routing_before_ok","ack_routing_after_ok","close_ok","cow_capture_calls_total/op","cow_prepare_calls_total/op","cow_publications_total/op","output/op","point_calls/op","wal_appends/op"): assert metrics[k]==1,k for k in ("wal_syncs/op","vlog_syncs/op","public_checkpoints/op","snapshot_rotations/op","enqueued_records/op"): assert metrics[k]==0,k assert metrics["layout_before_pointer"]==metrics["layout_after_pointer"]==metrics["layout_expected_records"]==24582 assert metrics["layout_before_inline"]==metrics["layout_after_inline"]==0 audit=json.loads((e/"stall-audit.json").read_bytes());stall=audit["stall"] assert not audit["gc_overlaps"] and not audit["gc_unpaired_ends"] and audit["gc_unclosed_count"]==0 assert "unix.Dup" in stall["entry"] and "benchmark_test.go:348" in stall["entry"] frac=stall["duration_ns"]/metrics["writer_max_ns"] d=json.loads((e/"dup-count.json").read_bytes()) measured=[r for r in d["timed_intervals"] if r["goid"]==stall["goid"]] assert len(measured)==64 and len(d["timed_intervals"])==65 chain=stall["entry"].split("TransitionStack=\n",1)[1].split("\nStack=",1)[0] (e/"complete-capture-callchain.raw").write_text(chain) put("attribution.json",dict(purpose="single causal latency-attribution diagnostic, not comparative acceptance",benchmark_invocations=1,metrics=metrics,writer_stall_goid=stall["goid"],writer_stall_syscall="unix.Dup",syscall_interval_ns=stall["duration_ns"],writer_max_index=metrics["writer_max_index"],writer_max_ns=metrics["writer_max_ns"],syscall_fraction_of_writer_max=frac,gc_overlap_count=0,parsed_gc_range_count=145,syscall_return_state="Running",separate_go_runnable_delay_recorded=False,public_gates_passed=True,CommitAt348_dup_intervals=dict(measured64=len(measured),automatic_calibration1=1,measured_sum_ns=sum(r["duration_ns"] for r in measured),over_100us=sum(r["duration_ns"]>=100000 for r in measured)),limitations=["Trace perturbs timing; maximum moved from prior untraced index19 to18.","A syscall interval can include kernel work, waiting or descheduling; trace cannot distinguish them.","This AFTER multilevel trace does not establish GE causality or attribute previously untraced runs.","Longer setup Fsync intervals are not timed CommitAt maxima.","No repeatability, comparative speedup or production acceptance claim."])) manifest=json.loads((src/"manifest.json").read_bytes()) mismatches=[] for x in manifest["publishable"]:  p=src/x["path"]  if p.stat().st_size!=x["bytes"] or sha(p)!=x["sha256"]:mismatches.append(x["path"]) assert not mismatches binary=src/"after.test" assert sha(binary)=="8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4" ps=subprocess.check_output(["ps","-eo","pid,ppid,comm,args"],text=True) (e/"final.processes.raw").write_text(ps) producers=[] for l in ps.splitlines()[1:]:  z=l.split(None,3)  if len(z)>2 and (z[2] in ("go","compile","link","unified-bench") or z[2].endswith(".test")):producers.append(l) put("quiescence.json",dict(time_unix=time.time(),go_quiet=not producers,go_producers=producers,retained_input_manifest_members_checked=len(manifest["publishable"]),retained_input_mismatches=mismatches,binary_sha256=sha(binary),source_mutations=0,builds=0,benchmark_invocations=1,source_ownership="Production source was never written or used for compilation; native and ordinary ownership stays with root/owners.",disposable_release_list=[])) assert not producers report="""# One actual AFTER multilevel pointer writer trace  Exactly one invocation of the retained actual-effect AFTER binary completed with exit0 in1.374seconds. All public value, actual COW/RELAXED selector, ACK, populated PRIMARY layout and explicit Close gates passed. Setup proves depth3 with24,582pointer records and historical GetAt(15) returning timestamp10. CPU0–3 were idle and no competing Go producer was present. Original command/env/64x fixture were retained; only standard -test.trace was added. A90-second process-group wall cap and120-second outer cap left the original test timeout unchanged. No build, reseed change, warmup, source edit, retry or second benchmark invocation occurred.  Writer maximum is7,534,593ns at original loop index18. A7,504,768ns unix.Dup syscall interval accounts for99.60% of that maximum. The complete stack with source paths/lines is retained in complete-capture-callchain.raw. The chain is public Store.CommitAt → CommitGroupAt → SetPointWithMVCCInput → setWithMVCCInput → writeCOWPointAdmittedWithMVCCInput → commandWALPublicBatch.write → Batch.WriteAfterCommandWALAppendWithPreparedRevision → writeRegularLocked → writeCOWPublication → prepared command-WAL append callback → appendAndRegisterPublicCommandWAL → appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized → appendCommandWALIntentWithTiming → captureCommandWALExternalDependencies → Manager.CaptureStableExternalRIDFence → stableResourceTokenFromOriginal → stableValueLogResourceToken → NewStableValueLogResourceToken → NewStableProducerResourceTokenForDomain → newStableResourceToken → initializeStableResourceToken → duplicateStableSyncFile → duplicateStableFile → unix.Dup. Timed public benchmark frame is benchmark_test.go:348.  There are exactly64 Dup intervals on the measured64-iteration CommitAt348 goroutine66, plus one on the automatic1-iteration calibration goroutine19. Only one measured Dup exceeds100us; the measured Dup sum is7,514,496ns. The63 other measured Dup intervals sum9,728ns. This is one Dup per measured CommitAt rather than repeated Dup within each call. Full-trace count including setup is1,285. No syscall samples were removed from results.  Goroutine66 returns directly Syscall→Running. No separate Go runnable delay is recorded. All145 GC ranges pair cleanly, with no GC/mark-assist/sweep/stop-the-world range overlapping this interval. Longer whole-trace Fsync intervals belong to setup stacks, not this timed writer maximum. Trace cannot distinguish kernel work, kernel waiting or descheduling inside the syscall interval.  Full traced totals:158875ns/op; loop elapsed10,167,808ns; writer sum8,764,776ns, reader sum1,397,222ns, residual5,810ns. Writer p5014,190ns, reader p5016,840ns;39844B/op and179allocs/op. Timed recorded WAL sync, vlog sync, public checkpoint, rotation/enqueue and new segment/directory-sync deltas remain zero. Timing includes the maximum.  This reproduces the same stable-token Dup latency site on actual AFTER multilevel public path previously seen on BEFORE/small, strengthening attribution of a real writer tail. It does not explain kernel behavior, establish GE causality or attribute the four earlier untraced multilevel calls. Trace timing is diagnostic only and cannot replace the retained +15.89% whole-unit concern or comparative/final gates.  The source seam identified by the stack is original-child conversion in stableResourceTokenFromOriginal/CaptureStableExternalRIDFence and token initialization in rootpublication/resource_token.go. The stack alone does not prove a maintained shared physical-backing reuse API or a safe code change. Any source-only reuse review must preserve exact external-RID membership, stable physical identity, independent retained lifetimes, command-WAL fence ownership, errors and Close/custody semantics. No bypass of Dup, durability change, GC tuning or new resource cache is justified by this trace. No further collection is requested or performed.  The binary, common harness and all85 parent manifest members rehash unchanged. Full10,323,541-byte trace, raw benchmark, original command/env, input binding, long-syscall stacks, all paired GC ranges and both local analysis commands are retained. Parsed output was streamed (6,791,989,801bytes, identical SHA across both analysis passes) rather than persisted; full trace permits reprocessing. Production sources are untouched; Go is quiet. Binaries remain retained at original paths and excluded from publication. No paths released for cleanup. """ (e/"report.md").write_text(report) files=sorted(p for p in e.iterdir() if p.is_file() and p.name!="manifest.json") put("manifest.json",dict(schema="finite-artifact-allowlist-v1",artifact_root=str(e),purpose="one actual AFTER multilevel public pointer trace; attribution only",publishable=[dict(path=p.name,bytes=p.stat().st_size,sha256=sha(p)) for p in files],retained_binary=dict(path=str(binary),bytes=binary.stat().st_size,sha256=sha(binary)),input_source_artifact=dict(root=str(src),manifest_sha256=sha(src/"manifest.json"),durable_artifact_commit="16d1b29593f966ecb9159a1e93e562f115f9f3bb"),excluded_binaries=[str(binary)],source_mutations=0,builds=0,benchmark_invocations=1,disposable_release_list=[])) print(json.dumps(dict(artifact_root=str(e),manifest_sha256=sha(e/"manifest.json"),report_sha256=sha(e/"report.md"),receipt_sha256=sha(e/"receipt.json"),attribution_sha256=sha(e/"attribution.json"),publishable_count=len(files),publishable_bytes=sum(p.stat().st_size for p in files),syscall_fraction=frac,go_quiet=not producers),indent=2))  PY
+ 738105  738104 python3         python3 -
+ 738106  738105 ps              ps -eo pid,ppid,comm,args
+ 776184 1957054 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+ 776227  776184 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+ 776228  776227 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+ 776235  776228 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+ 938177    2148 update-notifier /bin/sh /usr/lib/update-notifier/update-notifier-crash
+ 938196  938177 apport-gtk      /usr/bin/python3 /usr/share/apport/apport-gtk
+1130414       2 psimon          [psimon]
+1130690       2 psimon          [psimon]
+1195087    4644 bash            -bash
+1195196 1195087 sudo            sudo su
+1195263 1195196 sudo            sudo su
+1195264 1195263 su              su
+1195268       1 systemd         /usr/lib/systemd/systemd --user
+1195270 1195268 (sd-pam)        (sd-pam)
+1195292 1195268 dbus-daemon     /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+1195294 1195268 user-session-he /snap/snapd-desktop-integration/391/usr/bin/user-session-helper /snap/snapd-desktop-integration/391/usr/bin/snapd-desktop-integration
+1195295 1195264 bash            bash
+1195369 1195268 xdg-document-po /usr/libexec/xdg-document-portal
+1195376 1195268 xdg-permission- /usr/libexec/xdg-permission-store
+1195384 1195369 fusermount3     fusermount3 --auto-unmount -- /run/user/0/doc
+1199661       1 containerd      /usr/bin/containerd
+1200019       1 dockerd         /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+1394925       2 kworker/15:2-ev [kworker/15:2-events]
+1435980       1 snapd           /snap/snapd/current/usr/lib/snapd/snapd
+1766386 2972898 npm exec @opena npm exec @openai/codex@alpha --dangerously-bypass-approvals-and-sandbox
+1766397 1766386 sh              sh -c codex --dangerously-bypass-approvals-and-sandbox
+1766398 1766397 node            node /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/.bin/codex --dangerously-bypass-approvals-and-sandbox
+1766405 1766398 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox
+1957054    4644 bash            -bash
+2246472    2148 gnome-keyring-d /usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+2246474    2148 gnome-keyring-d /usr/bin/gnome-keyring-daemon --foreground --components=pkcs11,secrets --control-directory=/run/user/1000/keyring
+2516367       2 kworker/u65:2-t [kworker/u65:2-ttm]
+2566163       2 kworker/u65:5-t [kworker/u65:5-ttm]
+2718639    2499 Xwayland        /usr/bin/Xwayland :0 -rootless -noreset -accessx -core -auth /run/user/1000/.mutter-Xwaylandauth.LV86U3 -listenfd 4 -listenfd 5 -displayfd 6 -initfd 7 -byteswappedclients -enable-ei-portal
+2718654    2148 gsd-xsettings   /usr/libexec/gsd-xsettings
+2718667    2499 mutter-x11-fram /usr/libexec/mutter-x11-frames
+2718677    2148 ibus-x11        /usr/libexec/ibus-x11
+2971628       1 codex           /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --managed-daemon
+2972898    4644 bash            -bash
+2977748 2971628 codex-code-mode /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex-code-mode-host
+3036473    4644 bash            -bash
+3036614 3036473 sudo            sudo su
+3036617 3036614 sudo            sudo su
+3036618 3036617 su              su
+3036620 3036618 bash            bash
+3112332    4644 bash            -bash
+3728903       1 cupsd           /usr/sbin/cupsd -l
+3728904       1 cups-browsed    /usr/sbin/cups-browsed
+3728951 3728903 dbus            /usr/lib/cups/notifier/dbus dbus://
+3728952 3728903 dbus            /usr/lib/cups/notifier/dbus dbus://
+3845816    4644 bash            -bash
+3845893 3845816 top             top
+3971444    4644 bash            -bash
+4037386       2 kworker/14:1-ev [kworker/14:1-events]
+4101847    4644 bash            -bash
+4101956 4101847 ssh             ssh mikers@192.168.0.185

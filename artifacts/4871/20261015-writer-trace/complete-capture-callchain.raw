@@ -1,0 +1,70 @@
+	golang.org/x/sys/unix.Dup @ 0x5a86c9
+		golang.org/x/sys@v0.41.0/unix/zsyscall_linux.go:662
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.duplicateStableFile @ 0x6d5449
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_identity_unix.go:106
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.duplicateStableSyncFile @ 0x6d54f2
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_identity_unix.go:115
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.initializeStableResourceToken @ 0x748636
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_token.go:589
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.newStableResourceToken @ 0x747984
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_token.go:531
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceToken @ 0x747985
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_token.go:524
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableProducerResourceToken @ 0x6ddd7a
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_inventory.go:247
+	github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableProducerResourceTokenForDomain @ 0x6dd8ec
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/rootpublication/resource_inventory.go:224
+	github.com/snissn/gomap/TreeDB/internal/valuelog.NewStableValueLogResourceToken @ 0x7d06f3
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/valuelog/stable_resource.go:1626
+	github.com/snissn/gomap/TreeDB/internal/valuelog.stableValueLogResourceToken @ 0x7d2ab9
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/valuelog/stable_resource.go:1980
+	github.com/snissn/gomap/TreeDB/internal/valuelog.stableResourceTokenFromOriginal @ 0x7c2804
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/valuelog/stable_resource.go:359
+	github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CaptureStableExternalRIDFence @ 0x7c4b9e
+		github.com/snissn/gomap@v0.0.0/TreeDB/internal/valuelog/stable_resource.go:522
+	github.com/snissn/gomap/TreeDB/db.(*DB).captureCommandWALExternalDependencies @ 0x8dcfb7
+		github.com/snissn/gomap@v0.0.0/TreeDB/db/command_wal_raw.go:1821
+	github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming @ 0x8e06f7
+		github.com/snissn/gomap@v0.0.0/TreeDB/db/command_wal_raw.go:2700
+	github.com/snissn/gomap/TreeDB/db.(*DB).appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized @ 0x8da56d
+		github.com/snissn/gomap@v0.0.0/TreeDB/db/command_wal_raw.go:1595
+	github.com/snissn/gomap/TreeDB/db.(*DB).AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndMode @ 0x8d9789
+		github.com/snissn/gomap@v0.0.0/TreeDB/db/command_wal_raw.go:1451
+	github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared.func1 @ 0xcce50a
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:208
+	github.com/snissn/gomap/TreeDB.(*DB).appendAndRegisterPublicCommandWAL @ 0xcca1ce
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_group_commit.go:104
+	github.com/snissn/gomap/TreeDB.(*DB).appendPublicRawKVCommandEntryScanPrepared @ 0xcce42b
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:207
+	github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).appendCommandWAL @ 0xcd52f1
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:1511
+	github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write.func4 @ 0xcd361a
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:1158
+	github.com/snissn/gomap/TreeDB/caching.(*Batch).writeCOWPublication @ 0xb3afb0
+		github.com/snissn/gomap@v0.0.0/TreeDB/caching/cow_batch.go:261
+	github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked @ 0xc553fe
+		github.com/snissn/gomap@v0.0.0/TreeDB/caching/db.go:38716
+	github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular @ 0xc52f07
+		github.com/snissn/gomap@v0.0.0/TreeDB/caching/db.go:38087
+	github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision @ 0xc504c6
+		github.com/snissn/gomap@v0.0.0/TreeDB/caching/db.go:37592
+	github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).write @ 0xcd30dd
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:1157
+	github.com/snissn/gomap/TreeDB.(*commandWALPublicBatch).Write @ 0xcd2a66
+		github.com/snissn/gomap@v0.0.0/TreeDB/command_wal_public_cached.go:1069
+	github.com/snissn/gomap/TreeDB.(*DB).writeCOWPointAdmittedWithMVCCInput @ 0xce94c1
+		github.com/snissn/gomap@v0.0.0/TreeDB/public.go:2960
+	github.com/snissn/gomap/TreeDB.(*DB).setWithMVCCInput @ 0xce402f
+		github.com/snissn/gomap@v0.0.0/TreeDB/public.go:2100
+	github.com/snissn/gomap/TreeDB.(*DB).SetPointWithMVCCInput @ 0xce99f8
+		github.com/snissn/gomap@v0.0.0/TreeDB/public.go:2978
+	github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitGroupAt @ 0xcede7a
+		github.com/snissn/gomap@v0.0.0/TreeDB/mvcc/mvcc.go:279
+	github.com/snissn/gomap/TreeDB/mvcc.(*Store).CommitAt @ 0xcf77bc
+		github.com/snissn/gomap@v0.0.0/TreeDB/mvcc/mvcc.go:175
+	github.com/snissn/gomap/TreeDB/sprintperf_actual_effect.BenchmarkSprintMVCC.func1 @ 0xcf76f1
+		github.com/snissn/gomap/TreeDB/sprintperf_actual_effect/benchmark_test.go:348
+	testing.(*B).runN @ 0x51054f
+		testing/benchmark.go:219
+	testing.(*B).launch @ 0x510faa
+		testing/benchmark.go:347

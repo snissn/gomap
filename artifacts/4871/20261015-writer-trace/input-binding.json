@@ -1,0 +1,64 @@
+{
+  "manifest_sha256": "23cff07ddab5d40f1f6c9a4b06142b57956228a82983cca2e67f00c8f0a0ffc0",
+  "manifest_members_verified": 85,
+  "binary_sha256": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4",
+  "binary_bytes": 27374097,
+  "harness": [
+    {
+      "path": "harness/admission_test.go",
+      "bytes": 2610,
+      "sha256": "2978839f31fd5e5f511c4375ffc1109745ad5344d80bdaccdbdaa003f9b356ad"
+    },
+    {
+      "path": "harness/benchmark_test.go",
+      "bytes": 21522,
+      "sha256": "8b0efd309dd0c660d2b31fb6f8f81e3047b425e403511097677d1d98c1b46872"
+    },
+    {
+      "path": "harness/captured_successor_test.go",
+      "bytes": 6017,
+      "sha256": "00e82e5b073629475481f07eb738f1873f3f7a069f5cea2e9d6041814aa633b6"
+    },
+    {
+      "path": "harness/go.mod",
+      "bytes": 5409,
+      "sha256": "932469c9300de785b7ba80749019b84005db3aefa02163b86933456be86b0236"
+    },
+    {
+      "path": "harness/go.sum",
+      "bytes": 44762,
+      "sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a"
+    }
+  ],
+  "original_command": {
+    "label": "multilevel-forced_pointer-pair1-after",
+    "argv": [
+      "taskset",
+      "-c",
+      "0-3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+      "-test.benchtime=64x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v",
+      "-test.timeout=120s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/harness",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1",
+      "SPRINT_MEMTABLE": "cow_btree",
+      "SPRINT_REQUIRE_PRIMARY": "1",
+      "SPRINT_POPULATED_SIZE": "multilevel"
+    },
+    "exit": 0,
+    "elapsed_s": 1.1751906871795654,
+    "raw": "multilevel-forced_pointer-pair1-after.raw",
+    "sha256": "47cd2d25a82822e0af46f049f2ea27fcb306d5ccf537e70998c5a388c97c857c"
+  }
+}

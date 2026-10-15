@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0-3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkSprintMVCC$/^command_wal_relaxed$/^cow_btree$/^forced_pointer$/^point$",
+    "-test.benchtime=64x",
+    "-test.count=1",
+    "-test.benchmem",
+    "-test.v",
+    "-test.timeout=120s",
+    "-test.trace=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-multilevel-writer-trace-20261015/trace.out"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "SPRINT_MEMTABLE": "cow_btree",
+    "SPRINT_REQUIRE_PRIMARY": "1",
+    "SPRINT_POPULATED_SIZE": "multilevel"
+  },
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/harness",
+  "only_argv_delta": "added -test.trace",
+  "go_process_wall_timeout_s": 90,
+  "outer_driver_bound_s": 120,
+  "existing_test_timeout_unchanged": "120s"
+}

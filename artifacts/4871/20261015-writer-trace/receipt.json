@@ -1,0 +1,13 @@
+{
+  "exit": 0,
+  "timed_out": false,
+  "elapsed_s": 1.373745429329574,
+  "binary_sha256_before": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4",
+  "binary_sha256_after": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4",
+  "binary_unchanged": true,
+  "raw_bytes": 21022,
+  "raw_sha256": "2801efd575545f05c577803052c3ef595af58f71e0adb72d3f59dec2a7a4a6ab",
+  "trace_bytes": 10323541,
+  "trace_sha256": "949658fd19cf6b5f0250d952c901877c1b4e991059b8c3cf91fad05518676ae4",
+  "benchmark_invocations": 1
+}

@@ -1,0 +1,129 @@
+{
+  "schema": "finite-artifact-allowlist-v1",
+  "artifact_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-multilevel-writer-trace-20261015",
+  "purpose": "one actual AFTER multilevel public pointer trace; attribution only",
+  "publishable": [
+    {
+      "path": "analysis-receipt.json",
+      "bytes": 606,
+      "sha256": "7ef74dcbbe50609b17c95685358a7aacabb65309595a74ab0bf9fd759f8a8f9c"
+    },
+    {
+      "path": "attribution.json",
+      "bytes": 3045,
+      "sha256": "944a5e2cbe750531c225692bd2c6a60cfc1198234e4229feab596577571c8d96"
+    },
+    {
+      "path": "benchmark.raw",
+      "bytes": 21022,
+      "sha256": "2801efd575545f05c577803052c3ef595af58f71e0adb72d3f59dec2a7a4a6ab"
+    },
+    {
+      "path": "command.json",
+      "bytes": 1144,
+      "sha256": "6a6ac70cf766bb707ff0a48933aaeaa5b4666e3367fd765bb2521a058e14a558"
+    },
+    {
+      "path": "complete-capture-callchain.raw",
+      "bytes": 5383,
+      "sha256": "9ac1e590b97460fa8bd1f3165bcc97326aa25550b34742fc412093f5f81f4535"
+    },
+    {
+      "path": "dup-count-parse.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "dup-count.json",
+      "bytes": 11000,
+      "sha256": "a82ded3f18c28cf4a4f9db75cf07608091b6b68502944b8b1f53ccb89108e37a"
+    },
+    {
+      "path": "final.processes.raw",
+      "bytes": 37567,
+      "sha256": "dd29b650b544b5d24e74ae20c096a976e72240d1d400f8834c8c54eb19c8fc16"
+    },
+    {
+      "path": "gc-ranges.json",
+      "bytes": 500074,
+      "sha256": "9468b67c5b4930316180a019fe63ebc0720b7f8e4bd5ca3b0429acab3386d6b7"
+    },
+    {
+      "path": "input-binding.json",
+      "bytes": 2215,
+      "sha256": "2954023fbcae1f705936ba66e746eff0998a299b031b8cf162a5386977c9be80"
+    },
+    {
+      "path": "long-syscalls.json",
+      "bytes": 40299,
+      "sha256": "39e892af266227a60737a291b9fc07297b4da9f5c81c26d90564b5f90ec086bb"
+    },
+    {
+      "path": "postrun.processes.raw",
+      "bytes": 31767,
+      "sha256": "d8271065f46d7e6af4def854897fc5b05948b9f7decc22b782c72a04503d60eb"
+    },
+    {
+      "path": "preflight.json",
+      "bytes": 1916,
+      "sha256": "c8c7f8d95e2e5cf76093e3223c8416d9f487325397a66cbbe12fd04090e43784"
+    },
+    {
+      "path": "preflight.processes.raw",
+      "bytes": 31748,
+      "sha256": "329611e4db014bc6731c7f6d67006dd48f00738cb1fe44768cf0b6b3897d88aa"
+    },
+    {
+      "path": "quiescence.json",
+      "bytes": 494,
+      "sha256": "1f01448e4e585cf3ea2a59e17d7beb1dac86922f9d719af7d803d580cef18783"
+    },
+    {
+      "path": "receipt.json",
+      "bytes": 536,
+      "sha256": "d8d78040743980ff3f918aa33e2029e9ebf64a042ecabe57792761dcfa41433c"
+    },
+    {
+      "path": "report.md",
+      "bytes": 4558,
+      "sha256": "1ab4c9b3744cd645349af2a1558fc7a4fc26b296f85d7cce93850377ed56475d"
+    },
+    {
+      "path": "stall-audit.json",
+      "bytes": 70850,
+      "sha256": "ae137e576a4ea3b9a8be1dff6b4538080e14a6c59529325aed9964ab44abec37"
+    },
+    {
+      "path": "timed-writer-long-syscalls.json",
+      "bytes": 11488,
+      "sha256": "bbebe65864ce4777238fe0196fc7e36b077842fdd8fbae1337ec31ceab59686a"
+    },
+    {
+      "path": "trace-parse.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "trace.out",
+      "bytes": 10323541,
+      "sha256": "949658fd19cf6b5f0250d952c901877c1b4e991059b8c3cf91fad05518676ae4"
+    }
+  ],
+  "retained_binary": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test",
+    "bytes": 27374097,
+    "sha256": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4"
+  },
+  "input_source_artifact": {
+    "root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014",
+    "manifest_sha256": "23cff07ddab5d40f1f6c9a4b06142b57956228a82983cca2e67f00c8f0a0ffc0",
+    "durable_artifact_commit": "16d1b29593f966ecb9159a1e93e562f115f9f3bb"
+  },
+  "excluded_binaries": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test"
+  ],
+  "source_mutations": 0,
+  "builds": 0,
+  "benchmark_invocations": 1,
+  "disposable_release_list": []
+}

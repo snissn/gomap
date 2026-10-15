@@ -1,0 +1,13 @@
+{
+  "time_unix": 1792022922.6733794,
+  "go_quiet": true,
+  "go_producers": [],
+  "retained_input_manifest_members_checked": 85,
+  "retained_input_mismatches": [],
+  "binary_sha256": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4",
+  "source_mutations": 0,
+  "builds": 0,
+  "benchmark_invocations": 1,
+  "source_ownership": "Production source was never written or used for compilation; native and ordinary ownership stays with root/owners.",
+  "disposable_release_list": []
+}

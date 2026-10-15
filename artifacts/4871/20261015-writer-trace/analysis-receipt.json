@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "tool",
+    "trace",
+    "-d=parsed",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-multilevel-writer-trace-20261015/trace.out"
+  ],
+  "exit": 0,
+  "parsed_output_bytes": 6791989801,
+  "parsed_output_sha256": "787f28969f683019dbdc9fde95b1bf5bedf0ae65c930113112d08c137ed9bd30",
+  "parsed_output_retention": "streamed; full trace retained, long syscall entries and GC ranges retained below",
+  "events": 2181796,
+  "syscall_threshold_ns": 100000
+}
