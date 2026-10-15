@@ -1,0 +1,10 @@
+{
+  "head": "cb5960399df0c23e320193b64d8b6a5db5844c3e",
+  "base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "files": {
+    "TreeDB/zipper/zipper.go": "b3cf909881fd91c29c06a7ade658df4316ff45a8a16bf85d78ebf8d169e36657",
+    "TreeDB/zipper/clone_scratch_test.go": "9b96e1912daeba1659cd9d7ff71e525e0aab1724add0162a8a35e952147926a2",
+    "TreeDB/zipper/clone_scratch_public_test.go": "0daf133c32b65e5e224e65cdcf43bcf0616b36951cb4fc4ce619095be56ba210",
+    "TreeDB/zipper/scratch-reuse.md": "e1161c7e6d52948f6bcebd23b431bcffbf0f9f4675fb039c51231c162ced8a66"
+  }
+}

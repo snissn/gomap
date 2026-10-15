@@ -1,0 +1,7 @@
+--- FAIL: TestAllocatorCloneReusesApplyScratch (0.00s)
+    clone_scratch_test.go:26: allocator clones discarded reusable apply scratch
+--- FAIL: TestAllocatorCloneConcurrentScratchIsolation (0.00s)
+    clone_scratch_test.go:65: reused 0 scratches, want bounded 9
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/zipper	0.005s
+FAIL

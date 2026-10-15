@@ -1,0 +1,40 @@
+File: candidate-db.test
+Build ID: 843d8cab69c660e4a9fe00394a2655517042da8a
+Type: alloc_space
+Time: 2026-10-14 18:47:20 HST
+Active filters:
+   focus=github.com/snissn/gomap/TreeDB/db.\(\*Batch\).Write$
+Showing nodes accounting for 397.81MB, 81.53% of 487.94MB total
+Dropped 57 nodes (cum <= 2.44MB)
+Showing top 30 nodes out of 62
+      flat  flat%   sum%        cum   cum%
+  189.39MB 38.81% 38.81%   189.39MB 38.81%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage
+   50.04MB 10.26% 49.07%    50.04MB 10.26%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)
+   40.03MB  8.20% 57.28%    40.03MB  8.20%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)
+   25.27MB  5.18% 62.46%    25.27MB  5.18%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage
+   11.79MB  2.42% 64.87%    23.61MB  4.84%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages
+   11.72MB  2.40% 67.27%    15.02MB  3.08%  github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage
+   11.72MB  2.40% 69.68%    11.81MB  2.42%  github.com/snissn/gomap/TreeDB/freelist.reservationDigest
+    8.33MB  1.71% 71.38%     8.33MB  1.71%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized
+    8.24MB  1.69% 73.07%     8.24MB  1.69%  github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata (inline)
+    6.14MB  1.26% 74.33%     9.23MB  1.89%  github.com/snissn/gomap/TreeDB/freelist.(*recordingSink).write
+    5.13MB  1.05% 75.38%     7.28MB  1.49%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1
+    4.26MB  0.87% 76.26%     5.11MB  1.05%  github.com/snissn/gomap/TreeDB/freelist.appendIDExtents (inline)
+    3.41MB   0.7% 76.95%     3.41MB   0.7%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare
+    3.30MB  0.68% 77.63%    48.50MB  9.94%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+    3.09MB  0.63% 78.26%     3.09MB  0.63%  github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage
+    2.68MB  0.55% 78.81%     2.68MB  0.55%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).markReplacedPath (inline)
+    2.27MB  0.46% 79.28%     2.27MB  0.46%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+    2.15MB  0.44% 79.72%     2.15MB  0.44%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked
+    2.03MB  0.42% 80.13%   300.27MB 61.54%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate
+    1.65MB  0.34% 80.47%     2.47MB  0.51%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze
+    1.51MB  0.31% 80.78%    23.57MB  4.83%  github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1
+    0.89MB  0.18% 80.96%   324.27MB 66.46%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+    0.53MB  0.11% 81.07%     7.32MB  1.50%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).reservationExtents
+    0.46MB 0.094% 81.17%    48.95MB 10.03%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+    0.41MB 0.084% 81.25%    93.17MB 19.09%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany
+    0.37MB 0.075% 81.33%   319.28MB 65.43%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1
+    0.32MB 0.066% 81.39%    44.83MB  9.19%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate
+    0.25MB 0.052% 81.44%   410.75MB 84.18%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+    0.23MB 0.047% 81.49%    23.93MB  4.90%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate
+    0.18MB 0.037% 81.53%    45.01MB  9.23%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc

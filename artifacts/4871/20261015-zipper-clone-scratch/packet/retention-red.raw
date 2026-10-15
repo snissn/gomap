@@ -1,0 +1,5 @@
+--- FAIL: TestAllocatorCloneScratchDropsOversizedLeafRefMetadata (0.00s)
+    clone_scratch_test.go:161: retained oversized pointer metadata: free cap=5120 active cap=5120
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/zipper	0.001s
+FAIL

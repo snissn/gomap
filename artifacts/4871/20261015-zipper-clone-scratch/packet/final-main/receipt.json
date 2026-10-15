@@ -1,0 +1,77 @@
+{
+  "status": "FINAL_MAIN_FOCUSED_AND_THREE_PUBLIC_PAIRS_PASS_NOT_EIGHT_REPEAT_GRAPH_QUALIFICATION",
+  "at_utc": "2026-10-15T04:58:47.266721+00:00",
+  "base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "candidate": "cb5960399df0c23e320193b64d8b6a5db5844c3e",
+  "source_files": 3471,
+  "byte_equivalence_before_after": true,
+  "baseline_binding": "Exact base3f87 code via saved single-file Go overlay; other tracked product/harness inputs cleanmain; dependency zipper test files excluded from db binary",
+  "rows": {
+    "baseline": [
+      {
+        "iterations": 1000,
+        "ns": 58711.0,
+        "bytes": 152735,
+        "objects": 281
+      },
+      {
+        "iterations": 1000,
+        "ns": 45653.0,
+        "bytes": 152734,
+        "objects": 281
+      },
+      {
+        "iterations": 1000,
+        "ns": 45119.0,
+        "bytes": 152734,
+        "objects": 281
+      }
+    ],
+    "candidate": [
+      {
+        "iterations": 1000,
+        "ns": 52663.0,
+        "bytes": 141606,
+        "objects": 269
+      },
+      {
+        "iterations": 1000,
+        "ns": 44701.0,
+        "bytes": 141606,
+        "objects": 269
+      },
+      {
+        "iterations": 1000,
+        "ns": 43949.0,
+        "bytes": 141606,
+        "objects": 269
+      }
+    ]
+  },
+  "medians": {
+    "baseline": {
+      "ns": 45653.0,
+      "bytes": 152734,
+      "objects": 281
+    },
+    "candidate": {
+      "ns": 44701.0,
+      "bytes": 141606,
+      "objects": 269
+    }
+  },
+  "delta_percent": {
+    "ns": -2.085295599412962,
+    "bytes": -7.285869550984058,
+    "objects": -4.270462633451954
+  },
+  "checks": [
+    "zipper-full",
+    "pointer-reopen-gc",
+    "focused-race"
+  ],
+  "remaining": [
+    "required current-head CI/review and graph qualification owned by root"
+  ],
+  "released_paths": []
+}

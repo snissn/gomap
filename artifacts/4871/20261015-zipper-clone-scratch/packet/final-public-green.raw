@@ -1,0 +1,5 @@
+--- FAIL: TestAllocatorClonePublicBatchWriteRetainedSnapshot (0.01s)
+    clone_scratch_public_test.go:57: public delete: got="" err=<nil>
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/zipper	0.013s
+FAIL

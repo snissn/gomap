@@ -1,0 +1,152 @@
+[
+  {
+    "name": "pair-1-baseline",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.10021374188363552
+  },
+  {
+    "name": "pair-1-candidate",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.09077612217515707
+  },
+  {
+    "name": "pair-2-candidate",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.07569575682282448
+  },
+  {
+    "name": "pair-2-baseline",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.07844355376437306
+  },
+  {
+    "name": "pair-3-baseline",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.077835647854954
+  },
+  {
+    "name": "pair-3-candidate",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "1",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.0764758549630642
+  }
+]

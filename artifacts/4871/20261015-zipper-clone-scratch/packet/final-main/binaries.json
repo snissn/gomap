@@ -1,0 +1,10 @@
+{
+  "baseline-db.test": {
+    "bytes": 55403689,
+    "sha256": "e55fd6a40815867f35b654d4251c9eab9ca8f57769fc6329c2411b014d2072e1"
+  },
+  "candidate-db.test": {
+    "bytes": 55399063,
+    "sha256": "9aacec4dda6cd533f7b68c43fa0872735b8b4fc0bbafeb9dc013da3c6086c2c4"
+  }
+}

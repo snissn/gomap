@@ -1,0 +1,71 @@
+{
+  "at_utc": "2026-10-15T04:49:31.303090+00:00",
+  "status": "EARLY_PUBLIC_COMPARISON_PASSED_NOT_FINAL_QUALIFICATION",
+  "baseline_commit": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "candidate_worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+  "files": {
+    "TreeDB/zipper/zipper.go": {
+      "sha256": "3847bd770786086785cbb850dfce2dad53141692f67a3285f9542a31273f594e",
+      "bytes": 135788
+    },
+    "TreeDB/zipper/clone_scratch_test.go": {
+      "sha256": "fb5c46d0fe9210f30ac1aeb74461cb22695156b9c6d1c742054f9d2dbcd5c652",
+      "bytes": 4341
+    },
+    "TreeDB/zipper/clone_scratch_public_test.go": {
+      "sha256": "35d1e54cdd3058e6db139f1169026d9f228311d7433039fbade2ed31bb4aa160",
+      "bytes": 1899
+    }
+  },
+  "binaries": {
+    "ordinary-db.test": {
+      "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+      "bytes": 60842242
+    },
+    "candidate-db.test": {
+      "sha256": "64d835da3301cc32ce32d7045f32fce122d1012495a512efb08df6b09d5c64b2",
+      "bytes": 60837040
+    }
+  },
+  "public_bytes": {
+    "baseline_pairs": [
+      154838,
+      154840,
+      154839
+    ],
+    "candidate_pairs": [
+      143710,
+      143710,
+      143710
+    ]
+  },
+  "public_objects": {
+    "baseline": 286,
+    "candidate": 274
+  },
+  "public_ns": {
+    "baseline": [
+      62429,
+      47548,
+      47556
+    ],
+    "candidate": [
+      53599,
+      47559,
+      46478
+    ]
+  },
+  "exact_Write_profile_alloc_space": {
+    "baseline": 464099984,
+    "candidate": 430702520,
+    "newMergeScratch_baseline": 33323104,
+    "newMergeScratch_candidate": 0
+  },
+  "pending": [
+    "new public test validation",
+    "live retention upper bound audit",
+    "current-main transplant and qualified gates owned by root"
+  ],
+  "released_paths": [],
+  "retained_evidence_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015"
+}

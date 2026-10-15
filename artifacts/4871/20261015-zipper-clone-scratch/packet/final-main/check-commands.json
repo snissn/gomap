@@ -1,0 +1,115 @@
+[
+  {
+    "name": "zipper-full",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "./TreeDB/zipper",
+      "-count=1",
+      "-timeout=90s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 3.665470337960869
+  },
+  {
+    "name": "pointer-reopen-gc",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "./TreeDB",
+      "./TreeDB/db",
+      "-run",
+      "TestReopenVerify_WALOn_Checkpoint|TestReopenVerify_WALOn_WriteSync|TestValueLogGC_RemovesUnreferencedSegment",
+      "-count=1",
+      "-timeout=90s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 16.52936193300411
+  },
+  {
+    "name": "focused-race",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-race",
+      "./TreeDB/zipper",
+      "-run",
+      "TestAllocatorClone|TestApplyScratch|TestZipperLeafRefCache",
+      "-count=1",
+      "-timeout=90s"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 7.575502071995288
+  },
+  {
+    "name": "build-baseline",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-overlay=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/baseline-overlay.json",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 13.526917356066406
+  },
+  {
+    "name": "build-candidate",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/final-main/candidate-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "GOMAXPROCS": "4",
+      "CGO_ENABLED": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 13.55362986214459
+  }
+]

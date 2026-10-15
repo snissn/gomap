@@ -1,0 +1,104 @@
+[
+  {
+    "name": "pair-1-baseline",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.1493360553868115
+  },
+  {
+    "name": "pair-1-candidate",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.0906672109849751
+  },
+  {
+    "name": "pair-2-candidate",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.07787622883915901
+  },
+  {
+    "name": "pair-2-baseline",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.0807125149294734
+  },
+  {
+    "name": "pair-3-baseline",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.08046391326934099
+  },
+  {
+    "name": "pair-3-candidate",
+    "cmd": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchtime=1000x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=45s"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.07980367681011558
+  }
+]

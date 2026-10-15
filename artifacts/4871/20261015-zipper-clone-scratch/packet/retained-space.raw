@@ -1,0 +1,29 @@
+File: candidate-db.test
+Build ID: 843d8cab69c660e4a9fe00394a2655517042da8a
+Type: inuse_space
+Time: 2026-10-14 18:47:20 HST
+Active filters:
+   focus=github.com/snissn/gomap/TreeDB/db.\(\*Batch\).Write$
+Showing nodes accounting for 0.42kB, 0.12% of 358.59kB total
+      flat  flat%   sum%        cum   cum%
+    0.25kB  0.07%  0.07%     0.25kB  0.07%  sync.(*Pool).pinSlow
+    0.17kB 0.048%  0.12%     0.17kB 0.048%  sync.(*poolChain).pushHead
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0%  0.12%     0.12kB 0.035%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitPostWork
+         0     0%  0.12%     0.42kB  0.12%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0%  0.12%     0.12kB 0.035%  github.com/snissn/gomap/TreeDB/db.releaseValueLogRefDelta
+         0     0%  0.12%     0.30kB 0.083%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0%  0.12%     0.30kB 0.083%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+         0     0%  0.12%     0.17kB 0.048%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+         0     0%  0.12%     0.12kB 0.035%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).newPooledBuilderForType
+         0     0%  0.12%     0.30kB 0.083%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+         0     0%  0.12%     0.17kB 0.048%  github.com/snissn/gomap/TreeDB/zipper.releasePooledBuilder
+         0     0%  0.12%     0.12kB 0.035%  sync.(*Pool).Get
+         0     0%  0.12%     0.30kB 0.083%  sync.(*Pool).Put
+         0     0%  0.12%     0.25kB  0.07%  sync.(*Pool).pin
+         0     0%  0.12%     0.42kB  0.12%  testing.(*B).launch
+         0     0%  0.12%     0.42kB  0.12%  testing.(*B).runN

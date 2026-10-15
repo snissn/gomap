@@ -1,0 +1,12 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "verdict": "ACCEPT",
+  "reviewer": "/root/zipper_5133_review_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "effort": "high",
+  "candidate": "cb5960399df0c23e320193b64d8b6a5db5844c3e",
+  "parent": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "manifest_sha256": "8d432159a05761826d58bc0c4845c99ada41cd0275d3bd24bf495f0ea0b26302",
+  "scope": "Clone cache initialization/exclusive borrow/parallel lifetime/reset/retention; leaf-cache ownership; returned roots and retired lists; public caller and tests. No actionable finding. All four actual Git blobs equal frozen reviewed bytes.",
+  "limits": "No edits, Go or profiles run by reviewer. Root owns tests, performance, CI and acceptance."
+}
