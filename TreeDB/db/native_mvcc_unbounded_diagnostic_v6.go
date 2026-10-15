@@ -52,26 +52,35 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 	w := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	cut := c.db.mvccAdmission.Begin()
 	defer cut.Abort()
-	ready, err := cut.ObservePrune(c.request, c.record.Key, w)
-	if !ready || err != nil {
-		return false, err
+	records := c.records
+	if len(records) == 0 {
+		records = []node.LeafEntry{c.record}
 	}
-	// Validate against the SAME retained composite winner immediately before
-	// applying its physical delete. Do not omit the overlay row and resurrect
-	// an older disk incarnation.
-	input.Seek(c.record.Key)
-	if !input.Valid() || !bytes.Equal(input.UnsafeKey(), c.record.Key) {
-		return false, rootpublication.ErrDurableRootOwnership
+	// All entries are validated under the SAME fresh canonical cut before any
+	// DATA mutation. A conflicting current winner refuses the whole batch.
+	for i := range records {
+		record := &records[i]
+		ready, err := cut.ObservePrune(c.request, record.Key, w)
+		if !ready || err != nil {
+			return false, err
+		}
+		input.Seek(record.Key)
+		if !input.Valid() || !bytes.Equal(input.UnsafeKey(), record.Key) {
+			return false, rootpublication.ErrDurableRootOwnership
+		}
+		v, p, f, r := iterator.UnsafeEntryWithRevision(input)
+		if r != record.Revision || p != record.ValuePtr || f != record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, record.Value)) {
+			return false, rootpublication.ErrDurableRootOwnership
+		}
+		if err = input.Error(); err != nil {
+			return false, err
+		}
 	}
-	v, p, f, r := iterator.UnsafeEntryWithRevision(input)
-	if r != c.record.Revision || p != c.record.ValuePtr || f != c.record.Flags || (f&node.FlagPointer == 0 && !bytes.Equal(v, c.record.Value)) {
-		return false, rootpublication.ErrDurableRootOwnership
-	}
-	if err = input.Error(); err != nil {
-		return false, err
-	}
-	if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(c.record.Key), Revision: c.record.Revision}}); err != nil {
-		return false, err
+	for i := range records {
+		record := &records[i]
+		if err = delta.SetOps([]batch.Entry{{Type: batch.OpDelete, Key: bytes.Clone(record.Key), Revision: record.Revision}}); err != nil {
+			return false, err
+		}
 	}
 	group.pinBatchValueLogSegmentsLocked(delta)
 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
@@ -95,7 +104,7 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 	if err = node.EncodePrimaryDirectory(directory, txn.PrimaryConstructionReferenceV6().PageID, sequence, base, nil); err != nil {
 		return false, err
 	}
-	ready, err = txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
+	ready, err := txn.SealPrimaryConstructionV6(directory, [1]*primaryarena.Group{}, w)
 	if !ready || err != nil {
 		return false, err
 	}
@@ -126,6 +135,7 @@ func (c *NativeMVCCCurrentDeleteV6) PublishNativeMVCCUnboundedDiagnosticV6(basis
 		c.snapshot = nil
 		c.source = nil
 		c.record = node.LeafEntry{}
+		c.records = nil
 	}
 	return accepted, retErr
 }

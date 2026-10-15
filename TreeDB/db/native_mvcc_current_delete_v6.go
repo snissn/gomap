@@ -183,6 +183,7 @@ type NativeMVCCCurrentDeleteV6 struct {
 	selection   tree.NativeMVCCSelectionV6
 	source      NativeMVCCSelectionSourceV6
 	record      node.LeafEntry
+	records     []node.LeafEntry
 	request     mvccadmission.Request
 	transaction *rootpublication.DurableRootTransaction
 	release     rootpublication.PrimaryConstructionReleaseWork
@@ -215,6 +216,24 @@ func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, s
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	c.db, c.snapshot, c.selection, c.source, c.request, c.phase = s.db, s, selection, source, request, 1
+	return true, nil
+}
+
+// BindNativeMVCCDeleteBatchV6 borrows the cursor's preadmitted verified vector.
+// Its last row is the stationary original producer selection used to create
+// this SAME constructor. The caller retains every payload until checked Finish.
+func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCDeleteBatchV6(records []node.LeafEntry, w *iterator.OrdinalScanWork) (bool, error) {
+	if c == nil || c.phase != 3 || len(records) == 0 {
+		return false, ErrNativeMVCCSnapshotWork
+	}
+	last := records[len(records)-1]
+	if !w.Reserve(1, uint64(len(last.Key))+64) {
+		return false, nil
+	}
+	if !bytes.Equal(last.Key, c.record.Key) || last.Revision != c.record.Revision || last.Flags != c.record.Flags || last.ValuePtr != c.record.ValuePtr {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	c.records = records
 	return true, nil
 }
 
@@ -361,7 +380,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	}
 	if c.transaction == nil && c.phase != 5 {
 		c.db, c.snapshot, c.selection, c.request, c.phase = nil, nil, tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
-		c.source, c.record = nil, node.LeafEntry{}
+		c.source, c.record, c.records = nil, node.LeafEntry{}, nil
 		return true, nil
 	}
 	if c.phase != 5 {
@@ -376,7 +395,7 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	if ready && err == nil {
 		c.transaction, c.db, c.snapshot = nil, nil, nil
 		c.selection, c.request, c.phase = tree.NativeMVCCSelectionV6{}, mvccadmission.Request{}, 6
-		c.source, c.record = nil, node.LeafEntry{}
+		c.source, c.record, c.records = nil, node.LeafEntry{}, nil
 	}
 	return ready, err
 }
