@@ -1,0 +1,8 @@
+{
+  "classification": "WIP_UNACCEPTED_NATIVE_ACK0",
+  "recorded_utc": "2026-10-15T07:19:43.078258+00:00",
+  "source_scope": "Frozen 80-source checkpoint; subsequent owner repairs are excluded.",
+  "pending_finding": "Q32 map-growth retry stall in TreeDB/freelist/generation_v1_begin_work.go: lookup reserve followed by growth reserve can perpetually yield at len31 / phase3 len30. Owner is repairing this separately.",
+  "qualification": "Ordinary controls only. No bounded native ACK, Q32 or performance acceptance.",
+  "review_packet": "Pending separate bounded review packet; this finding is coordinator-reported."
+}

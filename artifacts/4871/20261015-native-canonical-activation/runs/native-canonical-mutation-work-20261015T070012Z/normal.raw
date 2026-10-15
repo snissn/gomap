@@ -1,0 +1,23 @@
+=== RUN   TestGenerationTopology5131PrivateAndPersistentUseSameShape
+--- PASS: TestGenerationTopology5131PrivateAndPersistentUseSameShape (0.00s)
+=== RUN   TestFreelistTxnCloneRevokesPrivateAliases
+--- PASS: TestFreelistTxnCloneRevokesPrivateAliases (0.00s)
+=== RUN   TestFreelistTxnPrivateFirstCopyIsolatesDirtyChildren
+--- PASS: TestFreelistTxnPrivateFirstCopyIsolatesDirtyChildren (0.00s)
+=== RUN   TestBeginCandidateV1RejectsStaleParent
+--- PASS: TestBeginCandidateV1RejectsStaleParent (0.00s)
+=== RUN   TestCanonicalStateMutationRetainsActualCallbackAndSummaryV1
+    generation_v1_tree_work_test.go:60: actual mutation callbacks=3 resumes=10 retained-summary-slots=256
+--- PASS: TestCanonicalStateMutationRetainsActualCallbackAndSummaryV1 (0.00s)
+=== RUN   TestCanonicalPrivateMutationDetachesSyntheticDirtyChildrenV1
+--- PASS: TestCanonicalPrivateMutationDetachesSyntheticDirtyChildrenV1 (0.00s)
+=== RUN   TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1
+    generation_v1_tree_work_test.go:152: original successor resumes=20 chunk-runs=2 retired-items=6
+--- PASS: TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1 (0.00s)
+=== RUN   TestCanonicalMutationRejectsOpaqueAndPreservesFirstErrorV1
+--- PASS: TestCanonicalMutationRejectsOpaqueAndPreservesFirstErrorV1 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.001s
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.002s [no tests to run]

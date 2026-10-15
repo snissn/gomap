@@ -66,9 +66,23 @@ type rootPublicationVisibleMemberV1 struct {
 	sequence                 uint64
 	next                     page.MetaPageBody
 	prepared                 *freelist.PreparedCOWCandidateV1
+	allocatorActivation      *freelist.COWActivationWorkV1
 	resources                *rootpublication.StableResourceSet
 	install                  *rootPublicationVisibleInstallV1
 	preparedLimits           *PreparedRootPublicationLimits
+
+	// Superseded operands transfer here at the actual fenced commit. This SAME
+	// visible member's original Finish callback owns their checked completion.
+	retiredPrimary                *primaryDurableRuntimeV5
+	retiredSeals                  []*rootPublicationSealV1
+	retiredSealsOwner             *retainedalloc.Owner
+	retiredSealsCharge            uint64
+	retiredSealIndex              int
+	retirementReleaseSet          primaryResourceReleaseWithWorkV6
+	retiredVisibleResources       *rootpublication.StableResourceSet
+	retiredRecord                 primaryarena.Ref
+	retiredRecordQueue            primaryarena.ReleaseQueue
+	retiredRecordQueueInitialized bool
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -101,6 +115,8 @@ type rootPublicationVisibleInstallV1 struct {
 	conditionalMutation         conditionalCommitMutation
 	activated                   bool
 	postActivationCompleted     bool
+	activationState             *DBState
+	activationSnapshot          *snapshotView
 }
 
 // rootPublicationSealBaseV1 preserves only the publisher-time fields that
@@ -120,6 +136,9 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
+	disposalPhase   uint8
+	disposalNative  bool
+	disposalIndex   int
 	disposalMu      sync.Mutex
 	disposalErr     error
 	disposalFailure originalDBCleanupFailure
@@ -252,58 +271,9 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 }
 
 func (seal *rootPublicationSealV1) release() error {
-	if seal == nil {
-		return nil
-	}
-	seal.disposalMu.Lock()
-	defer seal.disposalMu.Unlock()
-	if seal.released {
-		return seal.disposalErr
-	}
-	seal.released = true
-	var first error
-	if seal.primary != nil {
-		first = seal.primary.release()
-		if first == nil {
-			seal.primary = nil
-		}
-	}
-	// A refused physical root preparation leaves its exact resource edges intact.
-	if first == nil {
-		if err := seal.resources.ReleaseWithError(); err != nil {
-			first = err
-		} else {
-			seal.resources = nil
-		}
-		if err := seal.token.ReleaseWithError(); err != nil {
-			if first == nil {
-				first = err
-			}
-		} else {
-			seal.token = nil
-		}
-	}
-	if first != nil {
-		seal.disposalFailure.payload = seal
-		seal.disposalFailure.retainCause(0, first)
-		seal.disposalErr = &seal.disposalFailure
-		if seal.metadata != nil {
-			seal.metadata.CleanupFailed()
-		}
-		return seal.disposalErr
-	}
-	seal.prefix = nil
-	seal.manifest.ReleaseOwnedMetadataV1()
-	seal.manifest = nil
-	seal.prepared = nil
-	seal.base = rootPublicationSealBaseV1{}
-	owner, charge := seal.metadata, seal.metadataCharge
-	seal.metadata, seal.metadataCharge = nil, 0
-	seal.idx = nil
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
-	return nil
+	completion, _, err := continueRootPublicationSealReleaseV6(seal, nil, nil)
+	completion.complete()
+	return err
 }
 
 func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
@@ -560,28 +530,64 @@ func (install *rootPublicationVisibleInstallV1) abort() error {
 }
 
 func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {
-	if install == nil || install.db == nil || install.idx == nil || install.activated {
-		return errors.New("invalid root-publication visible install")
-	}
 	if activateAllocator == nil {
 		return errors.New("missing root-publication allocator activation")
+	}
+	_, err := install.activateWithWorkV6(nil, func(*iterator.OrdinalScanWork) (bool, error) { return true, activateAllocator() })
+	return err
+}
+
+// activateWithWorkV6 shares the original visible transition. All headers and
+// old-reader pin/prune work are admitted before the allocator visibility point.
+// No mutex scope or partially installed state escapes on normal refusal.
+func (install *rootPublicationVisibleInstallV1) activateWithWorkV6(w *iterator.OrdinalScanWork, activateAllocator func(*iterator.OrdinalScanWork) (bool, error)) (bool, error) {
+	if install == nil || install.db == nil || install.idx == nil || install.activated {
+		return false, errors.New("invalid root-publication visible install")
+	}
+	if activateAllocator == nil {
+		return false, errors.New("missing root-publication allocator activation")
+	}
+	ready, err := install.prepareActivationHeadersV6(w)
+	if !ready || err != nil {
+		return ready, err
 	}
 	db := install.db
 	db.mu.Lock()
 	if db.meta.CommitSeq+1 != install.next.CommitSeq {
 		db.mu.Unlock()
-		return fmt.Errorf("%w: visible=%d candidate=%d", errDurableRootCandidateStale, db.meta.CommitSeq, install.next.CommitSeq)
+		return false, fmt.Errorf("%w: visible=%d candidate=%d", errDurableRootCandidateStale, db.meta.CommitSeq, install.next.CommitSeq)
 	}
 	if scanned := install.vlogRefCounts; scanned != nil && (scanned.idx != install.idx ||
 		scanned.commitSeq != install.next.CommitSeq || scanned.userRootID != install.next.UserRootPageID ||
 		scanned.systemRootID != install.next.SystemRootPageID || scanned.counts.metadata == nil ||
 		scanned.incarnation.indexID != install.idx.id || !scanned.incarnation.valid()) {
 		db.mu.Unlock()
-		return errors.New("root-publication scanned reference counts do not match candidate")
+		return false, errors.New("root-publication scanned reference counts do not match candidate")
 	}
 	if db.testFailDurableRootVisibleInstall.Load() {
 		db.mu.Unlock()
-		return errTestDurableRootVisibleInstallFailpoint
+		return false, errTestDurableRootVisibleInstallFailpoint
+	}
+	// Native physical-only publication must not hide conditional point-map
+	// allocation. Preserve the original oracle authority; unsupported active
+	// transactions refuse before allocator or visible state changes.
+	if w != nil {
+		db.conditionalOracle.mu.Lock()
+		if !install.conditionalMutation.physicalOnly || len(db.conditionalOracle.active) != 0 {
+			db.conditionalOracle.mu.Unlock()
+			db.mu.Unlock()
+			return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+		}
+		defer db.conditionalOracle.mu.Unlock()
+	}
+	if w != nil && !w.Reserve(4, 2*uint64(unsafe.Sizeof(page.MetaPageBody{}))+uint64(unsafe.Sizeof(DBState{}))+uint64(unsafe.Sizeof(snapshotView{}))) {
+		db.mu.Unlock()
+		return false, nil
+	}
+	snapshotScope, ready := db.beginSnapshotPublicationV6(install.activationState, w)
+	if !ready {
+		db.mu.Unlock()
+		return false, nil
 	}
 	// Allocator activation is the visibility point of no return. Hold db.mu
 	// across the final sequence check and this transition; every operation below
@@ -605,10 +611,11 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 			admission.Refuse()
 		}
 	}
-	if err := activateAllocator(); err != nil {
+	if ready, err := activateAllocator(w); !ready || err != nil {
+		snapshotScope.finish(false)
 		admission.Abort()
 		db.mu.Unlock()
-		return err
+		return ready, err
 	}
 	db.meta = install.next
 	db.advanceEntryRevisionFloor(page.EntryRevision(install.next.MaxEntryRevision))
@@ -616,7 +623,8 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
 	}
-	newState := &DBState{
+	newState := install.activationState
+	*newState = DBState{
 		primaryRoot:       install.primaryRoot,
 		CommitSeq:         install.next.CommitSeq,
 		RootPageID:        install.next.UserRootPageID,
@@ -631,7 +639,9 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
-	install.conditionalMutation.record(db, install.next.CommitSeq)
+	if w == nil {
+		install.conditionalMutation.record(db, install.next.CommitSeq)
+	}
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
 		if install.post.oldState != nil {
@@ -639,12 +649,16 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		}
 		db.observeCommandWALCovered(previousApplied, install.next.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.negativeCoverage)
+	snapshotScope.commitPins()
+	db.publishSnapshotViewWithHeaderV6(install.activationSnapshot, install.idx, newState, db.valueLogManager, install.negativeCoverage)
+	snapshotScope.finish(true)
 	admission.Commit()
 	db.mu.Unlock()
 	install.valueLogSet = nil
+	install.activationState = nil
+	install.activationSnapshot = nil
 	install.activated = true
-	return nil
+	return true, nil
 }
 
 // completeOrderedPostActivation performs bookkeeping that must observe the
@@ -993,6 +1007,21 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			}
 			return nil
 		},
+	}
+	if transaction != nil && transaction.RequiresNativeCallbackWorkV6() {
+		member.retirementReleaseSet = releasePrimaryResourceSetWithWorkV6
+		transactionSpec.ActivateWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			return runtime.activateNativeVisibleMemberV6(member, transactionCOW, input, work)
+		}
+		transactionSpec.ConsumeWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			return runtime.consumeNativeVisibleMemberV6(member, transactionCOW, input, work)
+		}
+		transactionSpec.RetireWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			if input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+				return false, rootpublication.ErrDurableRootOwnership
+			}
+			return member.continueRetirementV6(runtime.idx.primary, work)
+		}
 	}
 	if transaction != nil {
 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
@@ -1517,15 +1546,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if base.slot == MetaPage0ID {
 		target = MetaPage1ID
 	}
-	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(base.slotMeta[target], base.slotRecord[target])
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], base.slotMeta[target], base.slotRecord[target], base.record)
 	if err != nil {
 		return err
-	}
-	retirements := make([]freelist.COWRetirementV1, 0, 2)
-	if len(overwrittenPages) != 0 {
-		retirements = append(retirements, freelist.COWRetirementV1{
-			PageIDs: overwrittenPages, LastReachableCommitSeq: base.slotCommit[target],
-		})
 	}
 	if previous := runtime.activeSeal; previous != nil {
 		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {

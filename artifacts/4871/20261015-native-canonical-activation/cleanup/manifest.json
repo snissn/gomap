@@ -1,0 +1,29 @@
+{
+  "files": [
+    {
+      "path": "preflight.json",
+      "bytes": 7368,
+      "sha256": "71852be1dc54c98c7f2346c2fe637554041e33ba5314ad4e2c7a5326958b84dd"
+    },
+    {
+      "path": "protected-files-before.json",
+      "bytes": 87143,
+      "sha256": "fffe2e6951b8d92d10a5427fd78d756e97c2a0e583800888251f364b4d103257"
+    },
+    {
+      "path": "result.json",
+      "bytes": 6917,
+      "sha256": "e5612513972aef8a04ca33857d42d709724b64c183b038db1e318ac103ccfefe"
+    },
+    {
+      "path": "worktree-registration-after.txt",
+      "bytes": 5880,
+      "sha256": "96fb24f15c3335c7a76d70995429fbacdc2ce3e54f7a24bf1962dbf5e6026f7e"
+    },
+    {
+      "path": "worktree-remove-command.json",
+      "bytes": 239,
+      "sha256": "79abf9602b1e3849877e662c3f3dd546c50161c966424100f0c40892fdc55f36"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "git",
+    "--git-dir=/home/mikers/dev/snissn/gomap/.git",
+    "worktree",
+    "remove",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

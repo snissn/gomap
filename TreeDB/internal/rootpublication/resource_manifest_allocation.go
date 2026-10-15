@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
@@ -151,35 +152,54 @@ func newOwnedDependencyManifestEntryV1(entry *stableResourceEntry, owner *retain
 }
 
 func (value *dependencyManifestEncodedEntryV1) releaseOwned() {
-	if value == nil || value.allocation == nil || !value.allocation.drop() {
+	if value == nil || value.allocation == nil {
 		return
 	}
-	clear(value.encoded)
-	value.encoded = nil
-	clear(value.entry.Reachability)
-	clear(value.entry.LogicalObligations)
-	if value.entry.Frontier.exactRIDs != nil {
-		clear(value.entry.Frontier.exactRIDs.values)
-	}
-	value.entry = DependencyManifestEntryV1{}
-	value.cacheCandidate = nil
-	value.allocation.refund()
+	_ = releaseResourceMetadataV6(value.allocation, value)
 }
 
 // ReleaseOwnedMetadataV1 ends only a selected publisher-scoped manifest. Its
 // caller must finish all synchronous encoding/materialization/diagnostic uses
 // before release. Generic manifests retain their canonical diagnostic lifetime.
 func (manifest *DependencyManifestV1) ReleaseOwnedMetadataV1() {
+	completion, _, _ := manifest.ReleaseOwnedMetadataWithWorkV6(nil)
+	completion.Complete()
+}
+
+// ReleaseOwnedMetadataWithWorkV6 owns only the original publisher manifest
+// edge. A last edge traverses the original allocation frame. The enclosing seal
+// must detach its manifest alias before completing the accounting-only value.
+func (manifest *DependencyManifestV1) ReleaseOwnedMetadataWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {
+	var empty StableResourceTokenReleaseCompletionV6
 	if manifest == nil {
-		return
+		return empty, true, nil
 	}
 	manifest.metadataMu.Lock()
 	defer manifest.metadataMu.Unlock()
-	if !manifest.selected || manifest.released {
-		return
+	if !manifest.selected || manifest.allocation == nil {
+		return empty, true, nil
 	}
-	manifest.released = true
-	manifest.dropOwnedMetadataLockedV1()
+	allocation := manifest.allocation
+	if !manifest.released {
+		frame, ready, err := startResourceGraphReleaseV6(allocation, manifest, w)
+		if !ready || err != nil {
+			return empty, false, err
+		}
+		manifest.released = true
+		if frame == nil {
+			return empty, true, nil
+		}
+	} else if allocation.release.current == nil && allocation.refs.Load() > 0 {
+		// Another original diagnostic scope retains the allocation. This
+		// publisher edge was already consumed; that scope owns final disposal.
+		return empty, true, nil
+	}
+	completion, ready, err := allocation.release.continueWork(w)
+	if !ready || err != nil {
+		return empty, false, err
+	}
+	manifest.allocation = nil
+	return StableResourceTokenReleaseCompletionV6{completion.owner, completion.charge}, true, nil
 }
 
 // Every scoped read owns the same immutable allocation edge. Ending the public

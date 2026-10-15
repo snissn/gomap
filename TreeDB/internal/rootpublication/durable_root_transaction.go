@@ -83,7 +83,11 @@ type DurableRootTransactionSpec struct {
 	// callback types alone do not establish that the window fits an allowance.
 	ActivateWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	ConsumeWithWork  func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
-	Abort            func(DurableRootCallbackInput) error
+	// RetireWithWork owns superseded producer operands transferred at the
+	// original fence. It runs after turn release on the SAME Finish receipt,
+	// outside transaction/publication locks, and retains custody on refusal.
+	RetireWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	Abort          func(DurableRootCallbackInput) error
 	// AbortComplete consumes callback payload only after BOTH original physical
 	// callback cleanup and constructor root cleanup have actually succeeded.
 	AbortComplete         func(DurableRootCallbackInput) error
@@ -114,6 +118,7 @@ type DurableRootTransaction struct {
 	consume                func(DurableRootCallbackInput) error
 	activateWithWork       func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	consumeWithWork        func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	retireWithWork         func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	abort                  func(DurableRootCallbackInput) error
 	abortComplete          func(DurableRootCallbackInput) error
 	physicalCleanupError   error
@@ -230,7 +235,7 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
 		},
 		activate: spec.Activate, consume: spec.Consume,
-		activateWithWork: spec.ActivateWithWork, consumeWithWork: spec.ConsumeWithWork,
+		activateWithWork: spec.ActivateWithWork, consumeWithWork: spec.ConsumeWithWork, retireWithWork: spec.RetireWithWork,
 		abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
 	}, nil

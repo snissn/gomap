@@ -28,16 +28,21 @@ func TestMetadataEmissionPreservesSharedDirtyBranches4627(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// A rollback snapshot can retain both unmaterialized branches.
-			held := txn.root
+			// Sharing through the rollback boundary revokes private edit
+			// permission before either transaction retains the dirty branches.
+			rollback, err := txn.cloneForAllocatorPrepare()
+			if err != nil {
+				t.Fatal(err)
+			}
+			held := rollback.root
 			before := detachUnmaterialized(held, 0)
 			var sink AppendPageSink = store
 			if fail {
-				// The selected chunk and leaf write first; fail while emitting
-				// the sibling after its identity/checksum have been assigned.
+				// Direct chunk pages write first; fail while emitting the
+				// parent after both child identities/checksums were assigned.
 				sink = &overwritingMetadataSink4627{store: store, remaining: 2}
 			}
-			_, err := txn.MaterializeCandidate(3, 3, candidateIDFromString(name), sink)
+			_, err = txn.MaterializeCandidate(3, 3, candidateIDFromString(name), sink)
 			if (err != nil) != fail {
 				t.Fatalf("materialize error=%v want failure=%v", err, fail)
 			}

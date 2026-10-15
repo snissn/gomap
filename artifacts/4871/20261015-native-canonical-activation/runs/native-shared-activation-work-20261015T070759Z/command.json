@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/freelist",
+    "./TreeDB",
+    "-run",
+    "^(TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1|TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication|TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut)$",
+    "-count=1",
+    "-timeout=90s",
+    "-v"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  },
+  "outer_timeout_s": 120,
+  "formatted_paths": [
+    "TreeDB/freelist/generation_v1_tree_work.go",
+    "TreeDB/freelist/generation_v1_begin_work.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/freelist/allocator_activation_work.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/primary_visible_member_work_v6.go"
+  ]
+}

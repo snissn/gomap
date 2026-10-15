@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/freelist",
+    "./TreeDB/db",
+    "-run",
+    "^(TestCanonicalStateMutationRetainsActualCallbackAndSummaryV1|TestCanonicalPrivateMutationDetachesSyntheticDirtyChildrenV1|TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1|TestCanonicalMutationRejectsOpaqueAndPreservesFirstErrorV1|TestFreelistTxnCloneRevokesPrivateAliases|TestFreelistTxnPrivateFirstCopyIsolatesDirtyChildren|TestGenerationTopology5131PrivateAndPersistentUseSameShape|TestBeginCandidateV1RejectsStaleParent|TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut)$",
+    "-count=1",
+    "-timeout=90s",
+    "-v"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  },
+  "outer_timeout_s": 120,
+  "formatted_paths": [
+    "TreeDB/freelist/generation_v1_tree.go",
+    "TreeDB/freelist/generation_v1_tree_work.go",
+    "TreeDB/freelist/generation_v1_begin_work.go",
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/generation_v1_tree_work_test.go",
+    "TreeDB/db/snapshot_publication_work_v6.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/db.go"
+  ]
+}

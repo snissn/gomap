@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-15T07:17:51.968614+00:00",
+  "repo": "snissn/gomap",
+  "branch": "codex/4878-canonical-activation-checkpoint-20261015",
+  "open_pr_count": 271,
+  "pages": 3,
+  "matching_live_pr_heads": [],
+  "classification": "WIP_NON_PR_CHECKPOINT",
+  "skip_ci_authority": "Explicit coordinator authorization; no implementation PR is created or modified."
+}

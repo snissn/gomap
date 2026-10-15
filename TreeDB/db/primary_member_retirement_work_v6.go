@@ -1,0 +1,100 @@
+package db
+
+import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"unsafe"
+)
+
+// continueRetirementV6 is called only by this SAME visible member's original
+// RetireWithWork callback, after native publication-turn release. A physical
+// Set driver is mandatory: a late nonlast-refcount assumption is not a driver.
+func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {
+	if m == nil || a == nil || w == nil {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	if m.retiredPrimary == nil && len(m.retiredSeals) == 0 && m.retiredSealsOwner == nil && m.retiredVisibleResources == nil && m.retiredRecord == (primaryarena.Ref{}) && !m.retiredRecordQueueInitialized {
+		return true, nil
+	}
+	if m.retirementReleaseSet == nil {
+		return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+	}
+	// Consume/activation transfer these exact original edges without invoking a
+	// physical callback under coordinator/publication locks. This SAME member
+	// finishes them after the fenced native turn has been released.
+	if m.retiredRecord != (primaryarena.Ref{}) || m.retiredRecordQueueInitialized {
+		if !m.retiredRecordQueueInitialized {
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueue))) {
+				return false, nil
+			}
+			a.InitializeReleaseQueue(&m.retiredRecordQueue)
+			m.retiredRecordQueueInitialized = true
+		}
+		if m.retiredRecord != (primaryarena.Ref{}) {
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecord))) {
+				return false, nil
+			}
+			ready, err := a.DropToReleaseQueue(m.retiredRecord, &m.retiredRecordQueue, w)
+			if err != nil || !ready {
+				return false, err
+			}
+			m.retiredRecord = primaryarena.Ref{}
+		}
+		for {
+			ready, progress, err := a.ReleaseQueueStep(&m.retiredRecordQueue, w)
+			if err != nil || !ready {
+				return false, err
+			}
+			if !progress {
+				break
+			}
+		}
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueueInitialized))) {
+			return false, nil
+		}
+		m.retiredRecordQueueInitialized = false
+	}
+	if m.retiredVisibleResources != nil {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredVisibleResources))) {
+			return false, nil
+		}
+		completion, ready, err := m.retirementReleaseSet(m.retiredVisibleResources, w)
+		if err != nil || !ready {
+			return false, err
+		}
+		m.retiredVisibleResources = nil
+		completion.Complete()
+	}
+	if m.retiredPrimary != nil {
+		completion, ready, err := continuePrimaryRuntimeDisposalV6(a, m.retiredPrimary, w, m.retirementReleaseSet)
+		if err != nil || !ready {
+			return false, err
+		}
+		m.retiredPrimary = nil
+		completion.complete()
+	}
+	for m.retiredSealIndex < len(m.retiredSeals) {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {
+			return false, nil
+		}
+		completion, ready, err := continueRootPublicationSealReleaseV6(m.retiredSeals[m.retiredSealIndex], w, m.retirementReleaseSet)
+		if err != nil || !ready {
+			return false, err
+		}
+		m.retiredSeals[m.retiredSealIndex] = nil
+		completion.complete()
+		m.retiredSealIndex++
+	}
+	if !w.Reserve(1, 2*uint64(cap(m.retiredSeals))*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {
+		return false, nil
+	}
+	clear(m.retiredSeals[:cap(m.retiredSeals)])
+	m.retiredSeals = nil
+	owner, charge := m.retiredSealsOwner, m.retiredSealsCharge
+	m.retiredSealsOwner, m.retiredSealsCharge = nil, 0
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+	return true, nil
+}

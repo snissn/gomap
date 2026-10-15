@@ -31,24 +31,43 @@ func (g *FreelistGenerationV1) pageUnavailableWithWorkV1(id, oldestCommit uint64
 	if g == nil || oldestCommit == 0 || id < 2 || id >= g.highWater {
 		return false, false, ErrGenerationFormat
 	}
+	key := id >> freelistChunkShift
 	n := g.root
-	for depth := 0; n != nil && depth < chunkTrieDepth; depth++ {
+	for n != nil {
 		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateNode{}))) {
 			return false, false, nil
 		}
-		n = n.child[chunkNibble(id>>freelistChunkShift, depth)]
-	}
-	if n != nil {
-		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateNode{}))+uint64(unsafe.Sizeof(stateChunk{}))) {
-			return false, false, nil
-		}
-		chunk := n.chunk
-		if chunk != nil {
+		// Compressed branches select their own stored depth. A direct terminal
+		// may share the selected nibble with an absent key; reject from the
+		// already-admitted node summary before touching its chunk payload.
+		if n.chunk != nil {
+			if n.minChunk != key {
+				break
+			}
+			if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(stateChunk{}))) {
+				return false, false, nil
+			}
+			chunk := n.chunk
+			if chunk.chunkNo != key {
+				return false, false, ErrGenerationFormat
+			}
 			offset := id & (freelistChunkSize - 1)
 			if chunk.isFree(offset) || (chunk.retired[offset] != 0 && (live || chunk.retired[offset] < oldestCommit)) {
 				return true, true, nil
 			}
+			break
 		}
+		if n.freeCount+n.retiredCount == 0 {
+			break
+		}
+		depth := int(n.depth)
+		if depth >= chunkTrieDepth {
+			return false, false, ErrGenerationFormat
+		}
+		if chunkPrefixV1(key, depth) != n.prefix {
+			break
+		}
+		n = n.child[chunkNibble(key, depth)]
 	}
 	lo, hi := 0, len(g.record.Extents)
 	for lo < hi {

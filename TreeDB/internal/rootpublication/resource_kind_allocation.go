@@ -171,46 +171,7 @@ func (backing *resourceKindBacking) release() error {
 	if backing == nil {
 		return nil
 	}
-	if err := backing.allocation.cleanupResult(); err != nil {
-		return err
-	}
-	if !backing.allocation.drop() {
-		return nil
-	}
-	fail := func(err error) error { return backing.allocation.cleanupFailed(backing, err) }
-	for i := range backing.cells {
-		cell := &backing.cells[i]
-		if err := releaseOwnedResourceLogical(cell.view.logical); err != nil {
-			return fail(err)
-		}
-		cell.view.logical = nil
-		if err := releaseOwnedResourcePhysical(cell.view.physical); err != nil {
-			return fail(err)
-		}
-		cell.view.physical = nil
-		releaseOwnedResourceObligationIndex(cell.view.logicalMembership)
-		cell.view.logicalMembership = nil
-		cell.view.fields.release()
-		cell.view.fields = nil
-		if err := cell.view.root.release(); err != nil {
-			return fail(err)
-		}
-		cell.view.root = nil
-		if cell.directoryOwned {
-			consumed, err := cell.view.directory.ReleaseOutcome()
-			if consumed {
-				cell.directoryOwned = false
-				cell.view.directory = nil
-			}
-			if err != nil {
-				return fail(err)
-			}
-		}
-		*cell = resourceKindCell{}
-	}
-	backing.cells = nil
-	backing.allocation.refund()
-	return nil
+	return releaseResourceMetadataV6(backing.allocation, backing)
 }
 
 func (backing *resourceKindBacking) find(kind ResourceKind) (stableResourceKindView, bool) {

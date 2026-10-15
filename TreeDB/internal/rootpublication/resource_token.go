@@ -470,6 +470,7 @@ type resourceTokenMetrics struct {
 }
 
 type StableResourceToken struct {
+	releaseWork        stableResourceTokenReleaseStateV6
 	cleanupFailure     originalReleaseFailure
 	cleanupDone        atomic.Bool
 	importedSource     *StableResourceToken
@@ -930,6 +931,9 @@ func (token *StableResourceToken) releaseFrom(owner ResourceOwnerState) error {
 	return token.releasePinned()
 }
 func (token *StableResourceToken) releasePinned() (err error) {
+	if token.metadata != nil {
+		return releaseOwnedTokenPhysicalV6(token)
+	}
 	if token.released.Swap(true) {
 		return token.releaseResult()
 	}

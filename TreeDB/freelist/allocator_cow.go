@@ -410,7 +410,7 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	}
 	rollbackTxn := a.cow.txn
 	rollbackStats := a.stats
-	staged, err := rollbackTxn.cloneForAllocatorPrepare()
+	staged, err := rollbackTxn.cloneForPrivateAllocatorPrepare()
 	if err != nil {
 		return nil, err
 	}
@@ -489,34 +489,8 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 // consumes it. This split is what permits several visible COW generations to
 // accumulate behind one dependency-closed durable-root publication.
 func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
-	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
-		return ErrGenerationFormat
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
-		return ErrCandidateConsumed
-	}
-	if a.cow.waitErr != nil {
-		return a.cow.waitErr
-	}
-	generation := prepared.candidate.Generation()
-	next, err := BeginCandidateV1(generation, generation.GenerationRef(), a.cow.ledger)
-	if err != nil {
-		return err
-	}
-	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
-		return err
-	}
-	a.cow.generation = generation
-	a.cow.txn = next
-	a.cow.prepared = nil
-	a.cow.activated = append(a.cow.activated, prepared)
-	prepared.rollbackTxn = nil
-	prepared.activated = true
-	a.stats.FreeIDs = generation.FreeCount()
-	a.cow.ready.Broadcast()
-	return nil
+	_, err := a.ActivateCOWCandidateWithWorkV1(prepared, nil, nil)
+	return err
 }
 
 // PublishActivatedCOWPrefixV1 consumes exactly the caller-proven ordered

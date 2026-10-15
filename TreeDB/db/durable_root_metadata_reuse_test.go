@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -285,6 +286,88 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 				t.Fatalf("recovered commit=%d want%d", reopened.State().CommitSeq, commit)
 			}
 			validateBothMetadataSlots4627(t, reopened)
+		})
+	}
+}
+
+// Both selectable slots still own their lineage until the replacement seal.
+// Inspect the real publication path after candidate pages have been written,
+// when premature retirement can overwrite the older slot's parent record.
+func TestDurableRootMetadataReuseRetainsBothSlotParents5135(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.SetSync([]byte("retained"), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 64; i++ {
+		publishNeutralMetadata4627(t, database)
+	}
+	current := database.durableRoot
+	older := uint64(1) - current.slot
+	if current.record.ParentRecordPageID != current.slotMeta[older].RootRecordPageID || current.slotRecord[older].ParentRecordPageID == 0 {
+		t.Fatal("fixture does not contain both overwritten-slot and parent aliases")
+	}
+	cut := errors.New("stop before replacement seal")
+	reached := false
+	var lineageErr error
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforePublicationSealWrite {
+			return nil
+		}
+		reached = true
+		for slot, record := range current.slotRecord {
+			if err := validateDurableRootLineageV1(database.idx.Load().pager, record); err != nil {
+				lineageErr = errors.Join(lineageErr, fmt.Errorf("slot%d commit%d: %w", slot, record.CommitSeq, err))
+			}
+		}
+		return cut
+	})
+	defer restore()
+	if err := database.SetSync([]byte("retained"), []byte("new")); !errors.Is(err, cut) {
+		t.Fatalf("publication error=%v", err)
+	}
+	if !reached {
+		t.Fatal("replacement seal cut not reached")
+	}
+	if lineageErr != nil {
+		t.Fatal(lineageErr)
+	}
+}
+
+func TestDurableRootSlotRetirementsUseSuccessorCommit5135(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("directory=%v", directory), func(t *testing.T) {
+			meta := page.DurableMetaV1{CommitSeq: 7, RootRecordPageID: 20}
+			record := rootpublication.DurableRootRecordV1{CommitSeq: 7, TotalPages: 40,
+				Manifest: rootpublication.DependencyManifestRefV1{FirstPageID: 30, PageCount: 2}}
+			if directory {
+				record.Manifest = rootpublication.DependencyManifestRefV1{}
+				record.Directory.RootPageID = 30
+			}
+			successor := rootpublication.DurableRootRecordV1{CommitSeq: 42, ParentRecordPageID: 20}
+			var storage [2]freelist.COWRetirementV1
+			retirements, err := appendDurableRootSlotRetirementsV1(storage[:0], meta, record, successor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(retirements) != 2 && !directory || len(retirements) != 1 && directory {
+				t.Fatalf("retirements=%+v", retirements)
+			}
+			root := retirements[len(retirements)-1]
+			if len(root.PageIDs) != 1 || root.PageIDs[0] != 20 || root.LastReachableCommitSeq != 42 {
+				t.Fatalf("parent retirement=%+v", root)
+			}
+			if !directory && (len(retirements[0].PageIDs) != 2 || retirements[0].PageIDs[0] != 30 || retirements[0].LastReachableCommitSeq != 7) {
+				t.Fatalf("manifest retirement=%+v", retirements[0])
+			}
+			successor.ParentRecordPageID = 19
+			retirements, err = appendDurableRootSlotRetirementsV1(storage[:0], meta, record, successor)
+			if err != nil || retirements[len(retirements)-1].LastReachableCommitSeq != 7 {
+				t.Fatalf("unrelated successor extends lifetime: %+v %v", retirements, err)
+			}
 		})
 	}
 }

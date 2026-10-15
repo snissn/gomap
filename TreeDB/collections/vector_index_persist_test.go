@@ -268,7 +268,7 @@ func TestCollectionVectorIndexNativeRootRejectsCommandWALReplayBeyondGraph(t *te
 	if err := d.Close(); err != nil {
 		t.Fatalf("close setup db: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := saveCollectionCommandWALFormat(dir); err != nil {
 		t.Fatalf("enable command WAL: %v", err)
 	}
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("docs", []commitlog.CollectionDocument{{

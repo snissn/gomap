@@ -1,0 +1,197 @@
+{
+  "schema": "allocator5135-exact-cleanup-result-v1",
+  "utc": "2026-10-15T07:02:03.010049+00:00",
+  "removed": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-main-20261015",
+      "kind": "registered_worktree",
+      "identity": {
+        "device": 66306,
+        "inode": 108297284,
+        "mode": 16832,
+        "type": "directory",
+        "size": 4096,
+        "blocks512": 8,
+        "nlink": 22,
+        "mtime_ns": 1792041023101813948,
+        "ctime_ns": 1792041023101813948
+      },
+      "member_snapshot": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-cleanup-inventory-20261015/worktree-members.json",
+      "logical_bytes": 904876856
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-5130-20261015/baseline-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 108308207,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55403689,
+        "blocks512": 108224,
+        "nlink": 1,
+        "mtime_ns": 1792041239165668906,
+        "ctime_ns": 1792041239165668906
+      },
+      "sha256": "e55fd6a40815867f35b654d4251c9eab9ca8f57769fc6329c2411b014d2072e1",
+      "logical_bytes": 55403689
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-5130-20261015/candidate-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 108308204,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55432035,
+        "blocks512": 108272,
+        "nlink": 1,
+        "mtime_ns": 1792041226043556251,
+        "ctime_ns": 1792041226043556251
+      },
+      "sha256": "eb34b260215fcfa2a18ee0143b42571b54c95e85d54713f70a1e3d663e14dbe2",
+      "logical_bytes": 55432035
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-5130-20261015/activation-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 108308225,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55431819,
+        "blocks512": 108272,
+        "nlink": 1,
+        "mtime_ns": 1792041308086260599,
+        "ctime_ns": 1792041308086260599
+      },
+      "sha256": "8985d5a08f48bbe933961117d856649c6e22777f7af88386b6c2b5b7e40c43e8",
+      "logical_bytes": 55431819
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-post-zipper-5130-20261015/public-combined-final/baseline-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 105424983,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55399063,
+        "blocks512": 108208,
+        "nlink": 1,
+        "mtime_ns": 1792042716797360702,
+        "ctime_ns": 1792042716797360702
+      },
+      "sha256": "9aacec4dda6cd533f7b68c43fa0872735b8b4fc0bbafeb9dc013da3c6086c2c4",
+      "logical_bytes": 55399063
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-post-zipper-5130-20261015/public-combined-final/candidate-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 105424981,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55430793,
+        "blocks512": 108272,
+        "nlink": 1,
+        "mtime_ns": 1792042703218244246,
+        "ctime_ns": 1792042703218244246
+      },
+      "sha256": "582e647fcc8f998399f26f1730feb934d3b5bcecbfb16897f443b01d91644811",
+      "logical_bytes": 55430793
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/public-repaired-7702/baseline-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 106080308,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55414108,
+        "blocks512": 108232,
+        "nlink": 1,
+        "mtime_ns": 1792044486119520100,
+        "ctime_ns": 1792044486119520100
+      },
+      "sha256": "bf4a7084c35951d75de60c5b2fe6e6c0a5142f1f2ab11528996f52aaeee63d11",
+      "logical_bytes": 55414108
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/public-repaired-7702/candidate-db.test",
+      "kind": "individual_generated_elf",
+      "identity": {
+        "device": 66306,
+        "inode": 106080305,
+        "mode": 33277,
+        "type": "regular",
+        "size": 55448118,
+        "blocks512": 108304,
+        "nlink": 1,
+        "mtime_ns": 1792044449608207546,
+        "ctime_ns": 1792044449608207546
+      },
+      "sha256": "ceef51c3a531a808a54e137a9e28e1f3ad757937cfc604dfda57cffe8a1c551b",
+      "logical_bytes": 55448118
+    }
+  ],
+  "retained": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocator-5135-finalization-20261015/before-seal-crash",
+      "reason": "crash DB evidence release not authorized"
+    }
+  ],
+  "removed_logical_bytes": 1292836481,
+  "free_before_bytes": 275719290880,
+  "free_after_bytes": 277039853568,
+  "observed_free_delta_bytes": 1320562688,
+  "free_delta_limit": "Concurrent normal tests and filesystem activity may affect observed delta; not a physical reclamation guarantee.",
+  "worktree_absent": true,
+  "worktree_unregistered": true,
+  "worktree_gitdir_absent": true,
+  "branch_before": "a22078f59bfe9023787d5147c51c989a4010644d refs/heads/codex/5130-allocator-main-20261015",
+  "branch_after": "a22078f59bfe9023787d5147c51c989a4010644d refs/heads/codex/5130-allocator-main-20261015",
+  "remote_branches_touched": false,
+  "protected_roots_verified": {
+    "/home/mikers/dev/snissn/gomap/.git": {
+      "device": 66306,
+      "inode": 101712074,
+      "mode": 16893,
+      "type": "directory"
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal": {
+      "device": 66306,
+      "inode": 106209646,
+      "mode": 16832,
+      "type": "directory"
+    },
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains": {
+      "device": 66306,
+      "inode": 105555390,
+      "mode": 16893,
+      "type": "directory"
+    },
+    "/home/mikers/.cache/go-build": {
+      "device": 66306,
+      "inode": 101716785,
+      "mode": 16893,
+      "type": "directory"
+    },
+    "/home/mikers/go/pkg/mod": {
+      "device": 66306,
+      "inode": 101717099,
+      "mode": 16893,
+      "type": "directory"
+    }
+  },
+  "protected_file_count_verified": 242,
+  "protected_file_snapshot_sha256": "000c87572f5622be93cd80ab64746af8e3b575147760dd83be8a1a0d8ce10dbb",
+  "source_logs_overlays_profiles_crash_retained": true,
+  "common_git_native_toolchains_caches_retained": true,
+  "no_go_or_pr_writes": true,
+  "no_force": true
+}

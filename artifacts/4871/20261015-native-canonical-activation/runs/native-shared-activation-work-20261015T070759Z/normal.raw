@@ -1,0 +1,17 @@
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/reordered
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/extra
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/missing_first
+--- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/reordered (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/extra (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/missing_first (0.00s)
+=== RUN   TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1
+    generation_v1_tree_work_test.go:152: original successor resumes=20 chunk-runs=2 retired-items=6
+--- PASS: TestCandidateBeginStreamsPendingExtentsWithOriginalAuthorityV1 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.001s
+=== RUN   TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut
+--- PASS: TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	0.031s

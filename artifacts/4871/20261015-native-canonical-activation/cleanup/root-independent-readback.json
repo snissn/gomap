@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-15T07:03:53.793347+00:00",
+  "result_sha256": "e5612513972aef8a04ca33857d42d709724b64c183b038db1e318ac103ccfefe",
+  "protected_file_identities_checked": 242,
+  "all_removed_paths_absent": true,
+  "worktree_unregistered": true,
+  "source_logs_overlays_crash_retained": true,
+  "root_independent_verification": true
+}

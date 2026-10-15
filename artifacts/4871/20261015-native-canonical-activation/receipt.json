@@ -1,0 +1,28 @@
+{
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "index_bytes": 1827592,
+  "index_sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596",
+  "owned_count": 80,
+  "compiler_source_count": 4424,
+  "matches_latest_test_census": true,
+  "owned_manifest_sha256": "c3c64fc25f75dca31309b3c9e9b0f1a6c95c9583bae2f3e0c6655a004985496a",
+  "latest_run": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-shared-activation-work-20261015T070759Z",
+  "protected": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "foreign": [
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go",
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    }
+  ],
+  "qualification": "WIP; shared canonical mutation/successor ordinary runtime controls PASS; native typed activation compiled but not activated; production ACK=0/Q32 not established"
+}

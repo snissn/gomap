@@ -115,6 +115,8 @@ func (c *stateChunk) highestFreeUnreserved(ledger *ReservationLedger) (uint64, b
 type stateNode struct {
 	pageID                            uint64
 	checksum                          uint32
+	depth                             uint8
+	prefix                            uint64 // first depth nibbles, right aligned
 	child                             [16]*stateNode
 	chunk                             *stateChunk
 	freeCount, retiredCount           uint64
@@ -133,92 +135,126 @@ func cloneStateNode(n *stateNode) *stateNode {
 
 // detachUnmaterialized clones only nodes that do not yet have durable page
 // identities. Nodes with identities are immutable and safe to share.
-func detachUnmaterialized(n *stateNode, depth int) *stateNode {
-	if n == nil || n.pageID != 0 {
-		return n
+func detachUnmaterialized(n *stateNode, _ int) *stateNode {
+	var work stateDetachWorkV1
+	work.begin(n)
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
 	}
-	out := *n
-	if depth == chunkTrieDepth {
-		if n.chunk != nil && n.chunk.pageID == 0 {
-			chunk := *n.chunk
-			out.chunk = &chunk
-		}
-		return &out
-	}
-	for i, child := range n.child {
-		out.child[i] = detachUnmaterialized(child, depth+1)
-	}
-	return &out
+	return work.result
 }
 
 func chunkNibble(chunkNo uint64, depth int) int {
 	return int((chunkNo >> uint((chunkTrieDepth-1-depth)*4)) & 0xf)
 }
-
-func recomputeStateNode(n *stateNode, depth int) {
-	n.freeCount, n.retiredCount, n.minRetiredSeq = 0, 0, 0
-	n.minChunk, n.maxChunk = 0, 0
-	if depth == chunkTrieDepth {
-		if n.chunk == nil {
-			return
-		}
-		n.freeCount = n.chunk.freeCount()
-		n.retiredCount, n.minRetiredSeq = n.chunk.retiredSummary()
-		n.minChunk, n.maxChunk = n.chunk.chunkNo, n.chunk.chunkNo
-		return
+func chunkPrefixV1(key uint64, depth int) uint64 {
+	return key >> uint(4*(chunkTrieDepth-depth))
+}
+func firstDifferingDepthV1(a, b uint64) int {
+	if a == b {
+		return chunkTrieDepth
 	}
-	first := true
-	for _, child := range n.child {
-		if child == nil || child.freeCount+child.retiredCount == 0 {
-			continue
-		}
-		n.freeCount += child.freeCount
-		n.retiredCount += child.retiredCount
-		if child.minRetiredSeq != 0 && (n.minRetiredSeq == 0 || child.minRetiredSeq < n.minRetiredSeq) {
-			n.minRetiredSeq = child.minRetiredSeq
-		}
-		if first || child.minChunk < n.minChunk {
-			n.minChunk = child.minChunk
-		}
-		if first || child.maxChunk > n.maxChunk {
-			n.maxChunk = child.maxChunk
-		}
-		first = false
+	return chunkTrieDepth - (bits.Len64(a^b)+3)/4
+}
+func recomputeStateNode(n *stateNode, _ int) {
+	work := stateSummaryWorkV1{node: n}
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
 	}
 }
 
-func mutateChunk(n *stateNode, chunkNo uint64, depth int, f func(*stateChunk)) *stateNode {
-	out := cloneStateNode(n)
-	if depth == chunkTrieDepth {
-		chunk := out.chunk.clone()
-		chunk.chunkNo = chunkNo
-		f(chunk)
-		if chunk.freeCount() == 0 {
-			retired, _ := chunk.retiredSummary()
-			if retired == 0 {
-				out.chunk = nil
-				recomputeStateNode(out, depth)
-				return out
+func mutateChunk(n *stateNode, key uint64, depth int, f func(*stateChunk)) *stateNode {
+	return mutateChunkMode(n, key, depth, f, false, nil)
+}
+
+// mutatePrivateChunk may reuse unpublished nodes only when the caller owns
+// the complete dirty graph exclusively. PageID zero alone grants no permission.
+func mutatePrivateChunk(n *stateNode, key uint64, depth int, f func(*stateChunk)) *stateNode {
+	return mutateChunkMode(n, key, depth, f, true, nil)
+}
+func mutatePrivateChunkWithStats(n *stateNode, key uint64, depth int, f func(*stateChunk), stats *FreelistTxnStats) *stateNode {
+	return mutateChunkMode(n, key, depth, f, true, stats)
+}
+func mutateChunkMode(n *stateNode, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats) *stateNode {
+	var work stateMutationWorkV1
+	work.begin(n, key, private, stats, f, nil)
+	_, err := work.step(nil)
+	if err != nil {
+		panic(err)
+	}
+	return work.result
+}
+
+func lookupChunk(n *stateNode, key uint64) *stateChunk {
+	for n != nil {
+		if n.chunk != nil {
+			if n.chunk.chunkNo == key {
+				return n.chunk
+			}
+			return nil
+		}
+		if n.freeCount+n.retiredCount == 0 || chunkPrefixV1(key, int(n.depth)) != n.prefix {
+			return nil
+		}
+		n = n.child[chunkNibble(key, int(n.depth))]
+	}
+	return nil
+}
+
+// validateCanonicalStateV2 independently checks shape and cached summaries.
+func validateCanonicalStateV2(n *stateNode, root bool) error {
+	if n == nil {
+		return ErrGenerationFormat
+	}
+	if n.chunk != nil {
+		if n.chunk.chunkNo >= 1<<56 || n.pageID != n.chunk.pageID || n.checksum != n.chunk.checksum {
+			return ErrGenerationFormat
+		}
+		for _, child := range n.child {
+			if child != nil {
+				return ErrGenerationFormat
 			}
 		}
-		out.chunk = chunk
-		recomputeStateNode(out, depth)
-		return out
+		if n.freeCount+n.retiredCount == 0 {
+			return ErrGenerationFormat
+		}
+	} else {
+		depth := int(n.depth)
+		if depth >= chunkTrieDepth || n.prefix>>uint(4*depth) != 0 {
+			return ErrGenerationFormat
+		}
+		count := 0
+		for slot, child := range n.child {
+			if child == nil {
+				continue
+			}
+			count++
+			if err := validateCanonicalStateV2(child, false); err != nil {
+				return err
+			}
+			if chunkPrefixV1(child.minChunk, depth) != n.prefix || chunkPrefixV1(child.maxChunk, depth) != n.prefix ||
+				chunkNibble(child.minChunk, depth) != slot || chunkNibble(child.maxChunk, depth) != slot ||
+				child.chunk == nil && int(child.depth) <= depth {
+				return ErrGenerationFormat
+			}
+		}
+		if count == 0 {
+			if !root || depth != 0 || n.prefix != 0 {
+				return ErrGenerationFormat
+			}
+		} else if count < 2 || firstDifferingDepthV1(n.minChunk, n.maxChunk) != depth {
+			return ErrGenerationFormat
+		}
 	}
-	i := chunkNibble(chunkNo, depth)
-	out.child[i] = mutateChunk(out.child[i], chunkNo, depth+1, f)
-	recomputeStateNode(out, depth)
-	return out
-}
-
-func lookupChunk(n *stateNode, chunkNo uint64) *stateChunk {
-	for depth := 0; n != nil && depth < chunkTrieDepth; depth++ {
-		n = n.child[chunkNibble(chunkNo, depth)]
+	summary := *n
+	recomputeStateNode(&summary, 0)
+	if summary.freeCount != n.freeCount || summary.retiredCount != n.retiredCount ||
+		summary.minRetiredSeq != n.minRetiredSeq || summary.minChunk != n.minChunk || summary.maxChunk != n.maxChunk {
+		return ErrGenerationFormat
 	}
-	if n == nil {
-		return nil
-	}
-	return n.chunk
+	return nil
 }
 
 func rightmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
@@ -226,7 +262,7 @@ func rightmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
 		return nil
 	}
 	*visits++
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		return n.chunk
 	}
 	for i := len(n.child) - 1; i >= 0; i-- {
@@ -242,7 +278,7 @@ func leftmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
 		return nil
 	}
 	*visits++
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		return n.chunk
 	}
 	for i := 0; i < len(n.child); i++ {
@@ -261,7 +297,7 @@ func findFreeLE(n *stateNode, target uint64, depth int, visits *uint64) *stateCh
 	if n.maxChunk <= target {
 		return rightmostFree(n, depth, visits)
 	}
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		return n.chunk
 	}
 	for i := len(n.child) - 1; i >= 0; i-- {
@@ -280,7 +316,7 @@ func findFreeGE(n *stateNode, target uint64, depth int, visits *uint64) *stateCh
 	if n.minChunk >= target {
 		return leftmostFree(n, depth, visits)
 	}
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		return n.chunk
 	}
 	for i := 0; i < len(n.child); i++ {
@@ -342,7 +378,7 @@ func walkState(n *stateNode, depth int, f func(*stateChunk) error) error {
 	if n == nil {
 		return nil
 	}
-	if depth == chunkTrieDepth {
+	if n.chunk != nil {
 		if n.chunk != nil {
 			return f(n.chunk)
 		}

@@ -48,27 +48,7 @@ func releaseOwnedResourceLogical(node *stableResourceLogicalIndexNode) error {
 	if node == nil {
 		return nil
 	}
-	if err := node.allocation.cleanupResult(); err != nil {
-		return err
-	}
-	if !node.allocation.drop() {
-		return nil
-	}
-	if err := releaseOwnedResourceLogical(node.left); err != nil {
-		return node.allocation.cleanupFailed(node, err)
-	}
-	node.left = nil
-	if err := releaseOwnedResourceLogical(node.right); err != nil {
-		return node.allocation.cleanupFailed(node, err)
-	}
-	node.right = nil
-	if err := node.entry.releaseBacking(); err != nil {
-		return node.allocation.cleanupFailed(node, err)
-	}
-	node.entry = nil
-	node.key = stableLogicalResourceKey{}
-	node.allocation.refund()
-	return nil
+	return releaseResourceMetadataV6(node.allocation, node)
 }
 
 // insertOwnedResourceLogical returns a new owned root without changing any

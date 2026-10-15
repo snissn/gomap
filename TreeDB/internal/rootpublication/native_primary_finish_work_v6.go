@@ -38,6 +38,10 @@ func (s *PrimaryConstructionReleaseWork) BindFinishV6(t *DurableRootTransaction,
 // physical work, including synchronized coordinator pin consumption. It must
 // not use the ordinary synchronous Set release as a bounded callback.
 //
+// When the original constructor's shared Set edge was consumed against its
+// exact visible clone, release is nil: only the SAME private arena queue and
+// by-value Set completion remain. Otherwise release supplies actual typed work.
+//
 // Once physical disposal has returned, this method detaches the transaction
 // and returns false. A later call with release == nil consumes only the
 // admitted accounting receipt. This prevents callback/transaction aliases from
@@ -68,12 +72,12 @@ func (s *PrimaryConstructionReleaseWork) ContinueFinishWorkV6(w *iterator.Ordina
 	}
 	if s.phase == 0 {
 		t := s.transaction
-		if t == nil || release == nil {
+		if t == nil {
 			return false, ErrDurableRootOwnership
 		}
 		t.mu.Lock()
 		c := t.constructionV6
-		if c == nil || c.cleanupReceipt != s {
+		if c == nil || c.cleanupReceipt != s || (!c.setReleaseConsumed && release == nil) {
 			t.mu.Unlock()
 			return false, ErrDurableRootOwnership
 		}
@@ -90,6 +94,11 @@ func (s *PrimaryConstructionReleaseWork) ContinueFinishWorkV6(w *iterator.Ordina
 					if !progress {
 						break
 					}
+				}
+				if c.setReleaseConsumed {
+					// Its exact protected shared edges were already consumed
+					// during the original publication turn, including pin counts.
+					return c.setRelease.ContinueWork(work)
 				}
 				return release(set, work)
 			})
@@ -124,4 +133,29 @@ func (s *PrimaryConstructionReleaseWork) FinishDetachedV6() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.finishing && (s.phase == 1 || s.phase == 2)
+}
+
+// consumePrimarySharedResourcesV6 is called under the original coordinator
+// mutex, during this transaction's admitted final publication turn. It does
+// not advance a frontier, consume the transaction, release the turn, or refund
+// any storage. The final driver must admit this operation BEFORE its fence;
+// the work-bearing callback contract alone is not that admission proof.
+func (t *DurableRootTransaction) consumePrimarySharedResourcesV6(visible *StableResourceSet, counts map[ResourceKind]uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	if t == nil || w == nil {
+		return false, ErrDurableRootOwnership
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.constructionV6
+	if c == nil || !c.nativeWorkOwned || c.unboundedDiagnostic ||
+		t.owner != ResourceOwnerCoordinator || t.phase != durableRootActivated ||
+		c.resources == nil || c.finishReleaseStarted || c.setReleaseConsumed || t.finishBusy {
+		return false, ErrDurableRootOwnership
+	}
+	ready, err := c.setRelease.consumeSharedWithVisibleV6(c.resources, visible, counts, c.arena.MetadataOwner(), w)
+	if ready && err == nil {
+		c.setReleaseConsumed = true
+		c.finishReleaseStarted = true
+	}
+	return ready, err
 }

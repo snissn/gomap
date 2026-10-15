@@ -46,6 +46,10 @@ type primaryDurableRuntimeV5 struct {
 	metadata                *retainedalloc.Owner
 	metadataCharge          uint64
 	disposalAttempted       bool
+	disposalPhase           uint8
+	disposalIndex           int
+	disposalNative          bool
+	disposalQueue           primaryarena.ReleaseQueue
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
@@ -55,6 +59,9 @@ type primaryDurableRuntimeV5 struct {
 	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
+	disposalPhase     uint8
+	disposalNative    bool
+	disposalQueue     primaryarena.ReleaseQueue
 	disposalMu        sync.Mutex
 	disposalAttempted bool
 	disposalErr       error
@@ -785,7 +792,12 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 		return 0, e
 	}
 	retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
+	retiredTransferred := false
 	defer func() {
+		if retiredTransferred {
+			return
+		}
+
 		clear(retired)
 		retired = nil
 		a.MetadataOwner().RemovePending(retiredCharge)
@@ -833,6 +845,16 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	clear(runtime.seals[len(kept):])
 	runtime.seals = kept
 	runtime.activeSeal = nil
+	if member.transaction.RequiresNativeCallbackWorkV6() {
+		// No physical root/resource callbacks execute in Publish. The predecessor
+		// descriptor and independent retired pointer backing retain exact custody.
+		member.retiredPrimary = base.primary
+		member.retiredSeals = retired
+		member.retiredSealsOwner, member.retiredSealsCharge = a.MetadataOwner(), retiredCharge
+		retiredTransferred = true
+		unlock()
+		return oldest, nil
+	}
 	unlock()
 	// The SAME predecessor descriptor owns overwritten original physical
 	// operands until their root-before-resource completion has really succeeded.
@@ -849,73 +871,8 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 }
 
 func (seal *primaryPublicationSealV5) release() error {
-	if seal == nil {
-		return nil
-	}
-	seal.disposalMu.Lock()
-	defer seal.disposalMu.Unlock()
-	if seal.disposalAttempted {
-		return seal.disposalErr
-	}
-	seal.disposalAttempted = true
-	a := seal.prepared.Arena()
-	var first error
-	drop := func(ref *primaryarena.Ref) {
-		if *ref == (primaryarena.Ref{}) {
-			return
-		}
-		consumed, err := a.Drop(*ref, nil)
-		if err == nil && !consumed {
-			err = rootpublication.ErrResourceOwnership
-		}
-		if err == nil {
-			*ref = primaryarena.Ref{}
-		} else if first == nil {
-			first = err
-		}
-	}
-	if seal.promotion != nil {
-		drop(&seal.promotion.Root)
-		drop(&seal.promotion.Parent)
-		if seal.promotion.Root == (primaryarena.Ref{}) && seal.promotion.Parent == (primaryarena.Ref{}) {
-			seal.promotion.Image = nil
-			seal.promotion.View = rootpublication.PrimaryCapsuleViewV6{}
-		}
-	}
-	drop(&seal.proof)
-	// Manifest bank preparation also precedes resource-edge consumption.
-	if first == nil {
-		if err := seal.manifestBanks.release(); err != nil {
-			first = err
-		} else {
-			seal.manifestBanks = nil
-		}
-	}
-	if first == nil {
-		if err := seal.proofResources.ReleaseWithError(); err != nil {
-			first = err
-		} else {
-			seal.proofResources = nil
-		}
-		if err := seal.token.ReleaseWithError(); err != nil {
-			if first == nil {
-				first = err
-			}
-		} else {
-			seal.token = nil
-		}
-	}
-	if first != nil {
-		seal.disposalFailure.payload = seal
-		seal.disposalFailure.retainCause(0, first)
-		seal.disposalErr = &seal.disposalFailure
-		a.MetadataOwner().CleanupFailed()
-		return seal.disposalErr
-	}
-	seal.promotion = nil
-	seal.prepared = nil
-	seal.projection = rootpublication.PrimaryProjectionV5{}
-	return nil
+	_, err := continuePrimaryPublicationSealReleaseV6(seal, nil, nil)
+	return err
 }
 
 func (state *DBState) primaryRetentionCommitV5() uint64 {

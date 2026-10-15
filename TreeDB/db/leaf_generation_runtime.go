@@ -3,6 +3,9 @@ package db
 import (
 	"sync"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 type leafGenerationView struct {
@@ -139,19 +142,59 @@ func (s *leafGenerationPinSet) release(tracker *leafGenerationPinTracker) {
 }
 
 func (s *leafGenerationPinSet) markStale(tracker *leafGenerationPinTracker) {
+	transition, _ := s.beginStaleTransitionV6(tracker, nil)
+	transition.finish(true)
+}
+
+// leafGenerationStaleTransitionV6 is only a stack-local lock scope in one
+// non-yielding publication call. It owns no generation edge and must be ended
+// on both the successful and failed allocator transition. In particular it
+// must never be stored in a cursor across a public return.
+type leafGenerationStaleTransitionV6 struct {
+	set     *leafGenerationPinSet
+	tracker *leafGenerationPinTracker
+}
+
+// beginStaleTransitionV6 admits the actual old-generation probes and pin
+// atomics while holding their original mutex. Refusal has no pin/stale effect.
+// Keeping this scope until the allocator decision avoids marking a still
+// visible generation stale merely because the allocator refused activation.
+func (s *leafGenerationPinSet) beginStaleTransitionV6(tracker *leafGenerationPinTracker, w *iterator.OrdinalScanWork) (leafGenerationStaleTransitionV6, bool) {
 	if s == nil || tracker == nil {
-		return
+		return leafGenerationStaleTransitionV6{}, true
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stale {
+		s.mu.Unlock()
+		return leafGenerationStaleTransitionV6{}, true
+	}
+	pins := uint64(0)
+	if s.holders > 0 && !s.pinned {
+		pins = uint64(len(s.refs))
+	}
+	// Each potential pin reads one original ref slot and performs at most one
+	// atomic increment. The scalar admission also covers the stale/pinned state.
+	if w != nil && !w.Reserve(1+pins, uint64(unsafe.Sizeof(*s))+pins*(uint64(unsafe.Sizeof((*leafGenerationPinRef)(nil)))+2*8)) {
+		s.mu.Unlock()
+		return leafGenerationStaleTransitionV6{}, false
+	}
+	return leafGenerationStaleTransitionV6{set: s, tracker: tracker}, true
+}
+
+func (transition *leafGenerationStaleTransitionV6) finish(activated bool) {
+	if transition == nil || transition.set == nil {
 		return
 	}
-	s.stale = true
-	if s.holders > 0 && !s.pinned {
-		tracker.pinRefs(s.refs)
-		s.pinned = true
+	s, tracker := transition.set, transition.tracker
+	transition.set, transition.tracker = nil, nil
+	if activated {
+		s.stale = true
+		if s.holders > 0 && !s.pinned {
+			tracker.pinRefs(s.refs)
+			s.pinned = true
+		}
 	}
+	s.mu.Unlock()
 }
 
 type leafGenerationPinTracker struct {
