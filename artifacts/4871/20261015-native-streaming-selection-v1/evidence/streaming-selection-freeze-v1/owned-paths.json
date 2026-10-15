@@ -1,0 +1,34 @@
+[
+  {
+    "path": "TreeDB/mvcc/prune_cursor_v6.go",
+    "bytes": 19129,
+    "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165",
+    "ownership": "sole native writer; exact checkpoint allowlist",
+    "baseline_head_blob": "9943b1679f6f94a88d172a607180760b8e2b2bb2",
+    "baseline_sha256": "ab7528c4077ccda6d2fa692af35c7f5bb165be25eecbf61a0ba27259307a82cd"
+  },
+  {
+    "path": "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+    "bytes": 10856,
+    "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7",
+    "ownership": "sole native writer; exact checkpoint allowlist",
+    "baseline_head_blob": "00d265aba4492baf5bab71fbad46276632bd0bb3",
+    "baseline_sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+  },
+  {
+    "path": "TreeDB/mvcc/native_streaming_prune_v6_test.go",
+    "bytes": 7124,
+    "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba",
+    "ownership": "sole native writer; exact checkpoint allowlist",
+    "baseline_head_blob": null,
+    "baseline_sha256": null
+  },
+  {
+    "path": "TreeDB/mvcc/native_streaming_prune_v6.md",
+    "bytes": 1681,
+    "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5",
+    "ownership": "sole native writer; exact checkpoint allowlist",
+    "baseline_head_blob": null,
+    "baseline_sha256": null
+  }
+]

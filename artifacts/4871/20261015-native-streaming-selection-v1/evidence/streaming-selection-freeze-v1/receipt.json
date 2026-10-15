@@ -1,0 +1,372 @@
+{
+  "at_utc": "2026-10-15T01:02:39.174802+00:00",
+  "head": "7df5c8277ace70d8551417d92e8fe4a84842f472",
+  "owned_paths": [
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": "9943b1679f6f94a88d172a607180760b8e2b2bb2",
+      "baseline_sha256": "ab7528c4077ccda6d2fa692af35c7f5bb165be25eecbf61a0ba27259307a82cd"
+    },
+    {
+      "path": "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": "00d265aba4492baf5bab71fbad46276632bd0bb3",
+      "baseline_sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": null,
+      "baseline_sha256": null
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 1681,
+      "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": null,
+      "baseline_sha256": null
+    }
+  ],
+  "source_rows": 4345,
+  "source_final": "source-final.json",
+  "members": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/command.json",
+      "bytes": 635,
+      "sha256": "e90e001f29f4cab914dfc01cabb1b7ad0b165ce928f08e658a27f244d09b9ecd"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/exit.json",
+      "bytes": 141,
+      "sha256": "fdd96953df7e6950192aaecfc0e35f91b8e8577783b927a9aef082f6bdc3a729"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/raw.jsonl",
+      "bytes": 7525,
+      "sha256": "8ced678b78990b95c59c03b6c9a50c229c9270674493c25a836eec809b6ea095"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/source-after.json",
+      "bytes": 781034,
+      "sha256": "56b149c9303e3695428280acd2acae600a45b535ca4922ac6407ec02177d34d5"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/source-before.json",
+      "bytes": 781034,
+      "sha256": "56b149c9303e3695428280acd2acae600a45b535ca4922ac6407ec02177d34d5"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 16390,
+      "sha256": "ab7528c4077ccda6d2fa692af35c7f5bb165be25eecbf61a0ba27259307a82cd"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/state-after.json",
+      "bytes": 341,
+      "sha256": "e5947516f123e11b9c8e497a97cda3ff794a0ac37e8c537a6b112ccb4cfa40eb"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-red-v1/state-before.json",
+      "bytes": 341,
+      "sha256": "e5947516f123e11b9c8e497a97cda3ff794a0ac37e8c537a6b112ccb4cfa40eb"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/command.json",
+      "bytes": 635,
+      "sha256": "e90e001f29f4cab914dfc01cabb1b7ad0b165ce928f08e658a27f244d09b9ecd"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/exit.json",
+      "bytes": 141,
+      "sha256": "74e96ebca421bda6f5d72a933720cb895af1db8c5ee6abafb841c5ea3ce8a08b"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/raw.jsonl",
+      "bytes": 5854,
+      "sha256": "30eba79ed3d94facfc0142e8cbdf6ecd75446be9635900fedfe61e152edeab80"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/source-after.json",
+      "bytes": 781034,
+      "sha256": "974849a26c72b10e5fbff40fa12b865ae435e8389f8042470e693b5fdc5ffd90"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/source-before.json",
+      "bytes": 781034,
+      "sha256": "974849a26c72b10e5fbff40fa12b865ae435e8389f8042470e693b5fdc5ffd90"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/state-after.json",
+      "bytes": 376,
+      "sha256": "0e1f61085b498f2b2a9b874cfa6d9f09d950a90f59b049dc4a61fc95bbc37d11"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-first-ack-green-v1/state-before.json",
+      "bytes": 376,
+      "sha256": "0e1f61085b498f2b2a9b874cfa6d9f09d950a90f59b049dc4a61fc95bbc37d11"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/command.json",
+      "bytes": 631,
+      "sha256": "7797e5032e4dec323a58968bfe5eeaab43d1c6d5b4f04688db68ea27a2264493"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/exit.json",
+      "bytes": 141,
+      "sha256": "b88efd9128978f2d4de8a9372b74dd76aa08198aabce5d0388bc30eeef099f7c"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/raw.jsonl",
+      "bytes": 6273,
+      "sha256": "19d71f130a0d57ec5b15df44a5ac8cd331459a983827384d2e40b2a0eeac707c"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/source-after.json",
+      "bytes": 781204,
+      "sha256": "b2f90296d3a3c35631e3b6612092d0e01e44de0c2cd7a840c2e0290191916b1c"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/source-before.json",
+      "bytes": 781204,
+      "sha256": "b2f90296d3a3c35631e3b6612092d0e01e44de0c2cd7a840c2e0290191916b1c"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "336bee91055159b3f43e99dabb2a8047890ff7663c8ada86b4ceca41799ddc52"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/state-after.json",
+      "bytes": 426,
+      "sha256": "b86b718c0fb57c1f079df592da11ecfc203fa3406a79c190ea3125d9c3f2efb1"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v1/state-before.json",
+      "bytes": 426,
+      "sha256": "b86b718c0fb57c1f079df592da11ecfc203fa3406a79c190ea3125d9c3f2efb1"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/command.json",
+      "bytes": 631,
+      "sha256": "7797e5032e4dec323a58968bfe5eeaab43d1c6d5b4f04688db68ea27a2264493"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/exit.json",
+      "bytes": 140,
+      "sha256": "40b9df837f5b92d9bc3b92d979b3d7073b388b151e2130e621d2f221fc7d41c8"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/raw.jsonl",
+      "bytes": 6247,
+      "sha256": "707de80aeaa71465ba895e7e22399b2b6f175603bdce5f1218b580596ca7d91d"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/source-after.json",
+      "bytes": 781369,
+      "sha256": "9afc2fb544a09aa3f9a6ade727256c3b607771f1ab75ec85aaf2a4604ee200f4"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/source-before.json",
+      "bytes": 781369,
+      "sha256": "9afc2fb544a09aa3f9a6ade727256c3b607771f1ab75ec85aaf2a4604ee200f4"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 1681,
+      "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/state-after.json",
+      "bytes": 471,
+      "sha256": "e5e2c764e704d0a5536e9fcc0450f32ad9d6d8c78b0aa5dcd4d69d8e18aa21a2"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-v2/state-before.json",
+      "bytes": 471,
+      "sha256": "e5e2c764e704d0a5536e9fcc0450f32ad9d6d8c78b0aa5dcd4d69d8e18aa21a2"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/command.json",
+      "bytes": 644,
+      "sha256": "742bf1ab3313d9ef8f854f91944a56dc71face4c8bb7de582ce9404d2284fa2b"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/exit.json",
+      "bytes": 141,
+      "sha256": "c357e7ae7bab8b55523d89e62b999243e092e74a7c173a39b01dbbe99fc77639"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/raw.jsonl",
+      "bytes": 6243,
+      "sha256": "c66b49cf3d153ba2dc8a65a8d0476052684888966fc9bb16c34bda7236efbca1"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/source-after.json",
+      "bytes": 781369,
+      "sha256": "9afc2fb544a09aa3f9a6ade727256c3b607771f1ab75ec85aaf2a4604ee200f4"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/source-before.json",
+      "bytes": 781369,
+      "sha256": "9afc2fb544a09aa3f9a6ade727256c3b607771f1ab75ec85aaf2a4604ee200f4"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 1681,
+      "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/state-after.json",
+      "bytes": 471,
+      "sha256": "e5e2c764e704d0a5536e9fcc0450f32ad9d6d8c78b0aa5dcd4d69d8e18aa21a2"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-continuation-race-v1/state-before.json",
+      "bytes": 471,
+      "sha256": "e5e2c764e704d0a5536e9fcc0450f32ad9d6d8c78b0aa5dcd4d69d8e18aa21a2"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/owned-paths.json",
+      "bytes": 1382,
+      "sha256": "6e12db4b59c234b5972bcc1121929c4385aaee5f56f1412d8a4c51dddb2a3e6d"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/preimages/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 9457,
+      "sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/preimages/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 16390,
+      "sha256": "ab7528c4077ccda6d2fa692af35c7f5bb165be25eecbf61a0ba27259307a82cd"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/source-final.json",
+      "bytes": 781369,
+      "sha256": "9afc2fb544a09aa3f9a6ade727256c3b607771f1ab75ec85aaf2a4604ee200f4"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/source.patch",
+      "bytes": 10372,
+      "sha256": "60096a8b8f3a713f9ca8ec08edbf933feeabeb3903cb41078f5b899b60ba0636"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/sources/TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 1681,
+      "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/sources/TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/sources/TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/sources/TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/state-final.json",
+      "bytes": 474,
+      "sha256": "8b1f1881c1d3d1fa0b8c4680f92823d44d12443e53080906681bea42267d6fd8"
+    }
+  ],
+  "protected_sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f",
+  "foreign": {
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+  },
+  "production_unchanged_since_first_ack_green": true,
+  "no_live_test_producer": true,
+  "outcomes": {
+    "meaningful_red": "first-ack-red: actual lifecycle/path checks pass; Visited1027/Complete true fails streaming oracle",
+    "first_ack_green": "Visited2/Completefalse/selectedintegritytrue; lifecycle/reopen/36of37 child refs PASS",
+    "continuation_v1": "value/late-malformed PASS; tombstone test queried forbidden timestamp at floor; corrected fixture only",
+    "continuation_normal_and_race": "four subcases PASS; actual writes after every nonterminal return incl ACK"
+  },
+  "single_sample": {
+    "before_ns": 5110350,
+    "after_ns": 925571,
+    "before_alloc_bytes": 2406448,
+    "after_alloc_bytes": 2107744,
+    "before_alloc_count": 3426,
+    "after_alloc_count": 1057,
+    "before_intervening_writes": 2276,
+    "after_intervening_writes": 53,
+    "interpretation": "same fixture/public-call boundary; fewer legal yields means fewer outside-timer ordinary writes; descriptive single samples, no statistical speedup claim"
+  },
+  "remaining_obligations": [
+    "bounded final publication phase16 still refuses; diagnostic counters incomplete/no Q32",
+    "private construction/current-generation proof/seal/cut graft/physical Finish boundedness remains",
+    "original protected default and target bounded fixture qualification remains OPEN",
+    "no whole native acceptance, broad matrix or performance viability claim"
+  ]
+}

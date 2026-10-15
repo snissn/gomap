@@ -1,0 +1,60 @@
+{
+  "at_utc": "2026-10-15T01:06:49.415803+00:00",
+  "parent": "7df5c8277ace70d8551417d92e8fe4a84842f472",
+  "packet_receipt_sha256": "6eadecf36232d1dd3043f36c799a4318672a1ef274911f85923ffa27a140068b",
+  "handoff_sha256": "118b25eded67dbef0afdb2f1d2ef67f01f467982bac2a43d1197d958a32827f3",
+  "source": [
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "bytes": 19129,
+      "sha256": "ae53e668969dfb84e1d6190551bc1b70b4b22fc978bb20c7fe55b02468b99165",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": "9943b1679f6f94a88d172a607180760b8e2b2bb2",
+      "baseline_sha256": "ab7528c4077ccda6d2fa692af35c7f5bb165be25eecbf61a0ba27259307a82cd"
+    },
+    {
+      "path": "TreeDB/mvcc/native_unbounded_diagnostic_v6_test.go",
+      "bytes": 10856,
+      "sha256": "1038659953e6255ec6e6decc9bc7721b6a9d0ab22498daf62a0ff1304d2339d7",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": "00d265aba4492baf5bab71fbad46276632bd0bb3",
+      "baseline_sha256": "f28315de7df879002786931d86898defad70e095229a060f8180f9c6e86ae387"
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6_test.go",
+      "bytes": 7124,
+      "sha256": "65c6af01cbe9710a89996748216f991e0420c2d57bbc3c8c7a6b9695ecbdf4ba",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": null,
+      "baseline_sha256": null
+    },
+    {
+      "path": "TreeDB/mvcc/native_streaming_prune_v6.md",
+      "bytes": 1681,
+      "sha256": "5aabaabd493895df066f867810c8a5fda6361db9b1e5b1d86cdd5d5b5a6faeb5",
+      "ownership": "sole native writer; exact checkpoint allowlist",
+      "baseline_head_blob": null,
+      "baseline_sha256": null
+    }
+  ],
+  "go_and_doc_source_rows_verified": 4345,
+  "protected_fixture": {
+    "path": "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go",
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "foreign_preserved": {
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e",
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+  },
+  "meaningful_public_red_green": true,
+  "focused_normal_and_race_pass": true,
+  "qualification": "STREAMING_PUBLIC_UNBOUNDED_DIAGNOSTIC_ONLY; Visited1027->2 before first ACK; same capture/Request continuation, tombstone ordering, partial-progress late error, physical absence, old cut, real intervening writes and reopen PASS. Single timings confounded by outside-timer write counts; batching, bounded publication, Q32, throughput, production and final qualification OPEN.",
+  "merged": false,
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+  "ref": "refs/heads/codex/4878-native-traversal-20261014",
+  "all_source_blobs_verified": true,
+  "remaining_status": " M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n",
+  "remote_verified": true
+}

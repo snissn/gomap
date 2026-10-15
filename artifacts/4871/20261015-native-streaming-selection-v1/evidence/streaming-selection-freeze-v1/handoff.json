@@ -1,0 +1,11 @@
+{
+  "base_receipt": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-public-bridge-20261015/streaming-selection-freeze-v1/receipt.json",
+  "base_receipt_sha256": "6eadecf36232d1dd3043f36c799a4318672a1ef274911f85923ffa27a140068b",
+  "source_unchanged": true,
+  "additional_remaining_limitations": [
+    "BatchSize is checked/stored but each selected record currently uses one original constructor/publication; batching/throughput remains OPEN",
+    "Entry phase16 is 691117 of925571ns (74.67%) in the single firstACK public sample; synchronous diagnostic producer work remains dominant",
+    "Timing comparison includes public prune calls only;53 vs2276 legal intervening writes outside timing changes accumulated successor state; no isolated causal/statistical speedup claim"
+  ],
+  "next_structural_seam": "SAME constructor batching/current-output publication, chosen by root after checkpoint; no microallocation or broad qualification undertaken"
+}
