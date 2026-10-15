@@ -1,0 +1,62 @@
+[
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/README.md",
+    "bytes": 871,
+    "sha256": "568cd9dc27779dabe3d87b5f2e0ff5e460ed6c49b77ae47a2c33b8b52decf02e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/ci-publication-classification.json",
+    "bytes": 190,
+    "sha256": "999ca7d44a8507ef9806c2828a01132f1318f8e8646df25ec8984b1d5882b357"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/final-a220-source.json",
+    "bytes": 6811,
+    "sha256": "699fa6588297dc0ef769bb5b28b57aaa36727078fac872da6adf4a48edb559af"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/fixture-only.patch",
+    "bytes": 1618,
+    "sha256": "8391d86bb95048a0a15bf67a9279c76af994fdebc3955a46f89de26aa16db9a7"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-checks.json",
+    "bytes": 1685,
+    "sha256": "d478d2804a61088821601e0e9b996d6bbe74442139b0a0e79094ebc7593da94c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-gofmt.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-normal.log",
+    "bytes": 46,
+    "sha256": "134c9cb166b701a197b4adb18b59cc5ca75fd77480984f558bdd377f8c9942ef"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-race.log",
+    "bytes": 46,
+    "sha256": "512ab058db0e217dcf5e7317e7efb91cc6ecd7cff927e1f53fb4627c905a55cb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-red.json",
+    "bytes": 3274,
+    "sha256": "1194afca4a5a371b7874bf8da92a859d6dd33ab08850a7c7fb951bfcaed6fa5b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-review-accept.json",
+    "bytes": 731,
+    "sha256": "22c66f094f5f4287b6808086a33f5dd71cdda00cc454c5de47d008e5e06dc973"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-runtime-equivalence.json",
+    "bytes": 222562,
+    "sha256": "bc8bb39f75f8c18f1bba7c156d9b175a0264206167166299680b538a3360aa06"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-repair/snapshot-fixture-a220/snapshot-fixture-source-ready.json",
+    "bytes": 304,
+    "sha256": "9c3a3cfef39ebc7ac96ae3cc7e47fcc23bd625f3ce08fa327c524d96874bab33"
+  }
+]

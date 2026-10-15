@@ -1,0 +1,56 @@
+{
+  "base": "7702c2a28f9c45266977ec708688717f4e19fd6a",
+  "path": "TreeDB/db/physical_snapshot_cut_v1_test.go",
+  "sha256": "89bcb943e5e40cde8e8323331c47672b181df8503304f06fb3178335ae732d2e",
+  "git_blob": "cd463953ad5807f9d3fd74d0194cb6302465f9f3",
+  "commands": [
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/gofmt",
+        "-w",
+        "TreeDB/db/physical_snapshot_cut_v1_test.go"
+      ],
+      "exit": 0,
+      "wall_s": 0.0019721179269254208,
+      "raw": ""
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "^TestPhysicalSnapshotCutV1",
+        "-count=1",
+        "-timeout=30s"
+      ],
+      "exit": 0,
+      "wall_s": 18.5317174308002,
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.149s\n"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "^TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose$",
+        "-count=1",
+        "-timeout=30s"
+      ],
+      "exit": 0,
+      "wall_s": 27.631130266934633,
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.203s\n"
+    }
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "2"
+  },
+  "wall_s": 47.59493994386867,
+  "status": "RUNTIME_RELEASED"
+}
