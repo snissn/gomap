@@ -1,0 +1,163 @@
+{
+  "job": "windows-core-7",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676981",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-7.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:46:09.9734952Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Elapsed": 5.21
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3946773Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Elapsed": 0.42
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7780941Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Elapsed": 0.38
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7780941Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Elapsed": 6.02
+    },
+    {
+      "Time": "2026-10-15T16:50:24.4528011Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 384.445
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:46:04.7632885Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Output": "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:04.7632885Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Output": "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:09.8509149Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:09.851689Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:09.9667491Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Output": "    cow_public_review_regression_test.go:350: leaf-generation-pack-1: namespace persistence unsupported: leaf generation pack promotion\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:09.9734952Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Output": "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable (5.21s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:09.9740353Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Output": "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3174716Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3185266Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3888539Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Output": "    cow_public_review_regression_test.go:350: leaf-generation-pack-1: namespace persistence unsupported: leaf generation pack promotion\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3946773Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Output": "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (0.42s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.3946773Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Output": "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7223909Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7223909Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Output": "    cow_public_review_regression_test.go:299: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7733698Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Output": "    cow_public_review_regression_test.go:350: leaf-generation-pack-1: namespace persistence unsupported: leaf generation pack promotion\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7775483Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Output": "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.38s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:10.7780941Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Output": "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (6.02s)\n"
+    }
+  ],
+  "extra": []
+}

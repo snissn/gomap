@@ -1,0 +1,121 @@
+{
+  "job": "macos-latest-3",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676929",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/macos-latest-3.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:48:06.541441Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestInlineCommitSkipsValueLogRefresh",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-10-15T16:48:09.030667Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "Elapsed": 0.02
+    },
+    {
+      "Time": "2026-10-15T16:48:09.045952Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-10-15T16:48:09.045969Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "Elapsed": 0.04
+    },
+    {
+      "Time": "2026-10-15T16:49:33.890665Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Elapsed": 102.748
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:48:06.527015Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestInlineCommitSkipsValueLogRefresh",
+      "Output": "=== RUN   TestInlineCommitSkipsValueLogRefresh\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:06.537955Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestInlineCommitSkipsValueLogRefresh",
+      "Output": "    currentset_refresh_test.go:625: state missing value-log set\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:06.541409Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestInlineCommitSkipsValueLogRefresh",
+      "Output": "--- FAIL: TestInlineCommitSkipsValueLogRefresh (0.01s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.010371Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "Output": "=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.010374Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "Output": "=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.027871Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "Output": "    durable_root_open_test.go:635: seed publication did not install a value-log set\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.030646Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "Output": "--- FAIL: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1 (0.02s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.030673Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "Output": "=== RUN   TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.043242Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "Output": "    durable_root_open_test.go:635: seed publication did not install a value-log set\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.0458Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "Output": "--- FAIL: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2 (0.01s)\n"
+    },
+    {
+      "Time": "2026-10-15T16:48:09.045964Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "Output": "--- FAIL: TestDurableRootPublicationAcceptedWaitFailureRunsPostWork (0.04s)\n"
+    }
+  ],
+  "extra": []
+}

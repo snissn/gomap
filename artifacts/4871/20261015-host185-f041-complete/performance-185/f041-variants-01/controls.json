@@ -1,0 +1,49 @@
+[
+  {
+    "label": "pager",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "-overlay",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-overlay.json",
+      "./TreeDB/pager",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "exit": 0,
+    "elapsed_s": 0.8152246475219727,
+    "TMPDIR": "/mnt/fast4tb/mvcc4871tmp"
+  },
+  {
+    "label": "reset",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "-overlay",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/reset-overlay.json",
+      "./TreeDB/tree",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "exit": 0,
+    "elapsed_s": 5.573142766952515,
+    "TMPDIR": "/mnt/fast4tb/mvcc4871tmp"
+  },
+  {
+    "label": "unix-short-tmp",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/nativewire",
+      "-run=^TestServeUnixSocketAndDialContext$",
+      "-count=1",
+      "-timeout=90s"
+    ],
+    "exit": 0,
+    "elapsed_s": 52.09886336326599,
+    "TMPDIR": "/mnt/fast4tb/mvcc4871tmp"
+  }
+]

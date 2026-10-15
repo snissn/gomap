@@ -1,0 +1,576 @@
+{
+  "events": {
+    "cont": 165,
+    "fail": 7,
+    "output": 47548,
+    "pass": 22009,
+    "pause": 165,
+    "run": 21980,
+    "skip": 70,
+    "start": 106
+  },
+  "failures": [
+    {
+      "elapsed": 0.06,
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "status": "fail",
+      "test": "TestInlineCommitSkipsValueLogRefresh",
+      "top_level": true
+    },
+    {
+      "elapsed": 0.11,
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "status": "fail",
+      "test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork",
+      "top_level": true
+    },
+    {
+      "elapsed": 0.05,
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "status": "fail",
+      "test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/v1",
+      "top_level": false
+    },
+    {
+      "elapsed": 0.06,
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "status": "fail",
+      "test": "TestDurableRootPublicationAcceptedWaitFailureRunsPostWork/dpm2",
+      "top_level": false
+    },
+    {
+      "elapsed": 0,
+      "package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "status": "fail",
+      "test": "TestServeUnixSocketAndDialContext",
+      "top_level": true
+    }
+  ],
+  "first_event": "2026-10-15T06:16:47.858306265-10:00",
+  "last_event": "2026-10-15T06:58:24.393041756-10:00",
+  "malformed_lines": [
+    {
+      "line": 1,
+      "text": "go: downloading github.com/hashicorp/raft-boltdb/v2 v2.3.1\n"
+    },
+    {
+      "line": 2,
+      "text": "go: downloading github.com/xdg-go/stringprep v1.0.4\n"
+    },
+    {
+      "line": 3,
+      "text": "go: downloading golang.org/x/crypto v0.39.0\n"
+    },
+    {
+      "line": 4,
+      "text": "go: downloading github.com/hashicorp/go-msgpack/v2 v2.1.2\n"
+    },
+    {
+      "line": 5,
+      "text": "go: downloading github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78\n"
+    },
+    {
+      "line": 6,
+      "text": "go: downloading github.com/hashicorp/go-hclog v1.6.2\n"
+    },
+    {
+      "line": 7,
+      "text": "go: downloading github.com/hashicorp/go-metrics v0.5.4\n"
+    },
+    {
+      "line": 8,
+      "text": "go: downloading github.com/boltdb/bolt v1.3.1\n"
+    },
+    {
+      "line": 9,
+      "text": "go: downloading go.etcd.io/bbolt v1.4.3\n"
+    },
+    {
+      "line": 10,
+      "text": "go: downloading github.com/klauspost/compress v1.18.0\n"
+    },
+    {
+      "line": 11,
+      "text": "go: downloading github.com/xdg-go/scram v1.2.0\n"
+    },
+    {
+      "line": 12,
+      "text": "go: downloading golang.org/x/text v0.34.0\n"
+    },
+    {
+      "line": 13,
+      "text": "go: downloading github.com/fatih/color v1.13.0\n"
+    },
+    {
+      "line": 14,
+      "text": "go: downloading github.com/mattn/go-isatty v0.0.17\n"
+    },
+    {
+      "line": 15,
+      "text": "go: downloading github.com/armon/go-metrics v0.4.1\n"
+    },
+    {
+      "line": 16,
+      "text": "go: downloading golang.org/x/sync v0.19.0\n"
+    },
+    {
+      "line": 17,
+      "text": "go: downloading github.com/mattn/go-colorable v0.1.13\n"
+    },
+    {
+      "line": 18,
+      "text": "go: downloading github.com/hashicorp/go-immutable-radix v1.0.0\n"
+    },
+    {
+      "line": 19,
+      "text": "go: downloading github.com/hashicorp/golang-lru v0.5.0\n"
+    }
+  ],
+  "package_counts": {
+    "fail": 2,
+    "pass": 83,
+    "skip": 21
+  },
+  "packages": {
+    "github.com/snissn/gomap/TreeDB": {
+      "elapsed": 485.047,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/batch": {
+      "elapsed": 0.006,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/caching": {
+      "elapsed": 89.216,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/authority_inventory": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/db_histogram": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/debug_open": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/power_loss_certify": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/stress": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/template_corpus_extract": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/template_lab": {
+      "elapsed": 0.001,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/template_seed_train": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treedb_native_transport_benchmark": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark": {
+      "elapsed": 45.856,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_interleave": {
+      "elapsed": 0.012,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treedb_v4_production_gate": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treedb_vector_partition_m5_bench": {
+      "elapsed": 1.062,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/treemap": {
+      "elapsed": 39.924,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/unified_bench": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/verify": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/vlog_codec_shape_sweep": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/vlog_dict_realdata": {
+      "elapsed": 1.004,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/cmd/wal_classify": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/collections": {
+      "elapsed": 498.783,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/collections/chunking": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/collections/embedding": {
+      "elapsed": 0.055,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/db": {
+      "elapsed": 269.051,
+      "status": "fail"
+    },
+    "github.com/snissn/gomap/TreeDB/docs": {
+      "elapsed": 2.106,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/documentservice": {
+      "elapsed": 29.806,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/freelist": {
+      "elapsed": 0.219,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/integration/kvstoreadapter": {
+      "elapsed": 0.415,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/adaptive": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/atomicfile": {
+      "elapsed": 0.009,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/authorityinventory": {
+      "elapsed": 0.029,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/brq": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/bulk": {
+      "elapsed": 0.012,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/collectionwal": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/columnlayout": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/columnsemantics": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/commandwalapply": {
+      "elapsed": 1.762,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/commandwalbarrier": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/commitlog": {
+      "elapsed": 1.737,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/compression": {
+      "elapsed": 0.072,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/cowbench": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/cowbtree": {
+      "elapsed": 0.016,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/crc": {
+      "elapsed": 0.045,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/dictdb": {
+      "elapsed": 1.7189999999999999,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/durabilitycut": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/iterator": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/keyupdate": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/leafrefscan": {
+      "elapsed": 0.001,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/limits": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/lockfile": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/m7routetrace": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/mappedresource": {
+      "elapsed": 0.015,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/memtable": {
+      "elapsed": 0.605,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/merging": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/mvccadmission": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/mvcckey": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/nativewire": {
+      "elapsed": 0.014,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/outerleaf": {
+      "elapsed": 0.005,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/powerlosscert": {
+      "elapsed": 3.93,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/powerlossoracle": {
+      "elapsed": 0.046,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/powerlossreopen": {
+      "elapsed": 0.8,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/primaryarena": {
+      "elapsed": 0.016,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/quantizedasset": {
+      "elapsed": 0.008,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/rabitq": {
+      "elapsed": 0.004,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftapply": {
+      "elapsed": 15.235,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftcluster": {
+      "elapsed": 79.672,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftentry": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftfsm": {
+      "elapsed": 25.536,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftharness": {
+      "elapsed": 7.506,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/raftplacement": {
+      "elapsed": 89.255,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/retainedalloc": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/rootpublication": {
+      "elapsed": 11.667,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/skiplist": {
+      "elapsed": 0.017,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/sourcepartition": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/stableio": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/storagemaintenance": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/strictjson": {
+      "elapsed": 0.001,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/templatedb": {
+      "elapsed": 0.98,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/typedcolumn": {
+      "elapsed": 0.262,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/typeddecode": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/typedkernel": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/valuelog": {
+      "elapsed": 8.49,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/vectorops": {
+      "elapsed": 0.05,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/vectorpartition": {
+      "elapsed": 0.96,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/vectorpartitionplacement": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/internal/workstats": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/iterator": {
+      "elapsed": 0,
+      "status": "skip"
+    },
+    "github.com/snissn/gomap/TreeDB/lifecycle": {
+      "elapsed": 0.037,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": {
+      "elapsed": 56.33,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway/benchsupport": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway/compatdiff": {
+      "elapsed": 0.005,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient": {
+      "elapsed": 0.112,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway/wire": {
+      "elapsed": 0.078,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mvcc": {
+      "elapsed": 34.225,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mvcc/cowbench": {
+      "elapsed": 0.215,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/mvcc/mvcctest": {
+      "elapsed": 0.165,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/nativewire": {
+      "elapsed": 581.149,
+      "status": "fail"
+    },
+    "github.com/snissn/gomap/TreeDB/node": {
+      "elapsed": 0.04,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/page": {
+      "elapsed": 0.002,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/pager": {
+      "elapsed": 0.102,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/template": {
+      "elapsed": 0.003,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/tree": {
+      "elapsed": 0.035,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/vectorpartition": {
+      "elapsed": 0.085,
+      "status": "pass"
+    },
+    "github.com/snissn/gomap/TreeDB/zipper": {
+      "elapsed": 0.388,
+      "status": "pass"
+    }
+  },
+  "raw_sha256": "16b7353f9cf59d2cd762b2e8bf3cb1291f79c84ed18f2f7c61d91db8fec58b70",
+  "result": {
+    "elapsed": 2502.5304366908967,
+    "exit": 1
+  },
+  "source_before_after_equal": true,
+  "subtest_counts": {
+    "fail": 2,
+    "pass": 9699
+  },
+  "top_level_test_counts": {
+    "fail": 3,
+    "pass": 12227,
+    "skip": 49
+  },
+  "unfinished": []
+}

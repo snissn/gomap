@@ -1,0 +1,660 @@
+{
+  "job": "windows-core-6",
+  "failures": [
+    "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2",
+    "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8",
+    "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16",
+    "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup"
+  ],
+  "race_reports": 0,
+  "interesting": [
+    {
+      "line": 536,
+      "text": "2026-10-15T16:41:22.9543789Z {\"Time\":\"2026-10-15T16:41:22.9420204Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestReserveComparisonOutputsRejectsFilesystemAliases\",\"Output\":\"    application_compare_test.go:100: filesystem treats NFC and NFD names as distinct\\n\"}"
+    },
+    {
+      "line": 1217,
+      "text": "2026-10-15T16:41:36.6426862Z {\"Time\":\"2026-10-15T16:41:36.6383055Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestScoreOnlyDocFetchFailsReport\",\"Output\":\"    contract_test.go:108: expected failure: fail-closed counter-contract violations:\\n\"}"
+    },
+    {
+      "line": 1223,
+      "text": "2026-10-15T16:41:36.9689747Z {\"Time\":\"2026-10-15T16:41:36.9635964Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestFetchTopkBoundedByTopK\",\"Output\":\"    contract_test.go:144: expected failure: fail-closed counter-contract violations:\\n\"}"
+    },
+    {
+      "line": 1357,
+      "text": "2026-10-15T16:41:39.6344969Z {\"Time\":\"2026-10-15T16:41:39.6281279Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestMinimaPreservedBoundedLifecycle\",\"Output\":\"    minima_bounded_test.go:241: optional preserved artifact lifecycle characterization\\n\"}"
+    },
+    {
+      "line": 1430,
+      "text": "2026-10-15T16:41:39.6472613Z {\"Time\":\"2026-10-15T16:41:39.6304789Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestMinimaPeakRSSLifetimesAcceptActualRunnerSnapshots\",\"Output\":\"    minima_bounded_test.go:376: Linux process lifetime highwater\\n\"}"
+    },
+    {
+      "line": 2751,
+      "text": "2026-10-15T16:43:22.8287396Z {\"Time\":\"2026-10-15T16:43:22.8126082Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestServiceOverheadParityRows\",\"Output\":\"    service_overhead_test.go:70: filtered_hybrid: direct p50=0.275ms p99=0.358ms | service p50=0.775ms p99=2.023ms | overhead p50=+0.500ms p99=+1.665ms\\n\"}"
+    },
+    {
+      "line": 2752,
+      "text": "2026-10-15T16:43:22.8292675Z {\"Time\":\"2026-10-15T16:43:22.8132937Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark\",\"Test\":\"TestServiceOverheadParityRows\",\"Output\":\"    service_overhead_test.go:70: ann_dense: direct p50=4.245ms p99=4.355ms | service p50=4.506ms p99=6.073ms | overhead p50=+0.261ms p99=+1.717ms\\n\"}"
+    },
+    {
+      "line": 3181,
+      "text": "2026-10-15T16:47:46.8584291Z {\"Time\":\"2026-10-15T16:47:46.8472449Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/collectionwal\",\"Test\":\"TestValidateClassRootDirRejectsWritableModes\",\"Output\":\"    safefs_test.go:31: POSIX mode bits are not authoritative on windows\\n\"}"
+    },
+    {
+      "line": 3186,
+      "text": "2026-10-15T16:47:46.8593084Z {\"Time\":\"2026-10-15T16:47:46.8472449Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/collectionwal\",\"Test\":\"TestValidateClassRootDirRejectsSymlink\",\"Output\":\"    safefs_test.go:50: symlink privileges are environment-dependent on windows\\n\"}"
+    },
+    {
+      "line": 3245,
+      "text": "2026-10-15T16:47:47.7568585Z {\"Time\":\"2026-10-15T16:47:47.7410322Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-replace-small\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=8 bytes=504 calls=15; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=8 charged_bytes=504\\n\"}"
+    },
+    {
+      "line": 3250,
+      "text": "2026-10-15T16:47:47.7585316Z {\"Time\":\"2026-10-15T16:47:47.7410322Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-insert-small\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=13 bytes=784 calls=18; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=13 charged_bytes=784\\n\"}"
+    },
+    {
+      "line": 3255,
+      "text": "2026-10-15T16:47:47.7596464Z {\"Time\":\"2026-10-15T16:47:47.7410322Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-fork-replace-1\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=11 bytes=744 calls=18; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=11 charged_bytes=744\\n\"}"
+    },
+    {
+      "line": 3260,
+      "text": "2026-10-15T16:47:47.7606052Z {\"Time\":\"2026-10-15T16:47:47.7415589Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-fork-replace-2\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=15 bytes=1040 calls=24; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=15 charged_bytes=1040\\n\"}"
+    },
+    {
+      "line": 3265,
+      "text": "2026-10-15T16:47:47.7615967Z {\"Time\":\"2026-10-15T16:47:47.7415589Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-fork-replace-4\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=21 bytes=1528 calls=30; literal records_cap=32 bytes_cap=1048576 ready=true charged_records=21 charged_bytes=1528\\n\"}"
+    },
+    {
+      "line": 3270,
+      "text": "2026-10-15T16:47:47.7626216Z {\"Time\":\"2026-10-15T16:47:47.7415589Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-root-split\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=151 bytes=10622 calls=100; literal records_cap=32 bytes_cap=1048576 ready=false charged_records=27 charged_bytes=1328\\n\"}"
+    },
+    {
+      "line": 3275,
+      "text": "2026-10-15T16:47:47.7635628Z {\"Time\":\"2026-10-15T16:47:47.7415589Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/cowbtree\",\"Test\":\"TestSetWithWorkGeometryReceipts/default-fork-replace-full\",\"Output\":\"    map_mutation_work_test.go:329: value_bytes=48 pair_bytes=64 key_bytes=4; funded records=145 bytes=13166 calls=47; literal records_cap=32 bytes_cap=1048576 ready=false charged_records=4 charged_bytes=232\\n\"}"
+    },
+    {
+      "line": 3596,
+      "text": "2026-10-15T16:47:52.5644209Z {\"Time\":\"2026-10-15T16:47:52.5585601Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/replace/after-local-wal-append-before-visible-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3601,
+      "text": "2026-10-15T16:47:52.5667010Z {\"Time\":\"2026-10-15T16:47:52.5585601Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/replace/after-visible-before-result-record-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3606,
+      "text": "2026-10-15T16:47:52.5681211Z {\"Time\":\"2026-10-15T16:47:52.5585601Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/replace/after-result-record-before-progress-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3611,
+      "text": "2026-10-15T16:47:52.5700539Z {\"Time\":\"2026-10-15T16:47:52.5590821Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/delete/after-local-wal-append-before-visible-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3616,
+      "text": "2026-10-15T16:47:52.5719716Z {\"Time\":\"2026-10-15T16:47:52.5590821Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/delete/after-visible-before-result-record-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3621,
+      "text": "2026-10-15T16:47:52.5739113Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/delete/after-result-record-before-progress-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3626,
+      "text": "2026-10-15T16:47:52.5758533Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/same-content/after-local-wal-append-before-visible-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3631,
+      "text": "2026-10-15T16:47:52.5775236Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/same-content/after-visible-before-result-record-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3636,
+      "text": "2026-10-15T16:47:52.5788162Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/same-content/after-result-record-before-progress-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3641,
+      "text": "2026-10-15T16:47:52.5803550Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/missing-delete/after-local-wal-append-before-visible-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3646,
+      "text": "2026-10-15T16:47:52.5816788Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/missing-delete/after-visible-before-result-record-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3651,
+      "text": "2026-10-15T16:47:52.5828804Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMCoveredRecoveryV1/missing-delete/after-result-record-before-progress-v1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:26: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3658,
+      "text": "2026-10-15T16:47:52.5845091Z {\"Time\":\"2026-10-15T16:47:52.5594891Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestColocatedVectorMutationFSMRejectsTwoLSNCoverageGapV1\",\"Output\":\"    colocated_vector_mutation_recovery_v1_test.go:158: vector partition namespace persistence unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3739,
+      "text": "2026-10-15T16:47:54.6116538Z {\"Time\":\"2026-10-15T16:47:54.6077354Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotCaptureBarrierWaitHonorsLifetimeV1\",\"Output\":\"    raft_snapshot_barrier_lifetime_v1_test.go:71: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3744,
+      "text": "2026-10-15T16:47:54.6133800Z {\"Time\":\"2026-10-15T16:47:54.6077354Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotInstallBarrierWaitHonorsLifetimeV1\",\"Output\":\"    raft_snapshot_barrier_lifetime_v1_test.go:113: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3749,
+      "text": "2026-10-15T16:47:54.6150912Z {\"Time\":\"2026-10-15T16:47:54.6077354Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup\",\"Output\":\"    raft_snapshot_capture_v1_test.go:21: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3754,
+      "text": "2026-10-15T16:47:54.6162889Z {\"Time\":\"2026-10-15T16:47:54.6077354Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1RestoresCutAndReplaysTail\",\"Output\":\"    raft_snapshot_capture_v1_test.go:118: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3759,
+      "text": "2026-10-15T16:47:54.6172316Z {\"Time\":\"2026-10-15T16:47:54.6082946Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1AdmissionAndNeverPersistExpiry\",\"Output\":\"    raft_snapshot_capture_v1_test.go:188: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3764,
+      "text": "2026-10-15T16:47:54.6182906Z {\"Time\":\"2026-10-15T16:47:54.6082946Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1CanceledMaterializationCleansStage\",\"Output\":\"    raft_snapshot_capture_v1_test.go:236: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3769,
+      "text": "2026-10-15T16:47:54.6192961Z {\"Time\":\"2026-10-15T16:47:54.6082946Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1UnregisteredSideStoreRefuses\",\"Output\":\"    raft_snapshot_capture_v1_test.go:288: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3774,
+      "text": "2026-10-15T16:47:54.6209353Z {\"Time\":\"2026-10-15T16:47:54.6082946Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission\",\"Output\":\"    raft_snapshot_capture_v1_test.go:312: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3779,
+      "text": "2026-10-15T16:47:54.6228406Z {\"Time\":\"2026-10-15T16:47:54.6082946Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1SideDirectoryWithoutIndexRefusesContents\",\"Output\":\"    raft_snapshot_capture_v1_test.go:380: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3784,
+      "text": "2026-10-15T16:47:54.6246885Z {\"Time\":\"2026-10-15T16:47:54.6088655Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1CloseRetainsNamespaceUntilReaderCloses\",\"Output\":\"    raft_snapshot_capture_v1_test.go:422: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3793,
+      "text": "2026-10-15T16:47:54.6276982Z {\"Time\":\"2026-10-15T16:47:54.6111412Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedPrimaryRaftSnapshotRebindsBothFilesAndReplaysTail\",\"Output\":\"    raft_snapshot_primary_v5_test.go:17: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3822,
+      "text": "2026-10-15T16:47:54.6405052Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers\",\"Output\":\"    raft_snapshot_test.go:164: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3827,
+      "text": "2026-10-15T16:47:54.6415454Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace\",\"Output\":\"    raft_snapshot_test.go:209: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3832,
+      "text": "2026-10-15T16:47:54.6424687Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportIncludesEmptyVectorPartitionNamespace\",\"Output\":\"    raft_snapshot_test.go:267: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3837,
+      "text": "2026-10-15T16:47:54.6434863Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallRejectsIncompleteVectorPartitionStateBeforeReplacement\",\"Output\":\"    raft_snapshot_test.go:302: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3842,
+      "text": "2026-10-15T16:47:54.6445568Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier\",\"Output\":\"    raft_snapshot_test.go:408: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3847,
+      "text": "2026-10-15T16:47:54.6455853Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportDoesNotInvertVectorPartitionPublishAndApplyLocks\",\"Output\":\"    raft_snapshot_test.go:446: vector partition namespace persistence unsupported\\n\"}"
+    },
+    {
+      "line": 3852,
+      "text": "2026-10-15T16:47:54.6465381Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallExtractionDoesNotDeadlockExport\",\"Output\":\"    raft_snapshot_test.go:554: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3857,
+      "text": "2026-10-15T16:47:54.6475066Z {\"Time\":\"2026-10-15T16:47:54.626115Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportStagesArchiveWithoutPayloadAndReleaseCleans\",\"Output\":\"    raft_snapshot_test.go:752: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3870,
+      "text": "2026-10-15T16:47:54.8405167Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallReplacesStaleReplica\",\"Output\":\"    raft_snapshot_test.go:874: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3875,
+      "text": "2026-10-15T16:47:54.8413583Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallReplacesStaleFormatConfig\",\"Output\":\"    raft_snapshot_test.go:913: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3880,
+      "text": "2026-10-15T16:47:54.8423643Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState\",\"Output\":\"    raft_snapshot_test.go:963: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3885,
+      "text": "2026-10-15T16:47:54.8434016Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1TailReplayMatchesSourceDigest\",\"Output\":\"    raft_snapshot_test.go:1001: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3890,
+      "text": "2026-10-15T16:47:54.8442421Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallReplacesSideStores\",\"Output\":\"    raft_snapshot_test.go:1050: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3895,
+      "text": "2026-10-15T16:47:54.8452921Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout\",\"Output\":\"    raft_snapshot_test.go:1121: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3900,
+      "text": "2026-10-15T16:47:54.8461863Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata\",\"Output\":\"    raft_snapshot_test.go:1159: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3905,
+      "text": "2026-10-15T16:47:54.8470736Z {\"Time\":\"2026-10-15T16:47:54.8283538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1InstallDisabledSideStoresDoesNotTouchParentSideStores\",\"Output\":\"    raft_snapshot_test.go:1203: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3926,
+      "text": "2026-10-15T16:47:55.4849030Z {\"Time\":\"2026-10-15T16:47:55.4699437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportRejectsVectorPartitionLifecycleDirectory\",\"Output\":\"    raft_snapshot_test.go:1414: vector partition namespace mutation is unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3931,
+      "text": "2026-10-15T16:47:55.4859200Z {\"Time\":\"2026-10-15T16:47:55.4699437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportRejectsLifecycleSwapBeforeOpen\",\"Output\":\"    raft_snapshot_test.go:1431: vector partition namespace mutation is unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3936,
+      "text": "2026-10-15T16:47:55.4868371Z {\"Time\":\"2026-10-15T16:47:55.4699437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportRejectsSameSizeVectorPartitionReplacement\",\"Output\":\"    raft_snapshot_test.go:1458: vector partition namespace mutation is unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3941,
+      "text": "2026-10-15T16:47:55.4878247Z {\"Time\":\"2026-10-15T16:47:55.4699437Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotV1ExportRejectsVectorPartitionRootReplacementBeforeOpen\",\"Output\":\"    raft_snapshot_test.go:1486: vector partition namespace mutation is unsupported on this platform\\n\"}"
+    },
+    {
+      "line": 3986,
+      "text": "2026-10-15T16:48:05.8604642Z {\"Time\":\"2026-10-15T16:48:05.8562621Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementSnapshotCancellationOwnsNativeCompletionV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:20: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3991,
+      "text": "2026-10-15T16:48:05.8613756Z {\"Time\":\"2026-10-15T16:48:05.8562621Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementSnapshotAdmissionHandoffCleanupRetryV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:68: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 3996,
+      "text": "2026-10-15T16:48:05.8622776Z {\"Time\":\"2026-10-15T16:48:05.8568497Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementSnapshotNativeFailureRequiresRestartV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:118: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4001,
+      "text": "2026-10-15T16:48:05.8632286Z {\"Time\":\"2026-10-15T16:48:05.8568497Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementSnapshotConfigOnlyGapBindsNativeAndCommandBoundariesV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:132: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4010,
+      "text": "2026-10-15T16:48:05.8648445Z {\"Time\":\"2026-10-15T16:48:05.8575233Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementRetainedCopyCleanupProofV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:224: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4015,
+      "text": "2026-10-15T16:48:05.8656713Z {\"Time\":\"2026-10-15T16:48:05.8575233Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestReplacementNativeInstallCleanupDebtRecoversExactSeedV1\",\"Output\":\"    replacement_native_cleanup_v1_test.go:264: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4060,
+      "text": "2026-10-15T16:48:06.3125407Z {\"Time\":\"2026-10-15T16:48:06.2998961Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotInstallCleanupFailureRetainsAdmissionV1\",\"Output\":\"    snapshot_install_limits_v1_test.go:131: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4069,
+      "text": "2026-10-15T16:48:06.3144093Z {\"Time\":\"2026-10-15T16:48:06.2998961Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotInstallCloseWaitsForBlockedReaderV1\",\"Output\":\"    snapshot_install_limits_v1_test.go:198: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4074,
+      "text": "2026-10-15T16:48:06.3152822Z {\"Time\":\"2026-10-15T16:48:06.2998961Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotInstallCancellationBoundaryV1\",\"Output\":\"    snapshot_install_limits_v1_test.go:263: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4083,
+      "text": "2026-10-15T16:48:06.3168686Z {\"Time\":\"2026-10-15T16:48:06.3023067Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestRaftSnapshotInstalledVerificationCancelsNonemptyDigestV1\",\"Output\":\"    snapshot_install_limits_v1_test.go:393: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4116,
+      "text": "2026-10-15T16:48:06.7666200Z {\"Time\":\"2026-10-15T16:48:06.7598443Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestSnapshotStreamingDoesNotHoldApplyForWholeArchiveV1\",\"Output\":\"    snapshot_interference_v1_test.go:20: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4133,
+      "text": "2026-10-15T16:48:07.5317427Z {\"Time\":\"2026-10-15T16:48:07.5206653Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1ProviderCleanupFailureRemainsRetryable\",\"Output\":\"    snapshot_owner_lifetime_v1_test.go:66: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4138,
+      "text": "2026-10-15T16:48:07.5327348Z {\"Time\":\"2026-10-15T16:48:07.5206653Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestCapturedRaftSnapshotV1ProviderBlockedSinkCloseReopen\",\"Output\":\"    snapshot_owner_lifetime_v1_test.go:136: Raft snapshot export requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 4159,
+      "text": "2026-10-15T16:48:08.4333652Z {\"Time\":\"2026-10-15T16:48:08.4301743Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/raftfsm\",\"Test\":\"TestVectorPrepareFSMCaptureRetriesActualSnapshotReplacementV1\",\"Output\":\"    vector_prepare_storage_order_v1_test.go:186: Raft snapshot install requires durable rename and removal namespaces\\n\"}"
+    },
+    {
+      "line": 5612,
+      "text": "2026-10-15T16:48:15.7756998Z {\"Time\":\"2026-10-15T16:48:15.6535892Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenBuildsExecutionDomainsExactlyOnce\",\"Output\":\"    query_ready_execution_test.go:18: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5753,
+      "text": "2026-10-15T16:48:15.8645061Z {\"Time\":\"2026-10-15T16:48:15.855368Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyDeltaGenerationFileOpenIsMappedAndCloseIdempotent\",\"Output\":\"    query_ready_open_test.go:15: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5758,
+      "text": "2026-10-15T16:48:15.8652246Z {\"Time\":\"2026-10-15T16:48:15.855368Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenMapsExactSegmentRanges\",\"Output\":\"    query_ready_open_test.go:36: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5763,
+      "text": "2026-10-15T16:48:15.8657605Z {\"Time\":\"2026-10-15T16:48:15.855368Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationFileRangeRejectsOutOfBoundsAndWrongSlice\",\"Output\":\"    query_ready_open_test.go:72: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5768,
+      "text": "2026-10-15T16:48:15.8662677Z {\"Time\":\"2026-10-15T16:48:15.855368Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenIsIndependentOfFirstQuery\",\"Output\":\"    query_ready_open_test.go:101: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5773,
+      "text": "2026-10-15T16:48:15.8667342Z {\"Time\":\"2026-10-15T16:48:15.8557298Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenReusesImmutableStateAcrossReaders\",\"Output\":\"    query_ready_open_test.go:140: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5778,
+      "text": "2026-10-15T16:48:15.8671817Z {\"Time\":\"2026-10-15T16:48:15.8557298Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationWarmOpenEnforcesStricterBound\",\"Output\":\"    query_ready_open_test.go:187: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5783,
+      "text": "2026-10-15T16:48:15.8677091Z {\"Time\":\"2026-10-15T16:48:15.8557298Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationColdBoundMissDoesNotPoisonPermissiveReopen\",\"Output\":\"    query_ready_open_test.go:220: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5792,
+      "text": "2026-10-15T16:48:15.8685717Z {\"Time\":\"2026-10-15T16:48:15.8588481Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenRejectsSnapshotGenerationOverclaim\",\"Output\":\"    query_ready_open_test.go:276: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5797,
+      "text": "2026-10-15T16:48:15.8691743Z {\"Time\":\"2026-10-15T16:48:15.8588481Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenDoesNotDecodeWholePartsAfterReady\",\"Output\":\"    query_ready_open_test.go:297: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5802,
+      "text": "2026-10-15T16:48:15.8697155Z {\"Time\":\"2026-10-15T16:48:15.8588481Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenFailureDoesNotPublishPartialState\",\"Output\":\"    query_ready_open_test.go:319: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5807,
+      "text": "2026-10-15T16:48:15.8701711Z {\"Time\":\"2026-10-15T16:48:15.8588481Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenAbsentIsRebuildable\",\"Output\":\"    query_ready_open_test.go:343: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 5812,
+      "text": "2026-10-15T16:48:15.8706719Z {\"Time\":\"2026-10-15T16:48:15.8588481Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/typedcolumn\",\"Test\":\"TestQueryReadyGenerationOpenConcurrentReadersRaceFree\",\"Output\":\"    query_ready_open_test.go:372: query-ready generation file open requires read-only mmap support\\n\"}"
+    },
+    {
+      "line": 6861,
+      "text": "2026-10-15T16:48:44.2346785Z {\"Time\":\"2026-10-15T16:48:44.2281113Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestBackgroundIndexVacuumErrorOutcomes\",\"Output\":\"    background_vacuum_test.go:1605: online vacuum not supported on windows\\n\"}"
+    },
+    {
+      "line": 7086,
+      "text": "2026-10-15T16:50:02.9560856Z {\"Time\":\"2026-10-15T16:50:02.9431428Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestIteratorRandomizedRanges_ForcePointers\",\"Output\":\"    iterator_range_matrix_forcepointers_test.go:231: set TDB_ITERATOR_ATTACK=1 to run iterator attack probes\\n\"}"
+    },
+    {
+      "line": 7093,
+      "text": "2026-10-15T16:50:04.7818660Z {\"Time\":\"2026-10-15T16:50:04.7738216Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:154: payload=compressible256 enabled=false\\n\"}"
+    },
+    {
+      "line": 7094,
+      "text": "2026-10-15T16:50:04.7820653Z {\"Time\":\"2026-10-15T16:50:04.7750198Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xa1ae038c1e0 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7095,
+      "text": "2026-10-15T16:50:04.8289572Z {\"Time\":\"2026-10-15T16:50:04.8174634Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xa1ae038c1e0 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7096,
+      "text": "2026-10-15T16:50:04.8598829Z {\"Time\":\"2026-10-15T16:50:04.8563639Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:180: stage=afterPublicGC idx=0xa1ae038c1e0 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7099,
+      "text": "2026-10-15T16:50:07.0983350Z {\"Time\":\"2026-10-15T16:50:07.0838039Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:154: payload=compressible256 enabled=true\\n\"}"
+    },
+    {
+      "line": 7100,
+      "text": "2026-10-15T16:50:07.0986530Z {\"Time\":\"2026-10-15T16:50:07.084708Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xa1ae0094d20 seq=3 userRoot=18 systemRoot=3 filter=0xa1aed1a7320 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7101,
+      "text": "2026-10-15T16:50:07.1768636Z {\"Time\":\"2026-10-15T16:50:07.169766Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xa1ae0094d20 seq=4 userRoot=8 systemRoot=3 filter=0xa1aed1a7320 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7102,
+      "text": "2026-10-15T16:50:07.2549966Z {\"Time\":\"2026-10-15T16:50:07.2402454Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:180: stage=afterPublicGC idx=0xa1ae0094d20 seq=5 userRoot=8 systemRoot=3 filter=0xa1aed1a7320 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7103,
+      "text": "2026-10-15T16:50:10.9643631Z {\"Time\":\"2026-10-15T16:50:10.956813Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:154: payload=random4096 enabled=false\\n\"}"
+    },
+    {
+      "line": 7104,
+      "text": "2026-10-15T16:50:10.9645648Z {\"Time\":\"2026-10-15T16:50:10.9579346Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xa1ae038c3c0 seq=3 userRoot=18 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7105,
+      "text": "2026-10-15T16:50:11.0262494Z {\"Time\":\"2026-10-15T16:50:11.0182185Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xa1ae038c3c0 seq=4 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7106,
+      "text": "2026-10-15T16:50:11.1052145Z {\"Time\":\"2026-10-15T16:50:11.1003882Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:180: stage=afterPublicGC idx=0xa1ae038c3c0 seq=5 userRoot=8 systemRoot=3 filter=0x0 activeBytes=0\\n\"}"
+    },
+    {
+      "line": 7107,
+      "text": "2026-10-15T16:50:13.1584569Z {\"Time\":\"2026-10-15T16:50:13.154713Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:154: payload=random4096 enabled=true\\n\"}"
+    },
+    {
+      "line": 7108,
+      "text": "2026-10-15T16:50:13.1587992Z {\"Time\":\"2026-10-15T16:50:13.1552396Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:155: stage=initialLoadCheckpoint idx=0xa1ae0094b40 seq=3 userRoot=18 systemRoot=3 filter=0xa1aed1a6080 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7109,
+      "text": "2026-10-15T16:50:13.2360597Z {\"Time\":\"2026-10-15T16:50:13.2266947Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:175: stage=afterUpdateCheckpoint idx=0xa1ae0094b40 seq=4 userRoot=8 systemRoot=3 filter=0xa1aed1a6080 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7110,
+      "text": "2026-10-15T16:50:13.3158710Z {\"Time\":\"2026-10-15T16:50:13.3101473Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestNegativeLookupQualificationFixture\",\"Output\":\"    negative_lookup_test.go:180: stage=afterPublicGC idx=0xa1ae0094b40 seq=5 userRoot=8 systemRoot=3 filter=0xa1aed1a6080 activeBytes=10240\\n\"}"
+    },
+    {
+      "line": 7115,
+      "text": "2026-10-15T16:50:21.2418764Z {\"Time\":\"2026-10-15T16:50:21.2321513Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen\",\"Output\":\"    power_loss_certification_group_commit_test.go:124: close poisoned source: treedb: final command WAL checkpoint during close: collectionwal: recovery required: command wal post-append failure; reopen required\\n\"}"
+    },
+    {
+      "line": 7257,
+      "text": "2026-10-15T16:51:40.2684689Z {\"Time\":\"2026-10-15T16:51:40.2626866Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCompactStorageExhaustiveCommandWALRandom4KOffline\",\"Output\":\"    compact_storage_persistence_test.go:306: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 7264,
+      "text": "2026-10-15T16:51:40.5817452Z {\"Time\":\"2026-10-15T16:51:40.5798038Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-dependency-file-sync resource=command-wal matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7269,
+      "text": "2026-10-15T16:51:48.7225907Z {\"Time\":\"2026-10-15T16:51:48.7129822Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-dependency-file-sync resource=command-wal matching_attempts=1 group_acknowledged=false recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7274,
+      "text": "2026-10-15T16:51:56.6604334Z {\"Time\":\"2026-10-15T16:51:56.6589166Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7279,
+      "text": "2026-10-15T16:52:04.7574375Z {\"Time\":\"2026-10-15T16:52:04.7550868Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7284,
+      "text": "2026-10-15T16:52:13.0230973Z {\"Time\":\"2026-10-15T16:52:13.0123399Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7289,
+      "text": "2026-10-15T16:52:21.2021194Z {\"Time\":\"2026-10-15T16:52:21.1885954Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7294,
+      "text": "2026-10-15T16:52:29.4603094Z {\"Time\":\"2026-10-15T16:52:29.4469522Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7299,
+      "text": "2026-10-15T16:52:37.7209757Z {\"Time\":\"2026-10-15T16:52:37.7089861Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7304,
+      "text": "2026-10-15T16:52:46.0204624Z {\"Time\":\"2026-10-15T16:52:46.0085753Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7309,
+      "text": "2026-10-15T16:52:54.1800860Z {\"Time\":\"2026-10-15T16:52:54.1776753Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7314,
+      "text": "2026-10-15T16:53:02.3811501Z {\"Time\":\"2026-10-15T16:53:02.369629Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7319,
+      "text": "2026-10-15T16:53:10.6220071Z {\"Time\":\"2026-10-15T16:53:10.6191279Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7324,
+      "text": "2026-10-15T16:53:18.7224763Z {\"Time\":\"2026-10-15T16:53:18.7199034Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-dependency-file-sync resource=command-wal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7329,
+      "text": "2026-10-15T16:53:27.0672561Z {\"Time\":\"2026-10-15T16:53:27.057667Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-dependency-file-sync resource=command-wal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7334,
+      "text": "2026-10-15T16:53:35.0989376Z {\"Time\":\"2026-10-15T16:53:35.091269Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7339,
+      "text": "2026-10-15T16:53:43.1224842Z {\"Time\":\"2026-10-15T16:53:43.11399Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7344,
+      "text": "2026-10-15T16:53:51.4323078Z {\"Time\":\"2026-10-15T16:53:51.4264696Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7349,
+      "text": "2026-10-15T16:53:59.8307704Z {\"Time\":\"2026-10-15T16:53:59.8214962Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7354,
+      "text": "2026-10-15T16:54:08.2562084Z {\"Time\":\"2026-10-15T16:54:08.2488002Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7359,
+      "text": "2026-10-15T16:54:16.4772527Z {\"Time\":\"2026-10-15T16:54:16.4634754Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7364,
+      "text": "2026-10-15T16:54:24.8004758Z {\"Time\":\"2026-10-15T16:54:24.7928181Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7369,
+      "text": "2026-10-15T16:54:33.1227855Z {\"Time\":\"2026-10-15T16:54:33.1207713Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7374,
+      "text": "2026-10-15T16:54:41.3328947Z {\"Time\":\"2026-10-15T16:54:41.3172982Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7379,
+      "text": "2026-10-15T16:54:49.6953694Z {\"Time\":\"2026-10-15T16:54:49.68534Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7384,
+      "text": "2026-10-15T16:54:57.8276022Z {\"Time\":\"2026-10-15T16:54:57.8223586Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-dependency-file-sync resource=auxiliary matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7389,
+      "text": "2026-10-15T16:54:58.2772855Z {\"Time\":\"2026-10-15T16:54:58.2673534Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-dependency-file-sync resource=auxiliary matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7394,
+      "text": "2026-10-15T16:54:58.6058532Z {\"Time\":\"2026-10-15T16:54:58.6027424Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7399,
+      "text": "2026-10-15T16:54:58.9939981Z {\"Time\":\"2026-10-15T16:54:58.9822849Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-new-file-directory-sync resource=value-log matching_attempts=1 group_acknowledged=false recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7404,
+      "text": "2026-10-15T16:54:59.3839909Z {\"Time\":\"2026-10-15T16:54:59.3701921Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7409,
+      "text": "2026-10-15T16:54:59.9787697Z {\"Time\":\"2026-10-15T16:54:59.9766538Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-index-data-sync resource=index matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7414,
+      "text": "2026-10-15T16:55:00.7463268Z {\"Time\":\"2026-10-15T16:55:00.7413504Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7419,
+      "text": "2026-10-15T16:55:01.3113094Z {\"Time\":\"2026-10-15T16:55:01.2998376Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-publication-seal-write resource=publication-seal matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7424,
+      "text": "2026-10-15T16:55:01.7290496Z {\"Time\":\"2026-10-15T16:55:01.7178398Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7429,
+      "text": "2026-10-15T16:55:02.1953572Z {\"Time\":\"2026-10-15T16:55:02.1795182Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-write resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7434,
+      "text": "2026-10-15T16:55:02.6156397Z {\"Time\":\"2026-10-15T16:55:02.613425Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=before-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=false\\n\"}"
+    },
+    {
+      "line": 7439,
+      "text": "2026-10-15T16:55:03.0217738Z {\"Time\":\"2026-10-15T16:55:03.0173046Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync\",\"Output\":\"    cow_power_loss_test.go:290: actual COW cut=after-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\\n\"}"
+    },
+    {
+      "line": 7458,
+      "text": "2026-10-15T16:55:12.7994283Z {\"Time\":\"2026-10-15T16:55:12.7876388Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPowerLossCertificationMaintenanceUnlinkPublicReopen\",\"Output\":\"    power_loss_certification_api_test.go:553: exact certification replay selector is required\\n\"}"
+    },
+    {
+      "line": 7463,
+      "text": "2026-10-15T16:55:12.8007060Z {\"Time\":\"2026-10-15T16:55:12.7876388Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPowerLossCertificationPartialCompositeAfterOuterParentSync\",\"Output\":\"    power_loss_certification_layout_test.go:90: modeled generic parent-directory barriers are unavailable on Windows\\n\"}"
+    },
+    {
+      "line": 7476,
+      "text": "2026-10-15T16:55:12.8026288Z {\"Time\":\"2026-10-15T16:55:12.7978649Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestHelperTreeDBCommandWALDurableUncheckpointedWriter\",\"Output\":\"    recovery_spec_test.go:236: helper\\n\"}"
+    },
+    {
+      "line": 7620,
+      "text": "2026-10-15T16:55:53.2514598Z {\"Time\":\"2026-10-15T16:55:53.2432382Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCommandWALCleanupRetainsExactActiveIdentityAfterFilenameRebind\",\"Output\":\"    command_wal_publish_test.go:2659: Windows does not permit rebinding an open command-WAL segment\\n\"}"
+    },
+    {
+      "line": 7725,
+      "text": "2026-10-15T16:55:58.6425359Z {\"Time\":\"2026-10-15T16:55:58.6295883Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageIndexVacuumHighDebtUsesProductionAndReportsFinalAudit\",\"Output\":\"    compact_storage_index_vacuum_test.go:98: online index replacement is unsupported on Windows\\n\"}"
+    },
+    {
+      "line": 7846,
+      "text": "2026-10-15T16:55:59.3654130Z {\"Time\":\"2026-10-15T16:55:59.3629667Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageWindowsKeepsPackedLeafSourcesWhenIndexVacuumUnsupported\",\"Output\":\"    compact_storage_test.go:2673: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 7851,
+      "text": "2026-10-15T16:55:59.3670720Z {\"Time\":\"2026-10-15T16:55:59.3629667Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageLeafPackMultiPassReusesLiveScan\",\"Output\":\"    compact_storage_test.go:3008: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    }
+  ],
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-core-6.log",
+  "failed_test_output": [
+    {
+      "line": 7886,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2",
+      "output": "    durable_root_bench_test.go:701: online vacuum unsupported on this platform\n"
+    },
+    {
+      "line": 7887,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2",
+      "output": "    durable_root_bench_test.go:439: cohort final cleanup retained temporary governor\n"
+    },
+    {
+      "line": 7888,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2",
+      "output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCl1599109660\\001\\index.db.primary: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "line": 7893,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8",
+      "output": "    durable_root_bench_test.go:701: online vacuum unsupported on this platform\n"
+    },
+    {
+      "line": 7894,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8",
+      "output": "    durable_root_bench_test.go:439: cohort final cleanup retained temporary governor\n"
+    },
+    {
+      "line": 7895,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8",
+      "output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCl2313739063\\001\\index.db.primary: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "line": 7900,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16",
+      "output": "    durable_root_bench_test.go:701: online vacuum unsupported on this platform\n"
+    },
+    {
+      "line": 7901,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16",
+      "output": "    durable_root_bench_test.go:439: cohort final cleanup retained temporary governor\n"
+    },
+    {
+      "line": 7902,
+      "test": "TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16",
+      "output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCl1846045340\\001\\index.db.primary: The process cannot access the file because it is being used by another process.\n"
+    }
+  ]
+}

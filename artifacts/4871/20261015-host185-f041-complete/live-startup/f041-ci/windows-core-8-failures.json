@@ -1,0 +1,51 @@
+{
+  "job": "windows-core-8",
+  "url": "https://github.com/snissn/gomap/actions/runs/38770482412/job/116544676821",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/windows-8.log",
+  "failures": [
+    {
+      "Time": "2026-10-15T16:46:06.7575345Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "Elapsed": 1.58
+    },
+    {
+      "Time": "2026-10-15T16:46:56.8638568Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 216.302
+    }
+  ],
+  "failure_output": [
+    {
+      "Time": "2026-10-15T16:46:05.1742756Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "Output": "=== RUN   TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:05.2771519Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "Output": "    side_store_lookups_test.go:44: read-only dictionary capture: resources=&{{<nil> {{} {0 0}} [<nil> <nil>]} {{} 0} <nil> false <nil> {{} {0 0}} [{false <nil> <nil> 0x2602c5567188 [] map[] dictdb/index index index.db {262144 0 0 [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] 0 0 0 <nil>} 0x2602c3bbee00 {0x2602c3bbede0 <nil> <nil> 1 0x2602c580f0e0 map[frame.dictionary_generation:{1 [60 226 82 172 203 49 106 59 97 55 144 113 225 18 145 186 230 188 139 57 117 180 167 163 161 168 15 13 180 38 80 212]}] <nil> [] map[]} 0x2602c5730040}] 0x2602c3bbee20 map[dictionary:1] {{} 2} false false} err=<nil>, want nil authority and typed namespace refusal\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:06.7575345Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites574830577\\001\\dictdb: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-15T16:46:06.7575345Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites",
+      "Output": "--- FAIL: TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites (1.58s)\n"
+    }
+  ],
+  "extra": []
+}

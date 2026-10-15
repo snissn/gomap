@@ -1,0 +1,24 @@
+{
+  "busy": [
+    {
+      "pid": 1949,
+      "comm": "pulseaudio",
+      "ticks": 7600485,
+      "cpu_pct": 2.1930458125624717
+    },
+    {
+      "pid": 4672,
+      "comm": "gvfs-udisks2-vo",
+      "ticks": 725866,
+      "cpu_pct": 2.3924136137045147
+    },
+    {
+      "pid": 3140140,
+      "comm": "htop",
+      "ticks": 836731,
+      "cpu_pct": 2.1930458125624717
+    }
+  ],
+  "threshold_pct": 2,
+  "loadavg": "2.61 2.72 2.89 1/2771 263570\n"
+}

@@ -1,0 +1,133 @@
+{
+  "created_utc": "2026-10-15T17:11:02.215164+00:00",
+  "sources": {
+    "baseline": {
+      "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "tree": "e448be5924b4a8e66a4894090460fb559f241354",
+      "clean": true
+    },
+    "control": {
+      "head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+      "tree": "2a482daae31337697dedf42329e2597c344b3226",
+      "clean": true
+    }
+  },
+  "files": {
+    "baseline-db.test": {
+      "sha256": "4c43fbdd5af6a77feef833042fae548a8ca9d59e31c51f8a12f1cabddf9d1e81",
+      "bytes": 55448518
+    },
+    "baseline-treedb.test": {
+      "sha256": "9697d7b9dc8e77a66c3facd76bfa2d3b024d123f101f91bb08076940c3b06214",
+      "bytes": 52367773
+    },
+    "build.py": {
+      "sha256": "deb87343480c9a77fc8beeb3ffccd39fa5d08ce2fb898ef843b0285e3264ecb9",
+      "bytes": 1626
+    },
+    "builds.json": {
+      "sha256": "578559ec2a2c90f985612ec2f77f52e1a6a2b17fcf18bf2b9f6524c05105be25",
+      "bytes": 3692
+    },
+    "combined-build.py": {
+      "sha256": "c554824c3d9b26058275614db7d8e85c003666541fee259fd83ad9145f24b693",
+      "bytes": 1884
+    },
+    "combined-builds.json": {
+      "sha256": "eb3aadb4f53d52acfe8306532243e64b11f3b9176488b005b5deffafb8fd44a8",
+      "bytes": 2647
+    },
+    "combined-controls.json": {
+      "sha256": "dce00b09a29c7cac980048bba55fcf66699dc8ed379c2cfa6b6e58bebaf4d746",
+      "bytes": 294
+    },
+    "combined-db.test": {
+      "sha256": "75c6b435dd70b7dd2fbbfb8b7d08c28366e69c8e0551bf48b4e2d2488770d2f0",
+      "bytes": 61137208
+    },
+    "combined-overlay.json": {
+      "sha256": "74f2d56cb880e4bf1d7ff126ceae2d3581bfb4cedfc7e1264bf412b4b0838ee8",
+      "bytes": 527
+    },
+    "combined-treedb.test": {
+      "sha256": "1b2943d5fd6d7145e0bf024d0700816779e1aa01a809bbb373430a4d043d0661",
+      "bytes": 56740612
+    },
+    "control-db.test": {
+      "sha256": "ee53f37d8cef769d810cacc73d6156ab867575780e2186d8c40645756b29e692",
+      "bytes": 61143866
+    },
+    "control-treedb.test": {
+      "sha256": "7014640360e522a04a765aa5ff0582fb8dd6d7ff818ffdc6e3ed0062c029fc6e",
+      "bytes": 56743366
+    },
+    "controls.json": {
+      "sha256": "d5a79547c5f4fe7259b2db8f2b001908d82b8d913979b8048feffa2933335738",
+      "bytes": 1226
+    },
+    "controls.py": {
+      "sha256": "71d874e622c4bf87b24673107f7b72eb6867aa46690a33feb58ffeed7dbb4615",
+      "bytes": 1265
+    },
+    "pager-db.test": {
+      "sha256": "94715fcf8f9b2329b9165ee3797134ff87999329fcc6f1b581dc67050d957f38",
+      "bytes": 61137496
+    },
+    "pager-get.go": {
+      "sha256": "02e3361beea8b5462803972550ac14e88d38cd769996fc8fe8e9f55088cffdbc",
+      "bytes": 46582
+    },
+    "pager-overlay.json": {
+      "sha256": "2395e66406a28bdf5e2cbea320d4b424e9b41aa2057bbd3f47e248bc26fbf3e6",
+      "bytes": 191
+    },
+    "pager-treedb.test": {
+      "sha256": "348cc2c06b8c836c8e86796ecbcce68969122b5d5651126092ef34ccc39d01c0",
+      "bytes": 56740636
+    },
+    "paired.py": {
+      "sha256": "569a7877af1ba9c1793fb724a32602fd2205933675127ae8eae60e06291ef0ed",
+      "bytes": 3489
+    },
+    "plan.json": {
+      "sha256": "98f7509ec3ed185a957757dcfb36da8fecaddb5f621baae2977e1c6fb42fe7cc",
+      "bytes": 718
+    },
+    "pools-clear.go": {
+      "sha256": "774511230091b1e39dbcf7c4122f3f26a2fa3e40d431768159034aa790879f2b",
+      "bytes": 8315
+    },
+    "profile-plan.json": {
+      "sha256": "593f6af0ffa8e4d94c1df0c12647cbdd328e64a95167c023bb733409f8e76046",
+      "bytes": 2965
+    },
+    "profile-results.json": {
+      "sha256": "1dcfe62fe65e17f40bd23d6967a6c0e965fc3feeec47065c2cad4f2c3ceb27da",
+      "bytes": 2933
+    },
+    "profile.py": {
+      "sha256": "c8c8143937a3a861a08f6d5d664fdd944d0147a495431eabc36d2cea1f05a6f6",
+      "bytes": 1982
+    },
+    "reset-db.test": {
+      "sha256": "7b47c3796789d74ec71a0d1cc1142620221b197cba0aad47a784e17515595057",
+      "bytes": 61143474
+    },
+    "reset-overlay.json": {
+      "sha256": "832c0278b433d8d56023b746456441da2f83b9cf9d0df30687d8d23e0d788220",
+      "bytes": 190
+    },
+    "tree-reset.go": {
+      "sha256": "1ddafdc83e6a4f8037593faeaf897ae039675187d78ab4168fd3c45b654f3564",
+      "bytes": 55956
+    }
+  },
+  "claims": [
+    "Full pager package with pager overlay passed",
+    "Full tree package with reset overlay passed",
+    "Combined Snapshot/OneShot/NativeMVCCSnapshot/PrimarySnapshot controls passed",
+    "CPU profiles are diagnostic busy-host evidence only",
+    "Uninstrumented paired comparison collected ZERO samples: strict quiet preflight rejected background services",
+    "No performance threshold acceptance; requires successor hosted gate"
+  ]
+}

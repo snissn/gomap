@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-final/TreeDB/tree/tree.go": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/tree-reset.go"
+  }
+}

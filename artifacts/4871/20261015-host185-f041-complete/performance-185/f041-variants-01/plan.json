@@ -1,0 +1,13 @@
+{
+  "source": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "goal": "isolate redundant nil-reader reset cost and ordinary mapping routing overhead identified in CPU profiles",
+  "status": "diagnostic only; no performance qualification",
+  "variants": {
+    "reset": "nil reader Reset zeroes exactly the existing Tree fields in one assignment",
+    "pager": "shared local mapping lookup bypasses finite admission wrapper only for ordinary local DATA reads without metadata owner; finite and namespace routes unchanged"
+  },
+  "files": {
+    "tree-reset.go": "1ddafdc83e6a4f8037593faeaf897ae039675187d78ab4168fd3c45b654f3564",
+    "pager-get.go": "02e3361beea8b5462803972550ac14e88d38cd769996fc8fe8e9f55088cffdbc"
+  }
+}

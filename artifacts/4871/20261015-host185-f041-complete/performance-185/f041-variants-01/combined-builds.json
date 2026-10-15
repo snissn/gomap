@@ -1,0 +1,82 @@
+[
+  {
+    "label": "baseline-db",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-c",
+      "-p=1",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "exit": 0,
+    "sha256": "4c43fbdd5af6a77feef833042fae548a8ca9d59e31c51f8a12f1cabddf9d1e81",
+    "elapsed_s": 38.28208041191101
+  },
+  {
+    "label": "baseline-treedb",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-c",
+      "-p=1",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/baseline-treedb.test",
+      "./TreeDB"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator",
+    "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "exit": 0,
+    "sha256": "9697d7b9dc8e77a66c3facd76bfa2d3b024d123f101f91bb08076940c3b06214",
+    "elapsed_s": 22.04957914352417
+  },
+  {
+    "label": "combined-db",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-c",
+      "-p=1",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/combined-db.test",
+      "-overlay",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/combined-overlay.json",
+      "./TreeDB/db"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-final",
+    "head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+    "exit": 0,
+    "sha256": "75c6b435dd70b7dd2fbbfb8b7d08c28366e69c8e0551bf48b4e2d2488770d2f0",
+    "elapsed_s": 43.74812293052673
+  },
+  {
+    "label": "combined-treedb",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-c",
+      "-p=1",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/combined-treedb.test",
+      "-overlay",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/combined-overlay.json",
+      "./TreeDB"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-final",
+    "head": "f0415773f13a522dea5c1debdaecba09d15585dd",
+    "exit": 0,
+    "sha256": "1b2943d5fd6d7145e0bf024d0700816779e1aa01a809bbb373430a4d043d0661",
+    "elapsed_s": 33.07801294326782
+  }
+]

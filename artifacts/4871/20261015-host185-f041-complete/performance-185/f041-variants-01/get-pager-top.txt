@@ -1,0 +1,54 @@
+File: pager-db.test
+Build ID: f9a8fc65aa753e4148768e9434f2ce72fb295a4b
+Type: cpu
+Time: 2026-10-15 07:04:43 HST
+Duration: 5.25s, Total samples = 4.98s (94.78%)
+Showing nodes accounting for 4.58s, 91.97% of 4.98s total
+Dropped 37 nodes (cum <= 0.02s)
+Showing top 45 nodes out of 58
+      flat  flat%   sum%        cum   cum%
+     0.50s 10.04% 10.04%      0.50s 10.04%  cmpbody
+     0.44s  8.84% 18.88%      1.09s 21.89%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     0.39s  7.83% 26.71%      0.54s 10.84%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+     0.31s  6.22% 32.93%      0.33s  6.63%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset
+     0.21s  4.22% 37.15%      0.21s  4.22%  sync/atomic.(*Int32).Add (inline)
+     0.18s  3.61% 40.76%      1.12s 22.49%  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld
+     0.18s  3.61% 44.38%      4.97s 99.80%  github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned.func2
+     0.17s  3.41% 47.79%      0.44s  8.84%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).putRead
+     0.16s  3.21% 51.00%      2.62s 52.61%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     0.15s  3.01% 54.02%      0.16s  3.21%  github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified
+     0.14s  2.81% 56.83%      0.14s  2.81%  github.com/snissn/gomap/TreeDB/node.getUint16At (inline)
+     0.11s  2.21% 59.04%      0.46s  9.24%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint
+     0.11s  2.21% 61.24%      0.12s  2.41%  github.com/snissn/gomap/TreeDB/pager.(*Pager).getLocalMapping
+     0.10s  2.01% 63.25%      0.13s  2.61%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryJoinFast
+     0.09s  1.81% 65.06%      0.11s  2.21%  github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)
+     0.09s  1.81% 66.87%      0.10s  2.01%  testing.(*PB).Next (inline)
+     0.08s  1.61% 68.47%      0.09s  1.81%  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld.func1
+     0.07s  1.41% 69.88%      0.60s 12.05%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseRead
+     0.07s  1.41% 71.29%      0.12s  2.41%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryClaimFast
+     0.07s  1.41% 72.69%      0.07s  1.41%  sync/atomic.(*Uint64).Add (inline)
+     0.06s  1.20% 73.90%      0.26s  5.22%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+     0.06s  1.20% 75.10%      0.18s  3.61%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt
+     0.06s  1.20% 76.31%      0.11s  2.21%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryLayoutAt
+     0.06s  1.20% 77.51%      0.06s  1.20%  internal/sync.(*Mutex).Unlock (inline)
+     0.06s  1.20% 78.71%      0.10s  2.01%  runtime.(*_panic).nextDefer
+     0.05s  1.00% 79.72%      0.06s  1.20%  sync.(*Pool).Put
+     0.04s   0.8% 80.52%      0.56s 11.24%  bytes.Compare (inline)
+     0.04s   0.8% 81.33%      0.05s  1.00%  github.com/snissn/gomap/TreeDB/node.(*Node).internalLeafLogRefs (inline)
+     0.04s   0.8% 82.13%      0.16s  3.21%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     0.04s   0.8% 82.93%      0.52s 10.44%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto
+     0.04s   0.8% 83.73%      0.48s  9.64%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto
+     0.04s   0.8% 84.54%      0.04s   0.8%  internal/sync.(*Mutex).Lock (inline)
+     0.04s   0.8% 85.34%      0.04s   0.8%  sync/atomic.(*Int32).CompareAndSwap (inline)
+     0.03s   0.6% 85.94%      1.28s 25.70%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr
+     0.03s   0.6% 86.55%      0.65s 13.05%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).closeRead
+     0.03s   0.6% 87.15%      0.13s  2.61%  github.com/snissn/gomap/TreeDB/node.compareLeafKey
+     0.03s   0.6% 87.75%      0.04s   0.8%  github.com/snissn/gomap/TreeDB/node.decodeEntryRevision (inline)
+     0.03s   0.6% 88.35%      0.03s   0.6%  github.com/snissn/gomap/TreeDB/node.getUint64LEAt (inline)
+     0.03s   0.6% 88.96%      0.05s  1.00%  math/rand.(*Rand).Int31n
+     0.03s   0.6% 89.56%      0.03s   0.6%  runtime.asyncPreempt
+     0.03s   0.6% 90.16%      0.08s  1.61%  sync.(*RWMutex).RLock (inline)
+     0.03s   0.6% 90.76%      0.03s   0.6%  sync/atomic.(*Uint64).Load (inline)
+     0.02s   0.4% 91.16%      4.64s 93.17%  github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend
+     0.02s   0.4% 91.57%      0.04s   0.8%  github.com/snissn/gomap/TreeDB/db.(*indexGen).retainWrapperBorrow (inline)
+     0.02s   0.4% 91.97%      0.04s   0.8%  runtime.mapclear

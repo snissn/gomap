@@ -1,0 +1,87 @@
+[
+  {
+    "label": "get-control",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/control-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchtime=8000000x",
+      "-test.count=1",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/get-control.pprof"
+    ],
+    "binary_sha256": "ee53f37d8cef769d810cacc73d6156ab867575780e2186d8c40645756b29e692",
+    "exit": 0,
+    "elapsed_s": 5.371203899383545
+  },
+  {
+    "label": "get-reset",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/reset-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchtime=8000000x",
+      "-test.count=1",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/get-reset.pprof"
+    ],
+    "binary_sha256": "7b47c3796789d74ec71a0d1cc1142620221b197cba0aad47a784e17515595057",
+    "exit": 0,
+    "elapsed_s": 5.172276258468628
+  },
+  {
+    "label": "get-pager",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkGetVersioned$",
+      "-test.benchtime=8000000x",
+      "-test.count=1",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/get-pager.pprof"
+    ],
+    "binary_sha256": "94715fcf8f9b2329b9165ee3797134ff87999329fcc6f1b581dc67050d957f38",
+    "exit": 0,
+    "elapsed_s": 5.270942449569702
+  },
+  {
+    "label": "seek-control",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/control-treedb.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSnapshotIteratorSeekNext$/^keys=1024$/^snapshot_seek$",
+      "-test.benchtime=4000000x",
+      "-test.count=1",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/seek-control.pprof"
+    ],
+    "binary_sha256": "7014640360e522a04a765aa5ff0582fb8dd6d7ff818ffdc6e3ed0062c029fc6e",
+    "exit": 0,
+    "elapsed_s": 1.365644931793213
+  },
+  {
+    "label": "seek-pager",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-treedb.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkSnapshotIteratorSeekNext$/^keys=1024$/^snapshot_seek$",
+      "-test.benchtime=4000000x",
+      "-test.count=1",
+      "-test.cpuprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/seek-pager.pprof"
+    ],
+    "binary_sha256": "348cc2c06b8c836c8e86796ecbcce68969122b5d5651126092ef34ccc39d01c0",
+    "exit": 0,
+    "elapsed_s": 1.3656365871429443
+  }
+]

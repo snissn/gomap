@@ -1,0 +1,114 @@
+{
+  "source": "f0415773f13a522dea5c1debdaecba09d15585dd",
+  "environment": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/tmp"
+  },
+  "overlays": {
+    "tree-reset.go": "1ddafdc83e6a4f8037593faeaf897ae039675187d78ab4168fd3c45b654f3564",
+    "pager-get.go": "02e3361beea8b5462803972550ac14e88d38cd769996fc8fe8e9f55088cffdbc"
+  },
+  "builds": [
+    {
+      "variant": "control",
+      "package": "db",
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/control-db.test",
+        "./TreeDB/db"
+      ],
+      "exit": 0,
+      "elapsed_s": 46.34191274642944,
+      "sha256": "ee53f37d8cef769d810cacc73d6156ab867575780e2186d8c40645756b29e692"
+    },
+    {
+      "variant": "control",
+      "package": "treedb",
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/control-treedb.test",
+        "./TreeDB"
+      ],
+      "exit": 0,
+      "elapsed_s": 23.001129865646362,
+      "sha256": "7014640360e522a04a765aa5ff0582fb8dd6d7ff818ffdc6e3ed0062c029fc6e"
+    },
+    {
+      "variant": "reset",
+      "package": "db",
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/reset-db.test",
+        "-overlay",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/reset-overlay.json",
+        "./TreeDB/db"
+      ],
+      "exit": 0,
+      "elapsed_s": 43.84098529815674,
+      "sha256": "7b47c3796789d74ec71a0d1cc1142620221b197cba0aad47a784e17515595057"
+    },
+    {
+      "variant": "pager",
+      "package": "db",
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-db.test",
+        "-overlay",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-overlay.json",
+        "./TreeDB/db"
+      ],
+      "exit": 0,
+      "elapsed_s": 45.74368643760681,
+      "sha256": "94715fcf8f9b2329b9165ee3797134ff87999329fcc6f1b581dc67050d957f38"
+    },
+    {
+      "variant": "pager",
+      "package": "treedb",
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-c",
+        "-p=1",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-treedb.test",
+        "-overlay",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/f041-variants-01/pager-overlay.json",
+        "./TreeDB"
+      ],
+      "exit": 0,
+      "elapsed_s": 34.47317051887512,
+      "sha256": "348cc2c06b8c836c8e86796ecbcce68969122b5d5651126092ef34ccc39d01c0"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "job": "TreeDB required gate",
+  "failures": [],
+  "race_reports": 0,
+  "interesting": [],
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/f041-ci/TreeDB_required_gate.log"
+}
