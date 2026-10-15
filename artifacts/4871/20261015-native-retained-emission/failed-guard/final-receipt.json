@@ -1,0 +1,17 @@
+{
+  "complete": true,
+  "diagnostic_viable": false,
+  "guard": "FAIL bytes and objects; PASS latency",
+  "all_six_raw_exits_zero": true,
+  "reruns": 0,
+  "baseline_source": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "candidate_manifest_sha256": "b9c5d1d81f22ab3bad890ffebab84d0db3787b955e97cfe003c47e43efba8c68",
+  "results_sha256": "26fc1c1e480c81f43d86d0df43ef589e272aee919fe95083347f20f0634e94eb",
+  "summary_sha256": "06d3de61369ef53ac76d4767b913cb9456e45d79369c2aae6f28d98817f0ec68",
+  "independent_ratios_sha256": "c6638ff3a31cae0748ef56dd271993f7d250e47320fa315dade5db452b11dd39",
+  "inventory_sha256": "ab4d1da6df1f3d2dbdddbca417e75565e8ece90d8ffd64e20eabeb01f422058d",
+  "publication_manifest_sha256": "34465542a6f67e8d23c4315e99d066bbd0aca16ae4a381ab0995537a2e1c2762",
+  "source_and_binary_censuses_equal": true,
+  "native_index_and_foreign_hashes_unchanged": true,
+  "owned_outputs_retained": true
+}

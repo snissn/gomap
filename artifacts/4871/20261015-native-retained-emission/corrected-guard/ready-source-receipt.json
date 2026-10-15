@@ -1,0 +1,27 @@
+{
+  "preflight": "PASS",
+  "runner": {
+    "bytes": 7119,
+    "sha256": "57a7aa7d921e3631aa1c170ccb9777b224d79142d2f4c65316f9e7183bd7a3f7"
+  },
+  "source_preflight": {
+    "bytes": 4319,
+    "sha256": "7ce443dd19a9a2c0cce17a97bda2eaed281d2b91e635236d9fd8a49226864676"
+  },
+  "baseline_reused_without_build": {
+    "role": "baseline",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+    "sha256": "00da74d3ace1a42d85457bbf0d610e4fcedde1c8fb88e609e0db2b281c56a61a",
+    "bytes": 61469726,
+    "dev": 66306,
+    "inode": 108285229,
+    "mtime_ns": 1792050152728257281
+  },
+  "candidate_build_timeout_seconds": 90,
+  "timing_aggregate_seconds": 60,
+  "samples": 6,
+  "order": "AB/BA/AB",
+  "guard": "median latency <=5%; B/op and allocs/op must not increase",
+  "timing_requires_root_quiet_grant": true,
+  "free_bytes": 273595899904
+}

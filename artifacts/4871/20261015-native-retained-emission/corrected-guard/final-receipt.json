@@ -1,0 +1,39 @@
+{
+  "complete": true,
+  "diagnostic_viable": true,
+  "strict_gates": {
+    "latency": true,
+    "bytes": true,
+    "objects": true
+  },
+  "summary": {
+    "bytes": 2943,
+    "sha256": "35925248cfd0d9f73ddeb16dc216125107dd521d044c4922b15916bd43daeca8"
+  },
+  "publication_manifest": {
+    "bytes": 10823,
+    "sha256": "e596b4a645ca1dff7b42a8b870ee06db2f4871f1ea20b7957108cf27f91fa7ec"
+  },
+  "results": {
+    "bytes": 4742,
+    "sha256": "141db73d83107ee6a3eb792fcc86c268040d0dcc6ab9e4eaa27c85bb8ce2a65b"
+  },
+  "independent_ratios": {
+    "bytes": 2428,
+    "sha256": "277224f0e4a527039d477f6fb1780e657cc8b5bd25007463f680f30f380b9c89"
+  },
+  "inventory": {
+    "bytes": 4905,
+    "sha256": "e65b4fec76b698d6467d40f044b3fd7b84771da76da898bd5b38aef8df673a33"
+  },
+  "samples": 6,
+  "all_exits_zero": true,
+  "reruns": 0,
+  "build_seconds": 45.75306523218751,
+  "timing_seconds": 0.9035125994123518,
+  "source_censuses_equal": true,
+  "original_failed_packet_unchanged": true,
+  "protected_native_index_foreign_unchanged": true,
+  "retention": "Both helper roots and all three ELFs retained pending durable publication/root exact cleanup release",
+  "scope": "Short ordinary foreground diagnostic only; no native ACK or final acceptance claim"
+}

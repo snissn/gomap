@@ -1,0 +1,122 @@
+{
+  "candidate-freelist.after.json": {
+    "bytes": 743394,
+    "sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813"
+  },
+  "candidate-freelist.before.json": {
+    "bytes": 743394,
+    "sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813"
+  },
+  "candidate-freelist.command.json": {
+    "bytes": 944,
+    "sha256": "5072abfd5d73f7f44153279b7b8d440bb81c8e988d658a6aa51bd19ebd0d421b"
+  },
+  "candidate-freelist.exit.json": {
+    "bytes": 215,
+    "sha256": "d0bddea640b3c4f6f8e40bc57a42377266bd37d2c6c965dbc5cf138ef50f608c"
+  },
+  "candidate-freelist.raw": {
+    "bytes": 2456,
+    "sha256": "ae74f89e5c9adb7706b453d956cda50b56cd3494245757f5f1e479d88de6a664"
+  },
+  "candidate-paths.json": {
+    "bytes": 778,
+    "sha256": "b9c5d1d81f22ab3bad890ffebab84d0db3787b955e97cfe003c47e43efba8c68"
+  },
+  "candidate-public-promotion.after.json": {
+    "bytes": 743394,
+    "sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813"
+  },
+  "candidate-public-promotion.before.json": {
+    "bytes": 743394,
+    "sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813"
+  },
+  "candidate-public-promotion.command.json": {
+    "bytes": 663,
+    "sha256": "9bfe216d4c4d74141004eb36573374d930acb4ff6a33163ad46b917b2657af83"
+  },
+  "candidate-public-promotion.exit.json": {
+    "bytes": 216,
+    "sha256": "538f0611c47a360f0785e3c33d97c327b89f1f0a42c373490c082aff4c57a52d"
+  },
+  "candidate-public-promotion.raw": {
+    "bytes": 200,
+    "sha256": "003bea9bbe7e17b7759e9ca3c36bb17a1e619fa70680798165bd492977c28cb8"
+  },
+  "candidate/TreeDB/freelist/generation_v1_emit_work.go": {
+    "bytes": 7943,
+    "sha256": "840e2bdca2912c684d8d603db2bdb8b043c73c7eee2aafa75350d44826360e20"
+  },
+  "candidate/TreeDB/freelist/generation_v1_emit_work_test.go": {
+    "bytes": 5563,
+    "sha256": "d8bf613ddbb41da035daedf16f2a094a1a8e41bd4f4da0e9c2afa8593067c14f"
+  },
+  "candidate/TreeDB/freelist/generation_v1_encode_work.go": {
+    "bytes": 6401,
+    "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+  },
+  "candidate/TreeDB/freelist/generation_v1_format.go": {
+    "bytes": 16492,
+    "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+  },
+  "candidate/TreeDB/freelist/generation_v1_txn.go": {
+    "bytes": 28752,
+    "sha256": "093161bab3271401010da2a3436af39c7401654a5353c1ef760f83610314d1f4"
+  },
+  "environment.json": {
+    "bytes": 4905,
+    "sha256": "1c1c0d6ff6615b743914dc6aa2d693dbea115167027d50ddc983c524f634e2a4"
+  },
+  "generation_v1_format.go.preimage": {
+    "bytes": 18951,
+    "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+  },
+  "generation_v1_txn.go.preimage": {
+    "bytes": 29937,
+    "sha256": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7"
+  },
+  "lease-preimages.json": {
+    "bytes": 522,
+    "sha256": "5a0c8f0e005e7aa5ec5fb01fef2cbd9422812e8f0663223982f64413c893c2af"
+  },
+  "parent353/TreeDB/freelist/generation_v1_format.go": {
+    "bytes": 18951,
+    "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+  },
+  "parent353/TreeDB/freelist/generation_v1_txn.go": {
+    "bytes": 29937,
+    "sha256": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7"
+  },
+  "prior-format-reference.after.json": {
+    "bytes": 743394,
+    "sha256": "b6d611346d02b9ac9806055bbb24354618dd82cf634258e1759c3390a8e1f26f"
+  },
+  "prior-format-reference.before.json": {
+    "bytes": 743394,
+    "sha256": "b6d611346d02b9ac9806055bbb24354618dd82cf634258e1759c3390a8e1f26f"
+  },
+  "prior-format-reference.command.json": {
+    "bytes": 944,
+    "sha256": "9b0ecaa8d1ea9a6bb735e75c14591e09e9df11e70092afe2bc43d88f88dda991"
+  },
+  "prior-format-reference.exit.json": {
+    "bytes": 216,
+    "sha256": "a02989ee3cebe7eea248cefaf4e4a768b7b8f08c65002de250626b034cf10f87"
+  },
+  "prior-format-reference.raw": {
+    "bytes": 2456,
+    "sha256": "c1f7d0ab0197f1d7a5291a64c252f3b0c42b1a9c1382a7e125178685d8361bba"
+  },
+  "reference-binding.json": {
+    "bytes": 551,
+    "sha256": "c6034d2201f7b212e1b8fad33456d186e8f02c2b80435f41e2b71ccf3c67432d"
+  },
+  "source-freeze-receipt.json": {
+    "bytes": 3744,
+    "sha256": "8f067bae51b322db35aae626d821e5e5871037757bd966aeeeb6b9b0a16542e9"
+  },
+  "window.json": {
+    "bytes": 94,
+    "sha256": "ef5a8532e3e8e5efe70ab1300360e685d808b167ebe5011479e453409dc1dacd"
+  }
+}

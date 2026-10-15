@@ -1,0 +1,15 @@
+{
+  "scope": "SAME retained count/emission and canonical format2 chunk/index encoder; ordinary nil drivers share core; candidate page lifetime unchanged",
+  "sources": [
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "bytes": 29937,
+      "sha256": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "bytes": 18951,
+      "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+    }
+  ]
+}

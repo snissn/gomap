@@ -1,0 +1,12 @@
+{
+  "root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-emission-escape-fix-20261015",
+  "manifest": {
+    "bytes": 3964,
+    "sha256": "fa2426bb4d4c50156e6e1e493c164fca6fb7d3ac2a3038e04a3885e5c07c2845"
+  },
+  "receipt": {
+    "bytes": 6602,
+    "sha256": "2788a76738b2ae72733440170ea22a08cd16f403cf4bcfe4c95a3c20fdeccc2f"
+  },
+  "verified_members": 27
+}

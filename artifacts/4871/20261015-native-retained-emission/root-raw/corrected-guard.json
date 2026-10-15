@@ -1,0 +1,166 @@
+{
+  "at_utc": "2026-10-15T07:56:01.882108+00:00",
+  "method": "independent six raw stdout parse; exact 1000x AB/BA/AB; strict no bytes/object increase and <=5% latency median",
+  "samples": [
+    {
+      "index": 1,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25507.0,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 2,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25902.0,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147
+    },
+    {
+      "index": 3,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25915.0,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147
+    },
+    {
+      "index": 4,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25786.0,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 5,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25576.0,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 6,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25750.0,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 25576.0,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148
+    },
+    "candidate": {
+      "ns_per_op": 25902.0,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147
+    }
+  },
+  "percent_change": {
+    "ns_per_op": 1.2746324679386856,
+    "bytes_per_op": -0.06906971724583988,
+    "allocs_per_op": -0.6756756756756799
+  },
+  "gates": {
+    "latency": true,
+    "bytes": true,
+    "objects": true
+  },
+  "files": [
+    {
+      "name": "results.json",
+      "bytes": 4742,
+      "sha256": "141db73d83107ee6a3eb792fcc86c268040d0dcc6ab9e4eaa27c85bb8ce2a65b"
+    },
+    {
+      "name": "samples.json",
+      "bytes": 3690,
+      "sha256": "8edca279db58ac35ba213973fcc81bb3a9420992fa5c0350d8b26e001151cf88"
+    },
+    {
+      "name": "timing-plan.json",
+      "bytes": 2679,
+      "sha256": "e212196c0cbcf299aaa8358fa90af9c6805c945e60c7ff089e7422fcecd6d9c2"
+    },
+    {
+      "name": "source-preflight.json",
+      "bytes": 4319,
+      "sha256": "7ce443dd19a9a2c0cce17a97bda2eaed281d2b91e635236d9fd8a49226864676"
+    },
+    {
+      "name": "build-stage.json",
+      "bytes": 284,
+      "sha256": "45722e2f6d3e27efeb0fe56e5722192d74c6eed589b8633b2b7856191ceb06fe"
+    },
+    {
+      "name": "timing-stage.json",
+      "bytes": 287,
+      "sha256": "1efa828cd0d7e7d2d91afa35748f3915f66517b1bcee0bc14a73073efedb89de"
+    },
+    {
+      "name": "binaries.json",
+      "bytes": 709,
+      "sha256": "493f680ccd5ae4f4fb525def9261811c627e00d3a58382bfa1b47fd48c7bc89f"
+    },
+    {
+      "name": "corrected-packet-binding.json",
+      "bytes": 387,
+      "sha256": "6c5cca5eacb22f621d341c812136d63d18f47d335d918f56ea3f38f8190c2dc7"
+    },
+    {
+      "name": "ready-timing-receipt.json",
+      "bytes": 30596,
+      "sha256": "bf5152e7745ac94c8fef7d3f38a3cd7fa5a659713bc47b0f42b976a0562e7247"
+    },
+    {
+      "name": "run-guard.py",
+      "bytes": 7119,
+      "sha256": "57a7aa7d921e3631aa1c170ccb9777b224d79142d2f4c65316f9e7183bd7a3f7"
+    },
+    {
+      "name": "sample-01-baseline.stdout",
+      "bytes": 225,
+      "sha256": "c5b7afa9d7dbe003fc6d0ffdd0caa8ca6e2f9f1300b88f27c4262a22f9e41612"
+    },
+    {
+      "name": "sample-02-candidate.stdout",
+      "bytes": 225,
+      "sha256": "ca38659edf0292629382660bc17148283e7c3307e3b06a15c77635d61bab6615"
+    },
+    {
+      "name": "sample-03-candidate.stdout",
+      "bytes": 225,
+      "sha256": "16aca38267b697bc64e696e73c34328fd0dccacf199824551789225fa2ee7cc6"
+    },
+    {
+      "name": "sample-04-baseline.stdout",
+      "bytes": 225,
+      "sha256": "7e820efc1454becd7fd6706fc4b3c69ead8d601faf2c62cb997f927f0d9bc4ca"
+    },
+    {
+      "name": "sample-05-baseline.stdout",
+      "bytes": 225,
+      "sha256": "5ca4a77dde2ea8b87b79e09d4ca9bf2a30028c1cd76771ffe5fb124775368083"
+    },
+    {
+      "name": "sample-06-candidate.stdout",
+      "bytes": 225,
+      "sha256": "b51d68a1c571e5531a01e4944785e97f5cad12ce5fde73edd7f2a5fe672c0f50"
+    }
+  ],
+  "remote_census_hashes": {
+    "source-inputs-preflight.json": "334f14041f5702db5ecf7b67e0d833b68d8ff7cef3f35a2193b239842dac3266",
+    "build-inputs-before.json": "334f14041f5702db5ecf7b67e0d833b68d8ff7cef3f35a2193b239842dac3266",
+    "build-inputs-after.json": "334f14041f5702db5ecf7b67e0d833b68d8ff7cef3f35a2193b239842dac3266",
+    "timing-inputs-before.json": "334f14041f5702db5ecf7b67e0d833b68d8ff7cef3f35a2193b239842dac3266",
+    "timing-inputs-after.json": "334f14041f5702db5ecf7b67e0d833b68d8ff7cef3f35a2193b239842dac3266"
+  },
+  "scope": "short ordinary public foreground diagnostic only; no native ACK/final qualification; original failed guard retained"
+}

@@ -1,0 +1,8 @@
+# Shared emission escape repair
+Frozen failed five-path materialization packet and original six public guard samples are preserved unchanged in the sibling evidence directories.
+The compile-only predecessor escape report is ../native-retained-ordinary-escape-20261015/escape.raw.
+That report shows advance retaining caller next and sink pointers, MaterializeCandidate heap-moving next and its recordingSink.
+The corrected finite step binds the same exact original operands before the shared advance loop. The synchronous driver initializes caller-owned control and drains that same loop without retaining cross-call operand pointers. Canonical encoders/output ownership are unchanged; no pool, second encoder, or reset of candidate pages.
+The new focused test emits a real canonical chunk into preprovisioned original sink storage: only its immutable fresh output should allocate. RED against the frozen failed txn+emit source got 3 allocations. Corrected GREEN got the required 1 and passed canonical/lifetime/decoder and real-yield stale-input/sticky-error controls. Compiler now reports the original recordingSink does not escape; MaterializeCandidate next no longer moves to heap.
+Each run copied its exact five input paths and retained full before/after 4427-row source census, literal argv/environment, raw output and explicit exit. Only txn+emit differ RED to GREEN; test stays byte-identical. A compile-only escape report is not test or production activation qualification.
+Public ordinary guard remeasurement is pending. Production native ACK remains 0; Q32/final constructor/retirement obligations remain open.

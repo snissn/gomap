@@ -1,0 +1,108 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Independent bounded source-only review of exact frozen five-file retained count/encoder/emission component; not a retained MaterializeCandidate/public ACK qualification.",
+  "evidence_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015",
+  "source_freeze_receipt_sha256": "8f067bae51b322db35aae626d821e5e5871037757bd966aeeeb6b9b0a16542e9",
+  "manifest_sha256": "ca66d665b291b1f83c4fbaaf85d28fe3e9320114544fffa45791b677ccb6ac27",
+  "manifest_verification": {
+    "entries": 30,
+    "mismatches": 0,
+    "method": "Read and hash each exact packet file; verify bytes and SHA256 against manifest."
+  },
+  "parent_commit": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "parent_preimages_verified_by_object_read": {
+    "TreeDB/freelist/generation_v1_txn.go": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7",
+    "TreeDB/freelist/generation_v1_format.go": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+  },
+  "candidate_sources": {
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 28752,
+      "sha256": "093161bab3271401010da2a3436af39c7401654a5353c1ef760f83610314d1f4"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 16492,
+      "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "bytes": 6401,
+      "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+    },
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "bytes": 7943,
+      "sha256": "840e2bdca2912c684d8d603db2bdb8b043c73c7eee2aafa75350d44826360e20"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "bytes": 5563,
+      "sha256": "d8bf613ddbb41da035daedf16f2a094a1a8e41bd4f4da0e9c2afa8593067c14f"
+    }
+  },
+  "findings": [],
+  "checks": [
+    {
+      "source": "generation_v1_txn.go:626-662; generation_v1_format.go:193-196,237-242",
+      "conclusion": "Ordinary nil wrappers drain the SAME retained count, emission and encode core. Prior recursive/encoding bodies are removed rather than retained as competing authority."
+    },
+    {
+      "source": "generation_v1_encode_work.go:49-197",
+      "conclusion": "Header fields, child entries, canonical clear and checksum match prior encoding. Chunk retirement summary and output packing now share one retained256-slot loop; index validation/packing share one16-slot loop. Independent decoder bodies are unchanged."
+    },
+    {
+      "source": "generation_v1_emit_work.go:18-73,172-290",
+      "conclusion": "Count/emission use fixed canonical-depth frame arrays. Node and child traversal, page allocation, encoding and sink phases retain cursors; finite encoding batches only admitted entries. Fixed page clear/checksum primitives are admitted at page size."
+    },
+    {
+      "source": "generation_v1_emit_work.go:82-169",
+      "conclusion": "Finite recording accepts only the concrete production validation sink and typed ledger transition; opaque sinks/callbacks are refused. Map probe and insertion phases retain progress; vector growth is admitted as the actual indivisible unit, yielding explicit UnitTooLarge when it cannot fit."
+    },
+    {
+      "source": "generation_v1_emit_work.go:185-210,247-284",
+      "conclusion": "Emission binds exact root/generation/next pointer/sink. It stores the first error and returns it before replaying assignments or sink writes. Partial failure remains within consumed candidate ownership and existing ledger tail-attempt semantics."
+    },
+    {
+      "source": "generation_v1_emit_work.go:141-145,248-254,278-283; generation_v1_encode_work.go:9-12,46-48",
+      "conclusion": "Every emitted candidate page has fresh independent storage because CandidatePageWriter may retain views. Only controls are reused; output is not reset at Prepare/publication. Generic ordinary sinks retain their isolated copies. Existing encode-Into caller output reuse remains supported. No new pool, arena or second allocator."
+    },
+    {
+      "source": "generation_v1_emit_work_test.go:15-129,132-165",
+      "conclusion": "Tests cover retained count/emission versus ordinary entry points, canonical reference page bytes, unchanged decoder invariants, independent page storage, opaque finite refusal before page-ID effects and sticky first failure. Existing generic-sink and tail-failure controls are retained."
+    }
+  ],
+  "verified_existing_execution_evidence": {
+    "reviewer_reran_go": false,
+    "census_entries_per_run": 4427,
+    "each_run_before_after_equal": true,
+    "reference_candidate_census_delta": [
+      "TreeDB/freelist/generation_v1_format.go"
+    ],
+    "candidate_freelist_public_censuses_identical": true,
+    "all_five_candidate_hashes_match_current_execution_census": true,
+    "prior_format_reference": {
+      "exit_code": 0,
+      "raw_sha256": "c1f7d0ab0197f1d7a5291a64c252f3b0c42b1a9c1382a7e125178685d8361bba",
+      "census_sha256": "b6d611346d02b9ac9806055bbb24354618dd82cf634258e1759c3390a8e1f26f",
+      "meaning": "All five selected controls actually PASS while prior format supplies independent encodeChunkPage/encodeIndexPage reference bodies; new retained encoder/emitter remains active."
+    },
+    "candidate_freelist": {
+      "exit_code": 0,
+      "raw_sha256": "ae74f89e5c9adb7706b453d956cda50b56cd3494245757f5f1e479d88de6a664",
+      "census_sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813",
+      "meaning": "Same five controls PASS; all four canonical page SHA256 values equal the independent reference run; retained emission completes in27 calls."
+    },
+    "candidate_public_promotion": {
+      "exit_code": 0,
+      "raw_sha256": "003bea9bbe7e17b7759e9ca3c36bb17a1e619fa70680798165bd492977c28cb8",
+      "census_sha256": "e1102faa714834ae40d64f5020dadc0145af6a607722fa23dca3cb522b4b8813",
+      "selector": "TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut",
+      "package": "./TreeDB",
+      "meaning": "Exact test actually runs and PASSes on candidate compiler inputs; proves ordinary public promotion control, not native bounded ACK."
+    }
+  },
+  "limits": [
+    "No reviewer Go, benchmark/profile runs, native source writes, Git/GitHub writes or cleanup.",
+    "Acceptance covers only these exact five frozen component files and inspected supporting contracts; live owner edits are excluded.",
+    "MaterializeCandidate retained constructor, reservation normalization/chain/header and remaining closure stages are intentionally not implemented or qualified here.",
+    "Production native ACK remains0. Public promotion control and internal finite emission tests are not native public activation proof.",
+    "No performance acceptance or quantified speed/allocation claim; ordinary public performance guard may proceed without architecture changes demanded by this review.",
+    "Large map/vector backing growth remains an honestly indivisible, potentially over-Q32 operation with explicit refusal; general Q32 completion is not claimed."
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "roots": [
+    {
+      "role": "baseline",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+      "snapshot": "baseline-retained-worktree-snapshot.json",
+      "snapshot_sha256": "f6fe9dcd2990fc77b99712d1e6d2fdbd007eb03ac640deeb8c2aea75c2b3f216",
+      "tracked_objects": "baseline-tracked-objects.nul",
+      "tracked_objects_sha256": "6c0fdcc03e34a7cefff7689f9be3ad8d9605faf1d1828f0f4c443a50d1d85969",
+      "status": "",
+      "head": "353a88fb160febce951dd4caa45ac079c261fca4",
+      "logical_regular_bytes": 1045764362,
+      "changed_file_preservation": [],
+      "binary": {
+        "role": "baseline",
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+        "sha256": "00da74d3ace1a42d85457bbf0d610e4fcedde1c8fb88e609e0db2b281c56a61a",
+        "bytes": 61469726,
+        "dev": 66306,
+        "inode": 108285229,
+        "mtime_ns": 1792050152728257281
+      },
+      "retention": "Preserve until exact durable source/evidence publication and root explicit cleanup release; no deletion authorized by inventory."
+    },
+    {
+      "role": "candidate",
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+      "snapshot": "candidate-retained-worktree-snapshot.json",
+      "snapshot_sha256": "cf2d531295cd1a0d1cbb33239ae7b4cb80c4c9230b80bdb51bb33a75a1e41dc9",
+      "tracked_objects": "candidate-tracked-objects.nul",
+      "tracked_objects_sha256": "6c0fdcc03e34a7cefff7689f9be3ad8d9605faf1d1828f0f4c443a50d1d85969",
+      "status": " M TreeDB/freelist/generation_v1_format.go\n M TreeDB/freelist/generation_v1_txn.go\n?? TreeDB/freelist/generation_v1_emit_work.go\n?? TreeDB/freelist/generation_v1_emit_work_test.go\n?? TreeDB/freelist/generation_v1_encode_work.go\n",
+      "head": "353a88fb160febce951dd4caa45ac079c261fca4",
+      "logical_regular_bytes": 1045780626,
+      "changed_file_preservation": [
+        {
+          "path": "TreeDB/freelist/generation_v1_emit_work.go",
+          "candidate_source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/candidate/TreeDB/freelist/generation_v1_emit_work.go",
+          "candidate_sha256": "840e2bdca2912c684d8d603db2bdb8b043c73c7eee2aafa75350d44826360e20",
+          "parent_absent": true,
+          "parent_sha256": null
+        },
+        {
+          "path": "TreeDB/freelist/generation_v1_emit_work_test.go",
+          "candidate_source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/candidate/TreeDB/freelist/generation_v1_emit_work_test.go",
+          "candidate_sha256": "d8bf613ddbb41da035daedf16f2a094a1a8e41bd4f4da0e9c2afa8593067c14f",
+          "parent_absent": true,
+          "parent_sha256": null
+        },
+        {
+          "path": "TreeDB/freelist/generation_v1_encode_work.go",
+          "candidate_source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/candidate/TreeDB/freelist/generation_v1_encode_work.go",
+          "candidate_sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9",
+          "parent_absent": true,
+          "parent_sha256": null
+        },
+        {
+          "path": "TreeDB/freelist/generation_v1_format.go",
+          "candidate_source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/candidate/TreeDB/freelist/generation_v1_format.go",
+          "candidate_sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc",
+          "parent_absent": false,
+          "parent_sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+        },
+        {
+          "path": "TreeDB/freelist/generation_v1_txn.go",
+          "candidate_source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/candidate/TreeDB/freelist/generation_v1_txn.go",
+          "candidate_sha256": "093161bab3271401010da2a3436af39c7401654a5353c1ef760f83610314d1f4",
+          "parent_absent": false,
+          "parent_sha256": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7"
+        }
+      ],
+      "binary": {
+        "role": "candidate",
+        "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+        "sha256": "609259ffe92d615fc29b68194d3a5f44e7c2e4b21357b167bc2f2039c7125e17",
+        "bytes": 61490722,
+        "dev": 66306,
+        "inode": 108285233,
+        "mtime_ns": 1792050198475652783
+      },
+      "retention": "Preserve until exact durable source/evidence publication and root explicit cleanup release; no deletion authorized by inventory."
+    }
+  ],
+  "protected": "All native80/foreign files, commonGit, primary, original ordinary/baseline sources/binaries, evidence, toolchain and caches; only these two new roots/ELFs are owned generated outputs.",
+  "free_bytes": 273629020160
+}

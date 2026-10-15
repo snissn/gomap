@@ -1,0 +1,9 @@
+{
+  "before_utc": "2026-10-15T07:43:18Z",
+  "after_utc": "2026-10-15T07:43:19Z",
+  "before_loadavg": "0.83 0.34 0.22 1/1202 1401552",
+  "after_loadavg": "0.83 0.34 0.22 1/1202 1401578",
+  "boundary_competing_processes": [],
+  "coordinator": "Root exclusive build/timing lease; native owner/reviewer held; no other Go.",
+  "limitation": "Boundary process/load/stat checks only, not continuous monitoring; short latency result is diagnostic."
+}

@@ -1,0 +1,77 @@
+{
+  "raw_rows": [
+    {
+      "index": 1,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25689.0,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148,
+      "raw_sha256": "41d72e3b57cde5c65e14c2333a9f528941a91abafd200e2e0cf207fbb462cdda"
+    },
+    {
+      "index": 2,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25698.0,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149,
+      "raw_sha256": "101a25564dec4b48324d1f1d0475afb3d20a19df3a3ce30ef0384647599b2198"
+    },
+    {
+      "index": 3,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25672.0,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149,
+      "raw_sha256": "aa776d05872233f91e5ac954722356ddb3c38a92d4cafc716632ffb75f0cd093"
+    },
+    {
+      "index": 4,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25502.0,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148,
+      "raw_sha256": "cde67b5b4dd7517696b76bad10b1d11d7921390c6fb9684f0a3459c577194de4"
+    },
+    {
+      "index": 5,
+      "role": "baseline",
+      "iterations": 1000,
+      "ns_per_op": 25181.0,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148,
+      "raw_sha256": "70db284d0e8bcc501e011809c498e38f3cf37b0bc40e2663d96ba1311e4bbf14"
+    },
+    {
+      "index": 6,
+      "role": "candidate",
+      "iterations": 1000,
+      "ns_per_op": 25755.0,
+      "bytes_per_op": 46466,
+      "allocs_per_op": 149,
+      "raw_sha256": "2df0ffdf9722e92da6faa30d5f1fef7ad289b9ef5b724a1774b6fab4cf6577f8"
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 25502.0,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148
+    },
+    "candidate": {
+      "ns_per_op": 25698.0,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149
+    }
+  },
+  "gates": {
+    "latency": true,
+    "bytes": false,
+    "objects": false
+  },
+  "results_sha256": "26fc1c1e480c81f43d86d0df43ef589e272aee919fe95083347f20f0634e94eb",
+  "scope": "Root independently parsed all six retained raw benchmark stdout files; ordinary353 plus5 only; shortdiagnosticFAIL; no qualification or nativeACK."
+}

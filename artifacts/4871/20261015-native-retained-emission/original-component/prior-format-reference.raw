@@ -1,0 +1,27 @@
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/old-version
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/unary
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/wrong-prefix
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/invalid-kind
+=== RUN   TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/nonzero-tail
+--- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed (0.00s)
+    --- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/old-version (0.00s)
+    --- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/unary (0.00s)
+    --- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/wrong-prefix (0.00s)
+    --- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/invalid-kind (0.00s)
+    --- PASS: TestGenerationTopology5131DetachedEncodingCanonicalAndFailClosed/nonzero-tail (0.00s)
+=== RUN   TestCanonicalStateEmissionRetainsPagesAndCanonicalBytesV1
+    generation_v1_emit_work_test.go:108: canonical reference page=800 SHA256=b7738c08df7ef77943b5a053fedc291509109ce19c36a7e5bc65869ff5315eb3
+    generation_v1_emit_work_test.go:108: canonical reference page=801 SHA256=a093409f3a2a8936b11a47248ef749ad2aa98afc07ffb5ae2af584a7512bdfeb
+    generation_v1_emit_work_test.go:108: canonical reference page=802 SHA256=ecea5a1285bd32d53ad11198cc3ff05779906539122476adf2c14abc7b3d12dc
+    generation_v1_emit_work_test.go:108: canonical reference page=803 SHA256=1ab524a4f28dcefaca161c4628771bcddb5c7b0a17c16af44f34244986a06470
+    generation_v1_emit_work_test.go:129: actual canonical count=4 emission resumes=27 retained pages=4
+--- PASS: TestCanonicalStateEmissionRetainsPagesAndCanonicalBytesV1 (0.00s)
+=== RUN   TestCanonicalStateEmissionRejectsOpaqueBeforeEffectsAndKeepsFirstErrorV1
+--- PASS: TestCanonicalStateEmissionRejectsOpaqueBeforeEffectsAndKeepsFirstErrorV1 (0.00s)
+=== RUN   TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages
+--- PASS: TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages (0.00s)
+=== RUN   TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment
+--- PASS: TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.001s

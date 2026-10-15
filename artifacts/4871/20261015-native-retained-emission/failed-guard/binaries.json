@@ -1,0 +1,20 @@
+[
+  {
+    "role": "baseline",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+    "sha256": "00da74d3ace1a42d85457bbf0d610e4fcedde1c8fb88e609e0db2b281c56a61a",
+    "bytes": 61469726,
+    "dev": 66306,
+    "inode": 108285229,
+    "mtime_ns": 1792050152728257281
+  },
+  {
+    "role": "candidate",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+    "sha256": "609259ffe92d615fc29b68194d3a5f44e7c2e4b21357b167bc2f2039c7125e17",
+    "bytes": 61490722,
+    "dev": 66306,
+    "inode": 108285233,
+    "mtime_ns": 1792050198475652783
+  }
+]

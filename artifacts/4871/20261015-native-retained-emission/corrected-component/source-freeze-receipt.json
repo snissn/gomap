@@ -1,0 +1,57 @@
+{
+  "baseline": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "index": {
+    "bytes": 1827592,
+    "sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596"
+  },
+  "owned_five": {
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "bytes": 8400,
+      "sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "bytes": 7648,
+      "sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "bytes": 6401,
+      "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 16492,
+      "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 28878,
+      "sha256": "3a76cb33d259e7eda95b8fef3a94bff24c136a4b410ee233d6cc8ba0949ef858"
+    }
+  },
+  "parent_head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "protected_foreign": {
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "bytes": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    }
+  },
+  "raw": {
+    "green": {
+      "bytes": 2554345,
+      "sha256": "855d9951301bbb4e4bf60c0f26e5d339b35d9efb5598417b5dc5d80521784411"
+    },
+    "red": {
+      "bytes": 318,
+      "sha256": "2e982f49e7186e48bea10eaf5e53cd59194bb4cd7ee3473e7a42da5a98fc75de"
+    }
+  },
+  "scope": "Only txn/emission core/existing test changed vs frozen failed5; no constructor expansion.",
+  "source_rows": 4427,
+  "status": " M TreeDB/collections/command_wal_bench_test.go\n M TreeDB/collections/command_wal_test.go\n M TreeDB/collections/document_ingestion_test.go\n M TreeDB/collections/source_atomic_column_test.go\n M TreeDB/collections/vector_index_persist_test.go\n M TreeDB/db/command_wal_feature_gate_test.go\n M TreeDB/db/command_wal_recovery_test.go\n M TreeDB/db/db.go\n M TreeDB/db/durable_primary_runtime_v5.go\n M TreeDB/db/durable_root_metadata_reuse_test.go\n M TreeDB/db/durable_root_runtime.go\n M TreeDB/db/format_config.go\n M TreeDB/db/format_config_test.go\n M TreeDB/db/leaf_generation_runtime.go\n M TreeDB/db/open_readonly.go\n M TreeDB/db/original_primary_runtime_cleanup.go\n M TreeDB/db/physical_snapshot_cut_v1.go\n M TreeDB/db/physical_snapshot_cut_v1_test.go\n M TreeDB/db/primary_bank_construction_v5.go\n M TreeDB/db/root_publication_activation.go\n M TreeDB/db/stable_pager_owned_operations.go\n M TreeDB/docs/spec/recovery.md\n M TreeDB/docs/spec/storage-format.md\n M TreeDB/freelist/allocator_cow.go\n M TreeDB/freelist/generation_snapshot_v1.go\n M TreeDB/freelist/generation_snapshot_v1_test.go\n M TreeDB/freelist/generation_v1_format.go\n M TreeDB/freelist/generation_v1_metadata_cursor_test.go\n M TreeDB/freelist/generation_v1_metadata_reuse.go\n M TreeDB/freelist/generation_v1_metadata_reuse_test.go\n M TreeDB/freelist/generation_v1_reservation.go\n M TreeDB/freelist/generation_v1_test.go\n M TreeDB/freelist/generation_v1_tree.go\n M TreeDB/freelist/generation_v1_txn.go\n M TreeDB/internal/rootpublication/durable_root_transaction.go\n M TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go\n M TreeDB/internal/rootpublication/native_primary_finish_work_v6.go\n M TreeDB/internal/rootpublication/native_publication_v6.go\n M TreeDB/internal/rootpublication/pin_registry.go\n M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go\n M TreeDB/internal/rootpublication/resource_allocation.go\n M TreeDB/internal/rootpublication/resource_entry_allocation.go\n M TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go\n M TreeDB/internal/rootpublication/resource_field_allocation.go\n M TreeDB/internal/rootpublication/resource_kind_allocation.go\n M TreeDB/internal/rootpublication/resource_logical_allocation.go\n M TreeDB/internal/rootpublication/resource_manifest_allocation.go\n M TreeDB/internal/rootpublication/resource_obligation_allocation.go\n M TreeDB/internal/rootpublication/resource_original_cleanup.go\n M TreeDB/internal/rootpublication/resource_physical_allocation.go\n M TreeDB/internal/rootpublication/resource_rope_allocation.go\n M TreeDB/internal/rootpublication/resource_set.go\n M TreeDB/internal/rootpublication/resource_token.go\n M TreeDB/internal/rootpublication/resource_token_allocation.go\n M TreeDB/internal/valuelog/native_zstd_rank_census_test.go\n M cmd/treedb_column_graph_demo/main.go\n?? TreeDB/db/freelist_patricia_feature_v2_test.go\n?? TreeDB/db/leaf_generation_stale_work_v6_test.go\n?? TreeDB/db/primary_bank_release_work_v6.go\n?? TreeDB/db/primary_member_retirement_work_v6.go\n?? TreeDB/db/primary_runtime_disposal_work_v6.go\n?? TreeDB/db/primary_runtime_disposal_work_v6_test.go\n?? TreeDB/db/primary_seal_release_work_v6.go\n?? TreeDB/db/primary_visible_member_work_v6.go\n?? TreeDB/db/snapshot_publication_work_v6.go\n?? TreeDB/db/stable_pager_release_work_v6.go\n?? TreeDB/db/stable_pager_release_work_v6_test.go\n?? TreeDB/freelist/allocator_activation_work.go\n?? TreeDB/freelist/generation_topology_5131_test.go\n?? TreeDB/freelist/generation_v1_begin_work.go\n?? TreeDB/freelist/generation_v1_emit_work.go\n?? TreeDB/freelist/generation_v1_emit_work_test.go\n?? TreeDB/freelist/generation_v1_encode_work.go\n?? TreeDB/freelist/generation_v1_private_test.go\n?? TreeDB/freelist/generation_v1_tree_work.go\n?? TreeDB/freelist/generation_v1_tree_work_test.go\n?? TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_graph_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_graph_release_work_v6_test.go\n?? TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_set_release_work_v6_test.go\n?? TreeDB/internal/rootpublication/resource_token_release_work_v6.go\n?? TreeDB/internal/rootpublication/resource_token_release_work_v6_test.go\n?? TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go\n"
+}

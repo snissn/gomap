@@ -1,0 +1,44 @@
+{
+  "baseline_source": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "changed_vs_original_failed": [
+    "TreeDB/freelist/generation_v1_emit_work.go",
+    "TreeDB/freelist/generation_v1_emit_work_test.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "checkpoint_parent": "4b328fe047b2b976c21239003692fbe8821354a3",
+  "native_q32_to_corrected_delta": [
+    "TreeDB/freelist/generation_v1_emit_work.go",
+    "TreeDB/freelist/generation_v1_emit_work_test.go",
+    "TreeDB/freelist/generation_v1_encode_work.go",
+    "TreeDB/freelist/generation_v1_format.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "owned_five": {
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "bytes": 8400,
+      "sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "bytes": 7648,
+      "sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "bytes": 6401,
+      "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 16492,
+      "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 28878,
+      "sha256": "3a76cb33d259e7eda95b8fef3a94bff24c136a4b410ee233d6cc8ba0949ef858"
+    }
+  },
+  "red_to_green_delta": [
+    "TreeDB/freelist/generation_v1_emit_work.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "source_rows": 4427,
+  "source_stage_inputs": "Immutable candidate copies only; native live files never staged"
+}

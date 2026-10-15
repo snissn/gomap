@@ -1,0 +1,26 @@
+[
+  {
+    "role": "candidate",
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "args": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/candidate-fixed-db.test",
+      "./TreeDB/db"
+    ],
+    "timeout_seconds": 90,
+    "elapsed_seconds": 45.27841631881893,
+    "returncode": 0,
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  }
+]

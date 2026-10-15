@@ -1,0 +1,11 @@
+{
+  "command": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/run-guard.py",
+    "--execute"
+  ],
+  "returncode": 0,
+  "timeout": false,
+  "elapsed_seconds": 0.9035125994123518,
+  "hard_timeout_seconds": 60
+}

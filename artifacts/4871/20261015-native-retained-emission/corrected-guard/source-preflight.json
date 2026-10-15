@@ -1,0 +1,89 @@
+{
+  "source_preflight": "PASS",
+  "baseline_source": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "candidate": "same exact base plus exact five candidate paths",
+  "candidate_manifest_sha256": "fa2426bb4d4c50156e6e1e493c164fca6fb7d3ac2a3038e04a3885e5c07c2845",
+  "candidate_paths": {
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "bytes": 8400,
+      "sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "bytes": 7648,
+      "sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "bytes": 6401,
+      "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 16492,
+      "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 28878,
+      "sha256": "3a76cb33d259e7eda95b8fef3a94bff24c136a4b410ee233d6cc8ba0949ef858"
+    }
+  },
+  "frozen_packet": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-emission-escape-fix-20261015",
+  "frozen_source_receipt_sha256": "2788a76738b2ae72733440170ea22a08cd16f403cf4bcfe4c95a3c20fdeccc2f",
+  "sources": [
+    {
+      "role": "baseline",
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+      "head": "353a88fb160febce951dd4caa45ac079c261fca4",
+      "base_tree": "d407230a25418d307b382f3421b0604d3b8d74cb",
+      "source_input_census_sha256": "f17f01a5f0a1b29eb6bda88a10038cd38b6ec8f400d2b9c0235ba05ea2a7c4e1",
+      "status": "",
+      "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "root_identity": {
+        "dev": 66306,
+        "inode": 107782507
+      }
+    },
+    {
+      "role": "candidate",
+      "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+      "head": "353a88fb160febce951dd4caa45ac079c261fca4",
+      "base_tree": "d407230a25418d307b382f3421b0604d3b8d74cb",
+      "source_input_census_sha256": "84fbe9bb572c135b36b30d8a912a24be93b87e557ef9bf080e2a18702d2eb7ff",
+      "status": " M TreeDB/freelist/generation_v1_format.go\n M TreeDB/freelist/generation_v1_txn.go\n?? TreeDB/freelist/generation_v1_emit_work.go\n?? TreeDB/freelist/generation_v1_emit_work_test.go\n?? TreeDB/freelist/generation_v1_encode_work.go\n",
+      "binary": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/candidate-fixed-db.test",
+      "root_identity": {
+        "dev": 66306,
+        "inode": 108271631
+      }
+    }
+  ],
+  "benchmark_path": "TreeDB/db/conditional_kv_contract_bench_test.go",
+  "benchmark_blob": "ae3a6d3cd0ca244781e7843168dc5b35aac5d898",
+  "benchmark_sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+  "generated_roots": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015"
+  ],
+  "free_bytes": 273597628416,
+  "no_go_build_or_timing": true,
+  "changed_vs_failed_candidate": [
+    "TreeDB/freelist/generation_v1_emit_work.go",
+    "TreeDB/freelist/generation_v1_emit_work_test.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "source_difference_vs_baseline": [
+    "TreeDB/freelist/generation_v1_emit_work.go",
+    "TreeDB/freelist/generation_v1_emit_work_test.go",
+    "TreeDB/freelist/generation_v1_encode_work.go",
+    "TreeDB/freelist/generation_v1_format.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "reuse_baseline_binary": {
+    "role": "baseline",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+    "sha256": "00da74d3ace1a42d85457bbf0d610e4fcedde1c8fb88e609e0db2b281c56a61a",
+    "bytes": 61469726,
+    "dev": 66306,
+    "inode": 108285229,
+    "mtime_ns": 1792050152728257281
+  },
+  "original_failed_packet": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015"
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/run-guard.py",
+      "--build"
+    ],
+    "aggregate_seconds_limit": 180,
+    "elapsed_seconds": 92.92761937901378,
+    "returncode": 0,
+    "timeout": false
+  },
+  {
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/run-guard.py",
+      "--execute"
+    ],
+    "aggregate_seconds_limit": 60,
+    "elapsed_seconds": 0.8418164537288249,
+    "returncode": 0,
+    "timeout": false
+  }
+]

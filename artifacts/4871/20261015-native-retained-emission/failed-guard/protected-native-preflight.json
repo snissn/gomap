@@ -1,0 +1,18 @@
+{
+  "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+    "bytes": 6899,
+    "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+  },
+  "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+    "bytes": 7036,
+    "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+  },
+  "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+    "bytes": 6429,
+    "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+  },
+  "native_index": {
+    "path": "/home/mikers/dev/snissn/gomap/.git/worktrees/native-4878-traversal/index",
+    "sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596"
+  }
+}

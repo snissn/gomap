@@ -1,0 +1,6 @@
+{
+  "candidate_format_sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc",
+  "meaning": "Prior format implementation supplies independent reference encodeChunkPage/encodeIndexPage; retained new encoder is exercised directly. Capability absence is not runtime RED.",
+  "reference_format_path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-materialization-20261015/generation_v1_format.go.preimage",
+  "reference_format_sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+}

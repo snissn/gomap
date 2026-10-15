@@ -1,0 +1,181 @@
+{
+  "ready": true,
+  "preflight_sha256": "5788d58eb76a03b73f2852bad23f22a2663a81633d55cfabe09658e4cb208e80",
+  "runner": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/run-guard.py",
+  "runner_sha256": "feb66a1017013db09ae3ab258272a783e31ddee32b268439fe4b33471ba968b8",
+  "build_command": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/run-guard.py",
+    "--build"
+  ],
+  "timing_command": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/run-guard.py",
+    "--execute"
+  ],
+  "full_plan": {
+    "preflight": "PASS",
+    "build_commands": [
+      {
+        "role": "baseline",
+        "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+        "args": [
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+          "test",
+          "-c",
+          "-trimpath",
+          "-buildvcs=false",
+          "-o",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+          "./TreeDB/db"
+        ],
+        "timeout_seconds": 120
+      },
+      {
+        "role": "candidate",
+        "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+        "args": [
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+          "test",
+          "-c",
+          "-trimpath",
+          "-buildvcs=false",
+          "-o",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+          "./TreeDB/db"
+        ],
+        "timeout_seconds": 120
+      }
+    ],
+    "timing_plan": [
+      {
+        "index": 1,
+        "pair": 1,
+        "role": "baseline",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 2,
+        "pair": 1,
+        "role": "candidate",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 3,
+        "pair": 2,
+        "role": "candidate",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 4,
+        "pair": 2,
+        "role": "baseline",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 5,
+        "pair": 3,
+        "role": "baseline",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      },
+      {
+        "index": 6,
+        "pair": 3,
+        "role": "candidate",
+        "args": [
+          "taskset",
+          "-c",
+          "0",
+          "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.timeout=60s",
+          "-test.benchtime=1000x"
+        ]
+      }
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    }
+  },
+  "native_frozen_files_and_foreign_unchanged": true,
+  "protected_native_receipt_sha256": "f22a62f053975fbaa66c275511125fe986ee0e6d8f8efe9e431c9bc854884fb8",
+  "free_bytes": 274233597952,
+  "host": {
+    "utc": "2026-10-15T07:40:55Z",
+    "loadavg": "0.05 0.09 0.14 1/1205 1398378"
+  },
+  "estimates": {
+    "build_seconds_each_max": 120,
+    "build_seconds_likely_total": "40-90",
+    "timing_seconds_likely_total": "<5",
+    "disk_additional_binary_bytes": 120000000
+  },
+  "gates": {
+    "median_latency_max_regression_percent": 5,
+    "bytes_per_op_no_regression": true,
+    "allocs_per_op_no_regression": true
+  },
+  "no_go_build_or_timing": true
+}

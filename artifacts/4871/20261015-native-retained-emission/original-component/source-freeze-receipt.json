@@ -1,0 +1,95 @@
+{
+  "full_final_census": "candidate-public-promotion.after.json",
+  "head": "d7c27d7829e51ad06822340fcc55f03c3831f027",
+  "index": {
+    "bytes": 1827592,
+    "sha256": "e42654a67723accd81f368af2f851b05f3b8a41b612443d5b81ccb987a824596"
+  },
+  "owned_paths": {
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "bytes": 7943,
+      "sha256": "840e2bdca2912c684d8d603db2bdb8b043c73c7eee2aafa75350d44826360e20"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "bytes": 5563,
+      "sha256": "d8bf613ddbb41da035daedf16f2a094a1a8e41bd4f4da0e9c2afa8593067c14f"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "bytes": 6401,
+      "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 16492,
+      "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 28752,
+      "sha256": "093161bab3271401010da2a3436af39c7401654a5353c1ef760f83610314d1f4"
+    }
+  },
+  "parent_preimages": {
+    "TreeDB/freelist/generation_v1_emit_work.go": {
+      "absent_in_parent": true,
+      "git_error": "fatal: path 'TreeDB/freelist/generation_v1_emit_work.go' exists on disk, but not in '353a88fb'"
+    },
+    "TreeDB/freelist/generation_v1_emit_work_test.go": {
+      "absent_in_parent": true,
+      "git_error": "fatal: path 'TreeDB/freelist/generation_v1_emit_work_test.go' exists on disk, but not in '353a88fb'"
+    },
+    "TreeDB/freelist/generation_v1_encode_work.go": {
+      "absent_in_parent": true,
+      "git_error": "fatal: path 'TreeDB/freelist/generation_v1_encode_work.go' exists on disk, but not in '353a88fb'"
+    },
+    "TreeDB/freelist/generation_v1_format.go": {
+      "bytes": 18951,
+      "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 29937,
+      "sha256": "ab8589854292c709069dce3f84bf0382709f6ec90350aadcf3e000e44e1daea7"
+    }
+  },
+  "protected_foreign": {
+    "TreeDB/internal/valuelog/native_zstd_leaf_fixture_export_test.go": {
+      "bytes": 6899,
+      "sha256": "7f7db5c374a618b089819c09d4d78d7f490e4b305ac36497ebfcaf991d23e3a7"
+    },
+    "TreeDB/internal/valuelog/native_zstd_rank_census_test.go": {
+      "bytes": 7036,
+      "sha256": "eb39341c1b38cbd95c249a2724d345992176a0b74f083ffa6b61b28462a4693e"
+    },
+    "TreeDB/mvcc/bounded_prune_whole_current_publication_test.go": {
+      "bytes": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    }
+  },
+  "qualification": "Focused shared-core correctness only; native production ACK=0; MaterializeCandidate remains synchronous until successor closure stages implemented.",
+  "recommended_parent": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "runs": {
+    "candidate-freelist": {
+      "census_entries": 4427,
+      "census_equal": true,
+      "elapsed_seconds": 0.562498371116817,
+      "exit_code": 0,
+      "raw_sha256": "ae74f89e5c9adb7706b453d956cda50b56cd3494245757f5f1e479d88de6a664",
+      "timeout": false
+    },
+    "candidate-public-promotion": {
+      "census_entries": 4427,
+      "census_equal": true,
+      "elapsed_seconds": 13.866510287858546,
+      "exit_code": 0,
+      "raw_sha256": "003bea9bbe7e17b7759e9ca3c36bb17a1e619fa70680798165bd492977c28cb8",
+      "timeout": false
+    },
+    "prior-format-reference": {
+      "census_entries": 4427,
+      "census_equal": true,
+      "elapsed_seconds": 0.6064631380140781,
+      "exit_code": 0,
+      "raw_sha256": "c1f7d0ab0197f1d7a5291a64c252f3b0c42b1a9c1382a7e125178685d8361bba",
+      "timeout": false
+    }
+  },
+  "source_census_entries": 4427
+}

@@ -1,0 +1,124 @@
+{
+  "verdict": "ACCEPT",
+  "reviewer": "Independent GPT-6.1 Sol source review",
+  "scope": "Only corrected txn/emission/test delta against prior accepted frozen five-path component; source and existing evidence only.",
+  "native_ack": 0,
+  "findings": [],
+  "source_binding": {
+    "remote_packet": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-emission-escape-fix-20261015",
+    "source_freeze_receipt_sha256": "2788a76738b2ae72733440170ea22a08cd16f403cf4bcfe4c95a3c20fdeccc2f",
+    "manifest_sha256": "fa2426bb4d4c50156e6e1e493c164fca6fb7d3ac2a3038e04a3885e5c07c2845",
+    "manifest_members_verified": 27,
+    "manifest_mismatches": [],
+    "baseline": "353a88fb160febce951dd4caa45ac079c261fca4",
+    "owned_five": {
+      "TreeDB/freelist/generation_v1_emit_work.go": {
+        "bytes": 8400,
+        "sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a"
+      },
+      "TreeDB/freelist/generation_v1_emit_work_test.go": {
+        "bytes": 7648,
+        "sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61"
+      },
+      "TreeDB/freelist/generation_v1_encode_work.go": {
+        "bytes": 6401,
+        "sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9"
+      },
+      "TreeDB/freelist/generation_v1_format.go": {
+        "bytes": 16492,
+        "sha256": "201854f76a9fc98b1c3d7beb9eef8077a0dec5e93e342a6206251008cf6fcbdc"
+      },
+      "TreeDB/freelist/generation_v1_txn.go": {
+        "bytes": 28878,
+        "sha256": "3a76cb33d259e7eda95b8fef3a94bff24c136a4b410ee233d6cc8ba0949ef858"
+      }
+    },
+    "changed_vs_original_accept": [
+      "TreeDB/freelist/generation_v1_txn.go",
+      "TreeDB/freelist/generation_v1_emit_work.go",
+      "TreeDB/freelist/generation_v1_emit_work_test.go"
+    ],
+    "unchanged": [
+      "TreeDB/freelist/generation_v1_format.go",
+      "TreeDB/freelist/generation_v1_encode_work.go"
+    ]
+  },
+  "positive_checks": [
+    {
+      "source": "TreeDB/freelist/generation_v1_txn.go:636",
+      "conclusion": "Synchronous driver validates required operands, initializes stack-owned fixed-depth control, and drains the SAME advance loop with nil work. It no longer enters the retained binding method and does not store caller next/sink pointers in control."
+    },
+    {
+      "source": "TreeDB/freelist/generation_v1_emit_work.go:185",
+      "conclusion": "Retained step checks sticky first error before work, binds exact root/generation/next-pointer/sink identities before advancing, and stores the first bind/advance error. Real pre-output yield with a different next pointer is rejected without assigning page IDs or writing output."
+    },
+    {
+      "source": "TreeDB/freelist/generation_v1_emit_work.go:222",
+      "conclusion": "The traversal, encoder calls, page-ID mutation, sink admission, and output release stages are unchanged. Only operand binding moved into bind. No second encoder or changed on-disk authority."
+    },
+    {
+      "source": "TreeDB/freelist/generation_v1_emit_work.go:262",
+      "conclusion": "Fixed controls reuse embedded arrays; each emitted page remains fresh detached 4KiB output whose candidate/writer consumers may retain it. Batch/memtable/vlog resettable storage has an incompatible last-consumer boundary. Existing arena inventory and explicit persistent-output exception remain sound; no new arena/pool introduced."
+    },
+    {
+      "source": "TreeDB/freelist/generation_v1_emit_work_test.go:144",
+      "conclusion": "Added exact-next-pointer rejection across a real yield, retaining prior opaque refusal, canonical bytes/decoder, candidate alias lifetime, and duplicate/sticky-error controls."
+    },
+    {
+      "source": "TreeDB/freelist/generation_v1_emit_work_test.go:185",
+      "conclusion": "Actual canonical chunk is emitted into preprovisioned sink storage and decoded/checksummed; AllocsPerRun requires exactly one fresh output allocation, isolating controls from required persistent page output."
+    }
+  ],
+  "existing_runtime_evidence": {
+    "reviewer_executed_go_or_benchmarks": false,
+    "red": {
+      "raw_sha256": "2e982f49e7186e48bea10eaf5e53cd59194bb4cd7ee3473e7a42da5a98fc75de",
+      "result": "Actual regression fails at 3 allocations; same test bytes as GREEN; explicit exit 1, no timeout.",
+      "source_rows": 4427,
+      "before_after_equal": true
+    },
+    "green": {
+      "raw_sha256": "855d9951301bbb4e4bf60c0f26e5d339b35d9efb5598417b5dc5d80521784411",
+      "result": "All three actual selectors RUN/PASS: canonical bytes/retention; opaque refusal/exact binding/sticky failure; synchronous controls exactly 1 allocation. Explicit exit 0, no timeout.",
+      "source_rows": 4427,
+      "before_after_equal": true,
+      "compiler": "emitStatePages next does not escape (txn:636); original &recordingSink does not escape (txn:767); no MaterializeCandidate next heap-move. Compile diagnostics are supporting evidence, not independent public activation qualification."
+    }
+  },
+  "ordinary_public_guard": {
+    "remote_packet": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015",
+    "source_preflight_sha256": "7ce443dd19a9a2c0cce17a97bda2eaed281d2b91e635236d9fd8a49226864676",
+    "results_sha256": "141db73d83107ee6a3eb792fcc86c268040d0dcc6ab9e4eaa27c85bb8ce2a65b",
+    "corrected_packet_binding_sha256": "6c5cca5eacb22f621d341c812136d63d18f47d335d918f56ea3f38f8190c2dc7",
+    "source_binding": "Same baseline 353a88fb plus exact corrected five; benchmark unchanged e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6; candidate binary c9fb8163b24f6666a6c1fb4ccd748314f405ca6432ea054ef336c2e936bdddf5. Build/timing before-after censuses byte-identical.",
+    "samples": "All six AB/BA/AB samples exit 0; fixed1000x public default-engine foreground Batch.Write; same timer/lifecycle boundaries.",
+    "medians": {
+      "baseline": {
+        "ns_per_op": 25576.0,
+        "bytes_per_op": 46330,
+        "allocs_per_op": 148
+      },
+      "candidate": {
+        "ns_per_op": 25902.0,
+        "bytes_per_op": 46298,
+        "allocs_per_op": 147
+      }
+    },
+    "gates": {
+      "latency": true,
+      "bytes": true,
+      "objects": true
+    },
+    "interpretation": "Passes preset short guard: latency +1.2746%, bytes -32/op, objects -1/op; directional guard only. Original failed guard preserved and not waived."
+  },
+  "policy": "Reloaded current go-performance-optimization arena section and gomap reference, plus graph executor coherent proportional repair guidance. Existing maintained arena inventory reviewed; delta eliminates temporary heap controls rather than substituting an allocator.",
+  "limitations": [
+    "No Go, benchmarks, profiles, source edits, Git/GitHub writes, or native ownership takeover by reviewer. Only local review evidence written.",
+    "Acceptance is exact changed component, not final native activation/ACK, broad Q32 qualification, or performance qualification.",
+    "Real MaterializeCandidate retained constructor/reservation/header/closure stages remain pending as previously scoped. Prior independent-reference/decoder review is reused for unchanged encoding bytes."
+  ],
+  "verification_artifacts": {
+    "packet-verification.json": "a26a7f79613b1fa6c9ce1ccfee4fecd026821713a56216a2ada12833947ec597",
+    "guard-verification.json": "533d5b4a39c32d104f9103e69433d865009bf876afd6eeeb715ceda015aa9b83"
+  }
+}

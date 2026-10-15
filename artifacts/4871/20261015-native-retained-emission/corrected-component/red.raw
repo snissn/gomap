@@ -1,0 +1,6 @@
+=== RUN   TestCanonicalStateEmissionSynchronousControlsStayCallerOwnedV1
+    generation_v1_emit_work_test.go:209: one fresh retained output must be the sole allocation; got 3
+--- FAIL: TestCanonicalStateEmissionSynchronousControlsStayCallerOwnedV1 (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/freelist	0.001s
+FAIL

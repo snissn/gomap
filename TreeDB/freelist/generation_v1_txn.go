@@ -623,55 +623,24 @@ type recordingSink struct {
 	pages            []PageImageV1
 	beforeFirstWrite func() error
 	writeStarted     bool
+	ledger           *ReservationLedger
+	candidateID      CandidateIDV1
+	work             stateRecordingWriteWorkV1
 }
 
 func (s *recordingSink) write(id uint64, data []byte) error {
-	if !s.writeStarted {
-		if s.beforeFirstWrite != nil {
-			if err := s.beforeFirstWrite(); err != nil {
-				return err
-			}
-		}
-		s.writeStarted = true
-	}
-	sinkData := data
-	if _, ownsCandidateBytes := s.sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
-		// Arbitrary sinks may retain or mutate their input. Give them an
-		// isolated copy while the candidate keeps the fresh encoded buffer.
-		sinkData = append([]byte(nil), data...)
-	}
-	if err := s.sink.WritePage(id, sinkData); err != nil {
-		return err
-	}
-	s.pages = append(s.pages, PageImageV1{id, data})
-	return nil
+	_, err := s.writeWithWork(id, data, nil)
+	return err
 }
 
 func emitStatePages(n *stateNode, _ int, generationID uint64, next *uint64, sink *recordingSink) error {
-	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
-		return nil
+	if next == nil || sink == nil || generationID == 0 {
+		return ErrGenerationFormat
 	}
-	if n.chunk != nil {
-		n.chunk.pageID = *next
-		*next++
-		b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
-		n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
-		n.pageID, n.checksum = n.chunk.pageID, n.chunk.checksum
-		return sink.write(n.pageID, b)
-	}
-	for _, child := range n.child {
-		if err := emitStatePages(child, 0, generationID, next, sink); err != nil {
-			return err
-		}
-	}
-	n.pageID = *next
-	*next++
-	b, err := encodeIndexPage(n.pageID, generationID, n, int(n.depth))
-	if err != nil {
-		return err
-	}
-	n.checksum = binary.LittleEndian.Uint32(b[8:12])
-	return sink.write(n.pageID, b)
+	var work statePageEmissionWorkV1
+	work.frames[0].node, work.depth = n, 1
+	_, err := work.advance(generationID, next, sink, nil)
+	return err
 }
 
 func appendIDExtents(extents []ReservationExtentV1, ids []uint64, kind ReservationKindV1, seq uint64) []ReservationExtentV1 {
@@ -692,16 +661,9 @@ func appendReservationRange(extents []ReservationExtentV1, start, count uint64, 
 }
 
 func countUnmaterializedStatePages(n *stateNode, _ int) uint64 {
-	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
-		return 0
-	}
-	count := uint64(1)
-	if n.chunk == nil {
-		for _, child := range n.child {
-			count += countUnmaterializedStatePages(child, 0)
-		}
-	}
-	return count
+	var work statePageCountWorkV1
+	_, _ = work.step(n, nil)
+	return work.count
 }
 
 func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
@@ -803,10 +765,9 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	}
 	next := metadataStart
 	recorded := &recordingSink{
-		sink: sink,
-		beforeFirstWrite: func() error {
-			return t.ledger.markTailWriteAttempted(candidateID)
-		},
+		sink:        sink,
+		ledger:      t.ledger,
+		candidateID: candidateID,
 	}
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		// An empty tree still has one immutable exact-generation root page.

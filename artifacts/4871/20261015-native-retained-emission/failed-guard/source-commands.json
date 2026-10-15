@@ -1,0 +1,200 @@
+[
+  {
+    "name": "baseline-setup",
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/create_worktree.py",
+      "--repo",
+      "/home/mikers/dev/snissn/gomap",
+      "--path",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+      "--branch",
+      "codex/4878-ordinary-retained-baseline-guard-20261015",
+      "--base",
+      "353a88fb160febce951dd4caa45ac079c261fca4",
+      "--seed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "--mode",
+      "git"
+    ],
+    "cwd": null,
+    "exit": 0
+  },
+  {
+    "name": "baseline-head",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-clean",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-changed",
+    "args": [
+      "git",
+      "diff",
+      "--name-only"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-untracked",
+    "args": [
+      "git",
+      "ls-files",
+      "--others",
+      "--exclude-standard"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-tree",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "baseline-status",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-baseline-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-setup",
+    "args": [
+      "python3",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/create_worktree.py",
+      "--repo",
+      "/home/mikers/dev/snissn/gomap",
+      "--path",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+      "--branch",
+      "codex/4878-ordinary-retained-candidate-guard-20261015",
+      "--base",
+      "353a88fb160febce951dd4caa45ac079c261fca4",
+      "--seed",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "--mode",
+      "git"
+    ],
+    "cwd": null,
+    "exit": 0
+  },
+  {
+    "name": "candidate-head",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-clean",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-changed",
+    "args": [
+      "git",
+      "diff",
+      "--name-only"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-untracked",
+    "args": [
+      "git",
+      "ls-files",
+      "--others",
+      "--exclude-standard"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-ls-files",
+    "args": [
+      "git",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-tree",
+    "args": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  },
+  {
+    "name": "candidate-status",
+    "args": [
+      "git",
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-retained-candidate-guard-20261015",
+    "exit": 0
+  }
+]

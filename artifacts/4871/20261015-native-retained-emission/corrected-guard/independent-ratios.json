@@ -1,0 +1,101 @@
+{
+  "method": "Parse all six raw stdout rows independently, integer sorted-middle medians and Decimal ratios; no reruns",
+  "samples": [
+    {
+      "index": 1,
+      "pair": 1,
+      "role": "baseline",
+      "ns_per_op": 25507,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148,
+      "raw": {
+        "bytes": 225,
+        "sha256": "c5b7afa9d7dbe003fc6d0ffdd0caa8ca6e2f9f1300b88f27c4262a22f9e41612"
+      },
+      "exit": 0
+    },
+    {
+      "index": 2,
+      "pair": 1,
+      "role": "candidate",
+      "ns_per_op": 25902,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147,
+      "raw": {
+        "bytes": 225,
+        "sha256": "ca38659edf0292629382660bc17148283e7c3307e3b06a15c77635d61bab6615"
+      },
+      "exit": 0
+    },
+    {
+      "index": 3,
+      "pair": 2,
+      "role": "candidate",
+      "ns_per_op": 25915,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147,
+      "raw": {
+        "bytes": 225,
+        "sha256": "16aca38267b697bc64e696e73c34328fd0dccacf199824551789225fa2ee7cc6"
+      },
+      "exit": 0
+    },
+    {
+      "index": 4,
+      "pair": 2,
+      "role": "baseline",
+      "ns_per_op": 25786,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148,
+      "raw": {
+        "bytes": 225,
+        "sha256": "7e820efc1454becd7fd6706fc4b3c69ead8d601faf2c62cb997f927f0d9bc4ca"
+      },
+      "exit": 0
+    },
+    {
+      "index": 5,
+      "pair": 3,
+      "role": "baseline",
+      "ns_per_op": 25576,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148,
+      "raw": {
+        "bytes": 225,
+        "sha256": "5ca4a77dde2ea8b87b79e09d4ca9bf2a30028c1cd76771ffe5fb124775368083"
+      },
+      "exit": 0
+    },
+    {
+      "index": 6,
+      "pair": 3,
+      "role": "candidate",
+      "ns_per_op": 25750,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147,
+      "raw": {
+        "bytes": 225,
+        "sha256": "b51d68a1c571e5531a01e4944785e97f5cad12ce5fde73edd7f2a5fe672c0f50"
+      },
+      "exit": 0
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 25576,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148
+    },
+    "candidate": {
+      "ns_per_op": 25902,
+      "bytes_per_op": 46298,
+      "allocs_per_op": 147
+    }
+  },
+  "percent_change_decimal": {
+    "ns_per_op": "1.274632467938692524241476400",
+    "bytes_per_op": "-0.0690697172458450248219296400",
+    "allocs_per_op": "-0.6756756756756756756756756800"
+  },
+  "agrees_with_runner": true
+}

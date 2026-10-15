@@ -1,0 +1,104 @@
+[
+  {
+    "index": 1,
+    "pair": 1,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  },
+  {
+    "index": 2,
+    "pair": 1,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  },
+  {
+    "index": 3,
+    "pair": 2,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  },
+  {
+    "index": 4,
+    "pair": 2,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  },
+  {
+    "index": 5,
+    "pair": 3,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  },
+  {
+    "index": 6,
+    "pair": 3,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ]
+  }
+]

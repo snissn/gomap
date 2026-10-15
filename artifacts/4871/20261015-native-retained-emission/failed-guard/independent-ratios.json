@@ -1,0 +1,133 @@
+{
+  "method": "Parse all raw stdout with whitespace fields; independent sorted middle value and Decimal arithmetic (candidate-baseline)/baseline*100.",
+  "rows": [
+    {
+      "index": 1,
+      "pair": 1,
+      "role": "baseline",
+      "ns_per_op": 25689,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 2,
+      "pair": 1,
+      "role": "candidate",
+      "ns_per_op": 25698,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149
+    },
+    {
+      "index": 3,
+      "pair": 2,
+      "role": "candidate",
+      "ns_per_op": 25672,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149
+    },
+    {
+      "index": 4,
+      "pair": 2,
+      "role": "baseline",
+      "ns_per_op": 25502,
+      "bytes_per_op": 46330,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 5,
+      "pair": 3,
+      "role": "baseline",
+      "ns_per_op": 25181,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148
+    },
+    {
+      "index": 6,
+      "pair": 3,
+      "role": "candidate",
+      "ns_per_op": 25755,
+      "bytes_per_op": 46466,
+      "allocs_per_op": 149
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 25502,
+      "bytes_per_op": 46331,
+      "allocs_per_op": 148
+    },
+    "candidate": {
+      "ns_per_op": 25698,
+      "bytes_per_op": 46467,
+      "allocs_per_op": 149
+    }
+  },
+  "changes": {
+    "ns_per_op": {
+      "absolute": 196,
+      "percent": "0.768567171202258646380676025410"
+    },
+    "bytes_per_op": {
+      "absolute": 136,
+      "percent": "0.293539962444151863762923312685"
+    },
+    "allocs_per_op": {
+      "absolute": 1,
+      "percent": "0.675675675675675675675675675676"
+    }
+  },
+  "pairs": [
+    {
+      "pair": 1,
+      "changes": {
+        "ns_per_op": {
+          "absolute": 9,
+          "percent": "0.0350344505430339834170267429639"
+        },
+        "bytes_per_op": {
+          "absolute": 136,
+          "percent": "0.293539962444151863762923312685"
+        },
+        "allocs_per_op": {
+          "absolute": 1,
+          "percent": "0.675675675675675675675675675676"
+        }
+      }
+    },
+    {
+      "pair": 2,
+      "changes": {
+        "ns_per_op": {
+          "absolute": 170,
+          "percent": "0.666614383185632499411810838366"
+        },
+        "bytes_per_op": {
+          "absolute": 137,
+          "percent": "0.295704726958774012518886250809"
+        },
+        "allocs_per_op": {
+          "absolute": 1,
+          "percent": "0.675675675675675675675675675676"
+        }
+      }
+    },
+    {
+      "pair": 3,
+      "changes": {
+        "ns_per_op": {
+          "absolute": 574,
+          "percent": "2.27949644573289384853659505182"
+        },
+        "bytes_per_op": {
+          "absolute": 135,
+          "percent": "0.291381580367356629470548876562"
+        },
+        "allocs_per_op": {
+          "absolute": 1,
+          "percent": "0.675675675675675675675675675676"
+        }
+      }
+    }
+  ],
+  "guard": "FAIL: +1 allocation in every candidate sample; +135..137 B/op per planned pair; latency guard passes."
+}

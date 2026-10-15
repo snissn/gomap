@@ -1,0 +1,292 @@
+{
+  "source": "353a88fb160febce951dd4caa45ac079c261fca4",
+  "mechanisms": {
+    "TreeDB/batch/batch.go": [
+      {
+        "line": 72,
+        "text": "\tarenaChunks     [][]byte"
+      },
+      {
+        "line": 198,
+        "text": "func (b *Batch) Reset() {"
+      },
+      {
+        "line": 273,
+        "text": "\tif len(b.arenaChunks) == 0 {"
+      },
+      {
+        "line": 278,
+        "text": "\tfor i := range b.arenaChunks {"
+      },
+      {
+        "line": 279,
+        "text": "\t\tchunkCap := cap(b.arenaChunks[i])"
+      },
+      {
+        "line": 289,
+        "text": "\t\tfor i := range b.arenaChunks {"
+      },
+      {
+        "line": 290,
+        "text": "\t\t\tb.arenaChunks[i] = nil"
+      },
+      {
+        "line": 292,
+        "text": "\t\tb.arenaChunks = nil"
+      },
+      {
+        "line": 295,
+        "text": "\tkeep := b.arenaChunks[keepIdx][:0]"
+      },
+      {
+        "line": 296,
+        "text": "\tfor i := 1; i < len(b.arenaChunks); i++ {"
+      },
+      {
+        "line": 297,
+        "text": "\t\tb.arenaChunks[i] = nil"
+      },
+      {
+        "line": 299,
+        "text": "\tb.arenaChunks[0] = keep"
+      },
+      {
+        "line": 300,
+        "text": "\tb.arenaChunks = b.arenaChunks[:1]"
+      },
+      {
+        "line": 304,
+        "text": "func (b *Batch) Close() error {"
+      },
+      {
+        "line": 358,
+        "text": "\tif n := len(b.arenaChunks); n > 0 {"
+      },
+      {
+        "line": 360,
+        "text": "\t\tchunk := b.arenaChunks[last]"
+      },
+      {
+        "line": 367,
+        "text": "\t\tprevCap := cap(b.arenaChunks[last])"
+      },
+      {
+        "line": 386,
+        "text": "\tb.arenaChunks = append(b.arenaChunks, make([]byte, 0, chunkCap))"
+      }
+    ],
+    "TreeDB/caching/db.go": [
+      {
+        "line": 32542,
+        "text": "\tarenaLeasedBytes := db.batchArenaLeaseBytes.Load()"
+      },
+      {
+        "line": 32565,
+        "text": "\tarenaLeased := fmt.Sprintf(\"%d\", arenaLeasedBytes)"
+      },
+      {
+        "line": 32566,
+        "text": "\tarenaLeasedMax := fmt.Sprintf(\"%d\", db.batchArenaLeaseBytesMax.Load())"
+      },
+      {
+        "line": 32573,
+        "text": "\tstats[\"treedb.cache.batch_arena.leased_bytes\"] = arenaLeased"
+      },
+      {
+        "line": 32576,
+        "text": "\tstats[\"treedb.cache.batch_arena.leased_bytes_max\"] = arenaLeasedMax"
+      },
+      {
+        "line": 32582,
+        "text": "\tstats[\"treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate\"] = fmt.Sprintf(\"%d\", arenaPoolBytes+arenaLeasedBytes)"
+      },
+      {
+        "line": 32646,
+        "text": "\tstats[\"treedb.process.batch_arena.leased_bytes\"] = arenaLeased"
+      },
+      {
+        "line": 32649,
+        "text": "\tstats[\"treedb.process.batch_arena.leased_bytes_max\"] = arenaLeasedMax"
+      },
+      {
+        "line": 35263,
+        "text": "\tcopyArena                 []byte"
+      },
+      {
+        "line": 35264,
+        "text": "\tcopyArenaChunks           [][]byte"
+      },
+      {
+        "line": 35265,
+        "text": "\tcopyArenaCap              int"
+      },
+      {
+        "line": 35320,
+        "text": "\t\tcopyArenaCap:   db.batchCopyArenaInitCap(0),"
+      },
+      {
+        "line": 35338,
+        "text": "\t\tcopyArenaCap:   db.batchCopyArenaInitCap(reserveHint),"
+      },
+      {
+        "line": 36399,
+        "text": "\t\tb.copyArenaCap = b.db.batchCopyArenaInitCap(0)"
+      },
+      {
+        "line": 36462,
+        "text": "\tif b.db != nil && cap(b.copyArena) > 0 {"
+      },
+      {
+        "line": 36463,
+        "text": "\t\tb.db.noteBatchArenaChunkFinalize(batchArenaKindMain, len(b.copyArena), cap(b.copyArena))"
+      },
+      {
+        "line": 36465,
+        "text": "\tchunks := b.copyArenaChunks"
+      },
+      {
+        "line": 36469,
+        "text": "\tb.copyArenaChunks = nil"
+      }
+    ],
+    "TreeDB/internal/memtable/hash_sorted.go": [
+      {
+        "line": 41,
+        "text": "type hashArena struct {"
+      },
+      {
+        "line": 48,
+        "text": "func (a *hashArena) alloc(n int) []byte {"
+      },
+      {
+        "line": 70,
+        "text": "func (a *hashArena) copyBytes(src []byte) []byte {"
+      },
+      {
+        "line": 91,
+        "text": "\tarena       hashArena"
+      },
+      {
+        "line": 158,
+        "text": "func (a *hashArena) resetKeepFirstChunk() {"
+      },
+      {
+        "line": 1298,
+        "text": "\t\tidx.cond.Wait()"
+      }
+    ],
+    "TreeDB/internal/memtable/btree.go": [
+      {
+        "line": 17,
+        "text": "const btreeArenaChunkSize = 1 << 20"
+      },
+      {
+        "line": 68,
+        "text": "\tarena     *btreeArena"
+      },
+      {
+        "line": 150,
+        "text": "\t\tarena: &btreeArena{"
+      },
+      {
+        "line": 151,
+        "text": "\t\t\tchunkSize: btreeArenaChunkSize,"
+      },
+      {
+        "line": 795,
+        "text": "type btreeArena struct {"
+      },
+      {
+        "line": 801,
+        "text": "func (a *btreeArena) resetKeepFirstChunk() {"
+      },
+      {
+        "line": 816,
+        "text": "func (a *btreeArena) Copy(src []byte) []byte {"
+      },
+      {
+        "line": 825,
+        "text": "func (a *btreeArena) alloc(n int) []byte {"
+      },
+      {
+        "line": 835,
+        "text": "func (a *btreeArena) currentChunk(n int) []byte {"
+      }
+    ],
+    "TreeDB/internal/valuelog/writer.go": [
+      {
+        "line": 36,
+        "text": "\t// Retain up to one normal writer buffer of scratch across explicit flush-style"
+      },
+      {
+        "line": 117,
+        "text": "\tappendBuf              []byte"
+      },
+      {
+        "line": 121,
+        "text": "\tscratch                []byte"
+      },
+      {
+        "line": 318,
+        "text": "\tif len(w.appendBuf) == 0 {"
+      },
+      {
+        "line": 322,
+        "text": "\t\t_, err := w.bw.Write(w.appendBuf)"
+      },
+      {
+        "line": 323,
+        "text": "\t\tw.appendBuf = w.appendBuf[:0]"
+      },
+      {
+        "line": 326,
+        "text": "\tif err := w.writeAllToFile(w.appendBuf); err != nil {"
+      },
+      {
+        "line": 329,
+        "text": "\tw.appendBuf = w.appendBuf[:0]"
+      },
+      {
+        "line": 362,
+        "text": "\tw.scratch = trimTransientWriterScratch(w.scratch)"
+      },
+      {
+        "line": 374,
+        "text": "\tw.scratch = nil"
+      },
+      {
+        "line": 425,
+        "text": "\tif w == nil || cap(w.appendBuf) == 0 {"
+      },
+      {
+        "line": 428,
+        "text": "\tputWriterAppendBuf(w.appendBuf)"
+      },
+      {
+        "line": 429,
+        "text": "\tw.appendBuf = nil"
+      },
+      {
+        "line": 433,
+        "text": "\tif w == nil || len(w.appendBuf) != 0 {"
+      },
+      {
+        "line": 440,
+        "text": "\tif w == nil || capacity <= 0 || cap(w.appendBuf) >= capacity {"
+      },
+      {
+        "line": 443,
+        "text": "\told := w.appendBuf"
+      },
+      {
+        "line": 445,
+        "text": "\tnext = next[:len(w.appendBuf)]"
+      },
+      {
+        "line": 446,
+        "text": "\tcopy(next, w.appendBuf)"
+      }
+    ]
+  },
+  "decision": "No allocation implementation change in guard. Candidate fixed depth-bounded controls reuse arrays. Emitted 4KiB page bytes may be retained by CandidatePageWriterV1 after Prepare/publication, so they cannot be reset with batch/memtable/vlog scratch; retain detached ownership and generic sink isolation. Existing candidate retained-page/alias/failure controls apply; measure ordinary same nil-policy core."
+}

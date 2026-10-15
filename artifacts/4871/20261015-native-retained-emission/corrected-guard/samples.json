@@ -1,0 +1,140 @@
+[
+  {
+    "index": 1,
+    "pair": 1,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.05662127770483494,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25507.0,
+    "bytes_per_op": 46330,
+    "allocs_per_op": 148
+  },
+  {
+    "index": 2,
+    "pair": 1,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/candidate-fixed-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.051114905159920454,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25902.0,
+    "bytes_per_op": 46298,
+    "allocs_per_op": 147
+  },
+  {
+    "index": 3,
+    "pair": 2,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/candidate-fixed-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.050767891108989716,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25915.0,
+    "bytes_per_op": 46298,
+    "allocs_per_op": 147
+  },
+  {
+    "index": 4,
+    "pair": 2,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.051559628918766975,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25786.0,
+    "bytes_per_op": 46331,
+    "allocs_per_op": 148
+  },
+  {
+    "index": 5,
+    "pair": 3,
+    "role": "baseline",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-20261015/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.05082737188786268,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25576.0,
+    "bytes_per_op": 46330,
+    "allocs_per_op": 148
+  },
+  {
+    "index": 6,
+    "pair": 3,
+    "role": "candidate",
+    "args": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/native-retained-ordinary-guard-fix-20261015/candidate-fixed-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x"
+    ],
+    "elapsed_seconds": 0.05014678603038192,
+    "returncode": 0,
+    "iterations": 1000,
+    "ns_per_op": 25750.0,
+    "bytes_per_op": 46298,
+    "allocs_per_op": 147
+  }
+]
