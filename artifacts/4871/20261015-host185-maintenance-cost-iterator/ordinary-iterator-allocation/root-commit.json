@@ -1,0 +1,16 @@
+{
+  "head": "5027dc559f83dee04317910169c48d277fcce72f",
+  "tree": "a7710b6b41ebc62328a5282c959910193ce4cd0f",
+  "parent": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "review_sha256": "031e9663c3ec6b77b32496431b3f6439c8b9e9e4c9b1e5fabecfd060d76a8f70",
+  "freeze_sha256": "df7308e2a73c9a41ea36158801b76e08b775a50e05a0d49ed2842ee7d5add58f",
+  "all_source_count": 10246,
+  "changed_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/tree/iterator.go",
+    "TreeDB/tree/owned_iterator.go",
+    "TreeDB/tree/primary_iterator.go"
+  ],
+  "remote_verified": true,
+  "at_utc": "2026-10-15T21:44:51.788282+00:00"
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0,1",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.memprofilerate=1",
+      "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof",
+      "-test.timeout=120s"
+    ],
+    "arm": "baseline-public",
+    "binary_sha256": "bb9967979acb1c7913b8007d15e29e433490baf67123e4a9ee821bee27aa9761",
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 2.167580610141158,
+    "exit": 0,
+    "interrupted": null,
+    "profile_sha256": "e368f32b510568c8babc13864324c79c6f31cd3d9d9653912e0f4b5325450ab2",
+    "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "started_utc": "2026-10-15T21:29:00.635190+00:00",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_sha256": "9331162878e809975245134e5ca59f013828cbb0200989435cda9d907367e143"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0,1",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.memprofilerate=1",
+      "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof",
+      "-test.timeout=120s"
+    ],
+    "arm": "candidate-public",
+    "binary_sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "elapsed_s": 2.0169691923074424,
+    "exit": 0,
+    "interrupted": null,
+    "profile_sha256": "f34f455a6cdbc4ea09322756940ee5fc79507f39611923626fb30933791f23df",
+    "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+    "started_utc": "2026-10-15T21:29:03.028845+00:00",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_sha256": "a5b66a550db2898acac91ce6df2f8923bc92fb9a42d496b33c4d73c6455b77d1"
+  }
+]

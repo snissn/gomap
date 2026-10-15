@@ -1,0 +1,74 @@
+[
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-72e01/coordinator",
+    "elapsed_s": 83.32627566699999,
+    "exit": 0,
+    "interrupted": null,
+    "log": "baseline-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-72e01/coordinator",
+    "elapsed_s": 50.943900875,
+    "exit": 0,
+    "interrupted": null,
+    "log": "baseline-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair",
+    "elapsed_s": 61.473629972,
+    "exit": 0,
+    "interrupted": null,
+    "log": "candidate-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair",
+    "elapsed_s": 51.743840057,
+    "exit": 0,
+    "interrupted": null,
+    "log": "candidate-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,253 @@
+{
+  "status": "PROPOSED_ONLY_REQUIRES_ROOT_EXECUTION_GRANT",
+  "source_head": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "measured_candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "source_files": {
+    "TreeDB/cow_public_cost_bench_test.go": {
+      "sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/profiles.go": {
+      "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/public.go": {
+      "sha256": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/caching/db.go": {
+      "sha256": "666e3b833cd9bc4164b5d5379e946b9b27ed44869e72cfe6a900625998391387",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/caching/flush_run_planner.go": {
+      "sha256": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/caching/stable_leaf_resource.go": {
+      "sha256": "b885712d78acc2df14253e7e40b018642db20b9324178c780044de1f6cd6c0f8",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/batch/batch.go": {
+      "sha256": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/internal/mvccadmission/admission.go": {
+      "sha256": "14a91279780df01c1cff031e92f33d5dae7d0bb866ee461a60825a906e289a67",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/db.go": {
+      "sha256": "651d8087bbd688f8d168215d5f06d62d1c9636a482912e4e14f24ab11af0af22",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "sha256": "3fc85073c8434a119ce3b1998e0eb78d05c2a7107e7cd9e9c5ab8a59fb4b73ee",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/native_mvcc_data_dependency_release_v6.go": {
+      "sha256": "1f625a2f6b58be15e34af34b8c4a50d66f1781f47d139cb70b744188df29313d",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/vlog_ref_counts_owned.go": {
+      "sha256": "da07e7af8d51195a6bf86bfd1edf19df1158d63b75e7256b5aaa1e6035e65948",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/vlog_ref_incarnation.go": {
+      "sha256": "ddc684c077303db51d1b216462a7441642e49a6d5418ec15ff8574bead802743",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/stable_resource.go": {
+      "sha256": "7151ca8caf44e56afb2d3f7ddc529961db69b21faee022aa9bdae0ce6d1af1f2",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics.go": {
+      "sha256": "0c3de47cd9d2c5f16f173408f5acb9bd8c58823e55c4294962180fbd587db14f",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/internal/rootpublication/resource_token.go": {
+      "sha256": "51594dbbb09d0e1d0d1352da74a790a639d8cb2b395777d07d21f0b423b4400a",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/durable_root_bench_test.go": {
+      "sha256": "ddcb7d9b1f2af926e7c4c8050d3adc6c919fbe69899529e7df4cf882ba23717e",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/index_gen_db.go": {
+      "sha256": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/index_gen.go": {
+      "sha256": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/pools.go": {
+      "sha256": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/db/primary_dependency_v5.go": {
+      "sha256": "901976acaa83c38bdf04d3efd320817e779e02b17ada092ffd373abbcff004a3",
+      "equals_measured_candidate": true
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "sha256": "bf16356324aef7f9f978b2f581ed49d0ec7e253767e9973a961f7d7152655710",
+      "equals_measured_candidate": true
+    }
+  },
+  "raw_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01",
+  "raw_sha256": {
+    "performance-185/maintenance-bounded-02/pending-command.json": "190c5fa0e5a4efc183d90411015e6982db7a7b3e97795502d2417bc80ff7e4c3",
+    "performance-185/maintenance-bounded-02/00-checkpoint-baseline.txt": "797e99eef6c36a44c6dd89f1cd41a9f83ebbc9592470ea1a1132b0288f1b5d6f",
+    "performance-185/maintenance-bounded-02/measurement-quiet.json": "87654b458ceddfd33c87f7732f2761a7e4d1c24205e7552a9dc402b2a69920a8",
+    "performance-185/maintenance-bounded-02/result.json": "884609c26af98f6004903456aba822124ec904d1398c2bb5afc1588982ab4eb2",
+    "performance-185/maintenance-bounded-02/01-checkpoint-candidate.txt": "7feac998cbea4f69a237750468675ece5f45c4891fae2b28ab99dea2ce81698f",
+    "performance-185/maintenance-bounded-02/measurement-processes.jsonl": "499062b1d130896921ffb052f69e5d546b633d4f607689cd2bff836569922bc5",
+    "performance-185/maintenance-bounded-02/preflight.json": "afd5f0ff30f86fc367f681a04c9f915b92339b2927e07c33fb48d66258a5c7cc",
+    "performance-185/maintenance-bounded-02/10-vacuum-baseline.txt": "1c294bdfd1ec287701bba141eba960a71a5119f757bf1a644c88a56b1eeaa931",
+    "performance-185/maintenance-bounded-02/03-checkpoint-baseline.txt": "37c8ccd7e990a2487cb65a9e1cf124e695ade377ebfe5c0b45a6fd88a664d9ef",
+    "performance-185/maintenance-bounded-02/host.txt": "7f7ae60d24f0bc743f9a81bd7a3ed6116c5c23a7b02d95f69a9fb40a2c268ed8",
+    "performance-185/maintenance-bounded-02/09-vacuum-baseline.txt": "6cfa2224618fe672bc90b2ba165a036f72bea00c6613fbd45567ed9ddd6882de",
+    "performance-185/maintenance-bounded-02/preflight-processes.jsonl": "93ec5c2fc4d3ff2250877264d03183fd93a1f3c6c14c13b214cdd530200270b3",
+    "performance-185/maintenance-bounded-02/cpuinfo.txt": "995aff357b0e3412f824bb6bcce61c9de8c8341b71804a2257824b3672d9d580",
+    "performance-185/maintenance-bounded-02/08-vacuum-candidate.txt": "dea36a94543d97d6ebd04dec0b5caaa8e0f8d0032deeadcbeaff9e07239fbdce",
+    "performance-185/maintenance-bounded-02/04-checkpoint-baseline.txt": "09a2584d967ff790037e98082d83a20fb497cb6f711bcf0814fc0e6121346809",
+    "performance-185/maintenance-bounded-02/commands.json": "f12440cda4920054b9abdcaa4ffdd5e28120361636349b140f98c07ee671a719",
+    "performance-185/maintenance-bounded-02/13-cohort-candidate.txt": "56e30b1fa1e97773f0cee684798c9617bb926b5d9adcbcf2a019e68234ee531b",
+    "performance-185/maintenance-bounded-02/05-checkpoint-candidate.txt": "5f9e5a99276b35d38776a6c58ae581069c17b38c004fe9dbce8075b8e8c30660",
+    "performance-185/maintenance-bounded-02/06-vacuum-baseline.txt": "b3de3cd875c96691957facb9d8e427e652574a06fcc36265931d3232c1b05ab7",
+    "performance-185/maintenance-bounded-02/11-vacuum-candidate.txt": "0c52a1c0f2e96edac5407e78afa5c946e545336c61eb67c3e582c636addf3805",
+    "performance-185/maintenance-bounded-02/12-cohort-candidate.txt": "287823a8a261c7472817c18163b352bac22d42b9ccb5eaa732f3761f3e0faefa",
+    "performance-185/maintenance-bounded-02/binding.json": "fcdf6ff8011e259ef7d329a4d2a3d2d58f32b6696fffa6e57d46cf5776fc4d9b",
+    "performance-185/maintenance-bounded-02/02-checkpoint-candidate.txt": "649464aface6ee2018fc38a83d4790cae6f245d70a13bd32fb226dd73e3f74d3",
+    "performance-185/maintenance-bounded-02/07-vacuum-candidate.txt": "19f91b6a4189466a6233b12992c856b33336fd5ec64dc3c3a42bdd2a528e2294"
+  },
+  "source_mutation": false,
+  "execution_in_this_task": {
+    "builds": 0,
+    "tests": 0,
+    "benchmarks": 0,
+    "profiles": 0
+  },
+  "proposed_first_stage": {
+    "calls": 2,
+    "arms": [
+      "baseline-public.test",
+      "candidate-public.test"
+    ],
+    "source": "reuse exact retained hosted ELF files; verify their hashes and matching retained Go1.26.3 toolchain first",
+    "common_argv": [
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+      "-test.benchtime=16x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.memprofilerate=1",
+      "-test.memprofile=<task-arm-output>/alloc.pprof",
+      "-test.timeout=120s"
+    ],
+    "env": {
+      "GOMAXPROCS": "2",
+      "TMPDIR": "task-specific fastdisk short path"
+    },
+    "limits": "one call per arm, no retries, original process-group timeout/kill and complete raw output; diagnostic allocation profiling only, no latency acceptance",
+    "analysis": [
+      "Compare alloc_space and alloc_objects using exact symbols; retain flat/cumulative stacks for batch.Entry arrays, outer-leaf token diagnostics, DATA dependency lease, refcount candidates, visible install/transaction/seal metadata.",
+      "Classify synchronous Checkpoint-descended stacks separately from seed/NewBatch/side-store Open/setup and asynchronous publisher stacks. Standard memprofile includes all fixture work; do not divide whole-profile differences by 16 and label timed allocation attribution.",
+      "Do not change source or disable metadata/pins to manufacture a control. If profiles cannot separate setup and timed dirty publication, return evidence and request one bounded phase-specific artifact overlay before execution."
+    ],
+    "inner_timeout_seconds": 120,
+    "outer_process_group_timeout_seconds": 150,
+    "outer_policy": "Spawn in a fresh session/process group; retain raw stdout/stderr and exit; at 150s terminate whole group, then kill remaining group after bounded grace. No retry.",
+    "fixed_order": [
+      "baseline-public",
+      "candidate-public"
+    ],
+    "exact_calls": [
+      {
+        "arm": "baseline-public",
+        "binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-public.test",
+        "binary_sha256": "bb9967979acb1c7913b8007d15e29e433490baf67123e4a9ee821bee27aa9761",
+        "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-public.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+          "-test.benchtime=16x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.memprofilerate=1",
+          "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/baseline-public/alloc.pprof",
+          "-test.timeout=120s"
+        ],
+        "stdout_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/baseline-public/stdout.txt",
+        "stderr_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/baseline-public/stderr.txt",
+        "env": {
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/tmp",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOPROXY": "off",
+          "GOSUMDB": "off"
+        },
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair"
+      },
+      {
+        "arm": "candidate-public",
+        "binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-public.test",
+        "binary_sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+        "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-public.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+          "-test.benchtime=16x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.memprofilerate=1",
+          "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/candidate-public/alloc.pprof",
+          "-test.timeout=120s"
+        ],
+        "stdout_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/candidate-public/stdout.txt",
+        "stderr_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/candidate-public/stderr.txt",
+        "env": {
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/proposed-profile/tmp",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOPROXY": "off",
+          "GOSUMDB": "off"
+        },
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair"
+      }
+    ],
+    "measurement_scope": "Whole-process fixture construction, off-timer seed/reset, all checkpoints, stats and final close. NOT exact timed-op +40990 B/op or +32 allocs/op attribution; rate1 instrumentation changes behavior and timings are nonqualifying."
+  },
+  "decision": "No source repair justified by current stack-free evidence. First attribute the allocation families; preserve all custody/refund and benchmark boundaries. Cohort result is bounded retention evidence, not prompt physical reclamation or final cost acceptance.",
+  "entry_geometry_amd64_source_derived": {
+    "baseline_bytes": 88,
+    "candidate_bytes": 144,
+    "input_bytes": 56,
+    "baseline_offsets": {
+      "Type": 0,
+      "Key": 8,
+      "Value": 32,
+      "ValuePtr": 56,
+      "IsPtr": 72,
+      "Revision": 80
+    },
+    "candidate_offsets": {
+      "MVCCInput": 0,
+      "Type": 56,
+      "Key": 64,
+      "Value": 88,
+      "ValuePtr": 112,
+      "IsPtr": 128,
+      "Revision": 136
+    },
+    "capacity_1024_payload_bytes": {
+      "baseline": 90112,
+      "candidate": 147456,
+      "delta": 57344
+    },
+    "qualification": "ABI field-layout arithmetic from actual declarations; no Go execution. Actual allocator rounding, pool hits, capacities and number of arrays determine allocation cost. Not a numeric attribution of the measured aggregate."
+  }
+}

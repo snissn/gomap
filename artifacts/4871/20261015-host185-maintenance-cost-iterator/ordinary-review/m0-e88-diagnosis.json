@@ -1,0 +1,478 @@
+{
+  "task": "Read-only M0 stability diagnosis; not final PR review",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_head": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "disposition": "Original e88 M0 remains FAILED; cause unattributed. No production code change justified. Narrow observation-only diagnostic harness change is justified before a single predeclared full-schedule control.",
+  "packets": {
+    "e88d0-m0-hosted": {
+      "head": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+      "go": "go version go1.26.9 linux/amd64",
+      "gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": false,
+        "public_status_explicit": true
+      },
+      "CV": {
+        "vacuum-total-ns/op": 0.057429597260823084,
+        "max-writer-pause-ns": 0.06490297844049937,
+        "foreground-p99-ns/op": 0.5175739881308198
+      },
+      "chronological_legacy_samples": [
+        {
+          "sample": 1,
+          "vacuum-total-ns/op": 24940568212.0,
+          "max-writer-pause-ns": 76411403.0,
+          "foreground-p99-ns/op": 14077363.0
+        },
+        {
+          "sample": 2,
+          "vacuum-total-ns/op": 24171060539.0,
+          "max-writer-pause-ns": 78075423.0,
+          "foreground-p99-ns/op": 10093059.0
+        },
+        {
+          "sample": 3,
+          "vacuum-total-ns/op": 24104074154.0,
+          "max-writer-pause-ns": 80489884.0,
+          "foreground-p99-ns/op": 10103195.0
+        },
+        {
+          "sample": 4,
+          "vacuum-total-ns/op": 24203266179.0,
+          "max-writer-pause-ns": 70575097.0,
+          "foreground-p99-ns/op": 10260394.0
+        },
+        {
+          "sample": 5,
+          "vacuum-total-ns/op": 26182596351.0,
+          "max-writer-pause-ns": 86507931.0,
+          "foreground-p99-ns/op": 26243001.0
+        },
+        {
+          "sample": 6,
+          "vacuum-total-ns/op": 24265076030.0,
+          "max-writer-pause-ns": 79877996.0,
+          "foreground-p99-ns/op": 10278754.0
+        },
+        {
+          "sample": 7,
+          "vacuum-total-ns/op": 28445427895.0,
+          "max-writer-pause-ns": 80389397.0,
+          "foreground-p99-ns/op": 29552244.0
+        },
+        {
+          "sample": 8,
+          "vacuum-total-ns/op": 23915356877.0,
+          "max-writer-pause-ns": 79502267.0,
+          "foreground-p99-ns/op": 10323723.0
+        },
+        {
+          "sample": 9,
+          "vacuum-total-ns/op": 24183752079.0,
+          "max-writer-pause-ns": 80267318.0,
+          "foreground-p99-ns/op": 10141458.0
+        },
+        {
+          "sample": 10,
+          "vacuum-total-ns/op": 24122696260.0,
+          "max-writer-pause-ns": 89779348.0,
+          "foreground-p99-ns/op": 11028714.0
+        }
+      ],
+      "all_reported_legacy_and_public_metrics_recomputed_match": true,
+      "results_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/e88d0-m0-hosted/packet/treedb-vacuum-m0-e88d0c8b908bf3928fdc42e82419627a743b416d/results.json",
+      "results_sha256": "060e0a4f5c7ae3a1dce5250a0349d1b5581cc87cf1e1eccc764514b61e38fbe1",
+      "raw_sha256": {
+        "legacy-1.txt": "4b267f8a2b24f924a1d4e2dfa6490a9509e75751aea168b0069c9a59f75aa401",
+        "legacy-10.txt": "7d77740b2183719a0b2b38297d00ac83961ad85bf63e9d5fa049c572a5182c3e",
+        "legacy-2.txt": "8764491cfb9c5c5b7fc8925cff570337effc99ddb42500ff2c64a9fe9cfcc538",
+        "legacy-3.txt": "84e9c90fc1d4d94b03250397fbc711efe3f6c58e0adc053a057be3aea22482fc",
+        "legacy-4.txt": "e01c3666c7f4c70f9cfd82ee2957c2ed4c830f06524a139112e3e80ba1ce4d9a",
+        "legacy-5.txt": "d7b7deef08f7f3b91eff249b1349fc0914617627d1475e35c3dddbfe22ac101a",
+        "legacy-6.txt": "1d80b1133d5f7fda75197aa18ecd658ef9bb9c0e63efd03a4551ea8ff9ac6626",
+        "legacy-7.txt": "8c3bbbd8b7120f94e216e163bc75f05515473861868a3c8d2b977ae7e843e47a",
+        "legacy-8.txt": "fb6e3d1f9d0066cef6a56833d73be6936f79dbc65ef99bee49ac7135b8490cf9",
+        "legacy-9.txt": "1609bd0558bf4eb6289267435f2008a0c938071c5e42affc07a05780e7c52a1c",
+        "public-1.txt": "ebe745f76e9eb33f11f98511291bc37363c4ae321995a9f54f10551cb3793897",
+        "public-10.txt": "1b4f782211e150a0ccfd708520b4ee2412b4165fb1bc7322977c847db18d8b9c",
+        "public-2.txt": "07840d6003264d1d1b7c0c3154ce53851840cd7b727af3bebbe8f57bdb0e560b",
+        "public-3.txt": "7d4ef680654cb7b1ea5eb9c9d900d279fffc9ac3a4b90e6cb313a110ebdeb30c",
+        "public-4.txt": "6ac7edd374c81b5a18ec5a3135270d26004e1815d2a67c034eae0e8aafc57a35",
+        "public-5.txt": "3d0243377e715b2b2613a2b2f007d299490787c0fb480f0dde2831aa3fbb912c",
+        "public-6.txt": "081345d53f3fd062b168d52fe973436ecbc933d05abd8f5714b2ac6ddeabe733",
+        "public-7.txt": "b24e347bab9bac3be3b2caf0087eff036e5a8f60961d35a9e83d311dd7d50ab7",
+        "public-8.txt": "cca953e67a3589571d04f0c915f12e74cee90bc50866c99e17d7a0ce6c110205",
+        "public-9.txt": "73c8c09172e476d7c29e57fe4619f76dd3f93414293926e6f86df4e54c99b5a0"
+      }
+    },
+    "72e01-m0-hosted": {
+      "head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+      "go": "go version go1.26.9 linux/amd64",
+      "gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": true,
+        "public_status_explicit": true
+      },
+      "CV": {
+        "vacuum-total-ns/op": 0.009534312790605407,
+        "max-writer-pause-ns": 0.042212963522613535,
+        "foreground-p99-ns/op": 0.008769075378731967
+      },
+      "chronological_legacy_samples": [
+        {
+          "sample": 1,
+          "vacuum-total-ns/op": 24795012680.0,
+          "max-writer-pause-ns": 74012833.0,
+          "foreground-p99-ns/op": 10154280.0
+        },
+        {
+          "sample": 2,
+          "vacuum-total-ns/op": 24371890936.0,
+          "max-writer-pause-ns": 78849341.0,
+          "foreground-p99-ns/op": 10074649.0
+        },
+        {
+          "sample": 3,
+          "vacuum-total-ns/op": 24219594553.0,
+          "max-writer-pause-ns": 79634753.0,
+          "foreground-p99-ns/op": 10404709.0
+        },
+        {
+          "sample": 4,
+          "vacuum-total-ns/op": 24086932090.0,
+          "max-writer-pause-ns": 77354619.0,
+          "foreground-p99-ns/op": 10178157.0
+        },
+        {
+          "sample": 5,
+          "vacuum-total-ns/op": 24207664737.0,
+          "max-writer-pause-ns": 70301113.0,
+          "foreground-p99-ns/op": 10171067.0
+        },
+        {
+          "sample": 6,
+          "vacuum-total-ns/op": 24227694925.0,
+          "max-writer-pause-ns": 79943219.0,
+          "foreground-p99-ns/op": 10193887.0
+        },
+        {
+          "sample": 7,
+          "vacuum-total-ns/op": 24048180886.0,
+          "max-writer-pause-ns": 78138409.0,
+          "foreground-p99-ns/op": 10149204.0
+        },
+        {
+          "sample": 8,
+          "vacuum-total-ns/op": 24448745495.0,
+          "max-writer-pause-ns": 75554476.0,
+          "foreground-p99-ns/op": 10249500.0
+        },
+        {
+          "sample": 9,
+          "vacuum-total-ns/op": 24006157517.0,
+          "max-writer-pause-ns": 72621442.0,
+          "foreground-p99-ns/op": 10120698.0
+        },
+        {
+          "sample": 10,
+          "vacuum-total-ns/op": 24209193676.0,
+          "max-writer-pause-ns": 78110694.0,
+          "foreground-p99-ns/op": 10162182.0
+        }
+      ],
+      "all_reported_legacy_and_public_metrics_recomputed_match": true,
+      "results_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/72e01-m0-hosted/raw/results.json",
+      "results_sha256": "b2e1cfa8402d6c4cc7e3df9cb6bbd493bd4dc6f4cebf59cf0b262aa0463c4b85",
+      "raw_sha256": {
+        "legacy-1.txt": "c88d64f00f791aa89c9367bfa2fd63828ca0a5d0ba070f14baf90c4242fa2ef7",
+        "legacy-10.txt": "701dc4bc696190324fbcb7775682ea45c30b83e6b9814098ca6f71e67f6ef55b",
+        "legacy-2.txt": "530d09310e36be00e2cc9e8448b73f38232903b4347ac739e27cc8739852bb93",
+        "legacy-3.txt": "0825434a78b3e368b135bc2373065f5ebf1d52dbf40e1a2c1c8c995c9005cac8",
+        "legacy-4.txt": "16be2a381daa91db1c6086352d695d388fa3b9dd20f0551b1f10aac13954cdf8",
+        "legacy-5.txt": "d46b3f65b34dd0f63446ee6b72b1596eadcee3f6d88776dd1ffe549d5b1625f3",
+        "legacy-6.txt": "b4e08137707cf6f4efb48b91400007a2be57a3e9869a8b9b528382565b79721d",
+        "legacy-7.txt": "1e675aca7d71dfa9d1e7d78a59e08077e1b6865abdc453d1073901b83fe6e2e3",
+        "legacy-8.txt": "a5f3704c86d0fa34971321ceb4bd82aa04a73e31596e567a2e785cd9b8847425",
+        "legacy-9.txt": "f8797c0a7b5d79b4d7fe308abadcb2b2c055ed7d33647e143f542d6e42db1d00",
+        "public-1.txt": "01be6a0622f03e7024db9ebb1e741832eb0830ccc305bd2f62b523a1a229aa5e",
+        "public-10.txt": "77eb81b7a94290aab0c55c6f0095ee319368e73be57269c48b9e354f7195aa60",
+        "public-2.txt": "def887990b14b625bd3330e832d7f37a2dce9af4fd13ff3ff787f3d13803ddf3",
+        "public-3.txt": "df6c5519edf79075f7c675de6173bf3b42d77486eb79ffce969b55c044a0f723",
+        "public-4.txt": "566f0cae68727de8d26cb8f2391180bf305905e540d2146e5ac3e9c02c86dfe0",
+        "public-5.txt": "f3c68f4d3c85342b44e42951d7c06d9c0778a8cd5a917d628faefca4339b7677",
+        "public-6.txt": "aafc358105a5b5f097174d3bbd82fb7f6436d1f9ba1ff113b10bfe35c7a9e0f7",
+        "public-7.txt": "4cb9e62f0f82567d3ad8aea8df20c6121d84c2760cddceaa609442ee31a65429",
+        "public-8.txt": "a8d104ad1cde4ba952f41a92d15c188c308ae78056b8e014aca908393fcad405",
+        "public-9.txt": "5b028919216fc6af26d891efcc44e32d9d66c801cc227b1275419b649c08cc08"
+      }
+    },
+    "5699-m0-hosted": {
+      "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+      "go": "go version go1.26.9 linux/amd64",
+      "gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": false,
+        "public_status_explicit": true
+      },
+      "CV": {
+        "vacuum-total-ns/op": 0.2356444817065872,
+        "max-writer-pause-ns": 0.05393876143886668,
+        "foreground-p99-ns/op": 0.964361036956542
+      },
+      "chronological_legacy_samples": [
+        {
+          "sample": 1,
+          "vacuum-total-ns/op": 26334631407.0,
+          "max-writer-pause-ns": 89823945.0,
+          "foreground-p99-ns/op": 10033648.0
+        },
+        {
+          "sample": 2,
+          "vacuum-total-ns/op": 25592872948.0,
+          "max-writer-pause-ns": 88720937.0,
+          "foreground-p99-ns/op": 9254050.0
+        },
+        {
+          "sample": 3,
+          "vacuum-total-ns/op": 24939930126.0,
+          "max-writer-pause-ns": 82715120.0,
+          "foreground-p99-ns/op": 9991731.0
+        },
+        {
+          "sample": 4,
+          "vacuum-total-ns/op": 29118803429.0,
+          "max-writer-pause-ns": 88909036.0,
+          "foreground-p99-ns/op": 38518196.0
+        },
+        {
+          "sample": 5,
+          "vacuum-total-ns/op": 29280300372.0,
+          "max-writer-pause-ns": 94269538.0,
+          "foreground-p99-ns/op": 54989007.0
+        },
+        {
+          "sample": 6,
+          "vacuum-total-ns/op": 26022190657.0,
+          "max-writer-pause-ns": 95242955.0,
+          "foreground-p99-ns/op": 10513536.0
+        },
+        {
+          "sample": 7,
+          "vacuum-total-ns/op": 29291695000.0,
+          "max-writer-pause-ns": 83007071.0,
+          "foreground-p99-ns/op": 43030442.0
+        },
+        {
+          "sample": 8,
+          "vacuum-total-ns/op": 27499261313.0,
+          "max-writer-pause-ns": 94016280.0,
+          "foreground-p99-ns/op": 19151510.0
+        },
+        {
+          "sample": 9,
+          "vacuum-total-ns/op": 28056848263.0,
+          "max-writer-pause-ns": 82780842.0,
+          "foreground-p99-ns/op": 14985228.0
+        },
+        {
+          "sample": 10,
+          "vacuum-total-ns/op": 48736468602.0,
+          "max-writer-pause-ns": 89531918.0,
+          "foreground-p99-ns/op": 104031264.0
+        }
+      ],
+      "all_reported_legacy_and_public_metrics_recomputed_match": true,
+      "results_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5699-m0-hosted/results.json",
+      "results_sha256": "0975f28b205d3938171a1d28894630a397a0fc2b392241779af0c3558cf40a15",
+      "raw_sha256": {
+        "legacy-1.txt": "71f437e0ebf31b51d93c2e5e22d91c8078c5d1df7753f55887709db8fc0bea1e",
+        "legacy-10.txt": "80bdee47c1a2dbac5c70c6a8dc88cd913118a83aa7bcdf5abc2489fed2846edb",
+        "legacy-2.txt": "13b8894f1735f733b4142156146ef9d6e7b4f2dbd26a343f38f51b5c239ca700",
+        "legacy-3.txt": "6d73df9dc57ba397c77f2f2b245bf1fe11f9a8f89e1c97a807df2962d5189285",
+        "legacy-4.txt": "a10b8a6a73c1c276692a2ca557963f6a7d08b9023567f5f59dcd5b4300747b8f",
+        "legacy-5.txt": "e2d790d94f3f10594ba6dab706d42e26bca139cb76b9492af2d5e436183f4883",
+        "legacy-6.txt": "b2e9cded402abadca30469e46f923f483cbd16480972f334549ae4f617bf9c80",
+        "legacy-7.txt": "c568f18ad12d3e01d4f829a4831692181316932dd147fda5428a633e02f293e3",
+        "legacy-8.txt": "28c764d41897315be2a3b080cfbea668c14e78ef390b799d032166508d97381f",
+        "legacy-9.txt": "9f4ab3d6c0149c569d3828aff1c0251cd781466befacc0917e4108ac799e59bf",
+        "public-1.txt": "9310187825a891f44b27235d8dc924d347523ba6a76ed7f1d7e67b50669fdb9a",
+        "public-10.txt": "1faade440b20e5c113e038add035b44b8f6f148378944b30629d657e1f6c079f",
+        "public-2.txt": "d0e987e621f59dbe72cb1d89f5a1d1955fad1e716b3a81a2de21d21dbaa73d75",
+        "public-3.txt": "1e2feb829830b1d32e78340d204ca16f2707d7246f1250fa7b20f91ac0bd640c",
+        "public-4.txt": "72a8d89f2b1669610d0fb9d83129069043435544d5f4f71a7bd30c7a285000c0",
+        "public-5.txt": "d5d4ea6139d1f231f7f31284f0ae98dd6aed79664495f794b23aed492e965914",
+        "public-6.txt": "dc334a7cb178396265803edb082e663fe20d0ec17ba8745cf8c0f9b9cf8a2d9e",
+        "public-7.txt": "c95e73a27fcc4ffa73dac60cc588669dd03e2196860bf11b60cd342efed7b73c",
+        "public-8.txt": "17bbda0d335a095762da286c3faa42b79b5bc4c42fc6d9873f52621691471e46",
+        "public-9.txt": "842682f85bafdaeb50344b678a6d67cdaa2ea502ac04504a210e305609edfd65"
+      }
+    },
+    "5699-m0-hosted-attempt2": {
+      "head": "5699f8e791c753f204cc297416e0b742d415afe3",
+      "go": "go version go1.26.9 linux/amd64",
+      "gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": false,
+        "public_status_explicit": true
+      },
+      "CV": {
+        "vacuum-total-ns/op": 0.10193350558458165,
+        "max-writer-pause-ns": 0.1673235797199743,
+        "foreground-p99-ns/op": 0.5143602142232727
+      },
+      "chronological_legacy_samples": [
+        {
+          "sample": 1,
+          "vacuum-total-ns/op": 25196886097.0,
+          "max-writer-pause-ns": 108434777.0,
+          "foreground-p99-ns/op": 15037563.0
+        },
+        {
+          "sample": 2,
+          "vacuum-total-ns/op": 26083292378.0,
+          "max-writer-pause-ns": 79010338.0,
+          "foreground-p99-ns/op": 16188367.0
+        },
+        {
+          "sample": 3,
+          "vacuum-total-ns/op": 32430122653.0,
+          "max-writer-pause-ns": 80581241.0,
+          "foreground-p99-ns/op": 32359177.0
+        },
+        {
+          "sample": 4,
+          "vacuum-total-ns/op": 24025225638.0,
+          "max-writer-pause-ns": 74177323.0,
+          "foreground-p99-ns/op": 10104724.0
+        },
+        {
+          "sample": 5,
+          "vacuum-total-ns/op": 24270402664.0,
+          "max-writer-pause-ns": 73399330.0,
+          "foreground-p99-ns/op": 10224254.0
+        },
+        {
+          "sample": 6,
+          "vacuum-total-ns/op": 24047229436.0,
+          "max-writer-pause-ns": 78135355.0,
+          "foreground-p99-ns/op": 10051709.0
+        },
+        {
+          "sample": 7,
+          "vacuum-total-ns/op": 24319973841.0,
+          "max-writer-pause-ns": 74340220.0,
+          "foreground-p99-ns/op": 10222164.0
+        },
+        {
+          "sample": 8,
+          "vacuum-total-ns/op": 24029696522.0,
+          "max-writer-pause-ns": 68952906.0,
+          "foreground-p99-ns/op": 10078164.0
+        },
+        {
+          "sample": 9,
+          "vacuum-total-ns/op": 24256434435.0,
+          "max-writer-pause-ns": 78313351.0,
+          "foreground-p99-ns/op": 10344046.0
+        },
+        {
+          "sample": 10,
+          "vacuum-total-ns/op": 24541225522.0,
+          "max-writer-pause-ns": 106492355.0,
+          "foreground-p99-ns/op": 11012826.0
+        }
+      ],
+      "all_reported_legacy_and_public_metrics_recomputed_match": true,
+      "results_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/5699-m0-hosted-attempt2/results.json",
+      "results_sha256": "6f3703a2f013443ca7227bede05c23a9b6c3a94b5a1ea6a6bdb7f62c6a8aab9b",
+      "raw_sha256": {
+        "legacy-1.txt": "41c8c0cd0370fb87ace8e7cc105c3fef122e46979a27ecf0303a93fcdc7b7653",
+        "legacy-10.txt": "6e0cbdc3182e06e03f6389ef9afe243ebc0457ef136ffdc929d89694fb94b7a0",
+        "legacy-2.txt": "784f9ed5697d1f2e94dce6c5c0ad6e60eea6fc0204cedf46a174a966acfcc9d7",
+        "legacy-3.txt": "a983062b20fb9f65fe272715208e23e35d0abc81d39aa22d34393ffe145784a2",
+        "legacy-4.txt": "155d3c040e516c6bcaafc51420398c82370cfc4171e14cc4ed11bee3259f6dd3",
+        "legacy-5.txt": "8edf34bb6de6f03e01e5c4d16a67f138030ba5e252b2d9ba9d2d252911e46e00",
+        "legacy-6.txt": "7442d4fa1976830712da3efcf0ada8e84df2e903687c5f25086eb05bd3006050",
+        "legacy-7.txt": "034d4400fe91101a950bda4aaf6e5e74fd61f43f0b890c15c23af40fcf2399d5",
+        "legacy-8.txt": "cc839652d43c23e02f63fed2c47450455bbb1958f5ea33e94bb78c3c7f806022",
+        "legacy-9.txt": "532d7912c4a963027e611e7a0c94295229baf1db936c40023649da22ead532b9",
+        "public-1.txt": "4f5182c7275ff80cfd9a04b4abb8bb0a4e3bf91aeef6a25b232994164a3ff1bc",
+        "public-10.txt": "118360da74d77b6b1d73f4376c1013993abc72321e14740d50b23b4129a0d3cb",
+        "public-2.txt": "e59ec142c26627251709c29ba6e531562bfe3640fc69b66fb7bfef700cf5e0f6",
+        "public-3.txt": "f107b1dad9c08fbe271fec40af05bf4119ecb778b5f98cd1c59e33cb55e0d4b8",
+        "public-4.txt": "bf9433c9261cd5c84e010de52a941db2e938dbedeb6ae2ab51d793becf005380",
+        "public-5.txt": "98db503451d8d8cc3a7d4bde413b4ff645fc770698863d4bddf9f80f6ab911cb",
+        "public-6.txt": "99b413a9c045ff68e77f6bd420059b672bccd8db22d57da926b3e7288cd30347",
+        "public-7.txt": "59d230fe1dc8922ade7793cd050e95397832c4eb45d899a94eb5bd0c9f0e6645",
+        "public-8.txt": "ff30db4e9673165d1b9079b3fd6b9193053121f021f0a31b1ac2b8e0884d92bb",
+        "public-9.txt": "62bddda0af30567bee089ec627424af9b7469166226e058e82f85e4375b1c75c"
+      }
+    }
+  },
+  "source_hashes": {
+    "TreeDB/db/vacuum_collection_bench_test.go": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+    "TreeDB/db/vacuum_collection_latency_external_bench_test.go": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0",
+    "TreeDB/db/vacuum_collection_external_bench_test.go": "227faeb039973ec5f7a882edf5961cd44540e2504650686cd31b226e7cc2bac2",
+    "TreeDB/db/vacuum_m0_fixture_test.go": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b",
+    "TreeDB/db/vacuum_online.go": "6fa641605954ae45bb25e2b23868a0a7cccf0f6cba7691914e4859d3d21f41ab",
+    "TreeDB/db/api.go": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e",
+    "TreeDB/db/commit_combiner.go": "53251026d6e2904704ba678051e8b6c55aece1253de48236a1091aaae9a62f0f",
+    "scripts/treedb_vacuum_m0_capture.sh": "60a42f57efda47c52320a88f6a87a033ae99fe0e727c7f89193987c415a9b607",
+    "scripts/treedb_vacuum_m0_summarize.py": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+    ".github/workflows/treedb-vacuum-m0.yml": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235"
+  },
+  "source_equivalence_check": {
+    "manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-72e01-diagnosis/root-freeze-final.json",
+    "files": 10246,
+    "mismatches": 0,
+    "additional_prior_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-5699-diagnosis/freeze-final.json",
+    "additional_prior_manifest_mismatches": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/cow_power_loss_test.go",
+      "TreeDB/power_loss_oracle_test.go"
+    ],
+    "binary_identity_not_claimed": true
+  },
+  "demonstrated": [
+    "All reported summary statistics match independent computation from retained raw rows across all four packets.",
+    "E88 legacy completes 4096 operations (2048 point,2048 range), zero exposure misses/errors/aborts, identical observed traversal/tail counts in all10 samples.",
+    "The benchmark waits at pre-cutover until the writer finishes all4096 operations. P99 uses nearest rank4056 of4096, including foreground formatting/write/batch close elapsed time; it is neither a percentile of ten samples nor final vacuum writer-pause latency.",
+    "E88 and72e use same CPU model label AMD EPYC9V45 and Go1.26.9 with identical declared two-CPU/GOMAXPROCS2/GOMEMLIMIT8GiB settings; same host instance/topology/scheduling/storage state not established.",
+    "Compilation and fixture setup precede b.ResetTimer. First fixture Go command took about53s wall before the samples in e88 job; capture script executes commands sequentially."
+  ],
+  "unproven_causes": [
+    "external CPU/steal or cgroup throttle",
+    "disk latency / background writeback / filesystem and page-cache state",
+    "Go GC/assist/heap state or internal lock/scheduler delays",
+    "startup build carry-over; direct compilation time is excluded from the benchmark metric",
+    "candidate-induced regression; equal relevant source does not imply identical linked ELF bytes or deterministic runtime behavior"
+  ],
+  "proposal": [
+    "One reviewed/frozen diagnostic-only harness change, with production untouched; no collection until root authorizes it. Preserve every original fixture command, all 10 legacy/public pairs in L1,P1,...,L10,P10 order, 1x work, GOMAXPROCS2/GOMEMLIMIT8GiB/two-CPU affinity, all assertions, CV<=.10 and existing 20-minute job / original process timeouts.",
+    "Add one bounded initial quiet admission observation (e.g. existing reviewed 10-second/2-percent observer); refuse before sample1 if busy, do not wait/retry until quiet. Retain refusal. Do not add per-sample settling/warmup or change sample cadence.",
+    "Retain timestamped process-group/host telemetry through original fixture setup and all 20 calls: CPU user/system/steal, run queue/CPU-pressure, cgroup throttling, process CPU/fault/I/O counters, device I/O/pressure, memory/swap, exact CPU topology/affinity/toolchain/hash/cache settings. Use existing observation seam where possible, 250ms bounded sampling with explicit sub-interval and hypervisor/exited-process blind spots. Child/outer timeout behavior stays fail-closed; retain all attempts and failure artifacts.",
+    "A test-only opt-in diagnostic export writes the ALREADY collected 4096 legacy latencies only after b.StopTimer, plus per-call wall span and untimed before/after GC counters / retained GC pause timestamps. No percentile change, additional writes, sleep, forced GC, GC knob change, publisher change, or new timed I/O. Missing/truncated GC coverage must be explicit. Review this narrow change before collection; any observation effect means its times are diagnostic, not replacement original qualification.",
+    "Execute exactly one full original schedule once after admission, stop on original failure/timeout, retain every completed/failed sample and telemetry, run unchanged summarizer. No discard/refill/retry or passing-subset selection. A contamination tag explains limits but never turns the unchanged gate green.",
+    "Decision after that single packet: if p99 variability persists, align slow foreground operations/GC windows with host and child counters. Correlated stalls nominate one narrowly scoped follow-up (e.g. separate block/runtime trace) for root approval; absence of correlation is not exoneration. A diagnostic PASS is scoped to its observed environment/harness and cannot waive current-head original hosted M0."
+  ],
+  "preserved_gates": [
+    "10 samples all retained",
+    "original interleaved order",
+    "original workload and concurrency",
+    "CV<=0.10 all three original legacy metrics",
+    "original completion/error/exposure/retry classification",
+    "original fixture digest/shrink/vlog validation",
+    "original timeouts"
+  ],
+  "limits": [
+    "No hosted quiet telemetry exists in retained original packets.",
+    "M0 fixture debt/digest is from separate offline-ceiling fixture, not the1024-document timed legacy fixture.",
+    "Public status is classified from live public metrics; fixture status string is historical metadata, not evidence public route is unavailable.",
+    "No retry-to-pass, qualification, mergeability, native or allocation-profile timing claim."
+  ],
+  "lease": "RELEASED"
+}

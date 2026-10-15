@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0,1",
+    "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-db.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkPrimaryBorrowedValueLogCohort$/^files=16$",
+    "-test.benchtime=128x",
+    "-test.count=1",
+    "-test.benchmem",
+    "-test.timeout=120s"
+  ],
+  "count": 128,
+  "cwd": "/home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair",
+  "kind": "cohort",
+  "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=16",
+  "package": "db",
+  "pair": null,
+  "raw": "13-cohort-candidate.txt",
+  "revision": "candidate",
+  "size": 16
+}

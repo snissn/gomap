@@ -1,0 +1,84 @@
+[
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=10000",
+      "-nodefraction=0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-raw",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=1000",
+      "-nodefraction=0",
+      "-focus=IteratorWithOptions|initPrimaryIterator",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=10000",
+      "-nodefraction=0",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-raw",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=1000",
+      "-nodefraction=0",
+      "-focus=IteratorWithOptions|initPrimaryIterator",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof"
+    ],
+    "exit": 0
+  }
+]

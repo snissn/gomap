@@ -1,0 +1,17 @@
+[
+  {
+    "path": "TreeDB/tree/iterator.go",
+    "before_sha256": "8f9599c1497ab420731a1ef94a0f606d4fdfaec8671a37b32443835b0d1ca9b1",
+    "after_sha256": "d9046f76f64f7d0a497946cf6e75313c3716f7b85ff9c89b9fb7f5241be6617d"
+  },
+  {
+    "path": "TreeDB/tree/primary_iterator.go",
+    "before_sha256": "19d70d94e359f1409a2a8199ba03338dcbe558d2dd02e77c7c712e032e4c7be8",
+    "after_sha256": "5174f89cfbe07d5e59525bafc2d6a3596577fdc72e9d480f4bad59509fd7e900"
+  },
+  {
+    "path": "TreeDB/tree/owned_iterator.go",
+    "before_sha256": "96644ca560e460bdf92a3c92e70479c63aa04ddecc527bb9f5a91ebaa14df518",
+    "after_sha256": "caa6e29bbe85b25682656ce5d98e841b81784dba1f889bcd26e4a9c362199223"
+  }
+]

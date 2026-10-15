@@ -1,0 +1,18 @@
+{
+  "adaptations": "Task output paths; executable byte-identical copies; CPU0,1; full original runtime environment; no workload or timer changes.",
+  "at_utc": "2026-10-15T21:29:00.513983+00:00",
+  "coordinator": "/root",
+  "fixed_order": [
+    "baseline-public",
+    "candidate-public"
+  ],
+  "maximum_calls": 2,
+  "maximum_inner_seconds": 120,
+  "maximum_outer_seconds": 150,
+  "proposal_sha256": "f7c7a70991260e81edcf7f9e0217c40de304a804c31b5bfb785a01c6b91a3ee3",
+  "purpose": "Whole-process allocation-stack attribution only. Instrumented timing and B/op are not acceptance results. Includes setup, reset/seed, ALL checkpoints and teardown.",
+  "rebuild": false,
+  "retries": 0,
+  "runner_sha256": "4c4205bcfe69e4e7ce591d9b9b2d4e9d257f7692c7f4f1be0f9452a2e3585d40",
+  "source_mutation": false
+}

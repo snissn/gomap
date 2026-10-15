@@ -1,0 +1,157 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Three-production-path iterator allocation repair plus generated CI discovery hash only; not final whole-PR review.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin required gpt-6.1-sol; independent explicitly routed review used.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "parent_head": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "prospective_index_tree": "a7710b6b41ebc62328a5282c959910193ce4cd0f",
+  "root_patch_sha256": "8fe6a9cab02fd69dc5778e877dc32c24d63bd6ed899877c571662d8977321f3a",
+  "blockers": [],
+  "source_files_verified": 10246,
+  "mismatches_before": [],
+  "mismatches_after": [],
+  "source_hashes": {
+    ".github/ci/ci_impact.json": "eb9544f667031cc9a3cd05c62f93dab52c11c9a84abd0237731078a0a418ffe9",
+    "TreeDB/tree/iterator.go": "d9046f76f64f7d0a497946cf6e75313c3716f7b85ff9c89b9fb7f5241be6617d",
+    "TreeDB/tree/owned_iterator.go": "caa6e29bbe85b25682656ce5d98e841b81784dba1f889bcd26e4a9c362199223",
+    "TreeDB/tree/primary_iterator.go": "5174f89cfbe07d5e59525bafc2d6a3596577fdc72e9d480f4bad59509fd7e900"
+  },
+  "metadata_only_field": "discovery_source_sha256",
+  "coverage": [
+    "Complete four-path diff; all three initPrimaryIterator callers, allocation branch, root loading/decode/base validation and Seek.",
+    "Existing ordinary iterator pool acquisition/reset/close, primary Close and owned containing struct/fixed size/aliases/error path.",
+    "Owned projection caller families: backend Snapshot, caching SAME basis, staged dependency rebind and directory borrowed main/exact lookup.",
+    "Existing selected PRIMARY close/retention test and corruption/bounded-reader source; no new mirrored tests.",
+    "All retained11 check raw hashes; eight normal/race JSON action inventories independently parsed, plus six CI metadata raw log hashes.",
+    "Whole-process pprof raw sample header, flat-frame allocation arithmetic, exact profile/ELF hashes and source before/after bindings; no profiler process executed."
+  ],
+  "retained_checks": [
+    {
+      "name": "tree-normal",
+      "exit": 0,
+      "top_pass": 57,
+      "sub_pass": 62,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "db-normal",
+      "exit": 0,
+      "top_pass": 25,
+      "sub_pass": 34,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "rootpublication-normal",
+      "exit": 0,
+      "top_pass": 4,
+      "sub_pass": 0,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "tree-race",
+      "exit": 0,
+      "top_pass": 57,
+      "sub_pass": 62,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "db-race",
+      "exit": 0,
+      "top_pass": 25,
+      "sub_pass": 34,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "rootpublication-race",
+      "exit": 0,
+      "top_pass": 4,
+      "sub_pass": 0,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "public-build",
+      "exit": 0,
+      "top_pass": 0,
+      "sub_pass": 0,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "public-buildinfo",
+      "exit": 0,
+      "top_pass": 0,
+      "sub_pass": 0,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "compiler-version",
+      "exit": 0,
+      "top_pass": 0,
+      "sub_pass": 0,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "caching-normal",
+      "exit": 0,
+      "top_pass": 5,
+      "sub_pass": 4,
+      "skip": 0,
+      "race_reports": 0
+    },
+    {
+      "name": "caching-race",
+      "exit": 0,
+      "top_pass": 5,
+      "sub_pass": 4,
+      "skip": 0,
+      "race_reports": 0
+    }
+  ],
+  "allocation_evidence": {
+    "old_measured_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+    "old_binary_sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+    "new_binary_sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+    "old_flat_iterator_objects": 144,
+    "old_flat_iterator_bytes": 1179648,
+    "new_flat_iterator_objects": 0,
+    "new_flat_iterator_bytes": 0,
+    "new_flat_initializer_objects": 0,
+    "new_flat_initializer_bytes": 0,
+    "successor_profile_calls": 1,
+    "profile_rate": 1,
+    "iterations": 16,
+    "new_profile_sha256": "d08f4d6c4112d571697f5f9b7aba60470473db37f5385f9b09f63e025ae9e1e1",
+    "scope": "Actual ordinary btree fixed16x public dirty-checkpoint whole process including setup/reset/seed/checkpoints/teardown. No timed allocation/latency/retention claim."
+  },
+  "limits": [
+    "Fresh matched public cost, raw default-path and enabled PRIMARY evidence needed for coherent committed successor; original thresholds remain unchanged.",
+    "Predecessor checkpoint +40990 B/+32 allocs per operation remains open until refreshed uninstrumented evidence.",
+    "Existing descendant pool/CRC allocations remain; no zero-allocation iteration claim.",
+    "E88 M0 remains failed independently; profile does not diagnose or waive variability.",
+    "No hosted CI/Windows runtime/full-PR/native/Q32/Dgraph/merge authorization."
+  ],
+  "evidence_sha256": {
+    "root-freeze-final.json": "df7308e2a73c9a41ea36158801b76e08b775a50e05a0d49ed2842ee7d5add58f",
+    "root-final.patch": "8fe6a9cab02fd69dc5778e877dc32c24d63bd6ed899877c571662d8977321f3a",
+    "freeze.json": "f3b8f7a0015e125f41247c224c5648848304bea2c35af8adfaf8a8541c630703",
+    "validation.json": "346ca36cf3f943ad9ef2e78dde7c6c1da9c2713b04dc7ce8f9c4c91d108c0218",
+    "root-profile-verification.json": "a91872d24a590f1fa3d99bc79e96865c16edeae09ee00114c427558d6f4af005",
+    "root-ci-checks.json": "e6cafb144fb0aa62a95655c54d0a4b05fd9ea732f65fb8cc8f68051ecbe53eb1",
+    "caller-audit.md": "263501e07643d866a8dc1c0b740f562bc818e9eecf294f7aef7d4fa853b7166c",
+    "root-allocation-disposition.md": "1fe7fff74dbe0e2596e1cb75e1ba4f4c38580d945ce62377617ca740347604c2"
+  },
+  "lease": "RELEASED; idle"
+}

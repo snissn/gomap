@@ -1,0 +1,173 @@
+{
+  "accepted_cost": false,
+  "at_utc": "2026-10-15T21:25:35.310340+00:00",
+  "binaries": {
+    "baseline-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-db.test",
+      "sha256": "a93462abd698ca3bcc713de11065804853d3c52b2a8a91ba515a28169bc7879e",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "baseline-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-public.test",
+      "sha256": "bb9967979acb1c7913b8007d15e29e433490baf67123e4a9ee821bee27aa9761",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-db.test",
+      "sha256": "fa222290a8e125e59fff7043075c2569ce768e01066076407dbe247381abddb1",
+      "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+    },
+    "candidate-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-public.test",
+      "sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+      "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+    }
+  },
+  "cohort": {
+    "16": {
+      "B/op": 3786.0,
+      "allocs/op": 14.0,
+      "closed-governor-bytes": 0.0,
+      "descriptor-only-gc-deleted-files": 0.0,
+      "drained-cohort-bytes": 13056.0,
+      "drained-cohort-files": 16.0,
+      "drained-gc-deleted-files": 0.0,
+      "held-cohort-bytes": 13056.0,
+      "held-cohort-files": 16.0,
+      "held-gc-deleted-files": 0.0,
+      "held-governor-bytes": 432336.0,
+      "held-old-data-bytes": 262144.0,
+      "held-old-primary-bytes": 1048576.0,
+      "last-reader-cleanup-ns": 67305.0,
+      "ns/op": 18445.0,
+      "scope-after-reader-governor-bytes": 278832.0,
+      "scope-complete-governor-bytes": 162592.0
+    },
+    "8": {
+      "B/op": 3722.0,
+      "allocs/op": 14.0,
+      "closed-governor-bytes": 0.0,
+      "descriptor-only-gc-deleted-files": 0.0,
+      "drained-cohort-bytes": 6528.0,
+      "drained-cohort-files": 8.0,
+      "drained-gc-deleted-files": 0.0,
+      "held-cohort-bytes": 6528.0,
+      "held-cohort-files": 8.0,
+      "held-gc-deleted-files": 0.0,
+      "held-governor-bytes": 305424.0,
+      "held-old-data-bytes": 262144.0,
+      "held-old-primary-bytes": 1048576.0,
+      "last-reader-cleanup-ns": 48791.0,
+      "ns/op": 14392.0,
+      "scope-after-reader-governor-bytes": 222064.0,
+      "scope-complete-governor-bytes": 162592.0
+    }
+  },
+  "harness_head": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+  "limitations": [
+    "Three matched pairs per maintenance operation; one capture sample per cohort size",
+    "250ms external-process sampling may miss shorter-lived processes",
+    "Cohort cleanup is one off-timer event, not a latency distribution",
+    "Vacuum cost fixture does not emit full digest, physical bytes or shrink ratio"
+  ],
+  "maintenance": {
+    "checkpoint": {
+      "all_paired_ns_percent": [
+        14.61506550379128,
+        -6.6885197498597115,
+        1.633510601634125
+      ],
+      "base": {
+        "B/op": 453587.0,
+        "allocs/op": 858.0,
+        "ns/op": 4050687.0
+      },
+      "candidate": {
+        "B/op": 494577.0,
+        "allocs/op": 890.0,
+        "ns/op": 3833677.0
+      },
+      "delta": {
+        "B/op": 40990.0,
+        "allocs/op": 32.0
+      },
+      "median_paired_ns_percent": 1.633510601634125,
+      "ops_per_second": {
+        "baseline": 246.8717034912843,
+        "candidate": 260.84617979031617
+      }
+    },
+    "vacuum": {
+      "all_paired_ns_percent": [
+        1.1470216212231987,
+        0.5028093168966352,
+        -0.5968377764624111
+      ],
+      "base": {
+        "B/op": 186052256.0,
+        "allocs/op": 616281.0,
+        "ns/op": 3075361669.0
+      },
+      "candidate": {
+        "B/op": 179979656.0,
+        "allocs/op": 518674.0,
+        "ns/op": 3090824874.0
+      },
+      "delta": {
+        "B/op": -6072600.0,
+        "allocs/op": -97607.0
+      },
+      "median_paired_ns_percent": 0.5028093168966352,
+      "ops_per_second": {
+        "baseline": 0.3251650074461535,
+        "candidate": 0.32353822709658964
+      }
+    }
+  },
+  "pending": "Checkpoint +40990 median B/op and +32 allocations need causal disposition; cohort retained storage tradeoff needs explicit acceptance.",
+  "quiet": {
+    "measurement-quiet.json": {
+      "collector_pid": 2522,
+      "elapsed_s": 24.46829414299998,
+      "max_external_cpu_percent": 0.3269537284963808,
+      "samples": 97
+    },
+    "preflight.json": {
+      "collector_pid": 2522,
+      "elapsed_s": 10.285113949999982,
+      "max_external_cpu_percent": 0.4861394851147963,
+      "samples": 42
+    }
+  },
+  "raw_sha256": {
+    "00-checkpoint-baseline.txt": "797e99eef6c36a44c6dd89f1cd41a9f83ebbc9592470ea1a1132b0288f1b5d6f",
+    "01-checkpoint-candidate.txt": "7feac998cbea4f69a237750468675ece5f45c4891fae2b28ab99dea2ce81698f",
+    "02-checkpoint-candidate.txt": "649464aface6ee2018fc38a83d4790cae6f245d70a13bd32fb226dd73e3f74d3",
+    "03-checkpoint-baseline.txt": "37c8ccd7e990a2487cb65a9e1cf124e695ade377ebfe5c0b45a6fd88a664d9ef",
+    "04-checkpoint-baseline.txt": "09a2584d967ff790037e98082d83a20fb497cb6f711bcf0814fc0e6121346809",
+    "05-checkpoint-candidate.txt": "5f9e5a99276b35d38776a6c58ae581069c17b38c004fe9dbce8075b8e8c30660",
+    "06-vacuum-baseline.txt": "b3de3cd875c96691957facb9d8e427e652574a06fcc36265931d3232c1b05ab7",
+    "07-vacuum-candidate.txt": "19f91b6a4189466a6233b12992c856b33336fd5ec64dc3c3a42bdd2a528e2294",
+    "08-vacuum-candidate.txt": "dea36a94543d97d6ebd04dec0b5caaa8e0f8d0032deeadcbeaff9e07239fbdce",
+    "09-vacuum-baseline.txt": "6cfa2224618fe672bc90b2ba165a036f72bea00c6613fbd45567ed9ddd6882de",
+    "10-vacuum-baseline.txt": "1c294bdfd1ec287701bba141eba960a71a5119f757bf1a644c88a56b1eeaa931",
+    "11-vacuum-candidate.txt": "0c52a1c0f2e96edac5407e78afa5c946e545336c61eb67c3e582c636addf3805",
+    "12-cohort-candidate.txt": "287823a8a261c7472817c18163b352bac22d42b9ccb5eaa732f3761f3e0faefa",
+    "13-cohort-candidate.txt": "56e30b1fa1e97773f0cee684798c9617bb926b5d9adcbcf2a019e68234ee531b"
+  },
+  "source_files": {
+    "baseline": 9936,
+    "candidate": 10246
+  },
+  "source_heads": {
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+  },
+  "status": "VERIFIED_ALL_14_BOUNDED_SAMPLES",
+  "verifier_sha256": "1f8483334f7d4873963f48d1738c494a645742b61a6f43a5d0f97af4ee2868c2",
+  "workflow_run": 38808351333
+}

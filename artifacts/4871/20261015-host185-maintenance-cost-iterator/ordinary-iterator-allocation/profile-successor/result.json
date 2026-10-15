@@ -1,0 +1,8 @@
+{
+  "binary_sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+  "calls": 1,
+  "profile_sha256": "d08f4d6c4112d571697f5f9b7aba60470473db37f5385f9b09f63e025ae9e1e1",
+  "source_unchanged": true,
+  "status": "ONE_SUCCESSOR_PROFILE_CAPTURED",
+  "timing_qualifies": false
+}

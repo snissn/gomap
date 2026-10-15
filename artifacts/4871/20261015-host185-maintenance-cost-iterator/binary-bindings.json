@@ -1,0 +1,74 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/compiler/compile",
+    "bytes": 25774723,
+    "sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/compiler/go",
+    "bytes": 15434598,
+    "sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/compiler/link",
+    "bytes": 6680481,
+    "sha256": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/go1.26.3-linux-amd64.tar.gz",
+    "bytes": 67701975,
+    "sha256": "2e1f709599bf435cde888f00dea53f3d02bf2b7bd1dc52495a81a6194b65bd9b",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-db.test",
+    "bytes": 55570096,
+    "sha256": "a93462abd698ca3bcc713de11065804853d3c52b2a8a91ba515a28169bc7879e",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/baseline-public.test",
+    "bytes": 52475055,
+    "sha256": "bb9967979acb1c7913b8007d15e29e433490baf67123e4a9ee821bee27aa9761",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-db.test",
+    "bytes": 61445982,
+    "sha256": "fa222290a8e125e59fff7043075c2569ce768e01066076407dbe247381abddb1",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-hosted-02/packet/bounded-maintenance-38808351333-1/mvcc-maintenance-72e01/performance-185/maintenance-build-02/candidate-public.test",
+    "bytes": 56917774,
+    "sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+    "bytes": 52475055,
+    "sha256": "bb9967979acb1c7913b8007d15e29e433490baf67123e4a9ee821bee27aa9761",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+    "bytes": 56917774,
+    "sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/candidate-public.test",
+    "bytes": 56911807,
+    "sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+    "bytes": 56911807,
+    "sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+    "reason": "binary or SDK retained locally; hash and provenance published"
+  }
+]

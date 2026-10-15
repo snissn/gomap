@@ -1,0 +1,55 @@
+{
+  "name": "caching-race",
+  "exit": 0,
+  "elapsed_seconds": 32.36939310608432,
+  "terminated_group": false,
+  "source_equal": true,
+  "top_pass": [
+    "TestCOWBasisCompletionWaitsForActualOriginalIterator",
+    "TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator",
+    "TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases",
+    "TestCOWSnapshotIteratorWrapperAdmissionAndLifetime",
+    "TestCOWPointerImmediatePointAndIteratorOldCut"
+  ],
+  "sub_pass": 4,
+  "skips": [],
+  "failures": [],
+  "data_race_reports": 0,
+  "stdout_sha256": "d646dc95e88c1cdc4fc9e65b824bbceb4e447ba5533a4bd2f2220df60c21be1d",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "-race",
+      "./TreeDB/caching",
+      "-run",
+      "^TestCOW(BasisCompletionWaitsForActualOriginalIterator|BasisPostcaptureRefusalJoinsPendingOriginalIterator|BasisOwnedIteratorScrubsConsumedWrapperAliases|PointerImmediatePointAndIteratorOldCut|SnapshotIteratorWrapperAdmissionAndLifetime)$",
+      "-count=1",
+      "-timeout=120s",
+      "-json"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+    "env": {
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOMAXPROCS": "2",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/tmp",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOSUMDB": "off",
+      "CGO_ENABLED": "1",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOAMD64": "v1",
+      "GOMEMLIMIT": "8GiB",
+      "GOGC": "100",
+      "GODEBUG": ""
+    },
+    "outer_timeout_seconds": 150,
+    "started_utc": "2026-10-15T21:38:23.689936+00:00"
+  }
+}

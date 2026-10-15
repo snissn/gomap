@@ -1,0 +1,113 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 116674960402,
+      "run_id": 38808351333,
+      "workflow_name": "TreeDB: bounded maintenance diagnostic (manual only)",
+      "head_branch": "codex/4871-maintenance-diagnostic-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38808351333",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbKl6cEg",
+      "head_sha": "28f32623a78ea11eca78d0ae7c0b8fa1106b121a",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116674960402",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38808351333/job/116674960402",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T21:14:37Z",
+      "started_at": "2026-10-15T21:14:39Z",
+      "completed_at": "2026-10-15T21:21:03Z",
+      "name": "fixed 5bca / 72e01 fourteen-call diagnostic",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T21:14:40Z",
+          "completed_at": "2026-10-15T21:14:41Z"
+        },
+        {
+          "name": "Checkout reviewed diagnostic harness",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T21:14:41Z",
+          "completed_at": "2026-10-15T21:15:05Z"
+        },
+        {
+          "name": "Initialize retained attempt packet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T21:15:05Z",
+          "completed_at": "2026-10-15T21:15:05Z"
+        },
+        {
+          "name": "Setup exact Go 1.26.3",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T21:15:05Z",
+          "completed_at": "2026-10-15T21:15:16Z"
+        },
+        {
+          "name": "Check syntax, receipts and fixed workflow contract (no Go execution)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T21:15:16Z",
+          "completed_at": "2026-10-15T21:15:16Z"
+        },
+        {
+          "name": "Prepare exact inputs and collect once",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T21:15:16Z",
+          "completed_at": "2026-10-15T21:20:45Z"
+        },
+        {
+          "name": "Upload complete attempt, including failure/refusal",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-15T21:20:45Z",
+          "completed_at": "2026-10-15T21:20:58Z"
+        },
+        {
+          "name": "Post Setup exact Go 1.26.3",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T21:20:58Z",
+          "completed_at": "2026-10-15T21:20:58Z"
+        },
+        {
+          "name": "Post Checkout reviewed diagnostic harness",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-15T21:20:58Z",
+          "completed_at": "2026-10-15T21:20:58Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-15T21:20:58Z",
+          "completed_at": "2026-10-15T21:20:58Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116674960402",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000547307,
+      "runner_name": "GitHub Actions 1000547307",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

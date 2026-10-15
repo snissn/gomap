@@ -1,0 +1,186 @@
+[
+  {
+    "file": "baseline-public-alloc_space-flat.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=60",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "f571b5786e108d98e900e6798213fe935654029ebf5502ffe44f0933dbd6a1cc"
+  },
+  {
+    "file": "baseline-public-alloc_space-cum.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=60",
+      "-cum",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "9fb55b489530ac07551266dad2c20405a24fd232da1d6492a93c77d332566de8"
+  },
+  {
+    "file": "baseline-public-alloc_objects-flat.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=60",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "3e6e79a69b7318deb8a1080aeed3a18eaa0c460da781eebf7decd71a06c1c4b0"
+  },
+  {
+    "file": "baseline-public-alloc_objects-cum.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=60",
+      "-cum",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "d3c88ae8691ef02bbefcf72c35087ee2ff458190180a0b60402cefe99bae1d62"
+  },
+  {
+    "file": "baseline-public-raw.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-raw",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "687e45b095f0a20f67a2e90dfeb384cca720b8b62541561ee5ac2c2a17a1d095"
+  },
+  {
+    "file": "candidate-public-alloc_space-flat.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=60",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "a768bea88b4d57d04ec75c18c8241827f0230b4310da81988212ebe1f7665184"
+  },
+  {
+    "file": "candidate-public-alloc_space-cum.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=60",
+      "-cum",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "2ea28618862d34555d38cce270182c375a1558308658f5cbc63c0023f77d69c3"
+  },
+  {
+    "file": "candidate-public-alloc_objects-flat.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=60",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "b75c3000372b2b7ae869d99d3156c5a8285ef817adec48f5248698e58575ad1e"
+  },
+  {
+    "file": "candidate-public-alloc_objects-cum.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=60",
+      "-cum",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "6fad635d8cdc175f27455887a65b28f92d5f93eb1a560abb33949612d159ba0e"
+  },
+  {
+    "file": "candidate-public-raw.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-raw",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "0b471dbd1a5875387a48a5deb9b378d93a3843ee9022333cfb46a8aa51c96864"
+  },
+  {
+    "file": "diff-alloc_space.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_space",
+      "-top",
+      "-nodecount=60",
+      "-base",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "3ccf92ae304629fb9bbb2992a55afeab30481054430eaaa4cf1e3ed0f1025ef1"
+  },
+  {
+    "file": "diff-alloc_objects.txt",
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "tool",
+      "pprof",
+      "-alloc_objects",
+      "-top",
+      "-nodecount=60",
+      "-base",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/baseline-public/alloc.pprof",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof"
+    ],
+    "exit": 0,
+    "sha256": "69daf0ddd45aa161a7b3c0710467c3aa71f4e94ae32e7dad25a78b97b6d19eb3"
+  }
+]

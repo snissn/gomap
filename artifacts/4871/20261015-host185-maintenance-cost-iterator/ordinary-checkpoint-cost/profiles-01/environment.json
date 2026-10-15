@@ -1,0 +1,16 @@
+{
+  "CGO_ENABLED": "1",
+  "GOAMD64": "v1",
+  "GODEBUG": "",
+  "GOENV": "off",
+  "GOFLAGS": "",
+  "GOGC": "100",
+  "GOMAXPROCS": "2",
+  "GOMEMLIMIT": "8GiB",
+  "GOPROXY": "off",
+  "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+  "GOSUMDB": "off",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/tmp"
+}

@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "version"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "env": {
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/tmp",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOAMD64": "v1",
+    "GOMEMLIMIT": "8GiB",
+    "GOGC": "100",
+    "GODEBUG": ""
+  },
+  "outer_timeout_seconds": 30,
+  "started_utc": "2026-10-15T21:37:29.710894+00:00"
+}

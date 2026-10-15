@@ -1,0 +1,99 @@
+{
+  "status": "DISCARDED_WRAPPER_ALLOCATION_REMOVED",
+  "old_source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "new_source_parent": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "new_source_patch_sha256": "c4949534bf8f9cad4e23a347f771be5a987dccb01683b965adb0d5addcdd537d",
+  "new_binary_sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+  "old_binary_sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+  "source_file_count": 10246,
+  "changed_from_measured_predecessor": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/cow_power_loss_test.go",
+    "TreeDB/power_loss_oracle_test.go",
+    "TreeDB/tree/iterator.go",
+    "TreeDB/tree/owned_iterator.go",
+    "TreeDB/tree/primary_iterator.go"
+  ],
+  "old_iterator_flat": {
+    "objects": 144,
+    "bytes": 1179648,
+    "allocation_rows": [
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 30,
+        "bytes": 245760,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 30,
+        "bytes": 245760,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 34,
+        "bytes": 278528,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 34,
+        "bytes": 278528,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      },
+      {
+        "objects": 2,
+        "bytes": 16384,
+        "location": "   520: 0x6bacf8 M=1 github.com/snissn/gomap/TreeDB/tree.(*Tree).IteratorWithOptions /home/runner/work/_temp/mvcc-maintenance-72e01/ordinary-repair/TreeDB/tree/iterator.go:515:0 s=509"
+      }
+    ],
+    "raw_sha256": "0b471dbd1a5875387a48a5deb9b378d93a3843ee9022333cfb46a8aa51c96864"
+  },
+  "new_iterator_flat": {
+    "objects": 0,
+    "bytes": 0,
+    "allocation_rows": [],
+    "raw_sha256": "baf5e7c3f1131a47829c7ac78d97e8573070c0ab2c63e9e06e5907cc6c0393ad"
+  },
+  "new_initializer_flat": {
+    "objects": 0,
+    "bytes": 0,
+    "allocation_rows": [],
+    "raw_sha256": "baf5e7c3f1131a47829c7ac78d97e8573070c0ab2c63e9e06e5907cc6c0393ad"
+  },
+  "new_profile_sha256": "d08f4d6c4112d571697f5f9b7aba60470473db37f5385f9b09f63e025ae9e1e1",
+  "old_profile_sha256": "f34f455a6cdbc4ea09322756940ee5fc79507f39611923626fb30933791f23df",
+  "scope": "Full-process allocation attribution, same original16x public dirty-checkpoint operation/fixture counters. Setup and off-timer reset/seed/teardown included. Not a timed B/op delta, latency, or overall allocation/retention acceptance."
+}

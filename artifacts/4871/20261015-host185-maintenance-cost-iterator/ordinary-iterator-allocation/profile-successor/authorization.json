@@ -1,0 +1,14 @@
+{
+  "at_utc": "2026-10-15T21:38:27.075023+00:00",
+  "binary_sha256": "1266ef015c2a58d058468b12eb73b4c7328cb98623f3f87005ba315c47e5350f",
+  "coordinator": "/root",
+  "driver_sha256": "2e7c97300b0e08927a5c6f4a3710997e381c9852d34596a73d3ab956bdeb0640",
+  "freeze_sha256": "8208df40015274a9497f69fbc76cde2eec293404a22d7a3d1dd313bf8463dba5",
+  "maximum_calls": 1,
+  "original_proposal_sha256": "f7c7a70991260e81edcf7f9e0217c40de304a804c31b5bfb785a01c6b91a3ee3",
+  "outer_timeout_seconds": 150,
+  "purpose": "One exact successor whole-process allocation profile. No timing qualification. Compare discarded-wrapper flat allocation with prior 72e profile; scopes include setup, off-timer work and teardown.",
+  "retries": 0,
+  "source_parent": "e88d0c8b908bf3928fdc42e82419627a743b416d",
+  "source_patch_sha256": "c4949534bf8f9cad4e23a347f771be5a987dccb01683b965adb0d5addcdd537d"
+}

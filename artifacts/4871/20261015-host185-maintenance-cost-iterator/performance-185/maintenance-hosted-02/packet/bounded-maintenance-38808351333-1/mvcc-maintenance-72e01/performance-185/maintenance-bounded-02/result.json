@@ -1,0 +1,166 @@
+{
+  "all_sources_and_binaries_unchanged": true,
+  "cohort": {
+    "16": {
+      "B/op": 3786.0,
+      "allocs/op": 14.0,
+      "closed-governor-bytes": 0.0,
+      "descriptor-only-gc-deleted-files": 0.0,
+      "drained-cohort-bytes": 13056.0,
+      "drained-cohort-files": 16.0,
+      "drained-gc-deleted-files": 0.0,
+      "held-cohort-bytes": 13056.0,
+      "held-cohort-files": 16.0,
+      "held-gc-deleted-files": 0.0,
+      "held-governor-bytes": 432336.0,
+      "held-old-data-bytes": 262144.0,
+      "held-old-primary-bytes": 1048576.0,
+      "last-reader-cleanup-ns": 67305.0,
+      "ns/op": 18445.0,
+      "scope-after-reader-governor-bytes": 278832.0,
+      "scope-complete-governor-bytes": 162592.0
+    },
+    "8": {
+      "B/op": 3722.0,
+      "allocs/op": 14.0,
+      "closed-governor-bytes": 0.0,
+      "descriptor-only-gc-deleted-files": 0.0,
+      "drained-cohort-bytes": 6528.0,
+      "drained-cohort-files": 8.0,
+      "drained-gc-deleted-files": 0.0,
+      "held-cohort-bytes": 6528.0,
+      "held-cohort-files": 8.0,
+      "held-gc-deleted-files": 0.0,
+      "held-governor-bytes": 305424.0,
+      "held-old-data-bytes": 262144.0,
+      "held-old-primary-bytes": 1048576.0,
+      "last-reader-cleanup-ns": 48791.0,
+      "ns/op": 14392.0,
+      "scope-after-reader-governor-bytes": 222064.0,
+      "scope-complete-governor-bytes": 162592.0
+    }
+  },
+  "executed": 14,
+  "failure": null,
+  "final_cost_acceptance": "root disposition pending",
+  "limits": [
+    "Three matched pairs per maintenance operation; one capture sample per cohort size",
+    "250ms external-process sampling may miss shorter-lived processes",
+    "Cohort cleanup is one off-timer event, not a latency distribution",
+    "Vacuum cost fixture does not emit full digest, physical bytes or shrink ratio"
+  ],
+  "maintenance": {
+    "checkpoint": {
+      "medians": {
+        "baseline": {
+          "B/op": 453587.0,
+          "allocs/op": 858.0,
+          "fixture_checkpoint_runs": 32.0,
+          "fixture_command_wal_file_sync_calls": 51.0,
+          "fixture_command_wal_sync_count": 34.0,
+          "fixture_value_log_sync_calls": 34.0,
+          "ns/op": 4050687.0,
+          "p50-ns": 3756062.0,
+          "p95-ns": 6674829.0,
+          "p99-ns": 6674829.0,
+          "snapshot_rotations/op": 0.0,
+          "warm_snapshot_rotations": 0.0
+        },
+        "candidate": {
+          "B/op": 494577.0,
+          "allocs/op": 890.0,
+          "fixture_checkpoint_runs": 32.0,
+          "fixture_command_wal_file_sync_calls": 51.0,
+          "fixture_command_wal_sync_count": 34.0,
+          "fixture_value_log_sync_calls": 34.0,
+          "ns/op": 3833677.0,
+          "p50-ns": 3636229.0,
+          "p95-ns": 7081204.0,
+          "p99-ns": 7081204.0,
+          "snapshot_rotations/op": 0.0,
+          "warm_snapshot_rotations": 0.0
+        }
+      },
+      "paired_ns_percent": [
+        14.61506550379128,
+        -6.6885197498597115,
+        1.633510601634125
+      ]
+    },
+    "vacuum": {
+      "medians": {
+        "baseline": {
+          "B/op": 186052256.0,
+          "allocs/op": 616281.0,
+          "collection-basis-ns/op": 2799036.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 37306402.0,
+          "deferred-cutovers/op": 1.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 7241261.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 1283250.0,
+          "foreground-p99-ns/op": 2308359.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 44242131.0,
+          "ns/op": 3075361669.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 10018098.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 603033.0,
+          "system-reserve-ns/op": 220391.0,
+          "system-tree-ns/op": 36544262.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 231311.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 3068555447.0
+        },
+        "candidate": {
+          "B/op": 179979656.0,
+          "allocs/op": 518674.0,
+          "collection-basis-ns/op": 3014551.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 35911570.0,
+          "deferred-cutovers/op": 1.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 6930544.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 1281886.0,
+          "foreground-p99-ns/op": 2358745.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 42819361.0,
+          "ns/op": 3090824874.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 9762927.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 582915.0,
+          "system-reserve-ns/op": 222575.0,
+          "system-tree-ns/op": 35135764.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 208057.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 3083567201.0
+        }
+      },
+      "paired_ns_percent": [
+        1.1470216212231987,
+        0.5028093168966352,
+        -0.5968377764624111
+      ]
+    }
+  },
+  "planned": 14,
+  "quiet": true,
+  "status": "COMPLETE_BOUNDED_DIAGNOSTIC",
+  "timings_qualify": false
+}

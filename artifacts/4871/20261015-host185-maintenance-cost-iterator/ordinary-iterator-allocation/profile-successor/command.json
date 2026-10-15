@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0,1",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/checkpoint.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+    "-test.benchtime=16x",
+    "-test.count=1",
+    "-test.benchmem",
+    "-test.memprofilerate=1",
+    "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-iterator-allocation/profile-successor/alloc.pprof",
+    "-test.timeout=120s"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "elapsed_s": 2.417748970910907,
+  "exit": 0,
+  "interrupted": null,
+  "started_utc": "2026-10-15T21:38:27.140991+00:00",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "90dbfd06efc44c1648d9b686f576939678f7f203a429606eebe18bd011367726"
+}

@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0,1",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/checkpoint.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkCOWPublicDirtyCost$/^command_wal_durable$/^btree$/^Pointer4096$/^N=1024$/^DirtyCheckpoint$",
+    "-test.benchtime=16x",
+    "-test.count=1",
+    "-test.benchmem",
+    "-test.memprofilerate=1",
+    "-test.memprofile=/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-checkpoint-cost/profiles-01/candidate-public/alloc.pprof",
+    "-test.timeout=120s"
+  ],
+  "arm": "candidate-public",
+  "binary_sha256": "d57ffb045efa6713c99f922eb98c4c2ed35f053de743601983587d7ee1989596",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+  "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "started_utc": "2026-10-15T21:29:03.028845+00:00"
+}

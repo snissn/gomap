@@ -1,0 +1,387 @@
+[
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128297",
+    "name": "macos-latest-1",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128475",
+    "name": "windows-core-2",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701202/job/116676131580",
+    "name": "qualify",
+    "state": "SUCCESS",
+    "workflow": "Peer security and global admission qualification"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128311",
+    "name": "macos-latest-3",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701202/job/116676131007",
+    "name": "public-path-cost",
+    "state": "SUCCESS",
+    "workflow": "Peer security and global admission qualification"
+  },
+  {
+    "bucket": "pending",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128497",
+    "name": "race-check (linux)-2",
+    "state": "IN_PROGRESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128357",
+    "name": "windows-caching-heavy-2",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pending",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128521",
+    "name": "race-check (linux)-1",
+    "state": "IN_PROGRESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128574",
+    "name": "windows-caching-rest-2",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701157/job/116676131433",
+    "name": "qualify",
+    "state": "SUCCESS",
+    "workflow": "Owner-local metadata qualification"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676127712",
+    "name": "CI impact (advisory only)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "fail",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701449/job/116676131630",
+    "name": "stable legacy/public capture",
+    "state": "FAILURE",
+    "workflow": "TreeDB: index-vacuum M0 evidence"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128292",
+    "name": "windows-core-6",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701086/job/116676130869",
+    "name": "append-only snapshot guardrail (linux)",
+    "state": "SUCCESS",
+    "workflow": "read-snapshot: guardrails"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128318",
+    "name": "windows-core-1",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128274",
+    "name": "windows-core-8",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128018",
+    "name": "vet (macos)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128197",
+    "name": "macos-latest-2",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128268",
+    "name": "windows-caching-rest-3",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693494/job/116676103940",
+    "name": "macos-latest-1",
+    "state": "SUCCESS",
+    "workflow": "Root: vet+test"
+  },
+  {
+    "bucket": "pending",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128336",
+    "name": "windows-core-5",
+    "state": "IN_PROGRESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693399/job/116676103640",
+    "name": "macos-latest",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128258",
+    "name": "race-check (linux)-4",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128226",
+    "name": "windows-caching-heavy-1",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128119",
+    "name": "vet (windows)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128182",
+    "name": "windows-core-4",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128333",
+    "name": "windows-core-7",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128139",
+    "name": "snapshot-iterator-perf (linux)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128099",
+    "name": "perf-smoke (linux)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128240",
+    "name": "vet (ubuntu)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701101/job/116676127302",
+    "name": "paired-performance",
+    "state": "SUCCESS",
+    "workflow": "Sparse catalog qualification"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128180",
+    "name": "windows-mongo-gateway",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128160",
+    "name": "windows-nativewire",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128277",
+    "name": "windows-powerloss-oracle",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693494/job/116676103813",
+    "name": "macos-latest-2",
+    "state": "SUCCESS",
+    "workflow": "Root: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128244",
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128191",
+    "name": "windows-core-3",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128253",
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128176",
+    "name": "race-check (linux)-3",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701101/job/116676127747",
+    "name": "qualify",
+    "state": "SUCCESS",
+    "workflow": "Sparse catalog qualification"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128122",
+    "name": "ubuntu-latest-3",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128148",
+    "name": "mvcc raw-path gate (linux)",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808701062/job/116676128214",
+    "name": "windows-caching-rest-1",
+    "state": "SUCCESS",
+    "workflow": "TreeDB: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693525/job/116676103192",
+    "name": "bench (linux)",
+    "state": "SUCCESS",
+    "workflow": "redisserver: protocol bench"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693613/job/116676103914",
+    "name": "profiles (linux) (balanced)",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: suites (gates)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693613/job/116676103846",
+    "name": "suites (linux)",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: suites (gates)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693399/job/116676103293",
+    "name": "ubuntu-latest",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693494/job/116676103894",
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS",
+    "workflow": "Root: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693665/job/116676103641",
+    "name": "windows-latest",
+    "state": "SUCCESS",
+    "workflow": "HashDB: vet+test (Windows)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693494/job/116676103474",
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS",
+    "workflow": "Root: vet+test"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693613/job/116676103963",
+    "name": "profiles (linux) (fast)",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: suites (gates)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693613/job/116676103434",
+    "name": "bigkeys_guard (linux)",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: suites (gates)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693613/job/116676103701",
+    "name": "profiles (linux) (durable)",
+    "state": "SUCCESS",
+    "workflow": "unified_bench: suites (gates)"
+  },
+  {
+    "bucket": "pass",
+    "link": "https://github.com/snissn/gomap/actions/runs/38808693630/job/116676103716",
+    "name": "gofmt",
+    "state": "SUCCESS",
+    "workflow": "Format"
+  },
+  {
+    "bucket": "pass",
+    "link": "",
+    "name": "CodeRabbit",
+    "state": "SUCCESS",
+    "workflow": ""
+  }
+]
