@@ -1,0 +1,37 @@
+{
+  "changed": [
+    "TreeDB/db/durable_root_runtime.go",
+    "TreeDB/db/native_mvcc_current_delete_v6.go",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "TreeDB/db/primary_member_retirement_work_v6.go",
+    "TreeDB/db/primary_runtime_metadata.go",
+    "TreeDB/db/primary_visible_member_work_v6.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/stable_pager_owned_operations.go",
+    "TreeDB/freelist/generation_v1_format.go",
+    "TreeDB/internal/primaryarena/arena.go",
+    "TreeDB/internal/rootpublication/coordinator.go",
+    "TreeDB/internal/rootpublication/native_publication_v6.go",
+    "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "TreeDB/mvcc/prune_cursor_v6.go",
+    "TreeDB/pager/grow_work.go",
+    "TreeDB/pager/pager.go",
+    "TreeDB/pager/primary_read_root_v6.go"
+  ],
+  "untracked": [
+    "TreeDB/db/native_finite_closure_pricing_v6_test.go",
+    "TreeDB/db/native_mvcc_final_basis_v6.go",
+    "TreeDB/db/native_mvcc_publication_binding_v6.go",
+    "TreeDB/db/primary_materialization_work_v6.go",
+    "TreeDB/db/primary_ordered_post_work_v6.go",
+    "TreeDB/freelist/generation_v1_publication_work_v6.go",
+    "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+    "TreeDB/internal/rootpublication/coordinator_service_work_v6_test.go",
+    "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+    "TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+    "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+    "TreeDB/lifecycle/graveyard_empty_work_v6.go",
+    "TreeDB/mvcc/native_finite_cursor_pricing_v6_test.go",
+    "TreeDB/pager/primary_read_root_retirement_work_v6_test.go"
+  ]
+}

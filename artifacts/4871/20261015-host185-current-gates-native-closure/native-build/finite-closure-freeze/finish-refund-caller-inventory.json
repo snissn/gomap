@@ -1,0 +1,1715 @@
+{
+  "scope": "Conservative whole TreeDB production callsite inventory for RemovePending, Remove, and named completion consumption. Includes non-Finish and non-owner Remove methods; actual SAME Finish chains are in forecast.md.",
+  "calls": [
+    {
+      "path": "TreeDB/caching/db.go",
+      "line": 2753,
+      "caller": "func (db *DB) removeFileRetry(path string) error {",
+      "call": "err = os.Remove(path)"
+    },
+    {
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "line": 57,
+      "caller": "func newStableOuterLeafCapture(db *DB, lane *lane) (*stableOuterLeafCapture, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "line": 112,
+      "caller": "func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableResourceToken) error {",
+      "call": "capture.metadata.RemovePending(old)"
+    },
+    {
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "line": 280,
+      "caller": "func (capture *stableOuterLeafCapture) disposeTokens() {",
+      "call": "capture.metadata.RemovePending(capture.tokensCharge)"
+    },
+    {
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "line": 292,
+      "caller": "func (capture *stableOuterLeafCapture) disposeMetadata() {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/caching/vlog_generation_state.go",
+      "line": 212,
+      "caller": "func saveValueLogGenerationState(path string, raw valueLogGenerationStateFile) error {",
+      "call": "if err := os.Remove(path); err != nil {"
+    },
+    {
+      "path": "TreeDB/cmd/treedb_rag_benchmark/application_compare.go",
+      "line": 1134,
+      "caller": "func reserveComparisonOutputs(paths ...string) (func(), error) {",
+      "call": "_ = os.Remove(path)"
+    },
+    {
+      "path": "TreeDB/cmd/treedb_rag_interleave/main.go",
+      "line": 627,
+      "caller": "func writeArtifact(path string, value artifact) (err error) {",
+      "call": "_ = os.Remove(temporary)"
+    },
+    {
+      "path": "TreeDB/collections/column_store_compaction.go",
+      "line": 540,
+      "caller": "func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) error {",
+      "call": "if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {"
+    },
+    {
+      "path": "TreeDB/collections/vector_index_construction_matrix.go",
+      "line": 39,
+      "caller": "func stageColumnVectorGraphConstructionMatrix(root string, rows []columnVectorGraphAssetRow, dimensions int) (_ *columnVectorGraphConstructionMatrix, err error) {",
+      "call": "err = errors.Join(err, os.Remove(path))"
+    },
+    {
+      "path": "TreeDB/collections/vector_index_construction_matrix.go",
+      "line": 91,
+      "caller": "func stageColumnVectorGraphConstructionMatrix(root string, rows []columnVectorGraphAssetRow, dimensions int) (_ *columnVectorGraphConstructionMatrix, err error) {",
+      "call": "if err := os.Remove(path); err != nil {"
+    },
+    {
+      "path": "TreeDB/db/capture_teardown_allocation.go",
+      "line": 90,
+      "caller": "func (db *DB) appendCaptureTeardownHookLocked(record captureTeardownHook, metadata *retainedalloc.Owner) error {",
+      "call": "selected.RemovePending(oldCharge)"
+    },
+    {
+      "path": "TreeDB/db/command_wal_publish.go",
+      "line": 931,
+      "caller": "func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) ([]commandWALSegmentCleanupDecision, error) {",
+      "call": "removeErr := os.Remove(decision.Path)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 2374,
+      "caller": "func (s *Snapshot) finalizeCloseRead(oneShot bool) error {",
+      "call": "generationMetadata.RemovePending(generationCharge)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 2694,
+      "caller": "func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 3390,
+      "caller": "func (db *DB) runCaptureTeardownHooksLocked() error {",
+      "call": "completionOwner.RemovePending(completionCharge)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 3405,
+      "caller": "func (db *DB) runCaptureTeardownHooksLocked() error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 3410,
+      "caller": "func (db *DB) runCaptureTeardownHooksLocked() error {",
+      "call": "metadata.RemovePending(errorCharge)"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 4982,
+      "caller": "func (db *DB) Prune() {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/dependency_directory_snapshot_rebind_v2.go",
+      "line": 40,
+      "caller": "func rebindSnapshotDependencyTreeWithMetadata(ctx context.Context, dir, sideRoot string, p *pager.Pager, tr *tree.Tree, count uint64, inExtent func(uint64) bool, metadata *retainedalloc.Owner) error {",
+      "call": "defer func() { *scratch = primaryDependencyRebindPageV2{}; metadata.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "line": 318,
+      "caller": "func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {",
+      "call": "a.MetadataOwner().RemovePending(pendingCharge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 144,
+      "caller": "func (db *DB) recoverDurablePrimaryV5(idx *indexGen) (retErr error) {",
+      "call": "defer func() { a.MetadataOwner().RemovePending(pendingCharge) }()"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 209,
+      "caller": "func (db *DB) recoverDurablePrimaryV5(idx *indexGen) (retErr error) {",
+      "call": "a.MetadataOwner().RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 290,
+      "caller": "func materializePrimaryManifestV5(idx *indexGen, m *rootpublication.DependencyManifestV1) (ref rootpublication.DependencyManifestRefV1, banks *primaryBankConstructionV5, err error) {",
+      "call": "claims.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 395,
+      "caller": "func (db *DB) initializeDurablePrimaryV5(idx *indexGen) (err error) {",
+      "call": "defer func() { clear(image); a.MetadataOwner().RemovePending(scratchCharge) }()"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 464,
+      "caller": "func (db *DB) initializeDurablePrimaryV5(idx *indexGen) (err error) {",
+      "call": "a.MetadataOwner().RemovePending(runtimeCharge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 617,
+      "caller": "func (runtime *rootPublicationRuntimeV1) preparePrimarySealV5(ctx context.Context, candidate *rootpublication.PreparedRootCandidate, member *rootPublicationVisibleMemberV1) (err error) {",
+      "call": "a.MetadataOwner().RemovePending(sealMetadata)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 773,
+      "caller": "func (runtime *rootPublicationRuntimeV1) commitPrimarySealScopedV6(seal *rootPublicationSealV1, scope *nativeAuthorityScopeV6) (oldest uint64, err error) {",
+      "call": "a.MetadataOwner().RemovePending(runtimeCharge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 840,
+      "caller": "func (runtime *rootPublicationRuntimeV1) commitPrimarySealScopedV6(seal *rootPublicationSealV1, scope *nativeAuthorityScopeV6) (oldest uint64, err error) {",
+      "call": "a.MetadataOwner().RemovePending(retiredCharge)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 31,
+      "caller": "func rebindDurablePrimarySnapshotLayoutV5(ctx context.Context, dir, sideRoot string) error {",
+      "call": "_ = os.Remove(name)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 74,
+      "caller": "func rebindDurablePrimarySnapshotLayoutV5(ctx context.Context, dir, sideRoot string) error {",
+      "call": "if err = errors.Join(backup.Close(), os.Remove(backupPath)); err != nil {"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 80,
+      "caller": "func rebindDurablePrimarySnapshotLayoutV5(ctx context.Context, dir, sideRoot string) error {",
+      "call": "defer os.Remove(backupPath)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 90,
+      "caller": "func rebindDurablePrimarySnapshotLayoutV5(ctx context.Context, dir, sideRoot string) error {",
+      "call": "if err = os.Remove(backupPath); err != nil {"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 124,
+      "caller": "func copyPrimarySnapshotIndexV5(ctx context.Context, dir, path string) (name string, size int64, result error) {",
+      "call": "_ = os.Remove(name)"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "line": 259,
+      "caller": "func rebindDurablePrimarySnapshotFilesV5(ctx context.Context, dir, sideRoot, dataPath, bankPath string) (resultErr error) {",
+      "call": "defer func() { *scratch = primaryRebindScratchV5{}; arena.MetadataOwner().RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 324,
+      "caller": "func (candidate *durableRootPublishCandidateV1) release() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 327,
+      "caller": "func (candidate *durableRootPublishCandidateV1) release() error {",
+      "call": "generationOwner.RemovePending(generationCharge)"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 3214,
+      "caller": "func (db *DB) validateGenericDurableDependencyEntryWithMetadataV1(builder *rootpublication.StableResourceSetBuilder, entry rootpublication.DependencyManifestEntryV1, physicalOnly bool, metadata *retainedalloc.Owner) error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/durable_root_snapshot_rebind.go",
+      "line": 79,
+      "caller": "func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, sideRoot string) error {",
+      "call": "_ = os.Remove(temporaryPath)"
+    },
+    {
+      "path": "TreeDB/db/index_gen.go",
+      "line": 186,
+      "caller": "func (g *indexGen) close() error {",
+      "call": "g.stableNamespaceMetadata.RemovePending(g.stableNamespaceParentCharge)"
+    },
+    {
+      "path": "TreeDB/db/index_gen.go",
+      "line": 298,
+      "caller": "func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, cleanupErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/index_gen_db.go",
+      "line": 78,
+      "caller": "func (db *DB) releaseIndex(gen *indexGen) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/index_gen_db.go",
+      "line": 127,
+      "caller": "func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/index_gen_db.go",
+      "line": 170,
+      "caller": "func (db *DB) closeAllIndexes() error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "line": 222,
+      "caller": "func (closure *LeafGenerationManifestStablePreparedClosure) ReleaseWithError() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "line": 290,
+      "caller": "func (closure *LeafGenerationManifestStablePreparedClosure) openReplacementFile(index int, store *leafGenerationManifestStore, name string, flags int, mode os.FileMode) (*os.File, error) {",
+      "call": "closure.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "line": 308,
+      "caller": "func (closure *LeafGenerationManifestStablePreparedClosure) closeReplacementFiles() error {",
+      "call": "closure.metadata.RemovePending(closure.replacementCharges[i])"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "line": 332,
+      "caller": "func (closure *LeafGenerationManifestStablePreparedClosure) closePreviousFile() error {",
+      "call": "closure.metadata.RemovePending(closure.previousFileCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "line": 354,
+      "caller": "func (closure *LeafGenerationManifestStablePreparedClosure) readPreviousViewLocked(store *leafGenerationManifestStore) ([]byte, error) {",
+      "call": "closure.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 163,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) openParent(path string, target **os.File) error {",
+      "call": "authority.metadata.RemovePending(fileCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 297,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) capture(created []rewriteCreatedSegment, pointers []page.LeafLogPtr) (err error) {",
+      "call": "authority.metadata.RemovePending(fileCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 718,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) releaseCaptured() error {",
+      "call": "authority.metadata.RemovePending(segment.handleCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 765,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) release() error {",
+      "call": "authority.metadata.RemovePending(authority.stagingParentCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 775,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) release() error {",
+      "call": "authority.metadata.RemovePending(authority.destinationParentCharge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "line": 802,
+      "caller": "func (authority *leafGenerationPackPromotionAuthority) release() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "line": 262,
+      "caller": "func (closure *LeafGenerationPackStablePreparedClosure) finishCompletionCall() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/namespace_mutation.go",
+      "line": 39,
+      "caller": "func removePersistentFile(root, path string, resource durabilitycut.Resource) (bool, error) {",
+      "call": "if err := os.Remove(path); err != nil {"
+    },
+    {
+      "path": "TreeDB/db/namespace_mutation.go",
+      "line": 57,
+      "caller": "func removePersistentFileBestEffortResult(root, path string, resource durabilitycut.Resource) (bool, error) {",
+      "call": "if err := os.Remove(path); err != nil {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 262,
+      "caller": "func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 232,
+      "caller": "func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 248,
+      "caller": "func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 253,
+      "caller": "func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 433,
+      "caller": "func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_data_dependency_release_v6.go",
+      "line": 60,
+      "caller": "func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref rootpublication.DependencyDirectoryRefV2, totalPages uint64) (*rootpublication.DependencyDirectoryV2, error) {",
+      "call": "completion.Metadata.RemovePending(completion.Charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_generation_completion_v6.go",
+      "line": 22,
+      "caller": "func (db *DB) closeGhostManagerCompletionV6(stop bool) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_materialized_write_v6.go",
+      "line": 90,
+      "caller": "func (c *NativeMVCCCurrentDeleteV6) closeMaterializedInputWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 369,
+      "caller": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 389,
+      "caller": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 397,
+      "caller": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 406,
+      "caller": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 169,
+      "caller": "func (operations *stablePagerOwnedOperations) ReleaseWithWorkV6(consumed *bool, w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 274,
+      "caller": "func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, primary bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "metadata.RemovePending(fileBytes)"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 391,
+      "caller": "func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, primary bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 439,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 448,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 457,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 469,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 478,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "line": 505,
+      "caller": "func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "line": 84,
+      "caller": "func openReadOnly(opts Options) (result *DB, retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "line": 285,
+      "caller": "func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (result *DB, retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/original_primary_runtime_cleanup.go",
+      "line": 40,
+      "caller": "func releasePrimaryRuntimeV5(a *primaryarena.Arena, r *primaryDurableRuntimeV5) error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/original_primary_runtime_cleanup.go",
+      "line": 89,
+      "caller": "func finishPrimaryRuntimeConstructionRootsV5(r *primaryDurableRuntimeV5) error {",
+      "call": "r.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/original_primary_runtime_cleanup.go",
+      "line": 144,
+      "caller": "func finishPrimaryRuntimeRebuildScratchV5(r *primaryDurableRuntimeV5) error {",
+      "call": "r.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/original_startup_generation.go",
+      "line": 28,
+      "caller": "func newStartupIndexGeneration(d *DB, lock *lockfile.Lock) (*indexGen, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/original_startup_generation.go",
+      "line": 188,
+      "caller": "func (g *indexGen) openOfflineReplacementPagerV1(dir string, chunkSize int64) error {",
+      "call": "metadata.RemovePending(parentCharge)"
+    },
+    {
+      "path": "TreeDB/db/original_startup_generation.go",
+      "line": 204,
+      "caller": "func (g *indexGen) openOfflineReplacementPagerV1(dir string, chunkSize int64) error {",
+      "call": "metadata.RemovePending(fileCharge)"
+    },
+    {
+      "path": "TreeDB/db/pools.go",
+      "line": 230,
+      "caller": "func (m *indexGhostManager) add(gen *indexGen) (*retainedalloc.Owner, uint64, error) {",
+      "call": "m.metadata.RemovePending(oldCharge)"
+    },
+    {
+      "path": "TreeDB/db/pools.go",
+      "line": 261,
+      "caller": "func (m *indexGhostManager) scavenge(maxAge time.Duration) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/pools.go",
+      "line": 289,
+      "caller": "func (m *indexGhostManager) closeAllWithCompletionV6() (*retainedalloc.Owner, uint64) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 117,
+      "caller": "func (owner *primaryArenaOwnerV5) clearNamespaceV5() error {",
+      "call": "owner.arena.MetadataOwner().RemovePending(owner.namespaceParentCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_arena_release_work.go",
+      "line": 103,
+      "caller": "func continuePrimaryArenaRelease(s *primaryArenaReleaseState, proof *rootpublication.NamespaceProofReleaseWork, parentRefund, ownerRefund *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_arena_release_work.go",
+      "line": 223,
+      "caller": "func continuePrimaryArenaRelease(s *primaryArenaReleaseState, proof *rootpublication.NamespaceProofReleaseWork, parentRefund, ownerRefund *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "owner.arena.MetadataOwner().RemovePending(owner.namespaceParentCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 45,
+      "caller": "func newPrimaryBankConstructionV5(idx *indexGen) (*primaryBankConstructionV5, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 75,
+      "caller": "func (claims *primaryBankConstructionV5) ensureCapacity(count int) error {",
+      "call": "claims.metadata.RemovePending(old)"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 101,
+      "caller": "func (claims *primaryBankConstructionV5) release() error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go",
+      "line": 186,
+      "caller": "func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) (retErr error) {",
+      "call": "defer func() { a.MetadataOwner().RemovePending(pendingCharge) }()"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go",
+      "line": 305,
+      "caller": "func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) (retErr error) {",
+      "call": "a.MetadataOwner().RemovePending(unusedCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 43,
+      "caller": "func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.PublicationBundle, g *freelist.FreelistGenerationV1, cow *freelist.PreparedCOWCandidateV1, cap freelist.ReuseCapability, r rootpublication.DurableRootRecordV1, projection rootpublication.PrimaryProjectionV5, m *rootpublication.DependencyManifestV1, resources *rootpublication.StableResourceSet) error {",
+      "call": "a.MetadataOwner().RemovePending(runtimeCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 144,
+      "caller": "func copyCapsuleReadImageV6(a *primaryarena.Arena, physical []byte, r rootpublication.DurableRootRecordV1) (primaryarena.Ref, error) {",
+      "call": "a.MetadataOwner().RemovePending(scratchCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_snapshot_rebind_v6.go",
+      "line": 40,
+      "caller": "func rebindPrimarySnapshotOperand(ctx context.Context, dir, sideRoot string, p *pager.Pager, writer primarySnapshotBankStoreV5, v *rootpublication.DurablePrimaryRootRecordV5, scratch *primaryRebindScratchV6, metadata *retainedalloc.Owner, firstBank uint64) error {",
+      "call": "defer metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_snapshot_rebind_v6.go",
+      "line": 73,
+      "caller": "func rebindPrimaryCapsuleSnapshotV6(ctx context.Context, dir, sideRoot string, p *pager.Pager, a *primaryarena.Arena, data, bank *snapshotIndexPageStoreV1, dataFile, bankFile *os.File) error {",
+      "call": "defer func() { *scratch = primaryRebindScratchV6{}; a.MetadataOwner().RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_snapshot_rebind_v6.go",
+      "line": 172,
+      "caller": "func rebindPrimarySnapshotManifestV1(ctx context.Context, dir, sideRoot string, writer primarySnapshotBankStoreV5, original rootpublication.DependencyManifestRefV1, metadata *retainedalloc.Owner) (rootpublication.DependencyManifestRefV1, error) {",
+      "call": "defer func() { clear(scratch); scratch = nil; metadata.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_v5.go",
+      "line": 73,
+      "caller": "func (lease *primaryDependencyLeaseV5) releaseOutcome() (disposed bool, err error) {",
+      "call": "completion.Metadata.RemovePending(completion.Charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_v5.go",
+      "line": 102,
+      "caller": "func disposePrimaryDependencyConstructorV6(alias **primaryDependencyLeaseV5, cause error) error {",
+      "call": "completion.Metadata.RemovePending(completion.Charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_v5.go",
+      "line": 118,
+      "caller": "func (db *DB) pinPrimaryDependencyV5(idx *indexGen, ref rootpublication.DependencyDirectoryRefV2, extent uint64) (*rootpublication.DependencyDirectoryV2, error) {",
+      "call": "idx.primary.MetadataOwner().RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_v5.go",
+      "line": 207,
+      "caller": "func (alloc *primaryDependencyAllocatorV5) seal(root uint64) error {",
+      "call": "defer func() { clear(frames); claims.metadata.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/primary_joint_recovery_proof_v6.go",
+      "line": 65,
+      "caller": "func newPrimaryJointRecoveryProofV6(registry *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (*primaryJointRecoveryProofV6, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_joint_recovery_proof_v6.go",
+      "line": 90,
+      "caller": "func (p *primaryJointRecoveryProofV6) closeValidation() error {",
+      "call": "p.metadata.RemovePending(p.pagerCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_joint_recovery_proof_v6.go",
+      "line": 129,
+      "caller": "func (p *primaryJointRecoveryProofV6) finish(err error) error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 143,
+      "caller": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 151,
+      "caller": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 162,
+      "caller": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 173,
+      "caller": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "line": 50,
+      "caller": "func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "line": 67,
+      "caller": "func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "line": 171,
+      "caller": "func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexGen, err error) {",
+      "call": "metadata.RemovePending(primaryCharge) // No child handle was produced."
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "line": 202,
+      "caller": "func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexGen, err error) {",
+      "call": "metadata.RemovePending(dataCharge) // No child handle was produced."
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 24,
+      "caller": "func (c *primaryRuntimeDisposalCompletionV6) complete() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 237,
+      "caller": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 80,
+      "caller": "func growPrimaryRuntimeSliceWithWorkV6[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "runtime.metadata.RemovePending(oldCharge)"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 134,
+      "caller": "func sealPrimaryRecordV5(a *primaryarena.Arena, ref primaryarena.Ref, value rootpublication.DurablePrimaryRootRecordV5) ([32]byte, error) {",
+      "call": "defer func() { clear(image); a.MetadataOwner().RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+      "line": 86,
+      "caller": "func abandonPrimarySealCommitStorageV6(seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "seal.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 121,
+      "caller": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 145,
+      "caller": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 170,
+      "caller": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 262,
+      "caller": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 287,
+      "caller": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 304,
+      "caller": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+      "line": 92,
+      "caller": "func (runtime *rootPublicationRuntimeV1) completeNativeVisibleMemberAbortV6(m *rootPublicationVisibleMemberV1, cow *freelist.PreparedCOWCandidateV1, input rootpublication.DurableRootCallbackInput, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 243,
+      "caller": "func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (capability *RecoverableRootSet, retry bool, resultErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 337,
+      "caller": "func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (capability *RecoverableRootSet, retry bool, resultErr error) {",
+      "call": "metadata.RemovePending(sourceCharge)"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 867,
+      "caller": "func (set *RecoverableRootSet) PinStableFile(file *os.File) (retErr error) {",
+      "call": "set.identityPins.Remove(identity)"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 874,
+      "caller": "func (set *RecoverableRootSet) PinStableFile(file *os.File) (retErr error) {",
+      "call": "set.identityPins.Remove(identity)"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 971,
+      "caller": "func (set *RecoverableRootSet) ReleaseWithError() error {",
+      "call": "set.identityPins.Remove(identity)"
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 1013,
+      "caller": "func (set *RecoverableRootSet) ReleaseWithError() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 286,
+      "caller": "func (seal *rootPublicationSealV1) release() error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 538,
+      "caller": "func (install *rootPublicationVisibleInstallV1) abort() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 919,
+      "caller": "func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(",
+      "call": "runtime.idx.primary.MetadataOwner().RemovePending(memberMetadata)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 1568,
+      "caller": "func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate *rootpublication.PreparedRootCandidate) (err error) {",
+      "call": "runtime.metadata.RemovePending(sealCharge)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 2077,
+      "caller": "func (runtime *rootPublicationRuntimeV1) release() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 2080,
+      "caller": "func (runtime *rootPublicationRuntimeV1) release() error {",
+      "call": "generationOwner.RemovePending(generationCharge)"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 2128,
+      "caller": "func (install *rootPublicationVisibleInstallV1) releaseReferenceCountEvidence() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "line": 114,
+      "caller": "func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOuterLeafCapture, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "line": 174,
+      "caller": "func (capture *rewriteStableOuterLeafCapture) add(token *rootpublication.StableResourceToken) error {",
+      "call": "capture.metadata.RemovePending(old)"
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "line": 385,
+      "caller": "func (capture *rewriteStableOuterLeafCapture) reserveID(ids *[]uint64, admitted *uint64) error {",
+      "call": "capture.metadata.RemovePending(old)"
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "line": 393,
+      "caller": "func (capture *rewriteStableOuterLeafCapture) disposeTokens() {",
+      "call": "capture.metadata.RemovePending(capture.tokensCharge)"
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "line": 406,
+      "caller": "func (capture *rewriteStableOuterLeafCapture) disposeMetadata() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 53,
+      "caller": "func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 59,
+      "caller": "func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 229,
+      "caller": "func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_resource.go",
+      "line": 188,
+      "caller": "func validateStableEncodedResourceClosure(resources *rootpublication.StableResourceSet, field rootpublication.ReachabilityField, id uint64, length int64, digest [32]byte) (retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_resource.go",
+      "line": 484,
+      "caller": "func (generation *indexGen) stablePagerNamespaceTokenCore(dir, name string, p *pager.Pager, rebind bool) (*rootpublication.StableNamespaceToken, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/stable_resource.go",
+      "line": 502,
+      "caller": "func (generation *indexGen) stablePagerNamespaceTokenCore(dir, name string, p *pager.Pager, rebind bool) (*rootpublication.StableNamespaceToken, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "line": 91,
+      "caller": "func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "line": 108,
+      "caller": "func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "line": 168,
+      "caller": "func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "line": 366,
+      "caller": "func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_gc_incremental.go",
+      "line": 619,
+      "caller": "func (db *DB) persistValueLogRefTracker() error {",
+      "call": "counts.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_gc_incremental.go",
+      "line": 1011,
+      "caller": "func encodeValueLogRefCountsOwned(commitSeq uint64, incarnation valueLogRefIncarnation, counts *valueLogRefCounts) ([]byte, uint64, error) {",
+      "call": "counts.metadata.RemovePending(idsCharge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_ref_cache_read.go",
+      "line": 119,
+      "caller": "func (t *valueLogRefTracker) finishCacheRead() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_ref_counts_owned.go",
+      "line": 138,
+      "caller": "func (c *valueLogRefCounts) close() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_ref_incarnation.go",
+      "line": 141,
+      "caller": "func (t *valueLogRefTracker) close() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "line": 3189,
+      "caller": "func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "line": 3207,
+      "caller": "func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/atomicfile/atomicfile.go",
+      "line": 103,
+      "caller": "func removeObserved(root, path string) error {",
+      "call": "if err := os.Remove(path); err != nil {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 409,
+      "caller": "func (c *Claim) finish() {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 593,
+      "caller": "func (a *Arena) sealDirectoryConstructedV6(r Ref, image []byte, groups [groupCount]*Group, record *bundleRecord, owner ReadRootConstructionV6, cert **ReadRootCertificateV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "a.metadata.Remove(certificateCharge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 777,
+      "caller": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "a.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Group{}))))"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 845,
+      "caller": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 858,
+      "caller": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "a.metadata.Remove(b.metadataCharge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 1251,
+      "caller": "func (a *Arena) sealExactAbsence(destination, current Ref, entry node.PrimaryDirectoryEntry, expectedRevision page.EntryRevision, scratch []byte, record *bundleRecord, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "a.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Group{}))))"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "line": 162,
+      "caller": "func (c *BundleClaim) finish() {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "line": 279,
+      "caller": "func (a *Arena) writeBundleLocked(directory Ref, image []byte, record *bundleRecord, w *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "line": 324,
+      "caller": "func (a *Arena) writeBundleLocked(directory Ref, image []byte, record *bundleRecord, w *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/directory_seal_work_v6.go",
+      "line": 139,
+      "caller": "func (s *DirectorySealWorkV6) step(a *Arena, r Ref, image []byte, groups [1]*Group, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (*ReadRootCertificateV6, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/metadata.go",
+      "line": 126,
+      "caller": "func (a *Arena) SealMetadata(r Ref, image []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+      "line": 102,
+      "caller": "func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry node.PrimaryDirectoryEntry, base node.PrimaryOperand, sequence uint64, selectedRevision page.EntryRevision, scratch []byte, owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (*ReadRootCertificateV6, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "line": 103,
+      "caller": "func (a *Arena) PrepareConstructedReadRootV6(owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (Ref, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "line": 327,
+      "caller": "func (a *Arena) CloneReadRootForPromotionV6(source Ref, w *iterator.OrdinalScanWork) (Ref, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "line": 332,
+      "caller": "func (a *Arena) CloneReadRootForPromotionV6(source Ref, w *iterator.OrdinalScanWork) (Ref, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "line": 338,
+      "caller": "func (a *Arena) CloneReadRootForPromotionV6(source Ref, w *iterator.OrdinalScanWork) (Ref, bool, error) {",
+      "call": "a.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/retention.go",
+      "line": 20,
+      "caller": "func (a *Arena) discardChunk(c **bankChunk) {",
+      "call": "a.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{}))))"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/retention.go",
+      "line": 59,
+      "caller": "func (a *Arena) CancelRootMetadata(r Ref, bytes uint64) {",
+      "call": "a.metadata.Remove(bytes)"
+    },
+    {
+      "path": "TreeDB/internal/raftcluster/snapshot_manifest.go",
+      "line": 314,
+      "caller": "func (s RaftSnapshotV1) Release() error {",
+      "call": "if err := os.Remove(s.ArchivePath); err != nil && !os.IsNotExist(err) {"
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/raft_snapshot.go",
+      "line": 138,
+      "caller": "func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {",
+      "call": "if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {"
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/snapshot_capture_files_v1.go",
+      "line": 64,
+      "caller": "func (c *snapshotCapturedFilesV1) close() error {",
+      "call": "cleanupErr = os.Remove(*target)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 1553,
+      "caller": "func (handoff *RecoveryResourceHandoff) ReleaseWithError() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 1606,
+      "caller": "func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_recovery_v2.go",
+      "line": 150,
+      "caller": "func ValidateDependencyDirectoryDescriptorsV2(directory *DependencyDirectoryV2, metadata *retainedalloc.Owner, validate func(DependencyManifestEntryV1, bool) error) error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_release_work.go",
+      "line": 249,
+      "caller": "func (s *DependencyDirectoryReleaseWork) continueWork(w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "s.completion.Metadata.RemovePending(s.completion.Charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_release_work.go",
+      "line": 260,
+      "caller": "func (s *DependencyDirectoryReleaseWork) continueWork(w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "call": "s.directoryOwner.RemovePending(s.directoryCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "line": 371,
+      "caller": "func (transaction *DurableRootTransaction) AbortPrivatePrimaryConstructionV6() error {",
+      "call": "terminal.owner.RemovePending(terminal.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "line": 446,
+      "caller": "func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) error {",
+      "call": "terminal.owner.RemovePending(terminal.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+      "line": 277,
+      "caller": "func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iterator.OrdinalScanWork, terminal *primaryConstructionReleaseState, removal *retainedalloc.RemovalWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 89,
+      "caller": "func (registry *IdentityPinRegistry) closeDirectoryAuthorityLocked(link stableNamespaceLink, authority stableDirectoryLinkAuthority) error {",
+      "call": "registry.metadata.Remove(authority.childCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 93,
+      "caller": "func (registry *IdentityPinRegistry) closeDirectoryAuthorityLocked(link stableNamespaceLink, authority stableDirectoryLinkAuthority) error {",
+      "call": "registry.metadata.Remove(authority.parentCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 330,
+      "caller": "func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*state))))"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 594,
+      "caller": "func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *os.File, name string) error {",
+      "call": "registry.metadata.Remove(pc + cc)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 600,
+      "caller": "func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *os.File, name string) error {",
+      "call": "registry.metadata.Remove(pc + cc)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 606,
+      "caller": "func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *os.File, name string) error {",
+      "call": "registry.metadata.Remove(cc)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 782,
+      "caller": "func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) (*identityPinState, error) {",
+      "call": "registry.metadata.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "line": 792,
+      "caller": "func (registry *IdentityPinRegistry) deleteIdleStateLocked(identity StableIdentity, state *identityPinState) {",
+      "call": "registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(identityPinState{}))))"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "line": 95,
+      "caller": "func (registry *IdentityPinRegistry) UnobserveWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*state))))"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 45,
+      "caller": "func (s *primaryBankMetadataScratchV5) Close() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 70,
+      "caller": "func (s *primaryBankDependencyScratchV5) Close() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "line": 33,
+      "caller": "func completePrimaryTerminalsV6(head **primaryTerminalCompletionV6) {",
+      "call": "terminal.owner.RemovePending(terminal.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 72,
+      "caller": "func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork, native bool) (primaryarena.ReadRootConstructionV6, bool, error) {",
+      "call": "a.MetadataOwner().RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 318,
+      "caller": "func (t *DurableRootTransaction) preparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork, private bool) (result *PrimaryPromotionV6, completed bool, returnErr error) {",
+      "call": "c.arena.MetadataOwner().RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "line": 122,
+      "caller": "func (t *registryTable[K, V]) set(key K, value V) error {",
+      "call": "t.owner.Remove(oldCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "line": 141,
+      "caller": "func (t *registryTable[K, V]) remove(key K) {",
+      "call": "t.owner.Remove(payload)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "line": 162,
+      "caller": "func (t *registryTable[K, V]) clear() {",
+      "call": "t.owner.Remove(payload)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "line": 169,
+      "caller": "func (t *registryTable[K, V]) close() {",
+      "call": "t.owner.Remove(t.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 81,
+      "caller": "func (allocation *resourceAllocation) refund() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go",
+      "line": 226,
+      "caller": "func (set *StableResourceSet) AcquireStats(now time.Time) (*ResourceDiagnostics, error) {",
+      "call": "defer func() { clear(namespaces); namespaces = nil; owner.RemovePending(scratch) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_directory_records_allocation.go",
+      "line": 92,
+      "caller": "func (set *StableResourceSet) walkOwnedDependencyDirectoryRecordsV2(visit func([]byte, []byte) error) error {",
+      "call": "defer func() { clear(records); records = nil; owner.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 204,
+      "caller": "func (root *resourceReleaseFrameV6) tokenNamespace(f *resourceReleaseFrameV6, t *StableResourceToken, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 220,
+      "caller": "func releaseOwnedTokenPhysicalV6(t *StableResourceToken) error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 42,
+      "caller": "func (c *resourceGraphReleaseCompletionV6) complete() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 163,
+      "caller": "func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {",
+      "call": "scratchOwner.RemovePending(scratchCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 176,
+      "caller": "func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 465,
+      "caller": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 764,
+      "caller": "func releaseResourceMetadataV6(a *resourceAllocation, value any) error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_import_allocation.go",
+      "line": 51,
+      "caller": "func newImportedResourceToken(owner *retainedalloc.Owner, source *StableResourceToken, root *stableResourceEntryNode, lane, id, path string, frontier DurableFrontier, field ReachabilityField, values []StableLogicalObligation) (*StableResourceToken, error) {",
+      "call": "owner.RemovePending(physicalCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_install_probe.go",
+      "line": 169,
+      "caller": "func (probe *StableChildFileInstallProbe) execute(",
+      "call": "probe.metadata.RemovePending(probe.fileCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_install_probe.go",
+      "line": 200,
+      "caller": "func (probe *StableChildFileInstallProbe) refundIfComplete() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_kind_allocation.go",
+      "line": 352,
+      "caller": "func (set *StableResourceSet) WithScopedTokens(visit func([]*StableResourceToken) error) (retErr error) {",
+      "call": "defer func() { clear(tokens); tokens = nil; owner.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_borrow.go",
+      "line": 219,
+      "caller": "func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {",
+      "call": "defer owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_borrow.go",
+      "line": 325,
+      "caller": "func WithReboundDependencyPhysicalV2(owner *retainedalloc.Owner, key, value []byte, rebind func(DependencyManifestEntryV1) (StableIdentity, StableIdentity, error), visit func([]byte) error) error {",
+      "call": "defer func() { *s = scratch{}; owner.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_walk.go",
+      "line": 139,
+      "caller": "func (d *ResourceDiagnostics) WalkLogicalObligations(visit func(StableResourcePhysicalDescriptor, StableLogicalObligation) error) error {",
+      "call": "defer func() { clear(records); records = nil; owner.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_allocation.go",
+      "line": 166,
+      "caller": "func (manifest *DependencyManifestV1) ReleaseOwnedMetadataV1() {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_allocation.go",
+      "line": 267,
+      "caller": "func (manifest *DependencyManifestV1) WithEntriesV1(visit func([]DependencyManifestEntryV1) error) error {",
+      "call": "defer func() { clear(out); out = nil; allocation.owner.RemovePending(charge) }()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load.go",
+      "line": 92,
+      "caller": "func LoadDependencyManifestWithMetadataV1(source freelist.PageSource, ref DependencyManifestRefV1, owner *retainedalloc.Owner) (*DependencyManifestV1, error) {",
+      "call": "owner.RemovePending(parsedCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load.go",
+      "line": 177,
+      "caller": "func (manifest *DependencyManifestV1) RebindPhysicalIdentitiesV1(visit func(DependencyManifestEntryV1) (StableIdentity, StableIdentity, error)) error {",
+      "call": "a.owner.RemovePending(2 * one)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load.go",
+      "line": 180,
+      "caller": "func (manifest *DependencyManifestV1) RebindPhysicalIdentitiesV1(visit func(DependencyManifestEntryV1) (StableIdentity, StableIdentity, error)) error {",
+      "call": "a.owner.RemovePending(one)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load.go",
+      "line": 253,
+      "caller": "func (manifest *DependencyManifestV1) RebindPhysicalIdentitiesV1(visit func(DependencyManifestEntryV1) (StableIdentity, StableIdentity, error)) error {",
+      "call": "a.owner.RemovePending(oldCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_rope_allocation.go",
+      "line": 32,
+      "caller": "func newOwnedStableResourceEntryLeaf(backing *resourceEntryBacking, start, end int, owner *retainedalloc.Owner) (*stableResourceEntryNode, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_rope_allocation.go",
+      "line": 87,
+      "caller": "func releaseOwnedResourceRope(node *stableResourceEntryNode) error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "line": 4330,
+      "caller": "func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState, counts map[ResourceKind]uint64) (err error) {",
+      "call": "completion.Complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1239,
+      "caller": "func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter, duplicate func(*os.File) (*os.File, error)) ([]*StableNamespaceToken, error) {",
+      "call": "spec.MetadataOwner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1260,
+      "caller": "func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter, duplicate func(*os.File) (*os.File, error)) ([]*StableNamespaceToken, error) {",
+      "call": "spec.MetadataOwner.RemovePending(parent.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1324,
+      "caller": "func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter, duplicate func(*os.File) (*os.File, error)) ([]*StableNamespaceToken, error) {",
+      "call": "spec.MetadataOwner.RemovePending(fileCharge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1478,
+      "caller": "func (batch *stableNamespaceBatchCleanup) completeIfConsumed() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1835,
+      "caller": "func (proof *StableNamespaceCreationProof) bindWithMetadata(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner, supplied bool, w *iterator.OrdinalScanWork) (*StableNamespaceToken, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1894,
+      "caller": "func (proof *StableNamespaceCreationProof) ReleaseWithError() error {",
+      "call": "state.owner.RemovePending(state.charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2556,
+      "caller": "func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) {",
+      "call": "token.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2778,
+      "caller": "func (token *StableNamespaceToken) releaseLocked() {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 73,
+      "caller": "func (backing *resourcePinnedBacking) release() error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 244,
+      "caller": "func (token *StableResourceToken) releaseMetadata() error {",
+      "call": "completion.complete()"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 46,
+      "caller": "func (c *StableResourceTokenReleaseCompletionV6) Complete() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/dict_codec_cache.go",
+      "line": 113,
+      "caller": "func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte, level zstd.EncoderLevel, noEntropy bool) *dictCodecEntry {",
+      "call": "c.ll.Remove(tail)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "line": 2108,
+      "caller": "func (m *Manager) registerSegmentLocked(path string, id uint32) error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "line": 2134,
+      "caller": "func (m *Manager) registerSegmentLocked(path string, id uint32) error {",
+      "call": "metadata.RemovePending(temporary)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/original_cleanup.go",
+      "line": 160,
+      "caller": "func (f *File) refundProducerMetadata() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/original_cleanup.go",
+      "line": 170,
+      "caller": "func (m *Manager) refundTerminalMetadataLocked() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/segment_registration_work.go",
+      "line": 148,
+      "caller": "func (m *Manager) RegisterSegmentWithWorkV6(path string, id uint32, s *SegmentRegistrationWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "s.metadata.RemovePending(temporary)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/segment_registration_work.go",
+      "line": 180,
+      "caller": "func (s *SegmentRegistrationWork) Close() error {",
+      "call": "s.metadata.RemovePending(s.charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/segment_registration_work.go",
+      "line": 215,
+      "caller": "func (s *SegmentRegistrationWork) Close() error {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 112,
+      "caller": "func newPendingStableSuccessor(parent *os.File, path string, fileID uint32, active StableResourceRegistration, producerOwner ...*retainedalloc.Owner) (*pendingValueLogSuccessor, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 141,
+      "caller": "func (pending *pendingValueLogSuccessor) disposeMetadata() {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 1349,
+      "caller": "func restoreRetirementQuarantine(q *retirementQuarantine, parent *os.File, base, parentPath, path string, alreadyLinked bool) error {",
+      "call": "if err := q.root.Remove(base); err != nil {"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 1398,
+      "caller": "func recoverStableDeleteQuarantine(root *os.Root, parent, quarantineName, base string, expected rootpublication.StableIdentity) (bool, error) {",
+      "call": "if err := q.root.Remove(base); err != nil && !os.IsNotExist(err) {"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 1534,
+      "caller": "func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity, capturedParent ...*os.File) (bool, error) {",
+      "call": "return q.root.Remove(baseName)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 1818,
+      "caller": "func (rotation *StableResourceRotation) ReleaseWithError() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "line": 2123,
+      "caller": "func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {",
+      "call": "active.MetadataOwner.RemovePending(rotationCharge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/template_cache.go",
+      "line": 94,
+      "caller": "func (c *templateDefCache) Add(id uint64, def templ.TemplateDef) {",
+      "call": "c.ll.Remove(back)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "line": 2789,
+      "caller": "func (w *Writer) Close() error {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer_original_cleanup.go",
+      "line": 135,
+      "caller": "func (w *Writer) disposePredecessorLocked() error {",
+      "call": "w.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer_original_cleanup.go",
+      "line": 217,
+      "caller": "func (w *Writer) refundPendingWriterReserveLocked(p *pendingValueLogSuccessor) {",
+      "call": "w.metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/nativewire/replica_replacement_seed_owner_v1.go",
+      "line": 126,
+      "caller": "func prepareReplacementSeedDirectoryV1(path string, command raftplacement.ReplicaReplacementBeginV1) (string, error) {",
+      "call": "if err := root.Remove(replacementSeedOwnerTempV1); err != nil && !errors.Is(err, os.ErrNotExist) {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 76,
+      "caller": "func NewGrowthForPager(p *Pager, target uint64, w *iterator.OrdinalScanWork) (*Growth, bool, error) {",
+      "call": "owner.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 506,
+      "caller": "func (g *Growth) install(p *Pager) {",
+      "call": "g.metadata.Remove(g.metadataOld + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Growth{}))))"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 600,
+      "caller": "func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "owner.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 393,
+      "caller": "func OpenReadOnlyOwnedFileWithMetadata(f *os.File, path string, chunkSize int64, opts OpenOptions, owner *retainedalloc.Owner) (*Pager, uint64, bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/pager/physical_close_work.go",
+      "line": 247,
+      "caller": "func (p *Pager) closePhysicalWork(native bool, w *iterator.OrdinalScanWork, refund *retainedalloc.RemovalWork) (bool, error) {",
+      "call": "owner.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 72,
+      "caller": "func (p *Pager) PreparePrimaryReadRootOwnerV6(local uint64, owner any) error {",
+      "call": "t.retention.Remove(charge)"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 89,
+      "caller": "func (p *Pager) PreparePrimaryReadRootOwnerV6(local uint64, owner any) error {",
+      "call": "t.retention.Remove(oldCharge)"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 195,
+      "caller": "func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "call": "t.retention.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))))"
+    },
+    {
+      "path": "TreeDB/side_store_lookups.go",
+      "line": 254,
+      "caller": "func (kv templateBackendKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/side_store_lookups.go",
+      "line": 260,
+      "caller": "func (kv templateBackendKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/template_adapter.go",
+      "line": 79,
+      "caller": "func (kv templateKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/template_adapter.go",
+      "line": 85,
+      "caller": "func (kv templateKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/template_stable_resource.go",
+      "line": 119,
+      "caller": "func (snapshot *templateStableSnapshot) ReleaseCaptureLease() {",
+      "call": "metadata.RemovePending(charge)"
+    },
+    {
+      "path": "TreeDB/zipper/materialized_write_work.go",
+      "line": 111,
+      "caller": "func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*MaterializedWriteWork, bool, error) {",
+      "call": "m.RemovePending(c)"
+    },
+    {
+      "path": "TreeDB/zipper/primary_directory.go",
+      "line": 125,
+      "caller": "func releasePrimaryScratch[T any](a *primaryarena.Arena, backing *[]T) {",
+      "call": "a.MetadataOwner().RemovePending(charge)"
+    }
+  ]
+}

@@ -1,0 +1,194 @@
+{
+  "affinity": [
+    0,
+    1
+  ],
+  "authorization": {
+    "at_utc": "2026-10-15T20:43:08.250325+00:00",
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "build_freeze_sha256": "2849330620e63f8eb63514d2247beb20fdcf3f509d14a8401991461e1797d36e",
+    "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+    "granted_by": "root under original graph execute-and-merge authorization",
+    "lease": "native build/test children joined and held; ordinary worker idle; all root builds/downloads/publication joined",
+    "review_sha256": "45e1e10b5295c427352fed775977bd6ff90e3e64c2b60278918a26d33a3ca25c",
+    "runner_sha256": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+    "runtime_authorized": true,
+    "schedule": [
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 0,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 0,
+        "revision": "candidate"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 1,
+        "revision": "candidate"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 1,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 2,
+        "revision": "baseline"
+      },
+      {
+        "count": 16,
+        "kind": "checkpoint",
+        "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+        "package": "public",
+        "pair": 2,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 0,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 0,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 1,
+        "revision": "candidate"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 1,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 2,
+        "revision": "baseline"
+      },
+      {
+        "count": 1,
+        "kind": "vacuum",
+        "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+        "package": "db",
+        "pair": 2,
+        "revision": "candidate"
+      },
+      {
+        "count": 128,
+        "kind": "cohort",
+        "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=8",
+        "package": "db",
+        "pair": null,
+        "revision": "candidate",
+        "size": 8
+      },
+      {
+        "count": 128,
+        "kind": "cohort",
+        "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=16",
+        "package": "db",
+        "pair": null,
+        "revision": "candidate",
+        "size": 16
+      }
+    ],
+    "scope": "ONE predeclared14-call bounded premerge diagnostic, originalquiet preflight mandatory; no retries, no expensive sustained qualification, no native runtime or quota revision"
+  },
+  "authorization_sha256": "40d86ee418544cfaefb6a15270c3c97168d5eec761d9834081be84240361dbec",
+  "binaries": {
+    "baseline-db": {
+      "package": "./TreeDB/db",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/baseline-db.test",
+      "sha256": "fa655eef121154e0f0b55235594c240842ec3acbe67d0e3a4f223297d8f6aa0b",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "baseline-public": {
+      "package": "./TreeDB",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/baseline-public.test",
+      "sha256": "19dc2f61d62e77331a91770b68a304b157d124cd1faa4f971ae80681ba982999",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate-db": {
+      "package": "./TreeDB/db",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/candidate-db.test",
+      "sha256": "8bf97400ed93e948f3b96bf582fe5a4a71dc634d57308bec474929a136c42260",
+      "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+    },
+    "candidate-public": {
+      "package": "./TreeDB",
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-build-02/candidate-public.test",
+      "sha256": "309c8f4c5e4da47d6b16d1a9745d4f3ac63c89f6445bf1b441f6f029801f9b36",
+      "source_head": "72e01efd767ef5d766f070e531fb53ea3f22674d"
+    }
+  },
+  "build_freeze_sha256": "2849330620e63f8eb63514d2247beb20fdcf3f509d14a8401991461e1797d36e",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOAMD64": "v1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/maintenance-bounded-02/tmp"
+  },
+  "observer_sha256": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+  "runner_sha256": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+  "scope": "Bounded premerge diagnostics only; not sustained/universal or native qualification",
+  "sources": {
+    "baseline": {
+      "head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "tree": "e448be5924b4a8e66a4894090460fb559f241354"
+    },
+    "candidate": {
+      "head": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+      "tree": "fa4e2c46824a09ef5ea890fa8e1a523021bbcd73"
+    }
+  },
+  "started_utc": "2026-10-15T20:43:11.139829+00:00"
+}

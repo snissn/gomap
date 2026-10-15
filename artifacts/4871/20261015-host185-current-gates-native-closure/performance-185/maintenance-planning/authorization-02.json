@@ -1,0 +1,128 @@
+{
+  "runtime_authorized": true,
+  "runner_sha256": "f0b1a165a17b069fa1425e6b8183ae7cc39fd34af25486b9f28585c540ba5259",
+  "schedule": [
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 0,
+      "revision": "baseline"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 0,
+      "revision": "candidate"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 1,
+      "revision": "candidate"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 1,
+      "revision": "baseline"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 2,
+      "revision": "baseline"
+    },
+    {
+      "kind": "checkpoint",
+      "name": "BenchmarkCOWPublicDirtyCost/command_wal_durable/btree/Pointer4096/N=1024/DirtyCheckpoint",
+      "count": 16,
+      "package": "public",
+      "pair": 2,
+      "revision": "candidate"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 0,
+      "revision": "baseline"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 0,
+      "revision": "candidate"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 1,
+      "revision": "candidate"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 1,
+      "revision": "baseline"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 2,
+      "revision": "baseline"
+    },
+    {
+      "kind": "vacuum",
+      "name": "BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x",
+      "count": 1,
+      "package": "db",
+      "pair": 2,
+      "revision": "candidate"
+    },
+    {
+      "kind": "cohort",
+      "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=8",
+      "count": 128,
+      "package": "db",
+      "pair": null,
+      "revision": "candidate",
+      "size": 8
+    },
+    {
+      "kind": "cohort",
+      "name": "BenchmarkPrimaryBorrowedValueLogCohort/files=16",
+      "count": 128,
+      "package": "db",
+      "pair": null,
+      "revision": "candidate",
+      "size": 16
+    }
+  ],
+  "candidate": "72e01efd767ef5d766f070e531fb53ea3f22674d",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "build_freeze_sha256": "2849330620e63f8eb63514d2247beb20fdcf3f509d14a8401991461e1797d36e",
+  "review_sha256": "45e1e10b5295c427352fed775977bd6ff90e3e64c2b60278918a26d33a3ca25c",
+  "granted_by": "root under original graph execute-and-merge authorization",
+  "at_utc": "2026-10-15T20:43:08.250325+00:00",
+  "scope": "ONE predeclared14-call bounded premerge diagnostic, originalquiet preflight mandatory; no retries, no expensive sustained qualification, no native runtime or quota revision",
+  "lease": "native build/test children joined and held; ordinary worker idle; all root builds/downloads/publication joined"
+}

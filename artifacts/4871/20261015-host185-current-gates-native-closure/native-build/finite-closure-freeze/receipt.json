@@ -1,0 +1,35 @@
+{
+  "created_utc": "2026-10-15T20:43:42.418871+00:00",
+  "source_base": "0556d5a86dfc96f7f0eb258a951469e58d0da02a",
+  "source_frozen": true,
+  "source_files": 10322,
+  "tracked_changed_paths": 17,
+  "untracked_paths": 14,
+  "source_before_after_identical": true,
+  "pure_test_exit_code": 0,
+  "activation_publication_finish_executed": false,
+  "complete_bound": false,
+  "numeric_diagnostic_allowance": null,
+  "public_gate": "Q32 RED / ACK0; all original guards unchanged",
+  "next_gate": "root whole-call-graph independent review; no further source/runtime until disposition",
+  "blockers": [
+    "R1 finite original Finish accounting including direct Owner.Remove and RemovePending as well as completion wrappers",
+    "R2 original publisher invocation-local path/closure/control and ambiguous disposition traffic",
+    "R3 composite final driver + actual consumed/published frame handoff; original owner binding compiled but route remains pre-builder refusal",
+    "R4 canonical disjoint retained admission total and dynamic post-newer-writer Finish geometry/capability"
+  ],
+  "files_sha256": {
+    "all-source-after-final.json": "0f6abd970382f74991a06a39b11769a90c407e315e46f0c83c3d65b05ec65a1a",
+    "all-source-after-initial.json": "ce077bcc180b88ed689173405cdae26693037084d481b3f9372cdf4b722b0132",
+    "all-source-before-final.json": "0f6abd970382f74991a06a39b11769a90c407e315e46f0c83c3d65b05ec65a1a",
+    "all-source-before.json": "ce077bcc180b88ed689173405cdae26693037084d481b3f9372cdf4b722b0132",
+    "changed-before.json": "ab92ef43fe09963be863869715a6312dae0a3e3ce329d3443ffd75299629fa1c",
+    "changed-final.json": "ab92ef43fe09963be863869715a6312dae0a3e3ce329d3443ffd75299629fa1c",
+    "command.txt": "81fc4b79aff8c10003e74efd6fb2bd185fa99d166d5bee17b326a64b4555990a",
+    "finish-refund-caller-inventory.json": "b09e1e0663f3c63e619d475b9bffec2d2a3df1014e44859020fee8d9cb525716",
+    "forecast.md": "5af6d7ef2d6ef6241bd9f3ad84bf474105b9e47e6197c709127c367681eddcf2",
+    "operation-source-expressions.json": "6f66a0275de9a6f9f72704accf80f29ab4c8dc9850e58ad6bb2701c77f068d0b",
+    "pure-pricing-final.log": "fd52e208a4f7e4d9fd6a84753456c21657de9064315aba6434614bd55c9ba252",
+    "pure-pricing.log": "982c8219ee6ed147598e7fcb8b6007a6b998349baadc2374f52826ad72b6ef91"
+  }
+}

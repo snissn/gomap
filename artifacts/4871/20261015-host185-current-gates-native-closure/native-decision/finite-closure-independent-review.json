@@ -1,0 +1,127 @@
+{
+  "created_utc": "2026-10-15T20:52:18.705101+00:00",
+  "reviewer": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_READ_ONLY_ARCHITECTURE_ADVICE",
+  "head": "c128d119e7e7ae97570a342519142e25f3f93370",
+  "tree": "108b02fa5eaab4d706dd652e8d28910069cd7372",
+  "parent": "0556d5a86dfc96f7f0eb258a951469e58d0da02a",
+  "identity_basis": "root-recovery.json; independently hashed all57 operation source files, zero drift",
+  "source_manifest_sha256": "0f6abd970382f74991a06a39b11769a90c407e315e46f0c83c3d65b05ec65a1a",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "runtime_executed": false,
+  "git_or_github_operations": false,
+  "source_acceptance": null,
+  "disposition": "PREREQUISITE_CLOSURE_REQUIRED",
+  "complete_finite_bound": false,
+  "numeric_allowance": null,
+  "runtime_grant": false,
+  "public_gate": "Q32 RED / ACK0; original quotas unchanged",
+  "retained_subtotal_bytes": 804576,
+  "retained_total_known": false,
+  "findings": [
+    {
+      "id": "R1",
+      "status": "CONFIRMED_INCOMPLETE",
+      "title": "Physical completion is not finite accounting completion",
+      "locations": [
+        "TreeDB/db/primary_member_retirement_work_v6.go:143",
+        "TreeDB/db/primary_runtime_disposal_work_v6.go:237",
+        "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go:163",
+        "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go:465",
+        "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go:553",
+        "TreeDB/internal/primaryarena/arena.go:777",
+        "TreeDB/pager/primary_read_root_v6.go:195",
+        "TreeDB/db/native_mvcc_materialized_write_v6.go:90",
+        "TreeDB/db/durable_primary_runtime_v5.go:773"
+      ],
+      "correction": "Carry owner/amount into SAME admitted parent RemovalWork; end child aliases and disposing call before accounting; preserve phase and original receipt across refusal/failure. Include abort, preparation rollback, hidden allocation.refund and commit-error defers."
+    },
+    {
+      "id": "R1a",
+      "status": "ADDITIONAL_CONFIRMED",
+      "title": "Native RemovalWork still invokes ordinary binding lease operations",
+      "locations": [
+        "TreeDB/internal/retainedalloc/owner_work.go:126",
+        "TreeDB/internal/retainedalloc/owner_work.go:153",
+        "TreeDB/internal/retainedalloc/owner_enroll_work.go:17",
+        "TreeDB/internal/memtable/native_retention_work.go:21"
+      ],
+      "correction": "For native shrink use actual WorkLease.ResizeWork and AdmitRetentionClose for each visited binding, including later enrollment. Refuse unsupported lease geometry without discarding original delta/cursor/custody. Preserve ordinary branch."
+    },
+    {
+      "id": "R2",
+      "status": "CONFIRMED_INCOMPLETE",
+      "title": "Publisher invocation and ambiguous/error traffic remain unclosed",
+      "locations": [
+        "TreeDB/db/root_publication_activation.go:1718",
+        "TreeDB/db/root_publication_activation.go:1992",
+        "TreeDB/mvcc/prune_cursor_v6.go:150"
+      ],
+      "correction": "Price actual path creation, environments, dispatch/context/result/control and first-error custody before effects; include allocator fail path and commit-error rollback, not only success."
+    },
+    {
+      "id": "R2a",
+      "status": "ADDITIONAL_CONFIRMED_CONDITIONAL",
+      "title": "Error ancestor traversal and directory CAS retry are not per-unit admitted",
+      "locations": [
+        "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go:96",
+        "TreeDB/internal/rootpublication/dependency_directory_release_work.go:111"
+      ],
+      "correction": "Latch first failure in original root frame and advance necessary failure propagation with original cursor/per-link admission; retain parent chain until complete. Charge each directory CAS attempt before retry. Directory case is conditional geometry, not proof it occurs on empty selected fixture."
+    },
+    {
+      "id": "R3",
+      "status": "CONFIRMED_INCOMPLETE",
+      "title": "Actual producer has no final driver or published output/frame terminal",
+      "locations": [
+        "TreeDB/mvcc/prune_cursor_v6.go:582",
+        "TreeDB/db/native_mvcc_current_delete_v6.go:398",
+        "TreeDB/db/native_mvcc_publication_binding_v6.go:1"
+      ],
+      "correction": "Implement composite preflight and one nonyielding final publication on original objects, then original physical Finish and distinct adopted-output/frame detachment; never call previsible Cancel after adoption."
+    },
+    {
+      "id": "R3a",
+      "status": "ADDITIONAL_CONFIRMED_SCOPE_BOUNDARY",
+      "title": "Coordinator join calls the expressly unlimited cursor close driver",
+      "locations": [
+        "TreeDB/mvcc/prune_cursor_v6.go:697",
+        "TreeDB/mvcc/prune_cursor_v6.go:714",
+        "TreeDB/internal/rootpublication/native_publication_v6.go:421"
+      ],
+      "correction": "Preserve ordinary unlimited Close/Stop ABI, but use an original bounded close-step for native terminal progress; no internal quota reset/drain in an operation counted as one bounded Finish/ACK unit. Unsupported indivisible geometry returns typed refusal, not endless local retry."
+    },
+    {
+      "id": "R4",
+      "status": "CONFIRMED_INCOMPLETE",
+      "title": "Retained subtotal and fixed old geometry cannot close later-writer execution",
+      "locations": [
+        "native-decision/finite-original-closure-forecast.md:119",
+        "TreeDB/db/native_stable_pager_capture_v6.go:129",
+        "TreeDB/db/native_mvcc_snapshot_close_v6.go:127"
+      ],
+      "correction": "Produce canonical disjoint actual charge ledger, include enlarged parent continuations, both capture/token graphs and scratch; recompute protected late geometry and each later physical unit under original locks. Oversized or unsupported units retain receipt and refuse."
+    }
+  ],
+  "inventory_calls": 285,
+  "inventory_paths": 117,
+  "source_expression_rows": 357,
+  "operation_source_files_independently_hashed": 57,
+  "whole_repository_source_review_claim": false,
+  "hosted_review_unavailability": "Manual hosted review cannot pin required gpt-6.1-sol model; not requested.",
+  "ordinary_integration": "Separate ordinary72e01 must be preserved; no blind cherry-pick from native.",
+  "lease": "Read-only reviewer complete; no source/runtime lease held",
+  "report_sha256": "4e7a3dfd79934b85725cc3cd9c9b89375c540a54c7dedd3d9d06a192a4f0112f",
+  "existing_native_refund_branches_preserved": [
+    "primary_arena_release_work.go parentRefund/ownerRefund; direct103/223 ordinary only",
+    "dependency_directory_release_work.go producerRefund/directoryRefund; direct249/260 nil-work only"
+  ],
+  "limits": [
+    "Pure pricing PASS only; no current actual builder/activation/publication/Finish execution",
+    "No full10322-file source acceptance or independent Git clean-state assertion",
+    "Conditional graph support/progress not inferred from empty fixture",
+    "No native Q32/#4878/Dgraph qualification"
+  ]
+}

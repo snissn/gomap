@@ -1,0 +1,2377 @@
+{
+  "status": "Source expressions, not an executable complete aggregate forecast; loops and callees must be included using forecast.md",
+  "source_files": [
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "sha256": "3702d11833d023113f85748bbd5743f44332f2fdab944e9d682e02081aa06d28"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "sha256": "b80fd90462b023a48dcbc1c9795b105b4b8c2df33516142dae335cfec0ca3dce"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "sha256": "def4a1f0cb4d5cd1c97a14f94f7bb109fe018d041dc2bf6e5d2f2ed51835375e"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "sha256": "e602cb079385e46cd941dae49a737fb2bf0baae148d5930e94fb00ea7b3ee8ae"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_dependency_release_v6.go",
+      "sha256": "62b5bcc95398fee1d44201f47bb177225a86c37f5a0cc6ee60f958a14417423d"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "sha256": "04841d965de309e92cf1e475427275059e634f6af847e26b5c7a501a4272f237"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "sha256": "ffb078d99bc2ef76d68554dfb07f847b4948c06258ff7afa68b431be360d40df"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "sha256": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "sha256": "8584e142eac5827db37c456492afd3a2c669b126ab61969cc235dc6655896a77"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "sha256": "96b6fb9c0ba258baac39e8d105ecd4f391f8a1a073176926abf6721fe3d65767"
+    },
+    {
+      "path": "TreeDB/db/primary_materialization_work_v6.go",
+      "sha256": "d903228f972f43590c1313d3e4986467d2ec58253ad735a18725024f442bb890"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "sha256": "71282a5143bc02772361dc22384bb3ff2adda9cc84d33d0fadc6bcaaf5a29a6c"
+    },
+    {
+      "path": "TreeDB/db/primary_ordered_post_work_v6.go",
+      "sha256": "300a6b0a30a775e38f435fd91a438340190d502648724b332303002747f2bfb6"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "sha256": "1f5a9155654b6c7fee9f33c5ee0f66023b76dd49d229c2abebe0152bfe4b7ed0"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "sha256": "abcdbfc15bef99a7ce0f4d54b6b4e8551d6a81c045b34b7d1c9aae915b4343a2"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+      "sha256": "24dd1fc79055ad5c1a08d22145a337a76770bfc067d1cf6b2deab29e91b99c00"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "sha256": "c2b7b4b0aeb305a111dbb0235ba49fda32c6ada3355d9a552b6285cf59ab0e72"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+      "sha256": "433b5bbbfc268850a37ad433e20e9b8b7eb1259f5dfb77e11a32ce771288f64d"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_member_work_v6.go",
+      "sha256": "61488122ae896306234b6b17bd621c0b5aee08142edc758d7e0e4620f2a571d9"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "sha256": "dfdcabaaf436ff7a6125c4c7508bbb1e500e67bd37bb6efe5e39dd220c16f982"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "sha256": "6c46db8c0b2fa9284020423c3ed3fb8bba0b5eb9c2e41a442280104a67b7e6c0"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "sha256": "03b5556e55a4d3eae40dc07c3f6f3300ed5328a53f014b27ef8ef184f314f649"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "sha256": "c966e519549c862325531f0b6ccb54521cccaf2a90e6dfa75d9e7d738d79adcc"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "sha256": "09214a0167dfedf06bff1f3bc995952f874513e854431627d63160799b96782a"
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/admission.go",
+      "sha256": "14a91279780df01c1cff031e92f33d5dae7d0bb866ee461a60825a906e289a67"
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/request.go",
+      "sha256": "8d9160b3764c5ca17eda2046e58f18dcbb11a5a3623884b31b65e8c02493f57c"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "sha256": "c6db9b5c00eb695a25d372f8815ee1f0d51495b2175b7962a8de03a8a0e3e66e"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner.go",
+      "sha256": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "sha256": "093d470463a37cd6ac19ad8ac781d6c61f951a98f4f9348265e57856734f097c"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "sha256": "c39a32692fdc2fc44797e7f5f562f47c8901957f191a5f0e0fd452b91aaf0ebc"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/clock.go",
+      "sha256": "f7e19577963b513f8e4ae98ea9b76a5ca782860d430b961a0ab248648855b577"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "432ab81225e648b31b6b6cea5645d02e991e9076753645e99fdb2f9ece2fefb0"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "sha256": "f7f97fc38178f01d2efc75282f635cb6590b9288df50f9d54afcbd5ecfc48b0c"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+      "sha256": "7e28a89dd1f4eb9da1e609041e8a97f4a94cf0bfb1c3594887a938fff14dfd7a"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "sha256": "debc1657ee147163a6357faa268c0f7446ff70dfda76f2b661e45d0d2e951086"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+      "sha256": "e1c129ae775189b4489b3e4c5de49a3fd5eb819494a625164257be9bcfbbe2d5"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+      "sha256": "3d2060b14c16a439f681ea4bd3df8b64765ffa0971ee1a34b960425a3edd048f"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+      "sha256": "cab4f85876060a31e247a1ef3a8062aaa90a6b7f94d49933211b068c9c0a6faa"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "sha256": "886c09682b4caeb1bb882b33624ff7b77a567a980e326d283c36501cd9ca6281"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "sha256": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+      "sha256": "563e54c4ba74a1774283876fc69016b4489ba9327115ea04a5aabe72f6fd83e5"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "sha256": "3d435edc85bdf4272193c24e8d8be88f418150f113e3f74c9614ea999534a25b"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "sha256": "529173a94784d6d68912491051b995e03a371465442fa7be85f71526c5914279"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "f9520ebf64d8a3b3d3a319f91c744a1b88778ebd244eedf66d1765bab549ce57"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+      "sha256": "a0c0a554525397c7e1a0a89ada79fedd2d602a483cbac44e132db6ad879a3a08"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "sha256": "c745ed9aed119876884149cb8f692a573024d6186d77235ea0f285676a8c5856"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "sha256": "ecba9d33890a4d1add1d321f57ad22747c5f7eeb26ebced8feba51e7708da570"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "sha256": "b50c15d13a1aca8cdfab7b9dc9db8ae46de41f61c9757b73475d289d52ad9507"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+      "sha256": "1570518b4e5631865142b60e3155b8564611e4c8630751bfc78ec0537184396e"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go",
+      "sha256": "d86f5f8b78a3ca41834c19619917ec625c4ff10b92b02f7ccd51050af9c6b1ff"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "sha256": "57512686a798f5c63f09b26a982b80ed838b20004fbfc8f9cc5c2f67ebb26231"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "sha256": "6a5e45b9b6c518295e496f4cbcbb5ed24cd94daafd0bbb81e06d77bdeeb137d2"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "sha256": "01c7f890e43f2096a185a797c825661a8c956625be83a23fbbe512f1cd415058"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "sha256": "4e64dd3fbc5518118e9c8bd0cb28fac9d04014ad8cebee3647e806fe6b9cfdc5"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "sha256": "71a8f8d8a4f52bf8493c3b8d459ac4ebeb2c933df1e0deefd16ef4800f9f4787"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "sha256": "33a7ce6be79d9a3ba2418336559981967eb2e304584f9784c2767e89c8ba84ea"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "sha256": "50fa27b687859e058b0bbf68642dfe6b99b2e40f83d41cfcdacd0b385a083ad6"
+    }
+  ],
+  "operations": [
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 2062,
+      "sourceSymbol": "func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) (metaMutated bool, err error) {",
+      "expression": "if !tx.work.Reserve(1, uint64(unsafe.Sizeof(tx))) {"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 2094,
+      "sourceSymbol": "func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) (metaMutated bool, err error) {",
+      "expression": "if !tx.work.Reserve(1, uint64(unsafe.Sizeof(tx.resources))+uint64(unsafe.Sizeof(tx.dir))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 47,
+      "sourceSymbol": "func (s *nativeMVCCSnapshotMinimumV6) step(db *DB, w *iterator.OrdinalScanWork) (uint64, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*s))+32) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 61,
+      "sourceSymbol": "func (s *nativeMVCCSnapshotMinimumV6) step(db *DB, w *iterator.OrdinalScanWork) (uint64, bool, error) {",
+      "expression": "if !w.Reserve(1+uint64(len(db.idxAll)), 32*uint64(len(db.idxAll))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 129,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(s.count)*8+2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 148,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 163,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 177,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 255,
+      "sourceSymbol": "func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+uint64(len(s.retired))*8) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 50,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(rootPublicationVisibleMemberV1{}))+2*uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 103,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(rootPublicationVisibleMemberV1{}))+2*uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{}))+10*uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 123,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s.member.install))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 154,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryStateRootV5{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 170,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(records, bytes) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 213,
+      "sourceSymbol": "func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 33,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(ref))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 43,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 256) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 78,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, 128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 103,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if amount == 0 || !w.Reserve(1, 2*uint64(amount)) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 113,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 128,
+      "sourceSymbol": "func (r *NativeMVCCFrameReaderV6) CancelProjectionFrame(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 143,
+      "sourceSymbol": "func (s *Snapshot) NewNativeMVCCProjectionV6(cert *primaryarena.ReadRootCertificateV6, start, end []byte, reader *NativeMVCCFrameReaderV6, w *iterator.OrdinalScanWork) (*tree.ChargedProjection, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 159,
+      "sourceSymbol": "func (s *Snapshot) ValidateNativeMVCCSelectionV6(selection tree.NativeMVCCSelectionV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if s == nil || w == nil || !w.Reserve(1, 128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 230,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(selection))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 249,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCDeleteBatchV6(records []node.LeafEntry, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(len(last.Key))+64) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 296,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 339,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scratch []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 368,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scratch []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(mvccadmission.Cut{}))+2*uint64(unsafe.Sizeof(mvccadmission.Authority{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 459,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_dependency_release_v6.go",
+      "line": 30,
+      "sourceSymbol": "func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*lease))+2*uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_dependency_release_v6.go",
+      "line": 97,
+      "sourceSymbol": "func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*lease))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "line": 34,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) prepareNativeSealInstallationV6(w *iterator.OrdinalScanWork) (nativeSealInstallationV6, bool, error) {",
+      "expression": "if !w.Reserve(4, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(rootPublicationSealV1{}))+2*uint64(unsafe.Sizeof(rootpublication.DurableRootRecordV1{}))+2*uint64(unsafe.Sizeof(page.DurableMetaV1{}))+2*uint64(unsafe.Sizeof(primaryStateRootV5{}))+uint64(unsafe.Sizeof(DBState{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "line": 70,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) prepareNativeSealInstallationV6(w *iterator.OrdinalScanWork) (nativeSealInstallationV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(runtime.debt[i]))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "line": 79,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) prepareNativeSealInstallationV6(w *iterator.OrdinalScanWork) (nativeSealInstallationV6, bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(runtime.seals))+2*uint64(unsafe.Sizeof(runtime.activeSeal))+uint64(unsafe.Sizeof(seal))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "line": 104,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) observeNativePublicationCutV6(cut *mvccadmission.Cut, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*cut))+2*uint64(unsafe.Sizeof(mvccadmission.Authority{}))+uint64(unsafe.Sizeof(c.records))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "line": 113,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) observeNativePublicationCutV6(cut *mvccadmission.Cut, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "line": 20,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCPublicationV6(owner rootpublication.NativePublicationOwnerV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(c.publicationCoordinator))+uint64(unsafe.Sizeof(c.publicationBound))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "line": 42,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) completeNativePublicationBindingV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.publicationCoordinator))+2*uint64(unsafe.Sizeof(c.publicationBound))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 60,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(page.MetaPageBody{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 111,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 4*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+2*page.PageSize) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 119,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "return w.Reserve(1, 2*uint64(len(observed.Key)+len(entry.Key))+2*uint64(unsafe.Sizeof(entry)))"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 185,
+      "sourceSymbol": "func (s *nativeMVCCRootPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 27,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeBasisGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeBasisGeometryForTestV6, ready bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(6, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(rootPublicationRuntimeV1{}))+4*uint64(unsafe.Sizeof(durableRootRuntimeV1{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 71,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeAllocatorGeometryForTestV6(w *iterator.OrdinalScanWork) (freelist.NativeCOWGeometryForTestV6, bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 78,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeCoordinatorGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeCoordinatorGeometryForTestV6, bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.db == nil || c.db.rootPublication == nil {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 85,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeResourcesGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeEmptySetGeometryForTestV6, bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.candidatePreparation.member == nil {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 99,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeIndexGeometryForTestV6(index int, target, first, last, pages uint64, w *iterator.OrdinalScanWork) (g NativeIndexGeometryForTestV6, ready bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(2, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(Snapshot{}))+2*uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))+2*uint64(unsafe.Sizeof(g))) || index < 0 || index > 1 || c.sealPreparation.seal == nil {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 191,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(rootpublication.PrimaryCapsuleViewV6{}))+2*uint64(unsafe.Sizeof(rootpublication.DurableRootRecordV1{}))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 240,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 268,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, 6*page.PageSize+2*uint64(unsafe.Sizeof(primaryManifestImagesV5{}))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 284,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.record))+2*uint64(unsafe.Sizeof(s.projection))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 297,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.parentRecord))+2*uint64(unsafe.Sizeof(s.parentMeta))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 357,
+      "sourceSymbol": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 409,
+      "sourceSymbol": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 430,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.parentRecord))+2*uint64(unsafe.Sizeof(s.parentMeta))+128) {"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 439,
+      "sourceSymbol": "func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3+uint64(count), bytes) {"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "line": 28,
+      "sourceSymbol": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "return w == nil || w.Reserve(records, bytes)"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "line": 55,
+      "sourceSymbol": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*claims))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "line": 69,
+      "sourceSymbol": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+16) {"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "line": 148,
+      "sourceSymbol": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+16) {"
+    },
+    {
+      "path": "TreeDB/db/primary_bank_release_work_v6.go",
+      "line": 154,
+      "sourceSymbol": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*claims))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_materialization_work_v6.go",
+      "line": 21,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) materializePrimarySealWithWorkV6(seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(6, bytes) {"
+    },
+    {
+      "path": "TreeDB/db/primary_materialization_work_v6.go",
+      "line": 48,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) materializePrimarySealWithWorkV6(seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(freelist.PreparedCOWCandidateV1{}))+uint64(unsafe.Sizeof((*freelist.PreparedCOWCandidateV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 17,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*m))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 31,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueue))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 38,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecord))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 56,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueueInitialized))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 66,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, uint64(unsafe.Sizeof(m.install.post))+uint64(unsafe.Sizeof(DBState{}))+uint64(unsafe.Sizeof(primaryStateRootV5{}))+uint64(unsafe.Sizeof(m.retiredPostRoot))+uint64(unsafe.Sizeof(m.retiredPostSet))+uint64(unsafe.Sizeof(m.retiredPostManager))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 94,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueue))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 101,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredPostRoot))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 119,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredRecordQueueInitialized))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 125,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredPostSet))+2*uint64(unsafe.Sizeof(m.retiredPostManager))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 135,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(m.retiredVisibleResources))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 154,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+      "line": 165,
+      "sourceSymbol": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(cap(m.retiredSeals))*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_ordered_post_work_v6.go",
+      "line": 16,
+      "sourceSymbol": "func (install *rootPublicationVisibleInstallV1) validateNativePostActivationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, uint64(unsafe.Sizeof(*install))+uint64(unsafe.Sizeof(finalizeCommitPost{}))+uint64(unsafe.Sizeof(pruneWorker{}))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_ordered_post_work_v6.go",
+      "line": 51,
+      "sourceSymbol": "func (install *rootPublicationVisibleInstallV1) completeNativeOrderedPostActivationV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(7, uint64(unsafe.Sizeof(*install))+uint64(unsafe.Sizeof(valueLogRefTracker{}))+uint64(unsafe.Sizeof(finalizeCommitPost{}))+2*uint64(unsafe.Sizeof(uint64(0)))+uint64(unsafe.Sizeof(pruneWorker{}))+2*uint64(unsafe.Sizeof(install.post.doPrune))+2*uint64(unsafe.Sizeof(install.post.kickPrune))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 63,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "admit := func(records, bytes uint64) bool { return w == nil || w.Reserve(records, bytes) }"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 74,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(r.disposalQueue))+64) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 88,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*ref))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 119,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(r.capsuleImages[i]))+2*uint64(unsafe.Sizeof(r.capsuleViews[i]))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 136,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(r.capsuleImages))+2*uint64(unsafe.Sizeof(r.capsuleViews))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 213,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*slot))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 277,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+      "line": 288,
+      "sourceSymbol": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+      "expression": "if !admit(1, bytes) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 27,
+      "sourceSymbol": "func growPrimaryRuntimeSliceWithWorkV6[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(*values))+uint64(unsafe.Sizeof(need))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 62,
+      "sourceSymbol": "func growPrimaryRuntimeSliceWithWorkV6[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1+length+oldCapacity, size*units+headers) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+      "line": 34,
+      "sourceSymbol": "func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena *primaryarena.Arena, sealCount int, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, bytes) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+      "line": 46,
+      "sourceSymbol": "func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena *primaryarena.Arena, sealCount int, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(count)*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_commit_work_v6.go",
+      "line": 71,
+      "sourceSymbol": "func abandonPrimarySealCommitStorageV6(seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))+uint64(cap(seal.commitRetired))*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 30,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "admit := func(r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 40,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 53,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*ref))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 126,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(s.proofResources))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 151,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(s.token))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 174,
+      "sourceSymbol": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 202,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "admit := func(r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 214,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 243,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(s.resources))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 268,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(s.token))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 293,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(s.manifest))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 308,
+      "sourceSymbol": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+      "expression": "if !admit(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+      "line": 19,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) abortNativeVisibleMemberV6(m *rootPublicationVisibleMemberV1, cow *freelist.PreparedCOWCandidateV1, input rootpublication.DurableRootCallbackInput, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+      "line": 65,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) completeNativeVisibleMemberAbortV6(m *rootPublicationVisibleMemberV1, cow *freelist.PreparedCOWCandidateV1, input rootpublication.DurableRootCallbackInput, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(*m.install))) {"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_member_work_v6.go",
+      "line": 24,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) consumeNativeVisibleMemberV6(",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(input))+6*uint64(unsafe.Sizeof(member))+4*8) {"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_member_work_v6.go",
+      "line": 75,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) activateNativeVisibleMemberV6(",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(input))+12*uint64(unsafe.Sizeof(member))) {"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 594,
+      "sourceSymbol": "func (install *rootPublicationVisibleInstallV1) activateWithWorkV6(w *iterator.OrdinalScanWork, activateAllocator func(*iterator.OrdinalScanWork) (bool, error)) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(4, 2*uint64(unsafe.Sizeof(page.MetaPageBody{}))+uint64(unsafe.Sizeof(DBState{}))+uint64(unsafe.Sizeof(snapshotView{}))) {"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 1722,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, candidate *rootpublication.PreparedRootCandidate, w *iterator.OrdinalScanWork, nativeScope *nativeAuthorityScopeV6) rootpublication.PublishResult {",
+      "expression": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(rootPublicationSealV1{}))+64) {"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 1732,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, candidate *rootpublication.PreparedRootCandidate, w *iterator.OrdinalScanWork, nativeScope *nativeAuthorityScopeV6) rootpublication.PublishResult {",
+      "expression": "if w != nil && !w.Reserve(1+uint64(len(runtime.visibleMembers)-runtime.visibleHead), 64+uint64(len(runtime.visibleMembers)-runtime.visibleHead)*16) {"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "line": 1814,
+      "sourceSymbol": "func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, candidate *rootpublication.PreparedRootCandidate, w *iterator.OrdinalScanWork, nativeScope *nativeAuthorityScopeV6) rootpublication.PublishResult {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*seal))+uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) {"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 94,
+      "sourceSymbol": "func (operations *stablePagerOwnedOperations) SyncThroughWithWorkV6(file *os.File, _ rootpublication.DurableFrontier, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*operations))+uint64(unsafe.Sizeof(file))) {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 103,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, bytes); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 150,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1+uint64(len(t.changedChunks)), 256+128*uint64(len(t.changedChunks))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 159,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1+uint64(len(t.replacedMetadata)), 256+128*uint64(len(t.replacedMetadata))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 189,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) Step(a *Allocator, generationID, commitSeq uint64, candidate CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, sink *CandidatePageSinkV1, w *iterator.OrdinalScanWork) (*FreelistCandidateV1, bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, 96); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 224,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) advance(a *Allocator, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*r))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 257,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) advance(a *Allocator, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 289,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) ValidateSourceWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 1, 256); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 394,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) claimDataLockedV6(extraRecords, extraBytes uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, records, bytes); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 442,
+      "sourceSymbol": "func (s *COWPreparationWorkV6) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 467,
+      "sourceSymbol": "func (s *privateRetirementWorkV6) step(t *FreelistTxn, id, seq uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 504,
+      "sourceSymbol": "func (s *privateRetirementWorkV6) step(t *FreelistTxn, id, seq uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "line": 76,
+      "sourceSymbol": "func WriteCandidatePageToPagerWithWorkV6(dst *pager.Pager, pageID uint64, view CandidatePageViewV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 1, uint64(unsafe.Sizeof(view))+uint64(unsafe.Sizeof(dst))+8); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "line": 20,
+      "sourceSymbol": "func (c *FreelistCandidateV1) WritePagesToPagerWithWorkV6(dst *pager.Pager, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 1, uint64(unsafe.Sizeof(*c))); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "line": 24,
+      "sourceSymbol": "func (c *FreelistCandidateV1) WritePagesToPagerWithWorkV6(dst *pager.Pager, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 1, uint64(unsafe.Sizeof(PageImageV1{}))+uint64(unsafe.Sizeof(CandidatePageViewV1{}))); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "line": 42,
+      "sourceSymbol": "func (a *Allocator) ValidateCOWPhysicalTailWithWorkV6(requiredHighWater uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 4, uint64(unsafe.Sizeof(*a))+uint64(unsafe.Sizeof(allocatorCOWStateV1{}))+uint64(unsafe.Sizeof(FreelistTxn{}))+uint64(unsafe.Sizeof((*pager.Pager)(nil)))+24); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "line": 63,
+      "sourceSymbol": "func (a *Allocator) ValidateCOWMaterializationWithWorkV6(prefix []*PreparedCOWCandidateV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 3, uint64(unsafe.Sizeof(*a))+uint64(unsafe.Sizeof(allocatorCOWStateV1{}))+uint64(unsafe.Sizeof(ReservationLedger{}))); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "line": 75,
+      "sourceSymbol": "func (a *Allocator) ValidateCOWMaterializationWithWorkV6(prefix []*PreparedCOWCandidateV1, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := appendReserve(w, 3, uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))+uint64(unsafe.Sizeof(reservation{}))+2*uint64(unsafe.Sizeof(CandidateIDV1{}))+16); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/request.go",
+      "line": 31,
+      "sourceSymbol": "func (c *Capability) CaptureRequest(floor uint64, w *iterator.OrdinalScanWork) (Request, bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(Request{}))+uint64(unsafe.Sizeof(Capability{}))+uint64(unsafe.Sizeof(Authority{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/request.go",
+      "line": 60,
+      "sourceSymbol": "func (r Request) Validate(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(Request{}))+uint64(unsafe.Sizeof(Capability{}))+uint64(unsafe.Sizeof(Authority{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/request.go",
+      "line": 81,
+      "sourceSymbol": "func (c *Cut) ObservePrune(r Request, key []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(len(key))+uint64(unsafe.Sizeof(Request{}))+uint64(unsafe.Sizeof(Capability{}))+uint64(unsafe.Sizeof(Authority{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 120,
+      "sourceSymbol": "func reserve(w *iterator.OrdinalScanWork, r, b uint64) bool { return w == nil || w.Reserve(r, b) }",
+      "expression": "func reserve(w *iterator.OrdinalScanWork, r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 267,
+      "sourceSymbol": "func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {",
+      "expression": "if !reserve(w, 1, 2*uint64(unsafe.Sizeof(Claim{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 283,
+      "sourceSymbol": "func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {",
+      "expression": "if !reserve(w, 1, 2*uint64(unsafe.Sizeof(bank{}))+64) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 317,
+      "sourceSymbol": "func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {",
+      "expression": "if !reserve(w, 1, 2*uint64(unsafe.Sizeof(bankChunk{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 395,
+      "sourceSymbol": "func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {",
+      "expression": "if !reserve(w, r, b) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 432,
+      "sourceSymbol": "func (a *Arena) SealComponent(r Ref, image []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, 1, 2*page.PageSize+2*uint64(unsafe.Sizeof(bank{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 467,
+      "sourceSymbol": "func (a *Arena) NewGroup(refs [groupSize]Ref, w *iterator.OrdinalScanWork) (*Group, bool, error) {",
+      "expression": "if !reserve(w, 1+count, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 499,
+      "sourceSymbol": "func (a *Arena) GroupComponents(g *Group, w *iterator.OrdinalScanWork) ([groupSize]Ref, bool, error) {",
+      "expression": "if !reserve(w, 1, 2*uint64(unsafe.Sizeof(Group{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 510,
+      "sourceSymbol": "func (a *Arena) GroupComponents(g *Group, w *iterator.OrdinalScanWork) ([groupSize]Ref, bool, error) {",
+      "expression": "if !reserve(w, 1, 2*uint64(unsafe.Sizeof(Group{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 537,
+      "sourceSymbol": "func (a *Arena) sealDirectoryConstructedV6(r Ref, image []byte, groups [groupCount]*Group, record *bundleRecord, owner ReadRootConstructionV6, cert **ReadRootCertificateV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, 1+count+node.PrimaryDirectoryMaxEntries, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 635,
+      "sourceSymbol": "func (a *Arena) Acquire(r Ref, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, 1, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 662,
+      "sourceSymbol": "func (a *Arena) DropToReleaseQueue(r Ref, queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, 2, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 696,
+      "sourceSymbol": "func (a *Arena) DropGroupToReleaseQueue(g *Group, queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, 2, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 717,
+      "sourceSymbol": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+      "expression": "if !reserve(w, 2+releaseCells, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 1094,
+      "sourceSymbol": "func (a *Arena) RootGroups(r Ref, w *iterator.OrdinalScanWork) ([groupCount]*Group, bool, error) {",
+      "expression": "if !reserve(w, 1, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 1134,
+      "sourceSymbol": "func (a *Arena) sealExactAbsence(destination, current Ref, entry node.PrimaryDirectoryEntry, expectedRevision page.EntryRevision, scratch []byte, record *bundleRecord, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, fixedRecords, bytesCost) {"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "line": 1215,
+      "sourceSymbol": "func (a *Arena) sealExactAbsence(destination, current Ref, entry node.PrimaryDirectoryEntry, expectedRevision page.EntryRevision, scratch []byte, record *bundleRecord, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserve(w, baseEdges+overrides+groupCount-1, 2*uint64(unsafe.Sizeof(Group{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 87,
+      "sourceSymbol": "func (o *Owner) beginEnrollmentLocked(wb WorkBudget, budget Budget, s *EnrollmentWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*o))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 133,
+      "sourceSymbol": "func (o *Owner) enrollStep(budget Budget, s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(binding{}))+uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 164,
+      "sourceSymbol": "func (o *Owner) enrollStep(budget Budget, s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*o))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 184,
+      "sourceSymbol": "func (o *Owner) enrollStep(budget Budget, s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(binding{}))+uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 232,
+      "sourceSymbol": "func (o *Owner) enrollStep(budget Budget, s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, uint64(unsafe.Sizeof(Enrollment{}))+2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(*o))+2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 295,
+      "sourceSymbol": "func (o *Owner) unwindEnrollment(s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*o))+4*uint64(unsafe.Sizeof(binding{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 317,
+      "sourceSymbol": "func (o *Owner) unwindEnrollment(s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*o))+2*uint64(unsafe.Sizeof(binding{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 354,
+      "sourceSymbol": "func (o *Owner) unwindEnrollment(s *EnrollmentWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*o))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 399,
+      "sourceSymbol": "func (s *EnrollmentWork) CancelWithWork(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 451,
+      "sourceSymbol": "func EnrollPairWithWork(first, second *Owner, budget Budget, s *EnrollmentPairWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 481,
+      "sourceSymbol": "func EnrollPairWithWork(first, second *Owner, budget Budget, s *EnrollmentPairWork, w *iterator.OrdinalScanWork) (*Enrollment, bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Enrollment{}))+uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+      "line": 581,
+      "sourceSymbol": "func (s *EnrollmentPairWork) CancelWithWork(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 51,
+      "sourceSymbol": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool {",
+      "expression": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 52,
+      "sourceSymbol": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool {",
+      "expression": "return w == nil || w.Reserve(r, b)"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 96,
+      "sourceSymbol": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 119,
+      "sourceSymbol": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 135,
+      "sourceSymbol": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 3, 6*uint64(unsafe.Sizeof(binding{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 187,
+      "sourceSymbol": "func (o *Owner) closeStep(native bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 229,
+      "sourceSymbol": "func (o *Owner) removeUnserialized(amount uint64, pending, native bool, s *RemovalWork, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 296,
+      "sourceSymbol": "func (s *RemovalWork) bindPending(o *Owner, amount uint64, native bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 368,
+      "sourceSymbol": "func (state *EnrollmentReleaseWork) bindUnserialized(e *Enrollment, native bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*e))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 394,
+      "sourceSymbol": "func (state *EnrollmentReleaseWork) bindUnserialized(e *Enrollment, native bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*companion))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 474,
+      "sourceSymbol": "func (e *Enrollment) closeEnrollmentStepInto(native bool, w *iterator.OrdinalScanWork, state *RemovalWork, alias **Enrollment) (bool, error) {",
+      "expression": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Enrollment{}))+2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 243,
+      "sourceSymbol": "func (c *Coordinator) enqueueLockedWithNativeReceiptV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork, receipt *NativePublicationV6) (enqueueDecision, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*receipt))+uint64(unsafe.Sizeof(c.pending))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 252,
+      "sourceSymbol": "func (c *Coordinator) enqueueLockedWithNativeReceiptV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork, receipt *NativePublicationV6) (enqueueDecision, error) {",
+      "expression": "if !w.Reserve(4, uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(PreparedRootCandidate{}))+uint64(unsafe.Sizeof(durableRootGroupExtension{}))+uint64(unsafe.Sizeof(DurableRootTransaction{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 269,
+      "sourceSymbol": "func (c *Coordinator) enqueueLockedWithNativeReceiptV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork, receipt *NativePublicationV6) (enqueueDecision, error) {",
+      "expression": "if !w.Reserve(11, controlBytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "line": 277,
+      "sourceSymbol": "func (c *Coordinator) enqueueLockedWithNativeReceiptV6(candidate *PreparedRootCandidate, supersede bool, w *iterator.OrdinalScanWork, receipt *NativePublicationV6) (enqueueDecision, error) {",
+      "expression": "if !w.Reserve(8, postBytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 37,
+      "sourceSymbol": "func admitNativeNotifyV6(w *iterator.OrdinalScanWork) (nativeNotifyPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(3, nativeDiagnosticHchanBytesV6+3*uint64(unsafe.Sizeof((chan struct{})(nil)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 65,
+      "sourceSymbol": "func (c *Coordinator) admitNativeTimerInstallLockedV6(w *iterator.OrdinalScanWork) (nativeTimerInstallPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(c.clock))+uint64(unsafe.Sizeof(c.timer))+uint64(unsafe.Sizeof(c.firstPendingAt))+3*uint64(unsafe.Sizeof(time.Duration(0)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 75,
+      "sourceSymbol": "func (c *Coordinator) admitNativeTimerInstallLockedV6(w *iterator.OrdinalScanWork) (nativeTimerInstallPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(6, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 98,
+      "sourceSymbol": "func admitNativeWakeV6(w *iterator.OrdinalScanWork) (nativeWakePermitV6, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof((chan struct{})(nil)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 118,
+      "sourceSymbol": "func (c *Coordinator) admitNativeClockLockedV6(w *iterator.OrdinalScanWork) (nativeClockPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(c.clock))+uint64(unsafe.Sizeof(time.Time{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 127,
+      "sourceSymbol": "func (c *Coordinator) admitNativeClockLockedV6(w *iterator.OrdinalScanWork) (nativeClockPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(FakeClock{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 153,
+      "sourceSymbol": "func (c *Coordinator) admitNativeTimerStopLockedV6(w *iterator.OrdinalScanWork) (nativeTimerStopPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(c.timer))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+      "line": 168,
+      "sourceSymbol": "func (c *Coordinator) admitNativeTimerStopLockedV6(w *iterator.OrdinalScanWork) (nativeTimerStopPermitV6, bool, error) {",
+      "expression": "if !w.Reserve(2, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+      "line": 22,
+      "sourceSymbol": "func reserveDurableRootCallbackDispatchV6(w *iterator.OrdinalScanWork) bool {",
+      "expression": "return w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootCallbackInput{}))+"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 30,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(spec))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 55,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(canonicalReachabilityRequirements[0]))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 64,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(visited, visited*uint64(unsafe.Sizeof(canonicalReachabilityRequirements[0]))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 84,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(12, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 110,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s.token))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 137,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(len(source))+2*uint64(unsafe.Sizeof(source))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 168,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*fileBytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 179,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(StableIdentity{}))+256) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 204,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s.token))+2*uint64(unsafe.Sizeof(*s.spec.Namespace))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+      "line": 233,
+      "sourceSymbol": "func (s *StableIndexTokenConstructionWorkV6) DetachV6(w *iterator.OrdinalScanWork) (*StableResourceToken, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+      "line": 34,
+      "sourceSymbol": "func (ns *StableNamespaceToken) ReleaseWithWorkV6(phase *uint8, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+      "line": 49,
+      "sourceSymbol": "func (ns *StableNamespaceToken) ReleaseWithWorkV6(phase *uint8, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+      "line": 61,
+      "sourceSymbol": "func (ns *StableNamespaceToken) ReleaseWithWorkV6(phase *uint8, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+      "line": 73,
+      "sourceSymbol": "func (ns *StableNamespaceToken) ReleaseWithWorkV6(phase *uint8, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+      "line": 18,
+      "sourceSymbol": "func (c *Coordinator) AcquireNativeBuilderWithWorkV6(r *NativePublicationV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+      "line": 54,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativeBuilderWithWorkV6(r *NativePublicationV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(builderHandle{}))+uint64(unsafe.Sizeof(builderLease{}))+24) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+      "line": 99,
+      "sourceSymbol": "func (c *Coordinator) EnqueueNativeBuiltWithWorkV6(r *NativePublicationV6, candidate *PreparedRootCandidate, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+      "line": 21,
+      "sourceSymbol": "func (s *PrimaryConstructionReleaseWork) BindFinishV6(t *DurableRootTransaction, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 74,
+      "sourceSymbol": "func (c *Coordinator) BindNativePublicationV6(r *NativePublicationV6, owner NativePublicationOwnerV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))+64) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 111,
+      "sourceSymbol": "func (c *Coordinator) BeginNativePublicationTurnV6(r *NativePublicationV6, candidate *PreparedRootCandidate, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 164,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 181,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, uint64(unsafe.Sizeof(c.pending))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(durableRootGroupExtension{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 203,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(4, 2*uint64(unsafe.Sizeof(result.Err))+uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(c.poison))+uint64(unsafe.Sizeof(c.publishNow))+uint64(unsafe.Sizeof(c.wakeReason))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 240,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(DurableRootCallbackInput{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 246,
+      "sourceSymbol": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(14, uint64(unsafe.Sizeof(primaryPublicationCompletionV6{}))+4*uint64(unsafe.Sizeof(Frontier{}))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+2*uint64(unsafe.Sizeof(c.pending))+2*uint64(unsafe.Sizeof(c.waiters))+12*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 296,
+      "sourceSymbol": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(builderHandle{}))+uint64(unsafe.Sizeof(builderLease{}))+uint64(unsafe.Sizeof(BuilderHandoffReceipt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 312,
+      "sourceSymbol": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 348,
+      "sourceSymbol": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(link))+uint64(unsafe.Sizeof(r.next))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 359,
+      "sourceSymbol": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(6, 2*uint64(unsafe.Sizeof(*r))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 464,
+      "sourceSymbol": "func (c *Coordinator) ConsumeNativePublicationResourcesV6(r *NativePublicationV6, result PublishResult, visible *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 491,
+      "sourceSymbol": "func (c *Coordinator) ConsumeNativePublicationTransactionV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "line": 16,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) captureStateLockedV6(identity StableIdentity, w *iterator.OrdinalScanWork) (*identityPinState, int, bool) {",
+      "expression": "if !w.Reserve(1, uint64(len(identity.Platform)+len(identity.ObjectID))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "line": 25,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) captureStateLockedV6(identity StableIdentity, w *iterator.OrdinalScanWork) (*identityPinState, int, bool) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(t.cells[i]))+2*uint64(unsafe.Sizeof(identityPinState{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "line": 59,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) PinWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (*IdentityPin, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(IdentityPin{}))+2*uint64(unsafe.Sizeof(*state))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+      "line": 88,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) UnobserveWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+      "line": 27,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) ObserveWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "return w.Reserve(r, b), nil"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+      "line": 29,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) ObserveWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := reserve(1, 2*uint64(unsafe.Sizeof(identity))+uint64(len(identity.Platform))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+      "line": 60,
+      "sourceSymbol": "func (registry *IdentityPinRegistry) ObserveWithWorkV6(identity StableIdentity, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := reserve(records, bytes); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 18,
+      "sourceSymbol": "func EmptyDependencyManifestWithWorkV6(set *StableResourceSet, w *iterator.OrdinalScanWork) (*DependencyManifestV1, bool, error) {",
+      "expression": "if !w.Reserve(4, 2*uint64(unsafe.Sizeof(DependencyManifestV1{}))+4*uint64(unsafe.Sizeof(resourceAllocation{}))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 63,
+      "sourceSymbol": "func PrepareEmptyStableResourceSetWithOrdinalWorkV6(owner *retainedalloc.Owner, source *StableResourceSet, w *iterator.OrdinalScanWork) (*StableResourceSet, bool, error) {",
+      "expression": "if !w.Reserve(6, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 95,
+      "sourceSymbol": "func NewPreparedPrimaryEmptyCandidateWithWorkV6(spec CandidateSpec, w *iterator.OrdinalScanWork) (*PreparedRootCandidate, bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(spec))+2*uint64(unsafe.Sizeof(PreparedRootCandidate{}))+2*uint64(unsafe.Sizeof(DurableRootTransaction{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 110,
+      "sourceSymbol": "func (c *Coordinator) MaintenanceNativeGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeCoordinatorGeometryForTestV6, ready bool) {",
+      "expression": "if c == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 121,
+      "sourceSymbol": "func (c *Coordinator) MaintenanceNativeGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeCoordinatorGeometryForTestV6, ready bool) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*receipt))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 144,
+      "sourceSymbol": "func (set *StableResourceSet) MaintenanceNativeEmptyGeometryForTestV6(visible *StableResourceSet, w *iterator.OrdinalScanWork) (g NativeEmptySetGeometryForTestV6, ready bool) {",
+      "expression": "if set == nil || visible == nil || set == visible || w == nil || !w.Reserve(3, 2*uint64(unsafe.Sizeof(*set))+2*uint64(unsafe.Sizeof(*visible))+2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(resourceKindBacking{}))+2*uint64(unsafe.Sizeof(resourceAllocation{}))+2*uint64(unsafe.Sizeof(DependencyDirectoryV2{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 198,
+      "sourceSymbol": "func (token *StableResourceToken) MaintenanceNativeIndexGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeIndexTokenGeometryForTestV6, ready bool) {",
+      "expression": "if token == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*token))+2*uint64(unsafe.Sizeof(StableNamespaceToken{}))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 61,
+      "sourceSymbol": "func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork, native bool) (primaryarena.ReadRootConstructionV6, bool, error) {",
+      "expression": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))+2*uint64(unsafe.Sizeof(primaryTerminalCompletionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 133,
+      "sourceSymbol": "func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransactionSpec, resources *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(DurableRootTransactionSpec{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 234,
+      "sourceSymbol": "func (t *DurableRootTransaction) PreparePrimaryPromotionStorageV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 258,
+      "sourceSymbol": "func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, uint64, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 287,
+      "sourceSymbol": "func (t *DurableRootTransaction) preparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork, private bool) (result *PrimaryPromotionV6, completed bool, returnErr error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 349,
+      "sourceSymbol": "func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 406,
+      "sourceSymbol": "func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.OrdinalScanWork, activePins map[ResourceKind]uint64, release func(*StableResourceSet, map[ResourceKind]uint64, *iterator.OrdinalScanWork) (bool, error)) (*primaryTerminalCompletionV6, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+      "line": 29,
+      "sourceSymbol": "func (set *StableResourceSet) emptyOperationWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(3, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 27,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+2*uint64(unsafe.Sizeof(*n.metadata))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 36,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 16) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 61,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) backing(b *resourcePinnedBacking, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*b))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+      "line": 97,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) token(t *StableResourceToken, expected ResourceOwnerState, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 46,
+      "sourceSymbol": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool {",
+      "expression": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 47,
+      "sourceSymbol": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool {",
+      "expression": "return w == nil || w.Reserve(r, b)"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 60,
+      "sourceSymbol": "func startResourceGraphReleaseV6(a *resourceAllocation, value any, w *iterator.OrdinalScanWork) (*resourceReleaseFrameV6, bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*a))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 147,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 189,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 222,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 261,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 294,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 359,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*cell))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 404,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+2*uint64(unsafe.Sizeof(*n.metadata))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 425,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+128) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 480,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 519,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*entry))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 531,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n.frontier))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 543,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 16) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 624,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof((*dependencyManifestEncodedEntryV1)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 636,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(dependencyManifestEncodedEntryV1{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 649,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 666,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 678,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(ReachabilityField(\"\")))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 690,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 702,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 16) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 716,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 722,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 731,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(resourceFieldCell{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 737,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 784,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, charge) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "line": 25,
+      "sourceSymbol": "func (token *StableResourceToken) SyncThroughWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, uint64(unsafe.Sizeof(*token))+2*uint64(unsafe.Sizeof(DurableFrontier{}))+2*uint64(unsafe.Sizeof(exactRIDMembership{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "line": 37,
+      "sourceSymbol": "func (token *StableResourceToken) SyncThroughWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(4, 2*uint64(unsafe.Sizeof(time.Time{}))+2*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "line": 45,
+      "sourceSymbol": "func (token *StableResourceToken) SyncThroughWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(5, 2*uint64(unsafe.Sizeof(time.Time{}))+2*uint64(unsafe.Sizeof(uint64(0)))+uint64(unsafe.Sizeof(operations))+uint64(unsafe.Sizeof(token.pinned))+uint64(unsafe.Sizeof(token.frontier))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "line": 71,
+      "sourceSymbol": "func (token *StableNamespaceToken) StabilizeWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(2, uint64(unsafe.Sizeof(*token))+16) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "line": 93,
+      "sourceSymbol": "func (token *StableResourceToken) StabilizeNamespaceWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*token))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+      "line": 33,
+      "sourceSymbol": "func CloneAdmittedStableResourceSetWithOrdinalWorkV6(source *StableResourceSet, w *iterator.OrdinalScanWork) (*StableResourceSet, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(StableResourceSet{}))+uint64(unsafe.Sizeof(resourceAllocation{}))+uint64(unsafe.Sizeof(stableResourceSetExtras{}))+64) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+      "line": 43,
+      "sourceSymbol": "func CloneAdmittedStableResourceSetWithOrdinalWorkV6(source *StableResourceSet, w *iterator.OrdinalScanWork) (*StableResourceSet, bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(StableResourceSet{}))+uint64(unsafe.Sizeof(resourceAllocation{}))+uint64(unsafe.Sizeof(resourceKindBacking{}))+64) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go",
+      "line": 59,
+      "sourceSymbol": "func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState, counts map[ResourceKind]uint64, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*set))+2*uint64(unsafe.Sizeof(*a))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go",
+      "line": 141,
+      "sourceSymbol": "func (root *resourceReleaseFrameV6) stepSet(f *resourceReleaseFrameV6, set *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*set))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 29,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 85,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*set))+2*uint64(unsafe.Sizeof(*visible))+2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 110,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(cell))+uint64(len(cell.kind))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 127,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof((*DependencyDirectoryV2)(nil)))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 142,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(d))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 153,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(cell))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 166,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(d))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "line": 194,
+      "sourceSymbol": "func (s *StableResourceSetReleaseWorkV6) consumeSharedWithVisibleV6(set, visible *StableResourceSet, counts map[ResourceKind]uint64, expectedOwner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if !w.Reserve(records, bytes) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 79,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "reserve := func(r, bytes uint64) bool { return w.Reserve(r, bytes) }"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 81,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 119,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(resourcePinnedBacking{}))+64) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 198,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*backing.allocation))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 211,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 217,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*backing))) {"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+      "line": 230,
+      "sourceSymbol": "func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {",
+      "expression": "if !reserve(1, 2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 108,
+      "sourceSymbol": "func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error) {",
+      "expression": "if !w.Reserve(1, size) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 202,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, size) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 228,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 257,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 274,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 297,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 314,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 332,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(c.anchorSize)+128) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 345,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 3*uint64(len(record.Key))) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 359,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 128) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 383,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 2*uint64(c.logicalSize)+uint64(len(c.record.Value))+3*uint64(len(c.record.Key))+uint64(c.anchorSize)+128) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 446,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 461,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(c.selectedSize)+64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 486,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(c.selectedSize)+64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 499,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, n*2+uint64(unsafe.Sizeof(selectedRecord))) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 544,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(len(c.record.Value))+128) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 609,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))+128) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 621,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 627,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 659,
+      "sourceSymbol": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error {",
+      "expression": "if !w.Reserve(1, uint64(c.resumeSize)+64) {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 55,
+      "sourceSymbol": "func NewGrowth(targetPages uint64, w *iterator.OrdinalScanWork) (*Growth, bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 6*uint64(unsafe.Sizeof(Growth{}))+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 118,
+      "sourceSymbol": "func (p *Pager) InstallAtCount(expected uint64, w *iterator.OrdinalScanWork, r, b uint64, install func()) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 2+r, 6*uint64(unsafe.Sizeof(Growth{}))+2048+b); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 155,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 2*uint64(unsafe.Sizeof(Growth{}))+1024); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 175,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 2*uint64(unsafe.Sizeof(Growth{}))+1024); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 190,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, uint64(g.totalChunks)*(48+2*uint64(unsafe.Sizeof(mappingOwner{})))+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 200,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, uint64(g.totalChunks)*48+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 207,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 4, 192+2*uint64(unsafe.Sizeof(mappingOwner{}))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 223,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, uint64(g.needVerified)*48+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 230,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 2, 144); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 235,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 2*verifiedChunkWords*8+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 248,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, uint64(g.needWords)*16+256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 254,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 266,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, uint64(g.needWords)*16+512); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 274,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 285,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 2048); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 325,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 3, traffic); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 365,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 256); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 374,
+      "sourceSymbol": "func (g *Growth) stepLockedAtCount(p *Pager, w *iterator.OrdinalScanWork, r, b uint64, install func(), expected uint64, checkCount bool) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 2+r, 6*uint64(unsafe.Sizeof(Growth{}))+2048+b); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 558,
+      "sourceSymbol": "func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, control+amount); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 572,
+      "sourceSymbol": "func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, control+uint64(len(c))); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 584,
+      "sourceSymbol": "func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, control); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 593,
+      "sourceSymbol": "func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, e := pagerReserve(w, 1, 6*uint64(unsafe.Sizeof(Growth{}))+512); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 622,
+      "sourceSymbol": "func (p *Pager) GrowWithinCapacityWithWorkV6(target uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, 1, uint64(unsafe.Sizeof(*p))+16); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "line": 645,
+      "sourceSymbol": "func (p *Pager) installCountWithinCapacityWithWorkV6(target uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, 5, uint64(unsafe.Sizeof(*p))+uint64(unsafe.Sizeof(verifiedBitset{}))+uint64(unsafe.Sizeof(prefetchBitset{}))+uint64(unsafe.Sizeof(dirtyChunkBits{}))+32); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 839,
+      "sourceSymbol": "func (p *Pager) GetWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if ok, err := pagerReserve(work, 3, 512); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 858,
+      "sourceSymbol": "func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if ok, err := pagerReserve(work, 1, 64); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 1091,
+      "sourceSymbol": "func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, 3, postBytes); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 1149,
+      "sourceSymbol": "func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64, indexPath ...string) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, records, traffic); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 1339,
+      "sourceSymbol": "func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, uint64(len(pageIDs))+1, uint64(len(pageIDs))*64+512); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "line": 1371,
+      "sourceSymbol": "func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, records, traffic); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 111,
+      "sourceSymbol": "func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool) {",
+      "expression": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(primaryReadRootTableV6{}))) {"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 122,
+      "sourceSymbol": "func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool) {",
+      "expression": "if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 145,
+      "sourceSymbol": "func (p *Pager) RegisterPrimaryReadRootV6(local uint64, image []byte, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, 1, uint64(2*page.PageSize+128)); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 162,
+      "sourceSymbol": "func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if ok, err := pagerReserve(w, 1, 128); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 176,
+      "sourceSymbol": "func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (bool, error) {",
+      "expression": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 24,
+      "sourceSymbol": "func (p *Pager) MaintenanceNativeGeometryForTestV6(target, first, last, pages uint64, pathBytes uint64, w *iterator.OrdinalScanWork) (g NativeMaterializationGeometryForTestV6, ready bool) {",
+      "expression": "if p == nil || w == nil || !w.Reserve(3, 2*uint64(unsafe.Sizeof(*p))+2*uint64(unsafe.Sizeof(g))+128) {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 66,
+      "sourceSymbol": "func pagerReserve(work *iterator.OrdinalScanWork, records, bytes uint64) (bool, error) {",
+      "expression": "func pagerReserve(work *iterator.OrdinalScanWork, records, bytes uint64) (bool, error) {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 73,
+      "sourceSymbol": "func pagerReserve(work *iterator.OrdinalScanWork, records, bytes uint64) (bool, error) {",
+      "expression": "return work.Reserve(records, bytes), nil"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 101,
+      "sourceSymbol": "func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, work *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 117,
+      "sourceSymbol": "func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, work *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if ok, err := pagerReserve(work, 5, 2*uint64(min(len(data), page.PageSize))+1024); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 139,
+      "sourceSymbol": "func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, work *iterator.OrdinalScanWork) ([]byte, bool, error) {",
+      "expression": "if ok, err := pagerReserve(work, 1, 32); !ok || err != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 214,
+      "sourceSymbol": "func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {",
+      "expression": "if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 238,
+      "sourceSymbol": "func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {",
+      "expression": "if ok, e := pagerReserve(work, records, bytes); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 271,
+      "sourceSymbol": "func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {",
+      "expression": "if ok, e := pagerReserve(work, 1, 2*uint64(flushEnd-flushStart)+64); !ok || e != nil {"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "line": 284,
+      "sourceSymbol": "func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {",
+      "expression": "if ok, e := pagerReserve(work, 1, 32); !ok || e != nil {"
+    }
+  ]
+}
