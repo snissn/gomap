@@ -1,0 +1,48 @@
+=== RUN   TestNativeStablePagerPartialTokenCancellationV6
+=== RUN   TestNativeStablePagerPartialTokenCancellationV6/before-token
+=== RUN   TestNativeStablePagerPartialTokenCancellationV6/before-retain
+=== RUN   TestNativeStablePagerPartialTokenCancellationV6/after-retain
+--- PASS: TestNativeStablePagerPartialTokenCancellationV6 (0.16s)
+    --- PASS: TestNativeStablePagerPartialTokenCancellationV6/before-token (0.07s)
+    --- PASS: TestNativeStablePagerPartialTokenCancellationV6/before-retain (0.04s)
+    --- PASS: TestNativeStablePagerPartialTokenCancellationV6/after-retain (0.05s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.187s
+=== RUN   TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6
+    native_prune_backend_route_v6_test.go:87: call=0 phase=0 work=32/810688 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=3 phase=2 work=32/636472 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=4 phase=3 work=32/41348 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=7 phase=6 work=32/12637 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=12 phase=10 work=32/20405 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=13 phase=16 work=18/309420 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=102 phase=24 work=6/42464 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=105 phase=25 work=19/54752 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=139 phase=26 work=32/32200 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:155: first actual route refusal: calls=149 phase=26 error=native prune phase 26: native MVCC transaction requires its original work-bearing caller
+--- PASS: TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6 (0.18s)
+=== RUN   TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6
+=== RUN   TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6/cancel-parent
+    native_prune_backend_route_v6_test.go:87: call=0 phase=0 work=32/810688 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=1 phase=3 work=31/651208 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=5 phase=6 work=32/24641 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=10 phase=15 work=32/293172 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=11 phase=16 work=9/170921 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=100 phase=24 work=6/42464 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=103 phase=25 work=19/54752 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=137 phase=26 work=32/32200 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:93: copied parent retained before promotion: calls=140 stage=8 work=31/133880
+=== RUN   TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6/stale-parent
+    native_prune_backend_route_v6_test.go:87: call=0 phase=0 work=32/810688 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=4 phase=3 work=32/671768 selected=0 anchor=0 requestFloor=0
+    native_prune_backend_route_v6_test.go:87: call=7 phase=6 work=32/21263 selected=0 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=13 phase=16 work=24/310103 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=102 phase=24 work=6/42464 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=105 phase=25 work=19/54752 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:87: call=139 phase=26 work=32/32200 selected=1 anchor=0 requestFloor=32
+    native_prune_backend_route_v6_test.go:93: copied parent retained before promotion: calls=142 stage=8 work=31/133880
+    native_prune_backend_route_v6_test.go:110: stale copied parent refused before promotion: stage=8 records=2 bytes=912 err=durable-root candidate base changed
+--- PASS: TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6 (0.32s)
+    --- PASS: TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6/cancel-parent (0.16s)
+    --- PASS: TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6/stale-parent (0.16s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	0.500s

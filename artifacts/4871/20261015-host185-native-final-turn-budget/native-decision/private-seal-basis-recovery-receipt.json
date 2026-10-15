@@ -1,0 +1,20 @@
+{
+  "after": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis-all-source-after.json",
+  "before": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis-all-source-before.json",
+  "changed_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-seal-basis-recovery-changed.json",
+  "command": "env GOROOT=/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3 GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOMAXPROCS=2 TMPDIR=/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/tmp GOCACHE=/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache /mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go test -p 1 ./TreeDB/db ./TreeDB/mvcc -run 'TestNativeStablePagerPartialTokenCancellationV6|TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6|TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6' -count=1 -v -timeout=3m",
+  "head": "4594e24aee1d468690c3c57639e83d42ebb86e8b",
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis.log",
+  "result": "exit0 PASS db/mvcc focused controls; original phase26 publication missing Q32RED ACK0",
+  "runtime_idle": true,
+  "source_files": 10308,
+  "source_frozen": true,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-seal-basis-recovery-all-source.json",
+  "source_manifest_sha256": "cc371f940512e8b6b54bc20cf542597c21353f0c0a7120ba372091c65d3b4c26",
+  "test_sources": {
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "5421b4a35f259ceae5ec0ed2b23a314ef5cf525346b8cc3cddbc22e5e7023de5",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "86c051c2199b77c3a86ed47213fb0ae3f853f9d33081b1928ab762dc4c3109ec"
+  },
+  "tested_source_identical": true,
+  "toolchain": "Go1.26.3"
+}

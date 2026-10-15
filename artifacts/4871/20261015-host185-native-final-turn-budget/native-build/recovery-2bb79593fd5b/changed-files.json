@@ -1,0 +1,7 @@
+[
+  "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+  "TreeDB/db/primary_authority_scope_v6.go",
+  "TreeDB/db/primary_capsule_runtime_v6.go",
+  "TreeDB/db/primary_seal_commit_work_v6.go",
+  "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+]

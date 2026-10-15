@@ -1,0 +1,15 @@
+{
+  "head": "2bb79593fd5b5a6a1dc919bae32cd6158345daac",
+  "tree": "789ce0b61a715ba5d2395a1c822d43b57491c476",
+  "parent": "4594e24aee1d468690c3c57639e83d42ebb86e8b",
+  "branch": "codex/4878-native-185-20261015",
+  "source_files": 10308,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis-all-source-after.json",
+  "source_manifest_sha256": "cc371f940512e8b6b54bc20cf542597c21353f0c0a7120ba372091c65d3b4c26",
+  "source_unchanged": true,
+  "qualified": false,
+  "gate": "Q32 RED, ACK0; actual publication/Consume/Finish and paused-Finish/newer-writer remain outstanding",
+  "remote_verified": true,
+  "at_utc": "2026-10-15T19:12:04.987226+00:00",
+  "remote_ref": "2bb79593fd5b5a6a1dc919bae32cd6158345daac\trefs/heads/codex/4878-native-185-20261015"
+}

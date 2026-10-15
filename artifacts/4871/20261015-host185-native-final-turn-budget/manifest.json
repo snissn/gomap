@@ -1,0 +1,173 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/gomap-4878-current.json",
+    "path": "live-startup/gomap-4878-current.json",
+    "source_bytes": 60791,
+    "source_sha256": "ccb1ef96c5192b082c4971e3142fd3aa377df77a476466caac89984c976a57dc",
+    "stored_bytes": 60791,
+    "stored_sha256": "ccb1ef96c5192b082c4971e3142fd3aa377df77a476466caac89984c976a57dc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis-all-source-after.json",
+    "path": "native-build/logs/private-seal-basis-all-source-after.json.gz",
+    "source_bytes": 1580647,
+    "source_sha256": "cc371f940512e8b6b54bc20cf542597c21353f0c0a7120ba372091c65d3b4c26",
+    "stored_bytes": 460306,
+    "stored_sha256": "5bf953268d61680c0ef45097e04068eda8251b18c47d56c581e4944cdd5fe1be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis-all-source-before.json",
+    "path": "native-build/logs/private-seal-basis-all-source-before.json.gz",
+    "source_bytes": 1580647,
+    "source_sha256": "cc371f940512e8b6b54bc20cf542597c21353f0c0a7120ba372091c65d3b4c26",
+    "stored_bytes": 460306,
+    "stored_sha256": "5bf953268d61680c0ef45097e04068eda8251b18c47d56c581e4944cdd5fe1be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-basis.log",
+    "path": "native-build/logs/private-seal-basis.log",
+    "source_bytes": 4575,
+    "source_sha256": "44c9c501817d335fbe13ac8f60f109982644fbb445c6e8ef9c50375b83a3a882",
+    "stored_bytes": 4575,
+    "stored_sha256": "44c9c501817d335fbe13ac8f60f109982644fbb445c6e8ef9c50375b83a3a882",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control-all-source-after.json",
+    "path": "native-build/logs/private-seal-control-all-source-after.json.gz",
+    "source_bytes": 1580646,
+    "source_sha256": "7ca1f4426fbfe201c5b2a0ac1891373b14bbb36c13f56845f9920c02cfa02b77",
+    "stored_bytes": 460305,
+    "stored_sha256": "194725565e85240a26a12f327e7ed8a655e3f4e998a643a145a540bb3c3efef8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control-all-source-before.json",
+    "path": "native-build/logs/private-seal-control-all-source-before.json.gz",
+    "source_bytes": 1580646,
+    "source_sha256": "7ca1f4426fbfe201c5b2a0ac1891373b14bbb36c13f56845f9920c02cfa02b77",
+    "stored_bytes": 460305,
+    "stored_sha256": "194725565e85240a26a12f327e7ed8a655e3f4e998a643a145a540bb3c3efef8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control-rerun1-all-source-after.json",
+    "path": "native-build/logs/private-seal-control-rerun1-all-source-after.json.gz",
+    "source_bytes": 1580647,
+    "source_sha256": "eef7a011182865edae5e094d95e5334e4ad8945c1d1e6df64bcbc1c18098f260",
+    "stored_bytes": 460308,
+    "stored_sha256": "e198d4f1fdc319ac0464458f46614e3d30396d0c2ecd990f9d0f8e90a1a7b110",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control-rerun1-all-source-before.json",
+    "path": "native-build/logs/private-seal-control-rerun1-all-source-before.json.gz",
+    "source_bytes": 1580646,
+    "source_sha256": "64e83e8698149c2bb3820224d8d768c3775d3081838bd8f273caf821fb67003d",
+    "stored_bytes": 460306,
+    "stored_sha256": "5edbdd0dd7a1e8da525caa91e166a87e743c20d6c9f0da6b0c3f83bb6c94d32b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control-rerun1.log",
+    "path": "native-build/logs/private-seal-control-rerun1.log",
+    "source_bytes": 4574,
+    "source_sha256": "97808b09986c8491f1b4e1748290dfd19e089366c44a1de43c36c6eb128a04f6",
+    "stored_bytes": 4574,
+    "stored_sha256": "97808b09986c8491f1b4e1748290dfd19e089366c44a1de43c36c6eb128a04f6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/logs/private-seal-control.log",
+    "path": "native-build/logs/private-seal-control.log",
+    "source_bytes": 4898,
+    "source_sha256": "a7c52ae7a3524e0a40b70c31c22b2043b7a0c9738214fdc6f232efb6fe229cc9",
+    "stored_bytes": 4898,
+    "stored_sha256": "a7c52ae7a3524e0a40b70c31c22b2043b7a0c9738214fdc6f232efb6fe229cc9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/recovery-2bb79593fd5b/changed-files.json",
+    "path": "native-build/recovery-2bb79593fd5b/changed-files.json",
+    "source_bytes": 244,
+    "source_sha256": "a9769723747c77d407b678967fe739d77c3ea667a19289e08b2a3099ef1f92d3",
+    "stored_bytes": 244,
+    "stored_sha256": "a9769723747c77d407b678967fe739d77c3ea667a19289e08b2a3099ef1f92d3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/recovery-2bb79593fd5b/push.log",
+    "path": "native-build/recovery-2bb79593fd5b/push.log",
+    "source_bytes": 121,
+    "source_sha256": "30184f5edd25e0a204e53ae0d1b187b03fd804a3b7454ab6de72ec34056ece8f",
+    "stored_bytes": 121,
+    "stored_sha256": "30184f5edd25e0a204e53ae0d1b187b03fd804a3b7454ab6de72ec34056ece8f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/recovery-2bb79593fd5b/receipt.json",
+    "path": "native-build/recovery-2bb79593fd5b/receipt.json",
+    "source_bytes": 795,
+    "source_sha256": "dd8dac7af3075eee8e8cb20407f8b8693e8dcbc195611dd4f54f3475da5a859b",
+    "stored_bytes": 795,
+    "stored_sha256": "dd8dac7af3075eee8e8cb20407f8b8693e8dcbc195611dd4f54f3475da5a859b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/root-private-seal-checkpoint.py",
+    "path": "native-build/root-private-seal-checkpoint.py",
+    "source_bytes": 2934,
+    "source_sha256": "06ae574ffc8250fe26a71e42cd3e45c0fe2722b03f709f8088981521b8f9d10b",
+    "stored_bytes": 2934,
+    "stored_sha256": "06ae574ffc8250fe26a71e42cd3e45c0fe2722b03f709f8088981521b8f9d10b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/final-turn-budget.md",
+    "path": "native-decision/final-turn-budget.md",
+    "source_bytes": 13035,
+    "source_sha256": "299e639859bdc106d12b5a9e6d41d17ed7c69562482adcc94222ec8ea566d603",
+    "stored_bytes": 13035,
+    "stored_sha256": "299e639859bdc106d12b5a9e6d41d17ed7c69562482adcc94222ec8ea566d603",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/implementation-progress.md",
+    "path": "native-decision/implementation-progress.md",
+    "source_bytes": 28233,
+    "source_sha256": "615ee71cf326d64b613da70e59cabbe3138d81d2886671589ca8d672eab32643",
+    "stored_bytes": 28233,
+    "stored_sha256": "615ee71cf326d64b613da70e59cabbe3138d81d2886671589ca8d672eab32643",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-seal-basis-recovery-all-source.json",
+    "path": "native-decision/private-seal-basis-recovery-all-source.json.gz",
+    "source_bytes": 1580647,
+    "source_sha256": "cc371f940512e8b6b54bc20cf542597c21353f0c0a7120ba372091c65d3b4c26",
+    "stored_bytes": 460306,
+    "stored_sha256": "5bf953268d61680c0ef45097e04068eda8251b18c47d56c581e4944cdd5fe1be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-seal-basis-recovery-changed.json",
+    "path": "native-decision/private-seal-basis-recovery-changed.json",
+    "source_bytes": 814,
+    "source_sha256": "230e81b5fe3facfc9188b3012b159991f35a6fbdc96588e11aa072ab9d1cd36f",
+    "stored_bytes": 814,
+    "stored_sha256": "230e81b5fe3facfc9188b3012b159991f35a6fbdc96588e11aa072ab9d1cd36f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-seal-basis-recovery-receipt.json",
+    "path": "native-decision/private-seal-basis-recovery-receipt.json",
+    "source_bytes": 1774,
+    "source_sha256": "d8903d29e998afb940b11b17d1a7e5ac96388b9b27435c5811caf623116c0742",
+    "stored_bytes": 1774,
+    "stored_sha256": "d8903d29e998afb940b11b17d1a7e5ac96388b9b27435c5811caf623116c0742",
+    "encoding": "identity"
+  }
+]
