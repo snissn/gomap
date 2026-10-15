@@ -12,6 +12,7 @@ import (
 // This is the existing shared handle counter's constructor-owned backing.
 // Immutable descriptor references are separate token allocation edges.
 type resourcePinnedBacking struct {
+	releaseWork      resourceReleaseFrameV6
 	sourceRoot       *stableResourceEntryNode
 	refs             atomic.Int64
 	file             *os.File
@@ -54,37 +55,22 @@ func (backing *resourcePinnedBacking) release() error {
 	if backing == nil {
 		return nil
 	}
-	if backing.failure != nil {
-		return backing.failure
+	var holder resourceReleaseFrameV6
+	if ready, err := holder.backing(backing, nil); !ready || err != nil {
+		return err
 	}
-	if backing.refs.Add(-1) != 0 {
+	if holder.current == nil {
 		return nil
 	}
-	if backing.sourceRoot != nil {
-		if err := backing.sourceRoot.release(); err != nil {
-			backing.failure = err
-			backing.owner.CleanupFailed()
-			// An imported cohort keeps the original source root's physical
-			// authority. Its adapter has no replacement registry; the checked
-			// caller retains this SAME backing and source-root failure graph.
-			if backing.registry != nil {
-				backing.registry.retainFailedPinnedBacking(backing)
-			}
-			return err
-		}
-		backing.sourceRoot, backing.file = nil, nil
-	} else if backing.file != nil {
-		if err := backing.file.Close(); err != nil {
-			backing.failure = err
-			backing.owner.CleanupFailed()
-			backing.registry.retainFailedPinnedBacking(backing)
-			return err
-		}
+	root := holder.current
+	root.parent = nil
+	root.current = root
+	completion, _, err := root.continueWork(nil)
+	if err != nil {
+		return err
 	}
-	backing.file = nil
-	owner, charge := backing.owner, backing.charge
-	backing.owner, backing.charge, backing.registry = nil, 0, nil
-	owner.RemovePending(charge)
+	backing = nil
+	completion.complete()
 	return nil
 }
 
@@ -240,35 +226,22 @@ func (token *StableResourceToken) releaseMetadata() error {
 	if token == nil || token.metadata == nil {
 		return nil
 	}
-	allocation := token.metadata
-	if err := allocation.cleanupResult(); err != nil {
+	var holder resourceReleaseFrameV6
+	if ready, err := holder.tokenMetadata(token, nil); !ready || err != nil {
 		return err
 	}
-	if !allocation.drop() {
+	if holder.current == nil {
 		return nil
 	}
-	if token.ownedOperations != nil {
-		consumed, err := token.ownedOperations.Release()
-		if consumed {
-			token.ownedOperations = nil
-		}
-		if err != nil {
-			return allocation.cleanupFailed(token, err)
-		}
-		if !consumed {
-			return allocation.cleanupFailed(token, ErrResourceOwnership)
-		}
+	root := holder.current
+	root.parent = nil
+	root.current = root
+	completion, _, err := root.continueWork(nil)
+	if err != nil {
+		return err
 	}
-	token.importedSource, token.importedFields = nil, nil
-	token.obligationBacking.release()
-	token.obligationBacking = nil
-	token.kind, token.logicalLane, token.resourceID, token.diagnosticPath, token.reachability = "", "", "", "", ""
-	token.identity = StableIdentity{}
-	token.frontier, token.syncedFrontier = DurableFrontier{}, DurableFrontier{}
-	token.logicalObligations = nil
-	token.flush, token.sync, token.onRelease, token.identityPin, token.releaseObservation = nil, nil, nil, nil, nil
-	token.metadata = nil
-	allocation.refund()
+	token = nil
+	completion.complete()
 	return nil
 }
 func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path string, frontier DurableFrontier, field ReachabilityField, values []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {

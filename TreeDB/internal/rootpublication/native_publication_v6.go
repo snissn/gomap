@@ -305,3 +305,36 @@ func (c *Coordinator) JoinNativePublicationsV6(ctx context.Context) error {
 		}
 	}
 }
+
+// ConsumeNativePublicationResourcesV6 consumes only the original constructor's
+// shared Set edges after the SAME successful physical fence, before transaction
+// Consume and turn release. The exact visible clone is protected by its Set
+// lock; its lifetime need not extend into native Finish. Existing resource pin
+// contributions end at these actual edge drops under c.mu.
+//
+// The final driver must preadmit this whole operation before its fence. Calling
+// it with finite work is not, by itself, proof that a no-yield final window fits.
+// An unexpected refusal after the fence follows the original ambiguity/custody
+// path; it may not be retried as an ordinary publication or relabeled success.
+func (c *Coordinator) ConsumeNativePublicationResourcesV6(r *NativePublicationV6, result PublishResult, visible *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
+	if c == nil || r == nil || visible == nil || w == nil {
+		return false, ErrPublisherProtocol
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))) {
+		return false, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r.coordinator != c || !r.turn || r.fenced || r.complete ||
+		c.activeAttempt.id != r.attempt.id || c.activeAttempt.candidate != r.candidate ||
+		len(c.pending) != 1 || c.pending[0].candidate != r.candidate ||
+		result.Outcome != PublishSucceeded || result.Err != nil ||
+		(result.DurableCommitSeq != 0 && result.DurableCommitSeq != r.candidate.frontier.commitSeq) {
+		return false, ErrPublisherProtocol
+	}
+	txn := r.candidate.DurableRoot()
+	if txn == nil {
+		return false, ErrDurableRootOwnership
+	}
+	return txn.consumePrimarySharedResourcesV6(visible, c.resourceActivePins, w)
+}

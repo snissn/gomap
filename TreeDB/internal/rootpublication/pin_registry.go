@@ -245,8 +245,8 @@ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
 
 // ReleaseWithWorkV6 consumes only the original pin. An observed or nonlast
 // state has no outgoing metadata cleanup and is a literal constant-size edge.
-// Native last-idle cleanup remains an explicit pre-effect refusal until its
-// registry-table/metadata disposal stages are bound to this SAME pin.
+// Last-idle removal admits the actual original table probes under its lock.
+// Closing-table disposal remains an explicit pre-effect refusal.
 func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
 	if pin == nil {
 		return true, nil
@@ -280,8 +280,50 @@ func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, er
 		return false, ErrUnbalancedResourcePin
 	}
 	if state.pins == 1 && state.observers == 0 && !state.deleting {
-		registry.mu.Unlock()
-		return false, retainedalloc.ErrWorkRequired
+		// A closing authority owns variable table teardown. Refuse that class
+		// before consuming this pin, rather than invoking Close under work.
+		if registry.closing {
+			registry.mu.Unlock()
+			return false, retainedalloc.ErrWorkRequired
+		}
+		table := &registry.states
+		if len(table.cells) == 0 {
+			registry.mu.Unlock()
+			return false, ErrUnbalancedResourcePin
+		}
+		if !w.Reserve(1, uint64(len(pin.identity.Platform))+uint64(len(pin.identity.ObjectID))) {
+			registry.mu.Unlock()
+			return false, nil
+		}
+		mask := len(table.cells) - 1
+		found := -1
+		for i := int(table.hash(pin.identity)) & mask; ; i = (i + 1) & mask {
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(table.cells[i]))+2*uint64(unsafe.Sizeof(*state))) {
+				registry.mu.Unlock()
+				return false, nil
+			}
+			cell := &table.cells[i]
+			if cell.status == 0 {
+				break
+			}
+			if cell.status == 1 && cell.key == pin.identity {
+				if cell.value != state || cell.payload != 0 {
+					registry.mu.Unlock()
+					return false, ErrUnbalancedResourcePin
+				}
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			registry.mu.Unlock()
+			return false, ErrUnbalancedResourcePin
+		}
+		// Every probe and the removal are admitted under the original lock.
+		// A refused probe leaves both the table and this exact pin untouched.
+		table.cells[found] = registryCell[StableIdentity, *identityPinState]{status: 2}
+		table.count--
+		registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*state))))
 	}
 	state.pins--
 	registry.activePins--
@@ -298,8 +340,8 @@ func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, er
 func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
 
 func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
- _, err := registry.ObserveWithWorkV6(identity,nil)
- return err
+	_, err := registry.ObserveWithWorkV6(identity, nil)
+	return err
 }
 
 func (registry *IdentityPinRegistry) Unobserve(identity StableIdentity) error {

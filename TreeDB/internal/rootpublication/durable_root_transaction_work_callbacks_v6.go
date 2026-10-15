@@ -28,6 +28,16 @@ func reserveDurableRootCallbackDispatchV6(w *iterator.OrdinalScanWork) bool {
 // containing metadata allocation can be refunded. Caller holds transaction.mu.
 func (transaction *DurableRootTransaction) clearDurableRootCallbacksV6() {
 	transaction.activate, transaction.consume = nil, nil
-	transaction.activateWithWork, transaction.consumeWithWork = nil, nil
+	transaction.activateWithWork, transaction.consumeWithWork, transaction.retireWithWork = nil, nil, nil
 	transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil
+}
+
+
+// RequiresNativeCallbackWorkV6 reports the SAME constructor's callback policy.
+// It grants no work, publication or resource-release authority.
+func (transaction *DurableRootTransaction) RequiresNativeCallbackWorkV6() bool {
+ if transaction == nil { return false }
+ transaction.mu.Lock()
+ defer transaction.mu.Unlock()
+ return transaction.requiresNativeCallbackWorkV6()
 }

@@ -16,6 +16,7 @@ import (
 // Selected clones acquire each directly shared allocation edge; children are
 // held by the containing node, so root retention requires no graph traversal.
 type resourceAllocation struct {
+	release resourceReleaseFrameV6
 	owner   *retainedalloc.Owner
 	charge  uint64
 	refs    atomic.Int64

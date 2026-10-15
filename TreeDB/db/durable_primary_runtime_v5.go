@@ -46,6 +46,10 @@ type primaryDurableRuntimeV5 struct {
 	metadata                *retainedalloc.Owner
 	metadataCharge          uint64
 	disposalAttempted       bool
+	disposalPhase           uint8
+	disposalIndex           int
+	disposalNative          bool
+	disposalQueue           primaryarena.ReleaseQueue
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
@@ -784,8 +788,11 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if e = a.MetadataOwner().AddPending(retiredCharge); e != nil {
 		return 0, e
 	}
-	retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
-	defer func() {
+ retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
+ retiredTransferred := false
+ defer func() {
+  if retiredTransferred { return }
+
 		clear(retired)
 		retired = nil
 		a.MetadataOwner().RemovePending(retiredCharge)
@@ -832,9 +839,19 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	}
 	clear(runtime.seals[len(kept):])
 	runtime.seals = kept
-	runtime.activeSeal = nil
-	unlock()
-	// The SAME predecessor descriptor owns overwritten original physical
+ runtime.activeSeal = nil
+ if member.transaction.RequiresNativeCallbackWorkV6() {
+  // No physical root/resource callbacks execute in Publish. The predecessor
+  // descriptor and independent retired pointer backing retain exact custody.
+  member.retiredPrimary = base.primary
+  member.retiredSeals = retired
+  member.retiredSealsOwner, member.retiredSealsCharge = a.MetadataOwner(), retiredCharge
+  retiredTransferred = true
+  unlock()
+  return oldest, nil
+ }
+ unlock()
+ // The SAME predecessor descriptor owns overwritten original physical
 	// operands until their root-before-resource completion has really succeeded.
 	if e = db.releaseOriginalPrimaryRuntimeV5(a, base.primary); e != nil {
 		return 0, e

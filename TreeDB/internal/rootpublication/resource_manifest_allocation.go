@@ -151,19 +151,10 @@ func newOwnedDependencyManifestEntryV1(entry *stableResourceEntry, owner *retain
 }
 
 func (value *dependencyManifestEncodedEntryV1) releaseOwned() {
-	if value == nil || value.allocation == nil || !value.allocation.drop() {
+	if value == nil || value.allocation == nil {
 		return
 	}
-	clear(value.encoded)
-	value.encoded = nil
-	clear(value.entry.Reachability)
-	clear(value.entry.LogicalObligations)
-	if value.entry.Frontier.exactRIDs != nil {
-		clear(value.entry.Frontier.exactRIDs.values)
-	}
-	value.entry = DependencyManifestEntryV1{}
-	value.cacheCandidate = nil
-	value.allocation.refund()
+	_ = releaseResourceMetadataV6(value.allocation, value)
 }
 
 // ReleaseOwnedMetadataV1 ends only a selected publisher-scoped manifest. Its

@@ -15,6 +15,8 @@ import (
 // clones retain this same backing, rather than copying opaque function values.
 // Its physical-owner edge protects cleanup/error custody through DB teardown.
 type stablePagerOwnedOperations struct {
+	releasePhase      uint8
+	releaseOwner      primaryArenaReleaseWork
 	refs              atomic.Int64
 	completionMu      sync.Mutex
 	snapshotCompleted bool

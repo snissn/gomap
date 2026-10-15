@@ -4304,6 +4304,15 @@ func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) error {
 // The caller owns counts under the existing coordinator mutex. Its pending
 // contribution ends at this SAME Set edge consumption, not before root disposal.
 func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState, counts map[ResourceKind]uint64) (err error) {
+	if set != nil && set.selected && set.metadata != nil {
+		completion, _, err := set.releaseSelectedGraphV6(owner, counts, nil)
+		if err != nil {
+			return err
+		}
+		set = nil
+		completion.Complete()
+		return nil
+	}
 	if set == nil {
 		return nil
 	}

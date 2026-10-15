@@ -32,6 +32,11 @@ type primaryTransactionConstructionV6 struct {
 	cleanupReceipt       *PrimaryConstructionReleaseWork
 	finishReleaseStarted bool
 	finishReleaseDone    bool
+	finishRetirementDone bool
+	// SAME constructor owns the original Set wrapper accounting after its
+	// protected shared edges are consumed in the publication turn.
+	setRelease         StableResourceSetReleaseWorkV6
+	setReleaseConsumed bool
 }
 type PrimaryPromotionV6 struct {
 	Image        []byte
@@ -165,7 +170,7 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
 	}
 	t.input = DurableRootCallbackInput{Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload, PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection}
 	t.activate, t.consume, t.abort, t.abortComplete, t.fail = spec.Activate, spec.Consume, spec.Abort, spec.AbortComplete, spec.Fail
-	t.activateWithWork, t.consumeWithWork = spec.ActivateWithWork, spec.ConsumeWithWork
+	t.activateWithWork, t.consumeWithWork, t.retireWithWork = spec.ActivateWithWork, spec.ConsumeWithWork, spec.RetireWithWork
 	c.resources = resources
 	c.metadataCharge += spec.PrimaryMetadataBytesV6
 	t.phase = durableRootPrepared
@@ -395,10 +400,25 @@ func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.Ordinal
 		return nil, false, nil
 	}
 	t.finishBusy = true
+	retire, retireInput := t.retireWithWork, t.input
 	t.mu.Unlock()
 
 	ready, err := true, error(nil)
-	if c.root != (primaryarena.Ref{}) {
+	// finishBusy serializes the original callback while t.mu is released. A
+	// superseded descriptor may acquire its own physical-owner locks, and must
+	// never run under the publication turn or a transaction lock. Normal work
+	// refusal retains BOTH the callback and its original containing custody.
+	if !c.finishRetirementDone {
+		if retire != nil {
+			ready, err = retire(retireInput, w)
+		}
+		if ready && err == nil {
+			t.mu.Lock()
+			c.finishRetirementDone = true
+			t.mu.Unlock()
+		}
+	}
+	if ready && err == nil && c.root != (primaryarena.Ref{}) {
 		if c.nativeWorkOwned && !c.unboundedDiagnostic {
 			ready, err = c.arena.DropToReleaseQueue(c.root, &c.cleanupQueue, w)
 		} else {
@@ -449,11 +469,21 @@ func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.Ordinal
 	// Immutable state/slot/reader refs independently own the root. Scrub this
 	// mutable constructor, then move its original accounting custody out of the
 	// call; defer unlock runs before the terminal can be consumed by its caller.
+	completion := c.terminalCompletion
+	completion.charge = c.metadataCharge
+	if c.setReleaseConsumed {
+		// The disposing callback has returned and mutable parent aliases are
+		// gone before transferring by-value accounting into the SAME terminal.
+		c.resources = nil
+		_, charge, err := c.setRelease.takeCompletionExpected(completion.owner)
+		if err != nil {
+			return nil, false, t.recordPhysicalCleanupFailureLocked(err)
+		}
+		completion.charge += charge
+	}
 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
 	t.clearDurableRootCallbacksV6()
 	t.constructionV6 = nil
-	completion := c.terminalCompletion
-	completion.charge = c.metadataCharge
 	*c = primaryTransactionConstructionV6{}
 	t.owner = ResourceOwnerReleased
 	t.phase = durableRootConsumed
