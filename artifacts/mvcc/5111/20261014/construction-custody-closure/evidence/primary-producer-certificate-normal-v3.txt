@@ -1,5 +1,0 @@
---- FAIL: TestPrimaryProducerCertificateV5DeliberateNil (0.02s)
-    primary_read_certificate_v6_test.go:146: legacy TreeDB meta requires rebuild: primary dependency directory feature mismatch
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	2.234s
-FAIL

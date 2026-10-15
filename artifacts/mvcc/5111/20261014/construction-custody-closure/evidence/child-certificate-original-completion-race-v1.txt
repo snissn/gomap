@@ -1,4 +1,0 @@
-ok  	github.com/snissn/gomap/TreeDB/pager	1.011s
-ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	1.007s
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.054s
-ok  	github.com/snissn/gomap/TreeDB/db	1.347s

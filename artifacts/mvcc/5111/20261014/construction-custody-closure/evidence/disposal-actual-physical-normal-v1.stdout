@@ -1,6 +1,0 @@
---- FAIL: TestOwnedSetActualPhysicalCloseFailureRetainsOriginalGraph (0.00s)
-    resource_set_allocation_test.go:318: Set edge was not consumed exactly once
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.009s
-ok  	github.com/snissn/gomap/TreeDB/db	4.948s
-FAIL

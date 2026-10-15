@@ -1,5 +1,0 @@
-# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
-TreeDB/db/primary_joint_completed_v6_test.go:42:103: undefined: a
-TreeDB/db/primary_joint_completed_v6_test.go:51:27: idx.primaryDurable undefined (type *indexGen has no field or method primaryDurable)
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL

@@ -1,9 +1,0 @@
---- FAIL: TestLeafGenerationManifestStablePreparedClosureAbandonUnpublishedRestoresView (0.06s)
-    leaf_generation_manifest_stable_prepare_test.go:35: prepareLeafGenerationManifestStableCandidate: stable resource ownership violation
---- FAIL: TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement (0.05s)
-    leaf_generation_manifest_stable_prepare_test.go:84: PrepareLeafGenerationManifestStableClosure: stable resource ownership violation
---- FAIL: TestLeafGenerationManifestStablePrepareSerializesWritersAndClose (0.07s)
-    leaf_generation_manifest_stable_prepare_test.go:250: PrepareLeafGenerationManifestStableClosure: stable resource ownership violation
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.554s
-FAIL

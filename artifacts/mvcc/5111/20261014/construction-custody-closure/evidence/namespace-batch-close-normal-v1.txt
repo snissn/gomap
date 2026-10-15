@@ -1,5 +1,0 @@
---- FAIL: TestStableNamespaceBatchActualFinalCloseRefusal (0.00s)
-    resource_namespace_batch_close_test.go:45: actual final Close: err=stable resource dependency unresolved: diagnostic path must be DB-relative tokens=0 syncs=0; require refusal before stable return
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s
-FAIL

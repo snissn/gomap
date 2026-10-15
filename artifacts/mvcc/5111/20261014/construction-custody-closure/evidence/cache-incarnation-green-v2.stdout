@@ -1,8 +1,0 @@
-=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
-=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
-=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
---- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.24s)
-    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.11s)
-    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.13s)
-PASS
-ok  	github.com/snissn/gomap/TreeDB/db	0.241s

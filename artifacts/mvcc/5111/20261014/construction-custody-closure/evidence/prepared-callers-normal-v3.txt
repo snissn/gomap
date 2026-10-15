@@ -1,5 +1,0 @@
---- FAIL: TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate (0.19s)
-    leaf_generation_pack_test.go:324: retained candidate manifest revision=4 manifest=false pack=false entries=[]
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	2.644s
-FAIL

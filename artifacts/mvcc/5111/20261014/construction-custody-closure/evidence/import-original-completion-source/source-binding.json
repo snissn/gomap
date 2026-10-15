@@ -1,7 +1,0 @@
-{
-  "head": "725c31dd2711467514a91df9847e2e303b719afd",
-  "original_test_sha256": "2dbbf1ec7b266f56544bc8c1f7da15f7fefdb9f7f8e521e84d1c6d70cd2ce0cc",
-  "head_test_sha256": "2dbbf1ec7b266f56544bc8c1f7da15f7fefdb9f7f8e521e84d1c6d70cd2ce0cc",
-  "changed_contract": "SAME source-root/adapter alias capacity retained on failed physical cleanup; no false disposal/refund",
-  "decision": "root message accepts explicit old expectation correction; original raw panic/Bytes()==0 RED retained"
-}

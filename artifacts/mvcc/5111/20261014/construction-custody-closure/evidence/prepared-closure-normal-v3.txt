@@ -1,5 +1,0 @@
---- FAIL: TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement (0.05s)
-    leaf_generation_manifest_stable_prepare_test.go:129: stable resource ownership violation
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.570s
-FAIL

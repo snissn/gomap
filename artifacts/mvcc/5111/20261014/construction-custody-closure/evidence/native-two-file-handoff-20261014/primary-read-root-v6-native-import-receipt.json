@@ -1,8 +1,0 @@
-{
-  "handoff_sha256": "5f36bcf1cfbe973ab772f82ba0716b1bfa680e0f1ca5fd9e656498a7b5dd06f7",
-  "path": "TreeDB/pager/primary_read_root_v6.go",
-  "sha256": "a7c80f022d3e8b6cca67ff5debdb369fa40de4911c7fceb3a6c0b36dffe23ed8",
-  "bytes": 6454,
-  "copied": false,
-  "native_sole_writer": true
-}

@@ -1,5 +1,0 @@
---- FAIL: TestCaptureDurableRootUsesSelectedPredecessorOwner (0.03s)
-    durable_root_owner_continuity_test.go:15: value exceeds inline threshold; use SetPointer
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.032s
-FAIL

@@ -1,7 +1,0 @@
-{
-  "gowork": "off",
-  "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.43",
-  "python": "3.14.4",
-  "runner_image": "local-unknown",
-  "runner_os": "Linux"
-}

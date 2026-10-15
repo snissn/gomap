@@ -1,2 +1,0 @@
-ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	2.016s
-ok  	github.com/snissn/gomap/TreeDB/db	1.218s

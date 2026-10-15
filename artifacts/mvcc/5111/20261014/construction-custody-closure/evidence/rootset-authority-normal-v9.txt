@@ -1,7 +1,0 @@
-# github.com/snissn/gomap/TreeDB/internal/rootpublication
-TreeDB/internal/rootpublication/resource_install_probe.go:75:48: cannot use sourceSize (constant 61 of type int) as uint64 value in argument to retainedalloc.AllocationCharge
-TreeDB/internal/rootpublication/resource_install_probe.go:75:93: cannot use destinationSize (constant 64 of type int) as uint64 value in argument to retainedalloc.AllocationCharge
-TreeDB/internal/rootpublication/resource_install_probe.go:76:47: cannot use sourceSize (constant 61 of type int) as uint64 value in argument to StableFileMetadataCharge
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication [build failed]
-FAIL

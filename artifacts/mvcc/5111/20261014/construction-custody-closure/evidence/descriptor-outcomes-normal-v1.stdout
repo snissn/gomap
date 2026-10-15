@@ -1,4 +1,0 @@
-# github.com/snissn/gomap/TreeDB/internal/rootpublication [github.com/snissn/gomap/TreeDB/internal/rootpublication.test]
-TreeDB/internal/rootpublication/resource_mutation_allocation.go:128:12: undefined: errors
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication [build failed]
-FAIL

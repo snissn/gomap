@@ -1,5 +1,0 @@
-# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
-TreeDB/db/leaf_generation_prepared_cleanup_test.go:23:4: d.setBackgroundError undefined (type *DB has no field or method setBackgroundError)
-TreeDB/db/leaf_generation_prepared_cleanup_test.go:67:4: d.setBackgroundError undefined (type *DB has no field or method setBackgroundError)
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL

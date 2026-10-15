@@ -1,8 +1,0 @@
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsFirstOutcome (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:559: terminal authority custody={ActivePins:2 ActiveIdentities:1 ActiveStableNamespaceLinks:0} want retained {ActivePins:2 ActiveIdentities:1 ActiveStableNamespaceLinks:1}
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:666: same original terminal custody={ActivePins:2 ActiveIdentities:1 ActiveStableNamespaceLinks:0} want above baseline {ActivePins:0 ActiveIdentities:0 ActiveStableNamespaceLinks:0}
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.356s
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.007s [no tests to run]
-FAIL

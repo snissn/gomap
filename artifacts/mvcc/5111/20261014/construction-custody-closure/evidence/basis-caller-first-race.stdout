@@ -1,7 +1,0 @@
---- FAIL: TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry (0.06s)
-    cow_pointer_read_test.go:169: handoff refusal=immutable memtable capacity exhausted
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/caching	2.993s
-ok  	github.com/snissn/gomap/TreeDB/db	2.425s
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.045s
-FAIL

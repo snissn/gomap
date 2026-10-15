@@ -1,7 +1,0 @@
-{
-  "head": "725c31dd2711467514a91df9847e2e303b719afd",
-  "path": "TreeDB/internal/retainedalloc/owner.go",
-  "sha256": "8ea67caacb91e2c96717333956eb4e2cb8a3c81504c1a92a0ee6d77722b96e29",
-  "bytes": 10414,
-  "release": "native sole writer; ordinary never mutates; retain AddPending preeffect, actual alias-before-RemovePending, sticky CleanupFailed and original binding lifetime; API concern void RemovePending/Close must remain ordinary unlimited drivers with actual result semantics"
-}

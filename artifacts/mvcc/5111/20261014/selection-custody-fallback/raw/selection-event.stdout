@@ -1,8 +1,0 @@
-=== RUN   TestCOWPublicPrimarySelectionLayeredPublication
-=== RUN   TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=false
-    cow_public_primary_selection_test.go:145: selected checkpoint authority event: {Point:before-applied-lsn-advance Resource:meta Root:/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111/TestCOWPublicPrimarySelectionLayeredPublicationcommand_wal_dura1608327113/001/maindb Path: Paths:[] LSN:1 Offset:0 Length:0 Namespace: OldPath: NewPath: CreatedDirectory: StablePath:<nil> StableParent:<nil> StableOldName: StableNewName:}
---- FAIL: TestCOWPublicPrimarySelectionLayeredPublication (0.08s)
-    --- FAIL: TestCOWPublicPrimarySelectionLayeredPublication/command_wal_durable/pointer=false (0.08s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB	0.082s
-FAIL

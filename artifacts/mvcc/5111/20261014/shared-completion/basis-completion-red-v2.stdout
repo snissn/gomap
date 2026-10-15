@@ -1,7 +1,0 @@
-=== RUN   TestCOWBasisOriginalLastPhysicalCloseRetainsBasisCapacity
-    cow_cut_test.go:341: actual failed PRIMARY and basis capacity after outer close: {TotalBytes:188288 HistoryBytes:0 ReservedBytes:188032 RetiredBytes:0 PeakBytes:242304 ControlBytes:256 DeferredBytes:0 ExternalBytes:188032 Views:0 Generations:0 Sources:0 ExternalLeases:1}
-    cow_cut_test.go:342: actual failed Snapshot basis lease refunded: leases=1 want arena+registry+basis
---- FAIL: TestCOWBasisOriginalLastPhysicalCloseRetainsBasisCapacity (0.05s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/caching	0.052s
-FAIL

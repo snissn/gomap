@@ -1,6 +1,0 @@
-# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
-TreeDB/db/durable_root_recovery.go:281:5: undefined: result
-TreeDB/db/durable_root_recovery.go:282:29: undefined: resultErr
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.006s
-FAIL

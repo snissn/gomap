@@ -1,4 +1,0 @@
-=== RUN   TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites
---- PASS: TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites (0.51s)
-PASS
-ok  	github.com/snissn/gomap/TreeDB/db	0.509s

@@ -1,5 +1,0 @@
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.011s
-# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
-TreeDB/db/durable_root_runtime.go:752:39: undefined: retErr
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL

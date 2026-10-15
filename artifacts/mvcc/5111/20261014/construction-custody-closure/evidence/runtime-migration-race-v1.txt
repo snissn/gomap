@@ -1,1 +1,0 @@
-ok  	github.com/snissn/gomap/TreeDB/db	2.401s

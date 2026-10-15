@@ -1,5 +1,0 @@
---- FAIL: TestOrdinaryRotationCaptureFailureInvalidatesStableParent (0.01s)
-    stable_resource_supported_test.go:164: stable parent=&{0x2f233f6aa7e0} err=injected ordinary-rotation parent capture failure want explicit invalidation
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.319s
-FAIL

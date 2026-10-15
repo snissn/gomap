@@ -1,5 +1,0 @@
---- FAIL: TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal (0.03s)
-    durable_root_owner_continuity_test.go:138: stable resource ownership violation
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.363s
-FAIL

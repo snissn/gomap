@@ -1,5 +1,0 @@
---- FAIL: TestPrimaryProducerCertificateV6ActualImmutableCuts (0.04s)
-    primary_read_certificate_v6_test.go:33: actual retained producer certificate missing: stable resource ownership violation
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.041s
-FAIL

@@ -1,8 +1,0 @@
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsFirstOutcome (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:552: repeat Close outcome=original DB physical cleanup failed want identical first receipt original DB physical cleanup failed
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:655: repeat terminal Close changed first outcome: original DB physical cleanup failed then original DB physical cleanup failed
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	1.847s
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.013s
-FAIL

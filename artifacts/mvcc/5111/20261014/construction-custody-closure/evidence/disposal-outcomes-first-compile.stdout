@@ -1,7 +1,0 @@
-# github.com/snissn/gomap/TreeDB/internal/rootpublication
-TreeDB/internal/rootpublication/resource_coalesce_allocation.go:176:26: selected.cloneOwnedPinnedDirectory undefined (type *StableResourceToken has no field or method cloneOwnedPinnedDirectory)
-TreeDB/internal/rootpublication/resource_requirements_allocation.go:261:23: token.cloneOwnedPinnedDirectory undefined (type *StableResourceToken has no field or method cloneOwnedPinnedDirectory)
-TreeDB/internal/rootpublication/resource_token.go:670:16: token.cloneOwnedPinnedDirectory undefined (type *StableResourceToken has no field or method cloneOwnedPinnedDirectory)
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication [build failed]
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL

@@ -1,6 +1,0 @@
-=== RUN   TestPrimaryConstructionV6BoundCandidateFailureCustody
-    root_publication_primary_cleanup_v6_test.go:140: failed actual Abort disposed original candidate count payload
---- FAIL: TestPrimaryConstructionV6BoundCandidateFailureCustody (0.05s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.056s
-FAIL

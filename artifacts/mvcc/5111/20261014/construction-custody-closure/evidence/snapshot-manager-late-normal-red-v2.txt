@@ -1,8 +1,0 @@
---- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB (0.07s)
-    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot (0.04s)
-        snapshot_manager_cleanup_test.go:40: write pointer: capture queued root dependencies: stable resource dependency unresolved: value-log file 2147483649 was not registered by its producer
-    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read (0.03s)
-        snapshot_manager_cleanup_test.go:40: write pointer: capture queued root dependencies: stable resource dependency unresolved: value-log file 2147483649 was not registered by its producer
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.069s
-FAIL

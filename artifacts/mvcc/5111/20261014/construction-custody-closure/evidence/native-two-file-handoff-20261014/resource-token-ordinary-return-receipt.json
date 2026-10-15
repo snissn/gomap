@@ -1,9 +1,0 @@
-{
-  "at_utc": "2026-10-14T10:46:24.185239+00:00",
-  "path": "TreeDB/internal/rootpublication/resource_token.go",
-  "sha256": "d8c0f0224912de2e5754091bbf18a71c4861380b2edca4484f3038e6d7d4c87c",
-  "bytes": 95111,
-  "released_by": "/root/mvcc_native_codec_integration_sol61",
-  "sole_writer": "/root/mvcc_architecture_repair_sol61",
-  "contract": "SAME existing batch namespace constructor, full before-effect containing/scratch/token/parent capacity admission on original DB registry; checked duplicate-parent Close/first outcome/actual aliases/debt, retained through original receipt. No second physical authority. Native treats readonly until next exact frozen handoff."
-}

@@ -1,6 +1,0 @@
-=== RUN   TestValueLogRefCountOwnerSurvivesPrimaryVacuum
-    vlog_ref_incarnation_test.go:223: genuine old PRIMARY physical close not reached
---- FAIL: TestValueLogRefCountOwnerSurvivesPrimaryVacuum (0.13s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.133s
-FAIL

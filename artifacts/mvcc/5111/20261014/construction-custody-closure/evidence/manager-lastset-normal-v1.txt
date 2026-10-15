@@ -1,6 +1,0 @@
-# github.com/snissn/gomap/TreeDB/internal/valuelog [github.com/snissn/gomap/TreeDB/internal/valuelog.test]
-TreeDB/internal/valuelog/original_cleanup_test.go:20:26: not enough arguments in call to w.Append
-	have (number, []byte)
-	want (uint64, []byte, uint64, []byte)
-FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog [build failed]
-FAIL

@@ -1,8 +1,0 @@
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsFirstOutcome (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:549: Close first cleanup outcome=original DB physical cleanup failed want original hard refusal
---- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose (0.05s)
-    leaf_generation_pack_stable_prepare_test.go:652: Close retained first packed cleanup outcome: original DB physical cleanup failed
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	1.873s
-ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.014s
-FAIL

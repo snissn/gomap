@@ -1,5 +1,0 @@
---- FAIL: TestOwnedBuilderActualLastCloseFailureRetainsOriginalPayload (0.00s)
-    resource_set_allocation_test.go:499: builder lost original failure payload: <nil>
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.001s
-FAIL

@@ -1,5 +1,0 @@
-# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
-TreeDB/db/root_publication_activation.go:750:32: undefined: idx
-TreeDB/db/vlog_gc_incremental.go:18:2: "github.com/snissn/gomap/TreeDB/internal/rootpublication" imported and not used
-FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
-FAIL

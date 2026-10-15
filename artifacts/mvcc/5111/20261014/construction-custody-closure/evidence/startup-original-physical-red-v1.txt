@@ -1,5 +1,0 @@
---- FAIL: TestOriginalStartupCleanupPhysicalRefusalRetainsLock (0.02s)
-    original_startup_generation_test.go:27: lost original startup operation or physical cleanup refusal: db=0x0 err=original startup operation refusal
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.027s
-FAIL

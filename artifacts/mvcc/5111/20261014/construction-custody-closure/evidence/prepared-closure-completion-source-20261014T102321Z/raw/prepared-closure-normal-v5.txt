@@ -1,5 +1,0 @@
---- FAIL: TestOriginalPreparedManifestPhysicalCloseRefusalKeepsCustody (0.05s)
-    leaf_generation_prepared_cleanup_test.go:93: refunded failed original manifest payload
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.759s
-FAIL

@@ -1,5 +1,0 @@
---- FAIL: TestOriginalWriterClosePhysicalRefusalRetainsOperand (0.01s)
-    writer_original_cleanup_test.go:28: failed actual file operand lost
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.010s
-FAIL

@@ -1,7 +1,0 @@
-=== RUN   TestPrimaryJointCompletedV6AdvancedCanonicalPair
-    primary_joint_completed_v6_test.go:68: complete same canonical pair rejected after ordinary advance: collectionwal: recovery required: committed pair has no complete eligible capsule
-        collectionwal: recovery required
---- FAIL: TestPrimaryJointCompletedV6AdvancedCanonicalPair (0.13s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/db	0.130s
-FAIL

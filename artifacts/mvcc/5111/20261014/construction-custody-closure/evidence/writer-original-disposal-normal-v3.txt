@@ -1,5 +1,0 @@
---- FAIL: TestOriginalWriterSuccessfulCapacityDrains (0.01s)
-    writer_original_cleanup_test.go:108: actual successful Writer capacity=2560 baseline=512
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.254s
-FAIL

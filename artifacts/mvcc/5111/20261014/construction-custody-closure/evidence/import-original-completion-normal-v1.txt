@@ -1,6 +1,0 @@
---- FAIL: TestImportedOriginalObservationKeepsFailedLastPhysicalCustody (0.00s)
-    resource_original_cleanup_unix_test.go:75: independent adapter backing survived disposal
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.003s
-ok  	github.com/snissn/gomap/TreeDB/caching	0.007s
-FAIL
