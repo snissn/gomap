@@ -417,6 +417,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		releaseRootSerialization:    func() {},
 		recordVacuumMutation:        recordVacuumMutation,
 		durableIndex:                group.idx,
+		conditionalMutation:         conditionalCommitMutation{physicalOnly: b.physicalOnly && !b.logicalMVCCInput},
 	}
 	if intent != nil {
 		commandOpts := commandWALFinalizeOptions(intent)
@@ -433,6 +434,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.recordVacuumMutation = opts.recordVacuumMutation
 		commandOpts.durableIndex = opts.durableIndex
 		commandOpts.negativeCoverage = opts.negativeCoverage
+		commandOpts.conditionalMutation = opts.conditionalMutation
 		opts = commandOpts
 	}
 	post, err := db.finalizeCommitLockedWithOptions(

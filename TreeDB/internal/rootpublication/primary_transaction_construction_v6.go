@@ -25,10 +25,11 @@ type primaryTransactionConstructionV6 struct {
 	metadataCharge     uint64
 	terminalCompletion *primaryTerminalCompletionV6
 	// This is custody on the SAME transaction, admitted in its containing allocation.
-	nativeWorkOwned bool
-	cleanupPhase    uint8
-	cleanupQueue    primaryarena.ReleaseQueue
-	cleanupReceipt  *PrimaryConstructionReleaseWork
+	nativeWorkOwned     bool
+	unboundedDiagnostic bool
+	cleanupPhase        uint8
+	cleanupQueue        primaryarena.ReleaseQueue
+	cleanupReceipt      *PrimaryConstructionReleaseWork
 }
 type PrimaryPromotionV6 struct {
 	Image        []byte
@@ -129,7 +130,7 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
 	c := t.constructionV6
 	// Native visibility requires the work-bearing callback contract; the
 	// existing synchronous callback binding cannot claim its continuation.
-	if c != nil && c.nativeWorkOwned {
+	if c != nil && c.nativeWorkOwned && !c.unboundedDiagnostic {
 		return false, ErrNativeMVCCRootWorkRequiredV6
 	}
 	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate == nil || resources == nil || resources.Owner() != ResourceOwnerBuilder ||
@@ -181,7 +182,7 @@ func (t *DurableRootTransaction) releaseOwnerLockedV6() {
 	// separately records completion of transaction/descriptor custody.
 }
 func (t *DurableRootTransaction) abortConstructionLockedV6(terminal *primaryConstructionReleaseState) error {
-	if t.constructionV6 != nil && t.constructionV6.nativeWorkOwned {
+	if t.constructionV6 != nil && t.constructionV6.nativeWorkOwned && !t.constructionV6.unboundedDiagnostic {
 		return ErrNativeMVCCRootWorkRequiredV6
 	}
 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}

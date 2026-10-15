@@ -788,8 +788,18 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 }
 
 func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
+	return c.dispatchPublicationCallPolicyV6(startup, nil)
+}
+
+// Only the explicit synchronous diagnostic caller supplies expected. The
+// scheduler always supplies nil and can never steal a native callback.
+func (c *Coordinator) dispatchPublicationCallPolicyV6(startup bool, expected *PreparedRootCandidate) (bool, primaryPublicationCompletionV6) {
 	c.mu.Lock()
-	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && !c.pendingNativeOwnedV6() && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+	nativeEligible := !c.pendingNativeOwnedV6()
+	if expected != nil {
+		nativeEligible = len(c.pending) == 1 && c.pending[0].candidate == expected && expected.DurableRoot().NativeUnboundedDiagnosticV6()
+	}
+	ready := !c.stopping && c.startupSynchronous == startup && (c.publishNow || expected != nil) && !c.publishing && c.activeDispatch == c.nativeDispatchV6 && nativeEligible && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
 	if !ready {
 		c.mu.Unlock()
 		return false, primaryPublicationCompletionV6{}

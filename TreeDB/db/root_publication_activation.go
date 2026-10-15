@@ -1305,6 +1305,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			opts.publishTiming.FinalizeHardAdmissionCount++
 		}
 	}
+	diagnosticNative := candidate.DurableRoot().NativeUnboundedDiagnosticV6()
 	reportErr := install.completeOrderedPostActivation()
 	post = install.post
 	post.accepted = true
@@ -1314,6 +1315,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	releaseBuildLocks()
 	if reportErr != nil {
 		db.reportError(reportErr)
+	}
+	if diagnosticNative {
+		// This explicitly unbounded caller drives the SAME native transaction.
+		// Never expose a pending native head to an ordinary caller between
+		// visibility activation and its genuine fence/Consume/physical Finish.
+		if err := runtime.coordinator.RunNativeUnboundedDiagnosticV6(candidate); err != nil {
+			post = db.finalizeAcceptedCommitPostWorkOnError(post)
+			return post, wrapAcceptedFinalizeCommitError(publicRootPublicationErrorV1(err))
+		}
+		candidate = nil
 	}
 	admissionStart := time.Now()
 	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {

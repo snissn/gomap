@@ -422,6 +422,8 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
 
 // PruneOptions controls bounded physical deletion. BatchSize defaults to 256.
 type PruneOptions struct {
+	diagnosticUnbounded bool // selected only by the explicitly tagged diagnostic entry
+
 	BatchSize              int
 	Mode                   CommitMode
 	WorkRecords, WorkBytes uint64

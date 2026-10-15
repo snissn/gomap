@@ -175,7 +175,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 			return false, nil
 		}
 		if t.abortComplete != nil {
-			if c.nativeWorkOwned {
+			if c.nativeWorkOwned && !c.unboundedDiagnostic {
 				return false, t.recordPhysicalCleanupFailureLocked(ErrNativeMVCCRootWorkRequiredV6)
 			}
 			if err := t.abortComplete(t.input); err != nil {

@@ -26,6 +26,8 @@ import (
 // bounded public calls. Close drives these same cleanup stages, never a second
 // snapshot, registry, transaction or accounting authority.
 type PruneCursor struct {
+	diagnosticUnbounded bool
+
 	mu                                        sync.Mutex
 	store                                     *Store
 	db                                        *treedb.DB
@@ -95,7 +97,7 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
 			return stats, e
 		}
 		lease := admitted.(*memtable.COWExternalLease)
-		c = &PruneCursor{store: s, db: d, mode: options.Mode, batchSize: options.BatchSize, recordLimit: options.WorkRecords, byteLimit: options.WorkBytes, retention: lease, retainedBytes: retainedalloc.AllocationCharge(size), loadingFloor: true}
+		c = &PruneCursor{diagnosticUnbounded: options.diagnosticUnbounded, store: s, db: d, mode: options.Mode, batchSize: options.BatchSize, recordLimit: options.WorkRecords, byteLimit: options.WorkBytes, retention: lease, retainedBytes: retainedalloc.AllocationCharge(size), loadingFloor: true}
 		c.codec.Owner, c.codec.Retention = c, c
 		c.value.ZSTD, c.value.Template = &c.codec, &c.template
 		c.namespaceSize = len(mvcckey.AppendNamespaceLower(c.namespace[:0]))
@@ -105,7 +107,7 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
 	stats.Cursor = c
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.store != s || c.mode != options.Mode || c.batchSize != options.BatchSize || c.recordLimit != options.WorkRecords || c.byteLimit != options.WorkBytes {
+	if c.diagnosticUnbounded != options.diagnosticUnbounded || c.store != s || c.mode != options.Mode || c.batchSize != options.BatchSize || c.recordLimit != options.WorkRecords || c.byteLimit != options.WorkBytes {
 		return stats, mvccadmission.ErrRequestInvalid
 	}
 	if c.closed {
@@ -436,7 +438,17 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			c.record = node.LeafEntry{}
 			c.phase = 5
 		case 16:
-			return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			if !c.diagnosticUnbounded {
+				return rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			}
+			if err := c.db.PublishNativeMVCCUnboundedDiagnosticV6(c.preparation); err != nil {
+				return err
+			}
+			stats.Pruned++
+			stats.PrunedBytes += c.selectedBytes
+			stats.Batches++
+			c.complete = true
+			return nil
 		default:
 			return nil
 		}
