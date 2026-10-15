@@ -2213,6 +2213,10 @@ func Open(opts Options) (*DB, error) {
 	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
+	patriciaFeature, err := validateFreelistTopologyGateV2(opts.Dir)
+	if err != nil {
+		return nil, err
+	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -2229,6 +2233,21 @@ func Open(opts Options) (*DB, error) {
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
+	}
+	if !patriciaFeature {
+		// Recheck under the store lock before persisting a fresh-store marker.
+		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
+			_ = lock.Close()
+			return nil, gateErr
+		}
+		cfg, configErr := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		if configErr == nil {
+			configErr = SaveFormatConfig(opts.Dir, cfg)
+		}
+		if configErr != nil {
+			_ = lock.Close()
+			return nil, configErr
+		}
 	}
 	db, err := openWithLock(opts, lock)
 	if err != nil {

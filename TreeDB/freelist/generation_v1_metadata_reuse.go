@@ -4,16 +4,16 @@ import "maps"
 
 // detachMetadataSiblings is called immediately after successful metadata
 // mutation copied the selected path. Other dirty branches still need isolation.
-func detachMetadataSiblings(n *stateNode, depth int, chunkNo uint64) *stateNode {
-	if depth == chunkTrieDepth {
-		return n // The selected leaf and chunk were both copied by mutateChunk.
+func detachMetadataSiblings(n *stateNode, _ int, chunkNo uint64) *stateNode {
+	if n == nil || n.chunk != nil {
+		return n
 	}
-	selected := chunkNibble(chunkNo, depth)
+	selected := chunkNibble(chunkNo, int(n.depth))
 	for i, child := range n.child {
 		if i == selected {
-			n.child[i] = detachMetadataSiblings(child, depth+1, chunkNo)
+			n.child[i] = detachMetadataSiblings(child, 0, chunkNo)
 		} else {
-			n.child[i] = detachUnmaterialized(child, depth+1)
+			n.child[i] = detachUnmaterialized(child, 0)
 		}
 	}
 	return n
@@ -193,17 +193,14 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 		// The selected chunk stays nonempty, so the eventual mutation neither
 		// creates nor removes a node; already dirty nodes are counted once.
 		statePages := countUnmaterializedStatePages(t.root, 0)
-		for n, depth := t.root, 0; n != nil; depth++ {
+		for n := t.root; n != nil; {
 			if n.pageID != 0 {
 				statePages++
 			}
-			if depth == chunkTrieDepth {
-				if n.chunk.pageID != 0 {
-					statePages++
-				}
+			if n.chunk != nil {
 				break
 			}
-			n = n.child[chunkNibble(chunk.chunkNo, depth)]
+			n = n.child[chunkNibble(chunk.chunkNo, int(n.depth))]
 		}
 		// Even one reservation page plus the header cannot fit. Reject before
 		// allocating a private plan or constructing its reservation extents.

@@ -410,7 +410,7 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	}
 	rollbackTxn := a.cow.txn
 	rollbackStats := a.stats
-	staged, err := rollbackTxn.cloneForAllocatorPrepare()
+	staged, err := rollbackTxn.cloneForPrivateAllocatorPrepare()
 	if err != nil {
 		return nil, err
 	}

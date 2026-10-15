@@ -152,18 +152,16 @@ func encodeNormalizedReservationPages(id uint64, record ReservationRecordV1) ([]
 
 func reservationDigest(pages [][]byte) [32]byte {
 	h := sha256.New()
+	var zeros [32]byte
 	for _, b := range pages {
-		canonical := append([]byte(nil), b...)
-		for i := 8; i < 12; i++ {
-			canonical[i] = 0
-		}
-		for i := 112; i < 144; i++ {
-			canonical[i] = 0
-		}
-		_, _ = h.Write(canonical)
+		_, _ = h.Write(b[:8])
+		_, _ = h.Write(zeros[:4])
+		_, _ = h.Write(b[12:112])
+		_, _ = h.Write(zeros[:])
+		_, _ = h.Write(b[144:])
 	}
 	var digest [32]byte
-	copy(digest[:], h.Sum(nil))
+	h.Sum(digest[:0])
 	return digest
 }
 
