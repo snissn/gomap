@@ -1,0 +1,9 @@
+{
+  "at": "2026-10-15T07:28:37.498455+00:00",
+  "removed_paths_absent": 6,
+  "worktrees_unregistered": 3,
+  "privategitdirs_absent": 3,
+  "packet_members_hash_exact": 114,
+  "receipt_sha256": "a554002a96bb36c843c80f58c73e02ad8da34356ee469814b236040a296d175f",
+  "self_manifest_and_final_receipt_match_published_hashes": true
+}

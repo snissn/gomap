@@ -1,0 +1,56 @@
+{
+  "complete": true,
+  "removed": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-pre-triad-20261015",
+      "type": "worktree",
+      "private_gitdir_removed": true,
+      "unregistered": true
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-ordinary-triad-20261015",
+      "type": "worktree",
+      "private_gitdir_removed": true,
+      "unregistered": true
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-5130-combined-triad-20261015",
+      "type": "worktree",
+      "private_gitdir_removed": true,
+      "unregistered": true
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/pre-db.test",
+      "type": "ELF",
+      "sha256": "5e1ab98a113948ed009ab3340098ca8394f6074f28f0c14828e708d6fc205630",
+      "bytes": 51095404
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/ordinary-db.test",
+      "type": "ELF",
+      "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a",
+      "bytes": 60842242
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-5130-exact-triad-20261015/combined-db.test",
+      "type": "ELF",
+      "sha256": "3677726354042912600185bada4c48cbd812e8c44d00f794108c0b67a1d58d5a",
+      "bytes": 55448526
+    }
+  ],
+  "retained_targets": [],
+  "estimated_logical_bytes": 2433793189,
+  "free_before": 274108993536,
+  "free_after": 276612804608,
+  "observed_free_delta": 2503811072,
+  "delta_attribution": "Observed filesystem delta is separate from logical bytes; concurrent writes and filesystem accounting may differ.",
+  "protected_evidence_files": 114,
+  "protected_evidence_sha256": "7604f32c386894ac545ef80e82b868f2e8ab6a4c3f3418b505cb4cdeaa880430",
+  "protected_evidence_unchanged": true,
+  "protected_roots_unchanged": true,
+  "branches_preserved": true,
+  "all_absent_and_unregistered": true,
+  "private_gitdirs_absent": true,
+  "no_go_or_bench": true,
+  "io_stopped_after_receipt": true
+}
