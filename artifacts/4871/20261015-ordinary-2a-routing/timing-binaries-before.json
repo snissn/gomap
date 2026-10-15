@@ -1,0 +1,20 @@
+[
+  {
+    "bytes": 28978815,
+    "dev": 66306,
+    "inode": 108277479,
+    "mtime_ns": 1792056146213216370,
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+    "role": "baseline",
+    "sha256": "0ba930b08d892326d80ae7af37b8a28c06b171560d025c9d14b552ba125b0158"
+  },
+  {
+    "bytes": 28979039,
+    "dev": 66306,
+    "inode": 108277483,
+    "mtime_ns": 1792056163948370981,
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+    "role": "candidate",
+    "sha256": "8b2c50f15e415a6b6bfb39bd81a4fe15d0b75801fd0b13be9eb02e2cae9bfa0e"
+  }
+]

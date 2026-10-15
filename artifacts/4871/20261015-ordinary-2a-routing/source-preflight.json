@@ -1,0 +1,70 @@
+{
+  "baseline_input_census_sha256": "6056521996bb57b21bdd4c2b32f898934d3d9932bfa4a5eb0995d613bd93cf49",
+  "branch": "codex/ordinary-2a-routing-20261015",
+  "free_bytes": 272585142272,
+  "head": "2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+  "origin_port": "Only three frozen production patch sections applied by Git; ordinary synchronous Begin resets origin after inherited retireMany, before any actual allocation; no native typed-work files.",
+  "overlay_sha256": "e04eed57018ffa26edb5029e7c4d2f78ae19450261c3295c271d5e975af7f4d3",
+  "owned_paths": [
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/freelist/generation_v1_routing_test.go",
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go"
+  ],
+  "production_files": [
+    "TreeDB/freelist/generation_v1_txn.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/db/root_publication_activation.go"
+  ],
+  "production_postimages": {
+    "TreeDB/db/root_publication_activation.go": {
+      "bytes": 79211,
+      "sha256": "c0e779a0c6e396836dd15b636d3cc8cfd347057c84692d4737ea2ca770c7db4b"
+    },
+    "TreeDB/freelist/allocator_cow.go": {
+      "bytes": 25297,
+      "sha256": "cbe5147911b9719fdc7a2712e469546c5d4b825914bcd9b7eb7c3520836f5dbe"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 31483,
+      "sha256": "775ae89bd007515c913c983ce403afc77367b36fa8082563f9bd012b6ad2f102"
+    }
+  },
+  "production_preimages": {
+    "TreeDB/db/root_publication_activation.go": {
+      "bytes": 78949,
+      "sha256": "16a0f979d0b15a95a08a96f02d33a95c51fb30a64d5c0ddcaf2328f4f519fe00"
+    },
+    "TreeDB/freelist/allocator_cow.go": {
+      "bytes": 24925,
+      "sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685"
+    },
+    "TreeDB/freelist/generation_v1_txn.go": {
+      "bytes": 30812,
+      "sha256": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3"
+    }
+  },
+  "root_identity": {
+    "dev": 66306,
+    "inode": 108265626
+  },
+  "scope": "Short ordinary checkpoint2a public CommitAt durable PRIMARY-replacement diagnostic after actual DATA materialization: ProfileNoWALFast, DisableSideStores=true, BackgroundCheckpointInterval=-1, PointerThreshold4096, 33 initial keys then64 DATA-transition keys, equal timestamp100 replacement k031, 128 measured calls. Setup/Stats/final Close outside timer. Not original33 prune equivalence or native/sprint/final5111 qualification.",
+  "source_input_census_sha256": "878f03d95c3bbab5cd11a47700aa74d8ccf6ff0f562e02e41d1f359bbdd7c195",
+  "source_input_rows": 3903,
+  "status": " M TreeDB/db/root_publication_activation.go\n M TreeDB/freelist/allocator_cow.go\n M TreeDB/freelist/generation_v1_txn.go\n?? TreeDB/freelist/generation_v1_routing_test.go\n?? TreeDB/mvcc/primary_generation_routing_v6_test.go\n",
+  "storage": "Scalar producer provenance only; no new arena/pool/storage or altered persistent output ownership.",
+  "tests": {
+    "TreeDB/freelist/generation_v1_routing_test.go": {
+      "bytes": 2313,
+      "sha256": "ebe7a1ae9a78dca9b063fa145823b9a4b885f9499bfb6e76f929cb6a5b7a7714"
+    },
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 5608,
+      "sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11"
+    }
+  },
+  "toolchain": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+  "tree": "4b00f962d2e9844e8f6b5a47422ed8dd8cff38d7",
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015"
+}

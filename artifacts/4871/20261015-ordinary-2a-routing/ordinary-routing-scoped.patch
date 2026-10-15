@@ -1,0 +1,75 @@
+--- a/TreeDB/freelist/generation_v1_txn.go
++++ b/TreeDB/freelist/generation_v1_txn.go
+@@ -191,6 +191,12 @@
+ 	allocated        []allocatedPage
+ 	abandonedAppends []ReservationExtentV1
+ 	consumed         bool
++	// requiresGeneration records actual edits after BeginCandidate's inherited
++	// pending-metadata retirement. Those inherited edits can remain deferred while
++	// a PRIMARY-only publication retains the exact immutable DATA generation.
++	// Every allocation/reuse/retirement/prune below sets this before it can be
++	// observed by the original allocator publication producer.
++	requiresGeneration bool
+ 	// Granted only after detaching pre-existing dirty aliases. New dirty
+ 	// nodes remain exclusively owned until clone or materialization revokes it.
+ 	privatePreparation bool
+@@ -289,6 +295,7 @@
+ }
+ 
+ func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
++	t.requiresGeneration = true
+ 	t.markReplacedPath(chunkNo)
+ 	if t.privatePreparation {
+ 		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
+@@ -349,6 +356,7 @@
+ // installAppend records an already selected append in the SAME transaction.
+ // Work-bearing callers prove capacity and guard the original ledger first.
+ func (t *FreelistTxn) installAppend(id uint64) {
++	t.requiresGeneration = true
+ 	t.highWater = id + 1
+ 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
+ 	t.stats.AppendAllocations++
+@@ -398,6 +406,7 @@
+ 			ids[i] = candidate + uint64(i)
+ 			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
+ 		}
++		t.requiresGeneration = true
+ 		t.highWater = candidate + width
+ 		t.stats.AppendAllocations += width
+ 		return ids, nil
+--- a/TreeDB/freelist/allocator_cow.go
++++ b/TreeDB/freelist/allocator_cow.go
+@@ -37,6 +37,10 @@
+ // It is a snapshot, not an admission limit: callers must also account for
+ // retirements, pruning, and pages produced after the census.
+ type COWPrepareProfileV1 struct {
++	// RequiresGeneration is issued by the live transaction's actual mutators.
++	// ChangedChunks also includes inherited successor bookkeeping, which alone
++	// does not require a new DATA generation for a PRIMARY-only publication.
++	RequiresGeneration       bool
+ 	Valid                    bool
+ 	HighWater                uint64
+ 	RetiredPages             uint64
+@@ -89,6 +93,7 @@
+ 	}
+ 	transaction, base := a.cow.txn, a.cow.generation
+ 	profile.Valid = true
++	profile.RequiresGeneration = transaction.requiresGeneration || transaction.consumed || transaction.base != base
+ 	profile.HighWater = transaction.highWater
+ 	profile.RetiredPages = transaction.root.retiredCount
+ 	profile.AllocatedPages = uint64(len(transaction.allocated))
+--- a/TreeDB/db/root_publication_activation.go
++++ b/TreeDB/db/root_publication_activation.go
+@@ -745,7 +745,11 @@
+ 		return nil, false, errors.New("missing actual DATA generation")
+ 	}
+ 	profile := runtime.idx.allocator.COWPrepareProfileV1()
+-	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || profile.AllocatedPages != 0 || profile.ChangedChunks != 0
++	// Only inherited BeginCandidate metadata bookkeeping may stay deferred.
++	// Actual allocator edits and explicit output retirement/allocation obligations
++	// always take the original COW producer path.
++	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
++		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
+ 	if dataChanged {
+ 		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
+ 		if err != nil {

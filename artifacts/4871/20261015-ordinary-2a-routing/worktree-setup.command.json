@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "python3",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/create_worktree.py",
+    "--repo",
+    "/home/mikers/dev/snissn/gomap",
+    "--path",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+    "--branch",
+    "codex/ordinary-2a-routing-20261015",
+    "--base",
+    "2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+    "--mode",
+    "git",
+    "--seed",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111"
+  ],
+  "exit": 0
+}

@@ -1,0 +1,31 @@
+{
+  "harness": {
+    "TreeDB/freelist/generation_v1_routing_test.go": {
+      "bytes": 2313,
+      "sha256": "ebe7a1ae9a78dca9b063fa145823b9a4b885f9499bfb6e76f929cb6a5b7a7714"
+    },
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 5608,
+      "sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11"
+    }
+  },
+  "head": "2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+  "no_go_launched": true,
+  "port_patch": {
+    "bytes": 13418,
+    "sha256": "29d4182e00a59214a53e2e54fa124dc29ee20060a0d26008f9e1de0a9cbbf9f4"
+  },
+  "runner": {
+    "bytes": 8117,
+    "sha256": "e4090825a94f5bb6f17da978417aa638fdd9581605fba93410ebedcd300f5bb1"
+  },
+  "runner_preflight": {
+    "bytes": 5344,
+    "sha256": "cca1556383d37c832ac4cc41883ee435e5a556040f44255f2012bc7120979829"
+  },
+  "source_preflight": {
+    "bytes": 3580,
+    "sha256": "e9b29f584d0d0fd917677044d1dd2027e65372c6f5494008e193ac578fb41ed3"
+  },
+  "tree": "4b00f962d2e9844e8f6b5a47422ed8dd8cff38d7"
+}

@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-tags=treedb_test",
+    "./TreeDB/mvcc",
+    "-run",
+    "^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$",
+    "-count=1",
+    "-timeout=55s",
+    "-v"
+  ],
+  "exit": 1,
+  "timeout": false,
+  "elapsed": 1.5856437031179667,
+  "census_rows": 4438,
+  "unchanged": true
+}

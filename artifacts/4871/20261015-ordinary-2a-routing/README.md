@@ -1,0 +1,7 @@
+# Ordinary generation-origin routing comparison
+
+Exact ordinary base2a46465e8b4aeb8c3fff13a610518d289aa85d53, isolated helper only. The native three ordinary production patch sections applied with git apply; ordinary BeginCandidate resets the origin bit only after inherited pending-metadata retirement and before returning. Subsequent mutations, append installation, contiguous append and clones preserve actual generation obligations. Reused metadata and prune paths use the same mutation helper; consumed/base-mismatch profiles fail toward producing a generation. No native retained-work implementation is imported.
+
+Both mvcc binaries compile the identical released public test/benchmark file. Baseline Go overlay restores only the three production files to exact2a. Candidate has those three routing edits. Producer test is candidate-only. Six samples are predeclared AB/BA/AB fixed128x, CPU0/GOMAXPROCS1. All samples and failures are retained; no retries. Benchmark setup, Stats, close are excluded from timing. The initial-bootstrap native PASS and genuine post-DATA RED/GREEN are retained separately as development evidence.
+
+This fixture is33 initial keys plus64 keys forcing actual DATA materialization; it is not the original33 prune acceptance fixture. Scalar provenance requires no new arena/pool and leaves persistent immutable outputs and reservation ownership unchanged. This diagnostic does not claim native activation, Q32 closure, final5111, Dgraph or sprint qualification.

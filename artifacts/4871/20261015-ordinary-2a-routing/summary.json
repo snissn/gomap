@@ -1,0 +1,98 @@
+{
+  "all_exit_zero": true,
+  "all_six_retained": true,
+  "binary_receipt": {
+    "bytes": 717,
+    "sha256": "c1600bc8a085c1a80bb1b564f443399f4a3f79de76e347508f3900876f6f2412"
+  },
+  "cpu0_window": {
+    "busy_ticks": 56,
+    "ticks": [
+      47,
+      0,
+      9,
+      20,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "total_ticks": 76
+  },
+  "independent_raw_parse": "PASS",
+  "input_census_rows": 3903,
+  "input_receipts": {
+    "build-inputs-after.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    },
+    "build-inputs-before.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    },
+    "focused-inputs-after.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    },
+    "focused-inputs-before.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    },
+    "timing-inputs-after.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    },
+    "timing-inputs-before.json": {
+      "bytes": 678679,
+      "sha256": "b8c12277674a817aaa84cb08d83abcffcfeba8662a3a3fdf5ccc0dab8d9c454a"
+    }
+  },
+  "limits": "Short ordinary checkpoint2a public CommitAt durable PRIMARY-replacement diagnostic after actual DATA materialization: ProfileNoWALFast, DisableSideStores=true, BackgroundCheckpointInterval=-1, PointerThreshold4096, 33 initial keys then64 DATA-transition keys, equal timestamp100 replacement k031, 128 measured calls. Setup/Stats/final Close outside timer. Not original33 prune equivalence or native/sprint/final5111 qualification.",
+  "medians": {
+    "baseline": {
+      "B/op": 386908.0,
+      "allocs/op": 535.0,
+      "generation_advances/op": 1.0,
+      "ns/op": 523348.0
+    },
+    "candidate": {
+      "B/op": 365932.0,
+      "allocs/op": 479.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 503719.0
+    }
+  },
+  "note": "First baseline650631ns retained; other baseline cells523348/522666ns. All three matched pairs improve latency, bytes and objects; no selective reruns. This fixed128x diagnostic is not a confidence interval or final qualification.",
+  "paired_percent_changes": [
+    {
+      "pair": 1,
+      "percent_change": {
+        "B/op": -5.4267793132144355,
+        "allocs/op": -10.467289719626171,
+        "generation_advances/op": -100.0,
+        "ns/op": -22.752066839729434
+      }
+    },
+    {
+      "pair": 2,
+      "percent_change": {
+        "B/op": -5.421443857454489,
+        "allocs/op": -10.467289719626171,
+        "generation_advances/op": -100.0,
+        "ns/op": -3.750659217193908
+      }
+    },
+    {
+      "pair": 3,
+      "percent_change": {
+        "B/op": -5.420954960636437,
+        "allocs/op": -10.467289719626171,
+        "generation_advances/op": -100.0,
+        "ns/op": -3.124748883608275
+      }
+    }
+  ],
+  "total_subprocess_seconds": 0.6147972098551691
+}

@@ -1,0 +1,185 @@
+{
+  "preflight": "PASS",
+  "source_census_sha256": "878f03d95c3bbab5cd11a47700aa74d8ccf6ff0f562e02e41d1f359bbdd7c195",
+  "focused_commands": [
+    [
+      "focused-producer",
+      [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/freelist",
+        "-run",
+        "^TestCOWGenerationRequirementDistinguishesInheritedMetadataV1$",
+        "-count=1",
+        "-timeout=55s",
+        "-v"
+      ]
+    ],
+    [
+      "focused-public",
+      [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-tags=treedb_test",
+        "./TreeDB/mvcc",
+        "-run",
+        "^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$",
+        "-count=1",
+        "-timeout=55s",
+        "-v"
+      ]
+    ]
+  ],
+  "build_commands": [
+    {
+      "role": "baseline",
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-c",
+        "-tags=treedb_test",
+        "-trimpath",
+        "-buildvcs=false",
+        "-overlay",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/baseline-overlay.json",
+        "-o",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+        "./TreeDB/mvcc"
+      ]
+    },
+    {
+      "role": "candidate",
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-c",
+        "-tags=treedb_test",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+        "./TreeDB/mvcc"
+      ]
+    }
+  ],
+  "timing_plan": [
+    {
+      "index": 1,
+      "pair": 1,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    },
+    {
+      "index": 2,
+      "pair": 1,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    },
+    {
+      "index": 3,
+      "pair": 2,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    },
+    {
+      "index": 4,
+      "pair": 2,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    },
+    {
+      "index": 5,
+      "pair": 3,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    },
+    {
+      "index": 6,
+      "pair": 3,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.benchtime=128x",
+        "-test.benchmem",
+        "-test.count=1",
+        "-test.timeout=60s"
+      ]
+    }
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off"
+  },
+  "limits": {
+    "focused_aggregate_seconds": 120,
+    "build_each_seconds": 120,
+    "build_aggregate_seconds": 180,
+    "timing_each_seconds": 60,
+    "timing_aggregate_seconds": 180
+  }
+}

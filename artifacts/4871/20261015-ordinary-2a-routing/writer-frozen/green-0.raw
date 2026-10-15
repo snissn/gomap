@@ -1,0 +1,18 @@
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/append
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/reuse
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/contiguous_append
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/reserve_reused
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/retire
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/retire_batch
+=== RUN   TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/prune
+--- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1 (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/append (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/reuse (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/contiguous_append (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/reserve_reused (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/retire (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/retire_batch (0.00s)
+    --- PASS: TestCOWGenerationRequirementDistinguishesInheritedMetadataV1/prune (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.001s

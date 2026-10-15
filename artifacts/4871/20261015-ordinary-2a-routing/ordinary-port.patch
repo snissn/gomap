@@ -1,0 +1,355 @@
+diff --git a/TreeDB/db/root_publication_activation.go b/TreeDB/db/root_publication_activation.go
+index 725f9e610..f313a6b4f 100644
+--- a/TreeDB/db/root_publication_activation.go
++++ b/TreeDB/db/root_publication_activation.go
+@@ -731,7 +731,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
+ 		return nil, false, errors.New("missing actual DATA generation")
+ 	}
+ 	profile := runtime.idx.allocator.COWPrepareProfileV1()
+-	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || profile.AllocatedPages != 0 || profile.ChangedChunks != 0
++	// Only inherited BeginCandidate metadata bookkeeping may stay deferred.
++	// Actual allocator edits and explicit output retirement/allocation obligations
++	// always take the original COW producer path.
++	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
++		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
+ 	if dataChanged {
+ 		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
+ 		if err != nil {
+diff --git a/TreeDB/freelist/allocator_cow.go b/TreeDB/freelist/allocator_cow.go
+index 198b21edb..0ec72cf9b 100644
+--- a/TreeDB/freelist/allocator_cow.go
++++ b/TreeDB/freelist/allocator_cow.go
+@@ -37,6 +37,10 @@ type allocatorCOWStateV1 struct {
+ // It is a snapshot, not an admission limit: callers must also account for
+ // retirements, pruning, and pages produced after the census.
+ type COWPrepareProfileV1 struct {
++	// RequiresGeneration is issued by the live transaction's actual mutators.
++	// ChangedChunks also includes inherited successor bookkeeping, which alone
++	// does not require a new DATA generation for a PRIMARY-only publication.
++	RequiresGeneration       bool
+ 	Valid                    bool
+ 	HighWater                uint64
+ 	RetiredPages             uint64
+@@ -89,6 +93,7 @@ func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
+ 	}
+ 	transaction, base := a.cow.txn, a.cow.generation
+ 	profile.Valid = true
++	profile.RequiresGeneration = transaction.requiresGeneration || transaction.consumed || transaction.base != base
+ 	profile.HighWater = transaction.highWater
+ 	profile.RetiredPages = transaction.root.retiredCount
+ 	profile.AllocatedPages = uint64(len(transaction.allocated))
+diff --git a/TreeDB/freelist/generation_v1_txn.go b/TreeDB/freelist/generation_v1_txn.go
+index 7aad31514..16f810c97 100644
+--- a/TreeDB/freelist/generation_v1_txn.go
++++ b/TreeDB/freelist/generation_v1_txn.go
+@@ -194,6 +194,12 @@ type FreelistTxn struct {
+ 	allocated        []allocatedPage
+ 	abandonedAppends []ReservationExtentV1
+ 	consumed         bool
++	// requiresGeneration records actual edits after BeginCandidate's inherited
++	// pending-metadata retirement. Those inherited edits can remain deferred while
++	// a PRIMARY-only publication retains the exact immutable DATA generation.
++	// Every allocation/reuse/retirement/prune below sets this before it can be
++	// observed by the original allocator publication producer.
++	requiresGeneration bool
+ 	// Granted only after detaching pre-existing dirty aliases. New dirty
+ 	// nodes remain exclusively owned until clone or materialization revokes it.
+ 	privatePreparation bool
+@@ -262,6 +268,9 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
+ 		t.replacedMetadata[id] = struct{}{}
+ 	}
+ 	t.retireMany(base.record.pendingMetadata())
++	// Begin applies inherited metadata bookkeeping before any actual allocations.
++	// Later mutations retain their generation obligation through every clone.
++	t.requiresGeneration = false
+ 	return t, nil
+ }
+ 
+@@ -311,6 +320,7 @@ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
+ }
+ 
+ func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
++	t.requiresGeneration = true
+ 	t.markReplacedPath(chunkNo)
+ 	if t.privatePreparation {
+ 		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
+@@ -371,6 +381,7 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
+ // installAppend records an already selected append in the SAME transaction.
+ // Work-bearing callers prove capacity and guard the original ledger first.
+ func (t *FreelistTxn) installAppend(id uint64) {
++	t.requiresGeneration = true
+ 	t.highWater = id + 1
+ 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
+ 	t.stats.AppendAllocations++
+@@ -420,6 +431,7 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
+ 			ids[i] = candidate + uint64(i)
+ 			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
+ 		}
++		t.requiresGeneration = true
+ 		t.highWater = candidate + width
+ 		t.stats.AppendAllocations += width
+ 		return ids, nil
+diff --git a/TreeDB/freelist/generation_v1_routing_test.go b/TreeDB/freelist/generation_v1_routing_test.go
+new file mode 100644
+index 000000000..e1e71d52e
+--- /dev/null
++++ b/TreeDB/freelist/generation_v1_routing_test.go
+@@ -0,0 +1,75 @@
++package freelist
++
++import "testing"
++
++func TestCOWGenerationRequirementDistinguishesInheritedMetadataV1(t *testing.T) {
++	fresh := func(t *testing.T) *FreelistTxn {
++		t.Helper()
++		base := MustNewFreelistGenerationV1(1, 32, []uint64{4, 5, 6}, map[uint64]uint64{8: 1})
++		base.record.Extents = []ReservationExtentV1{{StartPageID: 7, Count: 1, Kind: ReservationPendingMetadataRetirement, LastReachableCommitSeq: 2}}
++		txn, err := BeginCandidateV1(base, base.ref, NewReservationLedger())
++		if err != nil {
++			t.Fatal(err)
++		}
++		if len(txn.changedChunks) == 0 || txn.root.retiredCount < 2 {
++			t.Fatal("inherited pending metadata was not applied")
++		}
++		if txn.requiresGeneration {
++			t.Fatal("inherited metadata alone requires a DATA generation")
++		}
++		clone, err := txn.cloneForAllocatorPrepare()
++		if err != nil || clone.requiresGeneration {
++			t.Fatal("clean clone changed mutation origin", err)
++		}
++		return txn
++	}
++	tests := []struct {
++		name   string
++		mutate func(*testing.T, *FreelistTxn)
++	}{
++		{"append", func(t *testing.T, x *FreelistTxn) {
++			if _, err := x.AllocateAppend(); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"reuse", func(t *testing.T, x *FreelistTxn) {
++			if _, err := x.Allocate(0); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"contiguous append", func(t *testing.T, x *FreelistTxn) {
++			if _, err := x.allocateContiguousRange(4); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"reserve reused", func(t *testing.T, x *FreelistTxn) {
++			if err := x.ReservePage(4); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{"retire", func(t *testing.T, x *FreelistTxn) { x.Retire(9, 3) }},
++		{"retire batch", func(t *testing.T, x *FreelistTxn) {
++			x.retireMany([]retiredPage{{id: 9, lastReachableCommitSeq: 3}, {id: 10, lastReachableCommitSeq: 3}})
++		}},
++		{"prune", func(t *testing.T, x *FreelistTxn) {
++			cap, err := NewReuseCapability(10, 10, 0)
++			if err != nil {
++				t.Fatal(err)
++			}
++			x.PruneWithCapability(cap)
++		}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			txn := fresh(t)
++			tt.mutate(t, txn)
++			if !txn.requiresGeneration {
++				t.Fatal("actual allocator mutation lost its generation obligation")
++			}
++			clone, err := txn.cloneForAllocatorPrepare()
++			if err != nil || !clone.requiresGeneration {
++				t.Fatal("clone lost actual generation obligation", err)
++			}
++		})
++	}
++}
+diff --git a/TreeDB/mvcc/primary_generation_routing_v6_test.go b/TreeDB/mvcc/primary_generation_routing_v6_test.go
+new file mode 100644
+index 000000000..62f860f83
+--- /dev/null
++++ b/TreeDB/mvcc/primary_generation_routing_v6_test.go
+@@ -0,0 +1,177 @@
++//go:build treedb_test
++
++package mvcc
++
++import (
++	"bytes"
++	"fmt"
++	"strconv"
++	"testing"
++
++	treedb "github.com/snissn/gomap/TreeDB"
++)
++
++// PRIMARY-only replacement advances the actual public frontier while retaining
++// the allocator generation. Successor metadata retirement is deferred bookkeeping,
++// whereas materializing new DATA must still publish a new allocator generation.
++func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
++	dir := t.TempDir()
++	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
++	opts.DisableSideStores = true
++	opts.BackgroundCheckpointInterval = -1
++	opts.ValueLog.PointerThreshold = 4096
++	d, err := treedb.Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	closed := false
++	defer func() {
++		if !closed {
++			_ = d.Close()
++		}
++	}()
++	st := New(d)
++	commit := func(ts uint64, ms []Mutation) {
++		t.Helper()
++		if err := st.CommitAt(ts, ms, CommitDurable); err != nil {
++			t.Fatal(err)
++		}
++	}
++	number := func(key string) uint64 {
++		t.Helper()
++		value, err := strconv.ParseUint(d.Stats()[key], 10, 64)
++		if err != nil || value == 0 {
++			t.Fatalf("%s missing or invalid: %v", key, err)
++		}
++		return value
++	}
++	commit(1, []Mutation{{Key: []byte("k000"), Value: []byte("old")}})
++	commit(2, []Mutation{{Key: []byte("k000"), Value: []byte("keep")}})
++	ms := make([]Mutation, 31)
++	for i := range ms {
++		ms[i] = Mutation{Key: []byte(fmt.Sprintf("k%03d", i+1)), Value: []byte("before")}
++	}
++	commit(100, ms)
++	bootstrapGeneration := number("treedb.durable_root.freelist.generation")
++	// Actual DATA materialization creates the successor whose inherited metadata
++	// bookkeeping is under test; the 33-entry seed alone can stay PRIMARY-only.
++	seed := make([]Mutation, 64)
++	for i := range seed {
++		seed[i] = Mutation{Key: []byte(fmt.Sprintf("seed%03d", i)), Value: []byte("seed")}
++	}
++	commit(101, seed)
++	if got := number("treedb.durable_root.freelist.generation"); got <= bootstrapGeneration {
++		t.Fatalf("setup did not create actual DATA generation: %d -> %d", bootstrapGeneration, got)
++	}
++	generation := number("treedb.durable_root.freelist.generation")
++	sequence := number("treedb.durable_root.commit_seq")
++	for i := 0; i < 4; i++ {
++		commit(100, []Mutation{{Key: []byte("k031"), Value: []byte("after")}})
++		next := number("treedb.durable_root.commit_seq")
++		got := number("treedb.durable_root.freelist.generation")
++		if next <= sequence {
++			t.Fatal("public replacement did not advance durable frontier")
++		}
++		if got != generation {
++			t.Fatalf("bookkeeping-only PRIMARY replacement rebuilt DATA generation: before=%d after=%d replacement=%d", generation, got, i)
++		}
++		sequence = next
++	}
++	// Exceed the maintained PRIMARY directory so this actual public commit must
++	// materialize DATA and cannot use the bookkeeping-only route.
++	ms = make([]Mutation, 64)
++	for i := range ms {
++		ms[i] = Mutation{Key: []byte(fmt.Sprintf("new%03d", i)), Value: []byte("materialized")}
++	}
++	commit(101, ms)
++	if got := number("treedb.durable_root.freelist.generation"); got <= generation {
++		t.Fatalf("real DATA materialization reused generation %d (before %d)", got, generation)
++	}
++	if err := d.Close(); err != nil {
++		t.Fatal(err)
++	}
++	closed = true
++	d, err = treedb.Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	closed = false
++	st = New(d)
++	for _, want := range []struct {
++		key   string
++		ts    uint64
++		value string
++	}{
++		{"k000", 2, "keep"}, {"k031", 100, "after"}, {"new063", 101, "materialized"},
++	} {
++		value, err := st.GetAt([]byte(want.key), want.ts)
++		if err != nil || !bytes.Equal(value.Value, []byte(want.value)) {
++			t.Fatalf("reopen %s: %q %v", want.key, value.Value, err)
++		}
++	}
++}
++
++// BenchmarkCommitAtPrimaryOnlyAfterDataGeneration measures the actual durable
++// public replacement route after genuine DATA materialization. Both versions
++// report generation advances; the baseline may churn and must remain runnable.
++func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
++	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, b.TempDir())
++	opts.DisableSideStores = true
++	opts.BackgroundCheckpointInterval = -1
++	opts.ValueLog.PointerThreshold = 4096
++	d, err := treedb.Open(opts)
++	if err != nil {
++		b.Fatal(err)
++	}
++	defer func() {
++		if err := d.Close(); err != nil {
++			b.Fatal(err)
++		}
++	}()
++	st := New(d)
++	commit := func(ts uint64, ms []Mutation) {
++		b.Helper()
++		if err := st.CommitAt(ts, ms, CommitDurable); err != nil {
++			b.Fatal(err)
++		}
++	}
++	generation := func() uint64 {
++		b.Helper()
++		n, err := strconv.ParseUint(d.Stats()["treedb.durable_root.freelist.generation"], 10, 64)
++		if err != nil || n == 0 {
++			b.Fatal("missing actual durable DATA generation", err)
++		}
++		return n
++	}
++	commit(1, []Mutation{{Key: []byte("k000"), Value: []byte("old")}})
++	commit(2, []Mutation{{Key: []byte("k000"), Value: []byte("keep")}})
++	seed := make([]Mutation, 31)
++	for i := range seed {
++		seed[i] = Mutation{Key: []byte(fmt.Sprintf("k%03d", i+1)), Value: []byte("before")}
++	}
++	commit(100, seed)
++	bootstrap := generation()
++	seed = make([]Mutation, 64)
++	for i := range seed {
++		seed[i] = Mutation{Key: []byte(fmt.Sprintf("seed%03d", i)), Value: []byte("seed")}
++	}
++	commit(101, seed)
++	before := generation()
++	if before <= bootstrap {
++		b.Fatal("fixture did not materialize DATA")
++	}
++	mutation := []Mutation{{Key: []byte("k031"), Value: []byte("after")}}
++	b.ReportAllocs()
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		if err := st.CommitAt(100, mutation, CommitDurable); err != nil {
++			b.Fatal(err)
++		}
++	}
++	b.StopTimer()
++	after := generation()
++	if after < before {
++		b.Fatal("DATA generation regressed")
++	}
++	b.ReportMetric(float64(after-before)/float64(b.N), "generation_advances/op")
++}

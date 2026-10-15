@@ -1,0 +1,37 @@
+{
+  "all3903inputs_unchanged": true,
+  "all6samples_retained": true,
+  "cleanup_inventory": {
+    "bytes": 3604863,
+    "sha256": "03fa3a0aba818ab0a13bc753ad31933622848313b79356f8f67cdf4c969f3225"
+  },
+  "cleanup_not_released": true,
+  "member_count": 110,
+  "normal_and_timing_runtime_released": true,
+  "ordinary_patch": {
+    "bytes": 13418,
+    "sha256": "29d4182e00a59214a53e2e54fa124dc29ee20060a0d26008f9e1de0a9cbbf9f4"
+  },
+  "publication_manifest": {
+    "bytes": 18802,
+    "sha256": "8daacaea77de0f586628c934a7655e7c5f932178481f8ed766244baa7dda644a"
+  },
+  "results": {
+    "bytes": 2538,
+    "sha256": "f07795f75ebc15fb7cee4e108f41f7c8a0bd5c0ac0c3799f346b2c870bd8589e"
+  },
+  "runner": {
+    "bytes": 8117,
+    "sha256": "e4090825a94f5bb6f17da978417aa638fdd9581605fba93410ebedcd300f5bb1"
+  },
+  "source_or_github_mutations": "Only authorized isolated5-file ordinary port; no commits/push/GH or active-source edits",
+  "source_preflight": {
+    "bytes": 3580,
+    "sha256": "e9b29f584d0d0fd917677044d1dd2027e65372c6f5494008e193ac578fb41ed3"
+  },
+  "status": "FROZEN_DIAGNOSTIC_PASS",
+  "summary": {
+    "bytes": 3065,
+    "sha256": "46f1b2167632b4c64807a312d65b9d36472f3026e73613741e02b0a87e13a6f5"
+  }
+}

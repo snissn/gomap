@@ -1,0 +1,104 @@
+{
+  "gates": {
+    "bytes": true,
+    "candidate_generation_stable": true,
+    "latency": true,
+    "objects": true
+  },
+  "medians": {
+    "baseline": {
+      "B/op": 386908.0,
+      "allocs/op": 535.0,
+      "generation_advances/op": 1.0,
+      "ns/op": 523348.0
+    },
+    "candidate": {
+      "B/op": 365932.0,
+      "allocs/op": 479.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 503719.0
+    }
+  },
+  "percent_change": {
+    "B/op": -5.421443857454489,
+    "allocs/op": -10.467289719626171,
+    "generation_advances/op": -100.0,
+    "ns/op": -3.750659217193908
+  },
+  "samples": [
+    {
+      "index": 1,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 386933.0,
+        "allocs/op": 535.0,
+        "generation_advances/op": 1.0,
+        "ns/op": 650631.0
+      },
+      "pair": 1,
+      "role": "baseline"
+    },
+    {
+      "index": 2,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 365935.0,
+        "allocs/op": 479.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 502599.0
+      },
+      "pair": 1,
+      "role": "candidate"
+    },
+    {
+      "index": 3,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 365932.0,
+        "allocs/op": 479.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 503719.0
+      },
+      "pair": 2,
+      "role": "candidate"
+    },
+    {
+      "index": 4,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 386908.0,
+        "allocs/op": 535.0,
+        "generation_advances/op": 1.0,
+        "ns/op": 523348.0
+      },
+      "pair": 2,
+      "role": "baseline"
+    },
+    {
+      "index": 5,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 386906.0,
+        "allocs/op": 535.0,
+        "generation_advances/op": 1.0,
+        "ns/op": 522666.0
+      },
+      "pair": 3,
+      "role": "baseline"
+    },
+    {
+      "index": 6,
+      "iterations": 128,
+      "metrics": {
+        "B/op": 365932.0,
+        "allocs/op": 479.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 506334.0
+      },
+      "pair": 3,
+      "role": "candidate"
+    }
+  ],
+  "scope": "Short ordinary checkpoint2a public CommitAt durable PRIMARY-replacement diagnostic after actual DATA materialization: ProfileNoWALFast, DisableSideStores=true, BackgroundCheckpointInterval=-1, PointerThreshold4096, 33 initial keys then64 DATA-transition keys, equal timestamp100 replacement k031, 128 measured calls. Setup/Stats/final Close outside timer. Not original33 prune equivalence or native/sprint/final5111 qualification.",
+  "status": "PASS"
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "git",
+    "apply",
+    "--check",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/ordinary-routing-scoped.patch"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

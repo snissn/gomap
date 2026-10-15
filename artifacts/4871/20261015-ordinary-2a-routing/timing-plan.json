@@ -1,0 +1,104 @@
+[
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 1,
+    "pair": 1,
+    "role": "baseline"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 2,
+    "pair": 1,
+    "role": "candidate"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 3,
+    "pair": 2,
+    "role": "candidate"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 4,
+    "pair": 2,
+    "role": "baseline"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 5,
+    "pair": 3,
+    "role": "baseline"
+  },
+  {
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+      "-test.benchtime=128x",
+      "-test.benchmem",
+      "-test.count=1",
+      "-test.timeout=60s"
+    ],
+    "index": 6,
+    "pair": 3,
+    "role": "candidate"
+  }
+]

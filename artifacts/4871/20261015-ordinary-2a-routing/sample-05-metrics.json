@@ -1,0 +1,12 @@
+{
+  "index": 5,
+  "iterations": 128,
+  "metrics": {
+    "B/op": 386906.0,
+    "allocs/op": 535.0,
+    "generation_advances/op": 1.0,
+    "ns/op": 522666.0
+  },
+  "pair": 3,
+  "role": "baseline"
+}

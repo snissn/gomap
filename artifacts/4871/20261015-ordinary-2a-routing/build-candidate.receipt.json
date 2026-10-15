@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-c",
+    "-tags=treedb_test",
+    "-trimpath",
+    "-buildvcs=false",
+    "-o",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/candidate-mvcc.test",
+    "./TreeDB/mvcc"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+  "elapsed_seconds": 17.733965186867863,
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "1",
+    "GOPROXY": "off",
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "exit": 0,
+  "timeout": false
+}

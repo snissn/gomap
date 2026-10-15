@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "taskset",
+    "-c",
+    "0",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-2a-routing-20261015/public-comparison/baseline-mvcc.test",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+    "-test.benchtime=128x",
+    "-test.benchmem",
+    "-test.count=1",
+    "-test.timeout=60s"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-2a-routing-20261015",
+  "elapsed_seconds": 0.12750612711533904,
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "1",
+    "GOPROXY": "off",
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "exit": 0,
+  "timeout": false
+}
