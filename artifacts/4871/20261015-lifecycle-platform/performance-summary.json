@@ -1,0 +1,284 @@
+{
+  "GetVersioned": {
+    "baseline": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-1-baseline.raw",
+          "metrics": {
+            "ns/op": 318.4,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "e918083cc5598d9e1aa35b5d74bc5acfd7340e8c98109fff5c6c30040e3fb5b4"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-2-baseline.raw",
+          "metrics": {
+            "ns/op": 318.2,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "8921af2346cefe62e58899a2fefc858c46d2a20e5345b7299c73a4616feeccb7"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-3-baseline.raw",
+          "metrics": {
+            "ns/op": 322.9,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "b304193fe15175e54e9e8900d8e22107de3119ea0f7830c18cb841a4770b1dfb"
+        }
+      ],
+      "median": {
+        "ns/op": 318.4,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-1-candidate.raw",
+          "metrics": {
+            "ns/op": 324.4,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "d81bfebd8ead869eecde120060a6480b71194a882e2554f7ef8fe4e8fdd79e12"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-2-candidate.raw",
+          "metrics": {
+            "ns/op": 326.1,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "776d80406389209ae6e598d1311f99b5c20bee463ec1020a634d8f10e15431d3"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/GetVersioned-3-candidate.raw",
+          "metrics": {
+            "ns/op": 324.6,
+            "B/op": 0.0,
+            "allocs/op": 0.0
+          },
+          "raw_sha256": "1fb611ac62cf0ae524aa4c6b99049314a3d0c6f3b2eba228bdd69ed192765724"
+        }
+      ],
+      "median": {
+        "ns/op": 324.6,
+        "B/op": 0.0,
+        "allocs/op": 0.0
+      }
+    },
+    "delta_pct": {
+      "ns/op": 1.9472361809045324,
+      "B/op": null,
+      "allocs/op": null
+    },
+    "paired_ns_delta_pct": [
+      1.8844221105527748,
+      2.48271527341295,
+      0.5264787860018716
+    ],
+    "paired_median_ns_delta_pct": 1.8844221105527748
+  },
+  "ConditionalTxnBaselineBatchWrite": {
+    "baseline": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-1-baseline.raw",
+          "metrics": {
+            "ns/op": 21466.0,
+            "B/op": 31944.0,
+            "allocs/op": 127.0
+          },
+          "raw_sha256": "e2eac6ce4038f4f3fa759aef0a18416ed77fd266e7d5a2f2930f71d41d3d49b7"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-2-baseline.raw",
+          "metrics": {
+            "ns/op": 21376.0,
+            "B/op": 31944.0,
+            "allocs/op": 127.0
+          },
+          "raw_sha256": "dc3c9e9cb9bb25f0ad525ac86fe78a14682d2e5cd9a7385a108a319dac0c5309"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-3-baseline.raw",
+          "metrics": {
+            "ns/op": 20504.0,
+            "B/op": 31943.0,
+            "allocs/op": 127.0
+          },
+          "raw_sha256": "7ac3bea9d4c91072a4b2b31f41cbd25df8c77a9b2f310b8de6b9784b342d6464"
+        }
+      ],
+      "median": {
+        "ns/op": 21376.0,
+        "B/op": 31944.0,
+        "allocs/op": 127.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-1-candidate.raw",
+          "metrics": {
+            "ns/op": 20261.0,
+            "B/op": 31504.0,
+            "allocs/op": 104.0
+          },
+          "raw_sha256": "ad03f7888c97cdd41916d3b12a3eda897b7a20e44544ac37fa9021b3171a10da"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-2-candidate.raw",
+          "metrics": {
+            "ns/op": 20754.0,
+            "B/op": 31503.0,
+            "allocs/op": 104.0
+          },
+          "raw_sha256": "e0c6659baf5c0d146bf7353c9ee57bbe56a690aef3c56f35396a9f1558ec2183"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/ConditionalTxnBaselineBatchWrite-3-candidate.raw",
+          "metrics": {
+            "ns/op": 20636.0,
+            "B/op": 31503.0,
+            "allocs/op": 104.0
+          },
+          "raw_sha256": "d40ae965afc6831f59674ce05766e40e27fb6075a99ec1791689c75a80f9d799"
+        }
+      ],
+      "median": {
+        "ns/op": 20636.0,
+        "B/op": 31503.0,
+        "allocs/op": 104.0
+      }
+    },
+    "delta_pct": {
+      "ns/op": -3.4618263473053856,
+      "B/op": -1.3805409466566498,
+      "allocs/op": -18.11023622047244
+    },
+    "paired_ns_delta_pct": [
+      -5.613528370446286,
+      -2.9098053892215536,
+      0.6437768240343367
+    ],
+    "paired_median_ns_delta_pct": -2.9098053892215536
+  },
+  "CommitAtPrimaryOnlyAfterDataGeneration": {
+    "baseline": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-1-baseline.raw",
+          "metrics": {
+            "ns/op": 148513.0,
+            "generation_advances/op": 2.0,
+            "B/op": 279177.0,
+            "allocs/op": 474.0
+          },
+          "raw_sha256": "04272a4653f138e9ba0323169a9d152b01c78d1be054b27babe3f9a168cda813"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-2-baseline.raw",
+          "metrics": {
+            "ns/op": 142214.0,
+            "generation_advances/op": 2.0,
+            "B/op": 279177.0,
+            "allocs/op": 474.0
+          },
+          "raw_sha256": "f7980af7a02ab123c173e4600f60a7cd2ca3716da394fd50fc019cec5a7ab2a2"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-3-baseline.raw",
+          "metrics": {
+            "ns/op": 143491.0,
+            "generation_advances/op": 2.0,
+            "B/op": 279178.0,
+            "allocs/op": 474.0
+          },
+          "raw_sha256": "0b2ba04b27423f2d88ea3bbf588395c1ce09324667f3f9153d1663552def3d97"
+        }
+      ],
+      "median": {
+        "ns/op": 143491.0,
+        "generation_advances/op": 2.0,
+        "B/op": 279177.0,
+        "allocs/op": 474.0
+      }
+    },
+    "candidate": {
+      "rows": [
+        {
+          "round": 1,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-1-candidate.raw",
+          "metrics": {
+            "ns/op": 147317.0,
+            "generation_advances/op": 0.0,
+            "B/op": 226888.0,
+            "allocs/op": 392.0
+          },
+          "raw_sha256": "1571f15032cb43e1a5a5920d3d177c8c830f3c4568568d93564f462304786c1e"
+        },
+        {
+          "round": 2,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-2-candidate.raw",
+          "metrics": {
+            "ns/op": 147663.0,
+            "generation_advances/op": 0.0,
+            "B/op": 226887.0,
+            "allocs/op": 392.0
+          },
+          "raw_sha256": "3e397d310346ff33eb68ae6eb7508cbf00f26f5dd783b011c413fcf9bd3a325a"
+        },
+        {
+          "round": 3,
+          "raw": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/lifecycle-platform-guard/perf/CommitAtPrimaryOnlyAfterDataGeneration-3-candidate.raw",
+          "metrics": {
+            "ns/op": 147527.0,
+            "generation_advances/op": 0.0,
+            "B/op": 226888.0,
+            "allocs/op": 392.0
+          },
+          "raw_sha256": "f8c473988258a63f385c545718e8eb635dcf8d157e754ebe5b8aebf45ca5dfc5"
+        }
+      ],
+      "median": {
+        "ns/op": 147527.0,
+        "generation_advances/op": 0.0,
+        "B/op": 226888.0,
+        "allocs/op": 392.0
+      }
+    },
+    "delta_pct": {
+      "ns/op": 2.8127199615306964,
+      "generation_advances/op": -100.0,
+      "B/op": -18.72969478144689,
+      "allocs/op": -17.29957805907173
+    },
+    "paired_ns_delta_pct": [
+      -0.8053167062816002,
+      3.8315496364633495,
+      2.8127199615306964
+    ],
+    "paired_median_ns_delta_pct": 2.8127199615306964
+  }
+}
