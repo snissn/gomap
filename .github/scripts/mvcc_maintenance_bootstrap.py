@@ -15,7 +15,7 @@ import time
 import traceback
 
 BASELINE = '5bca87ffe6e1bfba2d693264d2dc82936adc234f'
-CANDIDATE = '5027dc559f83dee04317910169c48d277fcce72f'
+CANDIDATE = '2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49'
 COMPILER_SHA256 = 'd68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65'
 BRANCH = 'refs/heads/codex/4871-maintenance-diagnostic-185-20261015'
 
@@ -37,7 +37,7 @@ def validate_context(env):
 def main():
     validate_context(os.environ)
     harness = Path(os.environ['GITHUB_WORKSPACE']).resolve()
-    root = Path(os.environ['RUNNER_TEMP']).resolve() / 'mvcc-maintenance-5027d'
+    root = Path(os.environ['RUNNER_TEMP']).resolve() / 'mvcc-maintenance-2588c'
     root.mkdir()  # A repeated attempt must never overwrite prior evidence.
     (root / 'tmp').mkdir()
     commands = []

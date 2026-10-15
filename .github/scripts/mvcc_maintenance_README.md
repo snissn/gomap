@@ -2,7 +2,7 @@
 
 This manual-only diagnostic branch compares product commits
 `5bca87ffe6e1bfba2d693264d2dc82936adc234f` and
-`5027dc559f83dee04317910169c48d277fcce72f`. Neither product checkout contains
+`2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49`. Neither product checkout contains
 this harness branch's workflow/script changes. Root must independently review
 the final harness commit and explicitly authorize its manual dispatch first.
 There is no PR/push trigger, arbitrary ref input, retry, or self-hosted runner.

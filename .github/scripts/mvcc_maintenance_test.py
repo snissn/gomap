@@ -44,7 +44,7 @@ def check_workflow(text):
     assert 'go-version: "1.26.3"' in text and 'cache: false' in text
     assert 'if: always()' in text and 'if-no-files-found: error' in text
     assert 'include-hidden-files: true' in text
-    assert 'runner.temp }}/mvcc-maintenance-5027d' in text
+    assert 'runner.temp }}/mvcc-maintenance-2588c' in text
     runs = re.findall(r'(?m)^        run: (.+)$', text)
     assert runs == ['|', 'python3 -B .github/scripts/mvcc_maintenance_test.py',
                     'python3 -B .github/scripts/mvcc_maintenance_bootstrap.py']
@@ -60,7 +60,7 @@ class Contract(unittest.TestCase):
 
     def test_fixed_product_inputs(self):
         self.assertEqual(bootstrap.BASELINE, '5bca87ffe6e1bfba2d693264d2dc82936adc234f')
-        self.assertEqual(bootstrap.CANDIDATE, '5027dc559f83dee04317910169c48d277fcce72f')
+        self.assertEqual(bootstrap.CANDIDATE, '2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49')
         self.assertEqual(bootstrap.COMPILER_SHA256, 'd68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65')
         tree = ast.parse((SCRIPTS / 'mvcc_maintenance_prepare.py').read_text())
         heads = next(n for n in tree.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'heads' for t in n.targets))
