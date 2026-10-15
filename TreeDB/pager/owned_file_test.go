@@ -31,7 +31,7 @@ func TestOpenOwnedFileUsesTransferredHandle(t *testing.T) {
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("transferred file remains open: %v", err)
 	}
 	got, err := os.ReadFile(diagnostic)
@@ -50,7 +50,7 @@ func TestOpenOwnedFileFailureTransfersCleanup(t *testing.T) {
 		if err == nil || p != nil {
 			t.Fatalf("p=%p err=%v", p, err)
 		}
-		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+		if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 			t.Fatalf("file not closed: %v", err)
 		}
 	})
@@ -102,7 +102,7 @@ func TestOwnedFileMappingFailureClosesExactHandle(t *testing.T) {
 	if err == nil || p != nil {
 		t.Fatalf("read-only mapping unexpectedly initialized: %p %v", p, err)
 	}
-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("failed mapping lost file: %v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestPagerPartialUnmapRetainsMappingAndBlocksAccess(t *testing.T) {
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("cleanup did not close exact handle: %v", err)
 	}
 }

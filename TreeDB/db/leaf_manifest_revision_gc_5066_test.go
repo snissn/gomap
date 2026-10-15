@@ -266,18 +266,29 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := LeafLogDirPath(database.dir)
-	var recoveryNames []string
+	var recoveryNames [2]string
+	var recoveryErrors [2]error
 	database.durablePublishMu.Lock()
-	for _, resources := range database.durableRoot.slotResources {
-		for _, token := range resources.Tokens() {
-			if token.Kind() == rootpublication.ResourceOuterLeafManifest {
-				recoveryNames = append(recoveryNames, token.ResourceID())
+	for slot, resources := range database.durableRoot.slotResources {
+		// Selected sets expose tokens only through a scoped borrow. Decode the
+		// exact immutable revision, as recovery does, rather than inspecting
+		// the optional generic-set diagnostic slice.
+		recoveryErrors[slot] = resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			manifest, found, err := loadSelectedDurableLeafGenerationManifestTokens(tokens)
+			if err != nil {
+				return err
 			}
-		}
+			if found {
+				recoveryNames[slot] = leafGenerationDurableManifestFileName(manifest.ManifestRevision)
+			}
+			return nil
+		})
 	}
 	database.durablePublishMu.Unlock()
-	if len(recoveryNames) < 2 {
-		t.Fatalf("both recovery slots not represented: %v", recoveryNames)
+	for slot, name := range recoveryNames {
+		if recoveryErrors[slot] != nil || name == "" {
+			t.Fatalf("recovery slot %d manifest=%q error=%v", slot, name, recoveryErrors[slot])
+		}
 	}
 	for range 5 {
 		closure, err := database.PrepareLeafGenerationManifestStableClosure()

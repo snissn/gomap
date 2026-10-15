@@ -1000,6 +1000,42 @@ func (db *DB) rootPublicationDependencyBytesV1(resources *rootpublication.Stable
 	return resources.BytesNotCoveredBy(db.durableRoot.slotResources[db.durableRoot.slot])
 }
 
+// queuedPrimaryConstructionV6 holds the original zipper's retained outputs.
+// It is born only for a PRIMARY publication, never for ordinary DATA-only work.
+type queuedPrimaryConstructionV6 struct {
+	root     primaryarena.ReadRootConstructionV6
+	abortErr error
+	legacy   uint64
+}
+
+func (c *queuedPrimaryConstructionV6) release(db *DB, idx *indexGen) error {
+	defer func() {
+		if c.legacy != 0 {
+			bundle, ready, _ := idx.primary.TakePublicationBundle(c.legacy, nil)
+			if ready {
+				_, _ = idx.primary.Drop(bundle.Directory, nil)
+				_, _ = idx.primary.Drop(bundle.Record, nil)
+			}
+		}
+	}()
+	if c.root == nil {
+		return nil
+	}
+	if c.abortErr == nil {
+		c.abortErr = c.root.Abort()
+	}
+	if c.abortErr == nil {
+		return nil
+	}
+	// The first actual abort owns any incomplete physical debt. Never retry it
+	// or discard its exact original transaction on a construction failure.
+	if original, ok := c.root.(*rootpublication.DurableRootTransaction); ok {
+		c.abortErr = idx.primaryOwner.retainFailedTransactionV6(original, c.abortErr)
+	}
+	db.publicationPoisoned.Store(true)
+	return errors.Join(c.abortErr, ErrRecoveryRequired)
+}
+
 // finalizeQueuedRootPublicationV1 transfers one fully built logical root from
 // caller serialization into the coordinator. It performs no stable I/O. The
 // allocator, visible DB state, resource closure, and coordinator frontier cross
@@ -1031,40 +1067,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// Each publication owns an independently complete PRIMARY construction.
 	// System-only changes copy the immutable directory; bulk/manual DATA
 	// builders enter the same construction boundary as zipper mutations.
-	var copiedPrimary primaryarena.ReadRootConstructionV6
-	var copiedAbortErr error
-	var copiedLegacy uint64
-	defer func() {
-		if copiedLegacy != 0 {
-			bundle, ready, _ := idx.primary.TakePublicationBundle(copiedLegacy, nil)
-			if ready {
-				_, _ = idx.primary.Drop(bundle.Directory, nil)
-				_, _ = idx.primary.Drop(bundle.Record, nil)
-			}
-		}
-	}()
-	defer func() {
-		if copiedPrimary == nil {
-			return
-		}
-		if copiedAbortErr == nil {
-			copiedAbortErr = copiedPrimary.Abort()
-		}
-		if copiedAbortErr != nil {
-			// Dispose was attempted once by its original producer or here. Preserve
-			// that exact object; do not retry an incomplete action or refund its debt.
-			if original, ok := copiedPrimary.(*rootpublication.DurableRootTransaction); ok {
-				copiedAbortErr = idx.primaryOwner.retainFailedTransactionV6(original, copiedAbortErr)
-			}
-			db.publicationPoisoned.Store(true)
-			retErr = errors.Join(retErr, copiedAbortErr, ErrRecoveryRequired)
-		}
-	}()
+	var copied *queuedPrimaryConstructionV6
 	if idx.primary != nil {
+		// Output pointers are retained by the original zipper only when PRIMARY
+		// construction is active. DATA-only publication needs no heap outputs.
+		copied = &queuedPrimaryConstructionV6{}
+		defer func() { retErr = errors.Join(retErr, copied.release(db, idx)) }()
 		var id uint64
 		var err error
 		z := idx.zipper.CloneWithAllocator(idx.allocator)
-		z.SetPrimaryConstructionOutputV6(&copiedPrimary, &copiedAbortErr)
+		z.SetPrimaryConstructionOutputV6(&copied.root, &copied.abortErr)
 		switch {
 		case next.UserRootPageID == db.meta.UserRootPageID:
 			id, err = z.CopyPrimaryRoot(next.UserRootPageID)
@@ -1076,8 +1088,8 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 		if id != 0 {
 			next.UserRootPageID, newUserRootID = id, id
-			if copiedPrimary == nil {
-				copiedLegacy = id
+			if copied.root == nil {
+				copied.legacy = id
 			}
 		}
 		dataRetired := retired[:0]
@@ -1191,8 +1203,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
 	)
 	if transferred {
-		copiedPrimary = nil
-		copiedLegacy = 0
+		if copied != nil {
+			copied.root, copied.legacy = nil, 0
+		}
 		resourcesOwned = false
 		installOwned = false
 	}
@@ -1369,7 +1382,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	limits := member.preparedLimits
 	if limits != nil {
-		if member.resources == nil || member.resources.Len() > limits.MaxVisibleResources ||
+		if member.resources.Len() > limits.MaxVisibleResources ||
 			len(runtime.debt) >= limits.MaxAllocatorDebt || len(runtime.seals) >= limits.MaxSeals ||
 			len(runtime.debt)+1 > limits.MaxSealPrefixEntries {
 			return errors.New("prepared root-publication seal exceeds admission limits")

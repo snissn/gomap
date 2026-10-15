@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,13 +223,23 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
 				t.Fatalf("rewrite changed logical revision: got=%d want=%d error=%v", revision, entry.Revision, err)
 			}
 			current.Close()
-			_, err = database.CompactStorage(context.Background(), CompactStorageOptions{})
-			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
-				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-					t.Fatalf("unsupported leaf-pack promotion: %v", err)
+			report, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
+			packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
+			if err != nil {
+				if packSupported || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || len(report.Phases) == 0 || !strings.HasPrefix(report.Phases[len(report.Phases)-1].Name, "leaf-generation-pack-") {
+					t.Fatalf("ordinary compaction after selected rewrite: %v (phases=%+v)", err, report.Phases)
 				}
-			} else if err != nil {
-				t.Fatalf("ordinary compaction after selected rewrite: %v", err)
+			} else if !packSupported {
+				// The public planner may have no eligible pack work. Unsupported
+				// promotion is required only when a real pack is selected.
+				if len(report.LeafGenerationPacks) == 0 {
+					t.Fatal("compaction omitted leaf-pack planning")
+				}
+				for _, pack := range report.LeafGenerationPacks {
+					if pack.Ran || pack.SkipReason == "" || len(pack.Selection.GenerationIDs) != 0 {
+						t.Fatalf("unsupported promotion reported applied/selected pack: %+v", pack)
+					}
+				}
 			}
 			if err := database.Set([]byte("a"), []byte("late")); err != nil {
 				t.Fatal(err)

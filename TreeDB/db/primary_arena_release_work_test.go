@@ -143,3 +143,34 @@ func TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation(t *testing.
 		t.Fatalf("ordinary owner edge allocated unadmitted receipt: %g", allocations)
 	}
 }
+
+func TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError(t *testing.T) {
+	a, err := primaryarena.Open(filepath.Join(t.TempDir(), "primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := newPrimaryArenaOwnerV5(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sticky := errors.New("earlier sibling failed")
+	owner.cleanupErr = sticky
+	if ready, e := owner.retain(nil); !ready || e != nil {
+		t.Fatal(e)
+	}
+	if consumed, debt, e := owner.releaseWithOutcome(nil); !consumed || debt || !errors.Is(e, sticky) {
+		t.Fatalf("nonlast consumed=%v debt=%v err=%v", consumed, debt, e)
+	}
+	if owner.refs != 1 || owner.arena != a || owner.closeWork.started {
+		t.Fatal("nonlast edge started physical cleanup")
+	}
+	// The original terminal release still reports sticky failure and retains its
+	// debt; the scalar fast path must neither clear nor relocate that authority.
+	consumed, debt, e := owner.releaseWithOutcome(nil)
+	if !consumed || !debt || !errors.Is(e, sticky) {
+		t.Fatalf("last consumed=%v debt=%v err=%v", consumed, debt, e)
+	}
+	if owner.arena != a || owner.metadataCharge == 0 || !owner.closeWork.done {
+		t.Fatal("original sticky cleanup debt was lost")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 type originalClosureAdmissionBudget struct {
@@ -91,6 +92,12 @@ func TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge(t *testing
 		t.Fatal(err)
 	}
 	authority, err := newLeafGenerationPackPromotionAuthority(database, stagingRoot, stagingDir, LeafLogDirPath(database.dir))
+	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+		if authority != nil || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || owner.Bytes() != before || database.backgroundError() != nil {
+			t.Fatalf("unsupported promotion must refuse before original custody: authority=%p err=%v charge=%d", authority, err, owner.Bytes())
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

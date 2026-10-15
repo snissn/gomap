@@ -1649,7 +1649,11 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
 		}
 		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceCreationProof{}))) + retainedalloc.AllocationCharge(uint64(len(name))) + fileCharge
 		if stableNamespaceCreationPersistsThroughChild() {
-			childCharge, e := StableFileMetadataCharge(uint64(len(child.Name()) + len("#stable-pin")))
+			suffix := len("#stable-pin")
+			if runtime.GOOS == "windows" {
+				suffix = len("#stable-sync-pin")
+			}
+			childCharge, e := StableFileMetadataCharge(uint64(len(child.Name()) + suffix))
 			if e != nil {
 				return nil, e
 			}
@@ -1677,7 +1681,7 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
 	}
 	proof.persistence = proof.parent
 	if stableNamespaceCreationPersistsThroughChild() {
-		proof.persistence, err = duplicateStableFile(child)
+		proof.persistence, err = duplicateStableSyncFile(child)
 		if err != nil {
 			return fail(fmt.Errorf("duplicate namespace proof child: %w", err))
 		}

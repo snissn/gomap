@@ -72,9 +72,9 @@ func (db *DB) currentValueLogSetForPublication(limits *PreparedRootPublicationLi
 		return nil, nil
 	}
 	if limits == nil {
-		return db.valueLogManager.CurrentSetNoRefresh(), nil
+		return db.valueLogManager.CurrentSetNoRefreshForPublication(nil)
 	}
-	return db.valueLogManager.CurrentSetNoRefreshWithMaxFiles(limits.MaxRegisteredValueLogFiles)
+	return db.valueLogManager.CurrentSetNoRefreshForPublication(&limits.MaxRegisteredValueLogFiles)
 }
 
 func preparedProfileAdd(a, b uint64) uint64 {

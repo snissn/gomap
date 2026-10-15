@@ -69,9 +69,8 @@ func bindPrimaryArenaRelease(s *primaryArenaReleaseState, owner *primaryArenaOwn
 			return false, err
 		}
 	}
-	s.bound, s.native, s.prior = true, native, owner.cleanupErr
-	owner.refs--
-	s.last = owner.refs == 0
+	s.bound, s.native = true, native
+	s.last, s.prior = consumePrimaryArenaEdgeLocked(owner)
 	if !s.last {
 		s.phase = 6
 		return true, nil
@@ -81,6 +80,14 @@ func bindPrimaryArenaRelease(s *primaryArenaReleaseState, owner *primaryArenaOwn
 	owner.closeWork.started = true
 	return true, nil
 }
+
+// consumePrimaryArenaEdgeLocked consumes exactly one validated original edge.
+// Both scalar ordinary releases and retained physical receipts use this core.
+func consumePrimaryArenaEdgeLocked(owner *primaryArenaOwnerV5) (last bool, prior error) {
+	owner.refs--
+	return owner.refs == 0, owner.cleanupErr
+}
+
 func (s *primaryArenaReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, bool, error) {
 	if w == nil {
 		return false, false, ErrNativeMVCCSnapshotWork

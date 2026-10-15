@@ -60,7 +60,7 @@ func TestNativeMVCCOriginalSetPhysicalClose(t *testing.T) {
 			if len(m.files) != 0 || set.Files != nil || f.producerCharge != 0 || m.producerCharge != 0 || f.nativeCallbacks.Load() {
 				t.Fatal("actual terminal aliases/debt survive success")
 			}
-			if _, err := originalHandle.Stat(); !errors.Is(err, os.ErrClosed) {
+			if err := originalHandle.Close(); !errors.Is(err, os.ErrClosed) {
 				t.Fatal("actual original OS handle not closed", err)
 			}
 			if ready, err := m.ReleaseNativeMVCCSetStep(set, &iterator.OrdinalScanWork{}); !ready || err != nil {

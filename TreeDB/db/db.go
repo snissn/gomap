@@ -1753,6 +1753,12 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
 // Ordinary snapshots keep the established fast capture path. Bounded COW
 // captures below use their separate admission and fixed-registry policy.
 func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
+	return db.captureSnapshotForReadWithValueLogPublicationLockHeld(snap, false)
+}
+
+// Private one-shot reads cannot mint a later stable resource capture. Only
+// their immutable empty Sets can omit the original containing Manager borrow.
+func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapshot, oneShot bool) bool {
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
@@ -1781,6 +1787,11 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 	idx := view.idx
 	state := view.state
 	vm := view.vlogManager
+	vlogSet := state.ValueLogSet
+	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	if oneShot && !vlogNeedsPin {
+		vm = nil
+	}
 	managerBorrowAdopted := false
 	if vm != nil {
 		if !vm.RetainSnapshotWrapper() {
@@ -1792,8 +1803,6 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 			}
 		}()
 	}
-	vlogSet := state.ValueLogSet
-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
 			return false
@@ -1885,10 +1894,16 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		}
 	}
 	snap.tree.SetNegativeFilter(view.negativeFilter)
-	snap.iteratorMu.Lock()
+	// The private synchronous reader cannot publish an iterator or Snapshot
+	// alias. Exported captures still serialize initialization with Close.
+	if !oneShot {
+		snap.iteratorMu.Lock()
+	}
 	snap.closed.Store(false)
 	snap.readState.Store(0)
-	snap.iteratorMu.Unlock()
+	if !oneShot {
+		snap.iteratorMu.Unlock()
+	}
 	return true
 }
 
@@ -2192,30 +2207,50 @@ func (s *Snapshot) DetachForegroundRead() {
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	return s.closeRead(false)
+}
+
+// The private branch is used only by oneShotRead, which exposes no Snapshot,
+// iterator or completion callback. Both branches drain the same finalizer.
+func (s *Snapshot) closeRead(oneShot bool) error {
 	if s == nil {
 		return nil
 	}
 	if s.nativeMVCC.workOwned {
 		return ErrNativeMVCCSnapshotWork
 	}
-	s.iteratorMu.Lock()
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
 	if !s.closed.CompareAndSwap(false, true) {
-		s.iteratorMu.Unlock()
+		if !oneShot {
+			s.iteratorMu.Unlock()
+		}
 		return nil
 	}
 	s.readState.Or(snapshotReadClosedBit)
-	s.invalidateBoundIteratorsLocked()
-	s.iteratorMu.Unlock()
-	return s.finalizeCloseIfUnreferenced()
+	if !oneShot {
+		s.invalidateBoundIteratorsLocked()
+		s.iteratorMu.Unlock()
+	}
+	return s.finalizeCloseRead(oneShot)
 }
 
 func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+	return s.finalizeCloseRead(false)
+}
+
+func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	if s.nativeMVCC.workOwned {
 		return nil
 	}
-	s.iteratorMu.Lock()
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
 	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
-		s.iteratorMu.Unlock()
+		if !oneShot {
+			s.iteratorMu.Unlock()
+		}
 		return nil
 	}
 	originalIndex, originalDB := s.idx, s.db
@@ -2227,7 +2262,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	endForegroundRead := s.foregroundReadEnd
 	s.foregroundReadEnd = nil
 	s.foregroundReadMarked = false
-	s.iteratorMu.Unlock()
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
 	var err error
 	primaryCleanupErr := s.primaryRebindErr
 	if s.primaryRoot != nil && primaryCleanupErr == nil {
@@ -2315,7 +2352,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	// Success includes actual exported-handle scrub, not just claiming the
 	// finalizer. Failed cleanup retains the exact wrapper with its debt owner.
 	if err == nil && s.db != nil {
-		s.db.snapPool.Put(s)
+		s.db.snapPool.putRead(s, oneShot)
 	}
 	if pagerCompletion != nil {
 		err = pagerCompletion.snapshotFinalized(err)
@@ -2340,11 +2377,15 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	// Publish actual completion after alias scrub and every original callback's
 	// available final action. Private postcapture refusal can adopt while this
 	// same finalizer is running, or consume its retained exact outcome afterward.
-	s.iteratorMu.Lock()
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
 	s.cleanupFinished, s.cleanupErr = true, err
 	completion := s.cleanupCompletion
 	s.cleanupCompletion = nil
-	s.iteratorMu.Unlock()
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
 	if completion != nil {
 		completion.SnapshotCleanupCompleted(err)
 	}

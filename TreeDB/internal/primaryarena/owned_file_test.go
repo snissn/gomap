@@ -45,7 +45,7 @@ func TestOpenCapsuleOwnedFileFailedFormatClosesHandle(t *testing.T) {
 	if !errors.Is(err, ErrFormat) || a != nil {
 		t.Fatalf("a=%p err=%v", a, err)
 	}
-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("handle not closed: %v", err)
 	}
 }

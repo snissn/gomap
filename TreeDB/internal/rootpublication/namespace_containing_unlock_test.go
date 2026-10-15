@@ -45,10 +45,12 @@ func TestNamespaceContainingRefundAfterOriginalCallUnlock(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Cleanup(func() { _ = parent.Close() })
 	child, e := os.Create(filepath.Join(dir, "primary"))
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Cleanup(func() { _ = child.Close() })
 	var owner retainedalloc.Owner
 	owner.Initialize(0)
 	proof, e := NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
@@ -133,10 +135,12 @@ func TestNamespaceOrdinaryContainingReleaseDoesNotAllocateReceipt(t *testing.T) 
 		if e != nil {
 			t.Fatal(e)
 		}
+		t.Cleanup(func() { _ = parent.Close() })
 		child, e := os.Create(filepath.Join(dir, "primary"))
 		if e != nil {
 			t.Fatal(e)
 		}
+		t.Cleanup(func() { _ = child.Close() })
 		proofs[i], e = NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
 		if e != nil {
 			t.Fatal(e)

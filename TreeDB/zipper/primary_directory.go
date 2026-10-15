@@ -424,10 +424,12 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	if _, err = z.loadPrimaryOperand(base, nil, &metrics, scratch); err != nil {
 		return 0, nil, metrics, err
 	}
+	unchangedBase := true
 	// Large ordinary batches/ranges and keys exceeding directory capacity use
 	// the genuine materialized-base path. All consolidation and COW work remains
 	// in returned metrics and in the same allocator/retirement packet.
 	if len(ranges) > 0 || !primaryEntriesFitUnion(entries, ops) {
+		unchangedBase = false
 		var reclaimed []uint64
 		base, baseSeq, reclaimed, err = z.primaryMaterialize(base, baseSeq, entries, len(entries), cfg, &metrics, scratch)
 		if err != nil {
@@ -581,6 +583,12 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	}
 	metrics.ZipperApplyOps = len(ops) + len(ranges)
 	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, constructor)
+	if err == nil && unchangedBase && constructor != nil && cfg.unchangedPrimaryBase != nil {
+		*cfg.unchangedPrimaryBase = unchangedPrimaryBaseEvidence{
+			pager: z.pager, arena: z.primaryArena, input: rootID, output: root,
+			constructor: constructor,
+		}
+	}
 	return root, retired, metrics, err
 }
 func primaryEntriesFitKeys(ops []batch.Entry) bool { return primaryEntriesFitUnion(nil, ops) }

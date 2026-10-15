@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 	"io"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -66,18 +67,28 @@ func TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut(t *test
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = d.backend.VacuumIndexOnline(context.Background()); !errors.Is(e, rootpublication.ErrResourcePinned) {
+	// Register the original cut cleanup before any platform-specific assertion.
+	defer cut.Close()
+	before := d.backend.State().CommitSeq
+	e = d.backend.VacuumIndexOnline(context.Background())
+	if runtime.GOOS == "windows" {
+		if !errors.Is(e, errVacuumUnsupported) || d.backend.State().CommitSeq != before {
+			t.Fatalf("unsupported online replacement changed state: %v", e)
+		}
+	} else if !errors.Is(e, rootpublication.ErrResourcePinned) {
 		t.Fatalf("held cut refusal: %v", e)
 	}
 	if e = cut.Close(); e != nil {
 		t.Fatal(e)
 	}
-	before := d.backend.State().CommitSeq
-	if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
-		t.Fatal(e)
-	}
-	if d.backend.State().CommitSeq != before+1 {
-		t.Fatal("joint publication did not advance once")
+	if runtime.GOOS != "windows" {
+		before = d.backend.State().CommitSeq
+		if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
+			t.Fatal(e)
+		}
+		if d.backend.State().CommitSeq != before+1 {
+			t.Fatal("joint publication did not advance once")
+		}
 	}
 	if got, e := held.Get([]byte("base-003")); e != nil || !bytes.Equal(got, value) {
 		t.Fatalf("old reader: %v", e)

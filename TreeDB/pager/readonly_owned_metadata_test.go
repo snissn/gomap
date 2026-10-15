@@ -71,7 +71,7 @@ func TestReadOnlyOwnedMetadataAdmissionAndLifetime(t *testing.T) {
 				if !errors.Is(err, ErrFileSize) || p != nil || charge != 0 || !consumed || owner.Bytes() != 0 {
 					t.Fatalf("p=%p charge=%d consumed=%v err=%v owner=%d", p, charge, consumed, err, owner.Bytes())
 				}
-				if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+				if err := f.Close(); !errors.Is(err, os.ErrClosed) {
 					t.Fatal("consumed exact file remains open", err)
 				}
 			case "actual-close-refusal":

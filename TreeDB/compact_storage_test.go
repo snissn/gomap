@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrapper(t *testing.T) {
@@ -117,15 +119,42 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 		t.Fatalf("expected leaf-pack debt before compaction, debt=%+v", before.RemainingDebt)
 	}
 
+	// Record the real selected source files before maintenance can unlink them.
+	sources := make(map[uint32]string)
+	for _, candidate := range before.LeafGenerationPlan.Candidates {
+		for _, id := range candidate.FileIDs {
+			lane, seq := valuelog.DecodeFileID(id)
+			path := filepath.Join(backenddb.LeafLogDirPath(dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("selected source %s: %v", path, err)
+			}
+			sources[id] = path
+		}
+	}
 	stats, err := backend.CompactStorage(context.Background(), compactOpts)
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized || stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retained leaf generation overstated completion: %+v", stats)
+	if !stats.RemainingDebt.Empty() || !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("full policy compaction did not drain debt, or asserted exhaustive byte minimization: %+v", stats)
 	}
 	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
 		t.Fatalf("expected at least one leaf-generation pack run, packs=%+v", stats.LeafGenerationPacks)
+	}
+
+	deleted := 0
+	for _, pack := range stats.LeafGenerationPacks {
+		for _, id := range pack.Pack.SourceFileIDs {
+			if path, ok := sources[id]; ok {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("packed source survived completed GC: %s %v", path, err)
+				}
+				deleted++
+			}
+		}
+	}
+	if deleted == 0 || stats.LeafGenerationGC.FilesDeleted == 0 {
+		t.Fatalf("no original packed source physically reclaimed: sources=%v gc=%+v", sources, stats.LeafGenerationGC)
 	}
 
 	again, err := backend.CompactStoragePlan(context.Background(), compactOpts)

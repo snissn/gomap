@@ -10,7 +10,8 @@ import (
 
 func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db.primary")
-	p, e := Open(path, 4*page.PageSize)
+	chunkSize := max(int64(4*page.PageSize), mmapOffsetGranularity())
+	p, e := Open(path, chunkSize)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -57,7 +58,7 @@ func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
 	if e = p.Close(); e != nil {
 		t.Fatal(e)
 	}
-	p, e = Open(path, 4*page.PageSize)
+	p, e = Open(path, chunkSize)
 	if e != nil {
 		t.Fatal(e)
 	}

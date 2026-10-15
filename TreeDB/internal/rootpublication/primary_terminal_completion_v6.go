@@ -60,9 +60,6 @@ func (c *Coordinator) removeCompletedPendingPrefixV6(n int, bytes uint64) {
 func (c *Coordinator) completePublicationLockedV6(done primaryPublicationCompletionV6) {
 	c.durable, c.oldestRecoverable = done.frontier, done.oldest
 	c.reachabilityEpoch++
-	if done.sequence != 0 {
-		c.durableRootLineage, c.durableRootSequence = done.lineage, done.sequence
-	}
 	c.lastGroupSize, c.lastService = done.groupSize, done.service
 	if c.ewmaService == 0 {
 		c.ewmaService = done.service

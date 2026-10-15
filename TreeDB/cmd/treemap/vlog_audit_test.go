@@ -35,6 +35,9 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	if report.GCDryRun.SegmentsTotal == 0 {
 		t.Fatalf("expected GC dry-run to observe value-log segments: %+v", report.GCDryRun)
 	}
+	if report.GCDryRun.SegmentsReferenced == 0 || report.GCDryRun.BytesReferenced == 0 {
+		t.Fatalf("readonly owned scan dropped live value-log counts: %+v", report.GCDryRun)
+	}
 	if report.RIDScan.Records == 0 || report.RIDScan.MaxRID == 0 {
 		t.Fatalf("expected RID scan to observe value-log records: %+v", report.RIDScan)
 	}

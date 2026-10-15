@@ -64,16 +64,20 @@ func (s *primaryRebuildScratchV5) put(seq uint64, input rebuiltPrimaryRootV5) er
 // genuine DATA generation owns every rebuilt slot/proof tree. Its sequence is
 // the earliest retained record's commit; later bank-only records retain that
 // exact generation. No old DATA generation or bank image is relabelled.
-func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
-	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil, leafManifest)
+func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, leafManifest **leafGenerationManifest, sharedBases ...*vacuumSharedBase) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil, leafManifest, sharedBases...)
 }
 
 // produce is synchronous construction work. It is never stored in a root or
 // runtime: offline value-log rewrite must rewrite proof pointers with the same
 // producer as the two slots, rather than copying old value-log dependencies.
-func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest, sharedBases ...*vacuumSharedBase) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
 	if idx == nil || idx.primaryOwner == nil || roots == nil {
 		return selected, nil, rootpublication.ErrResourceOwnership
+	}
+	var sharedBase *vacuumSharedBase
+	if len(sharedBases) != 0 {
+		sharedBase = sharedBases[0]
 	}
 	a, p := idx.primary, idx.pager
 	source := roots.durable
@@ -119,7 +123,7 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		if produce != nil {
 			rebuilt, e = produce(root)
 		} else {
-			rebuilt, _, e = db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true)
+			rebuilt, _, e = db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true, sharedBase)
 		}
 		if e != nil {
 			return selected, nil, e
@@ -152,9 +156,17 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 	if len(sequences) < 2 || len(sequences) > 4 || sequences[0] == 0 {
 		return selected, nil, rootpublication.ErrResourceOwnership
 	}
+	var finalMetas [4]page.MetaPageBody
+	for i := 0; i < scratch.count; i++ {
+		finalMetas[i] = scratch.inputs[i].root.meta
+	}
+	constructionFree, e := sharedBase.finish(ctx, db, finalMetas[:scratch.count])
+	if e != nil {
+		return selected, nil, e
+	}
 	// All effective trees have been materialized before this real allocator cut.
 	allocator := freelist.New(p, 0)
-	base, e := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
+	base, e := freelist.NewFreelistGenerationV1(1, p.PageCount(), constructionFree, nil)
 	if e != nil {
 		return selected, nil, e
 	}

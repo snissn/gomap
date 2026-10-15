@@ -79,8 +79,8 @@ func TestNativeGenerationPublishedFailurePredicates(t *testing.T) {
 	close(start)
 	wg.Wait()
 	var late *valuelog.ManagerCleanupFailure
-	t.Logf("actual predicates: snapshotManager=%v backgroundManager=%v failedSnapshot=%v borrows=%d", errors.As(snapshotErr, &late), errors.As(d.backgroundError(), &late), g.failedSnapshots == s, g.wrapperBorrows)
-	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrows != 1 {
+	t.Logf("actual predicates: snapshotManager=%v backgroundManager=%v failedSnapshot=%v borrows=%d", errors.As(snapshotErr, &late), errors.As(d.backgroundError(), &late), g.failedSnapshots == s, g.wrapperBorrowCountV6())
+	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrowCountV6() != 1 {
 		t.Fatalf("late physical completion lost from published original receipt: %v", snapshotErr)
 	}
 	missing := errors.New("unrelated missing cause")

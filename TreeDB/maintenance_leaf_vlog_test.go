@@ -3,6 +3,8 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -27,7 +29,14 @@ func mainIndexPath(rootDir string) string {
 	return filepath.Join(rootDir, "index.db")
 }
 
-func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecordV1 {
+// mainMaterializedMeta describes the durable sequence and its DATA base, not
+// the logical PRIMARY directory ID. Maintenance assertions inspect that base.
+type mainMaterializedMeta struct {
+	CommitSeq      uint64
+	UserRootPageID uint64
+}
+
+func readMainMeta(t *testing.T, rootDir string) mainMaterializedMeta {
 	t.Helper()
 	indexPath := mainIndexPath(rootDir)
 	p, err := pager.OpenReadOnly(indexPath, 256*1024)
@@ -35,6 +44,55 @@ func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecor
 		t.Fatalf("open pager: %v", err)
 	}
 	defer func() { _ = p.Close() }()
+
+	primaryPath := indexPath + ".primary"
+	if _, statErr := os.Stat(primaryPath); statErr == nil {
+		primary, openErr := pager.OpenReadOnly(primaryPath, 256*1024)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer primary.Close()
+		header, headerErr := primary.Get(0)
+		if headerErr != nil || !page.VerifyChecksumNonMutating(header) || string(header[16:24]) != "TDPRCAPB" {
+			t.Fatalf("invalid PRIMARY capsule header: %v", headerErr)
+		}
+		var uuid [16]byte
+		copy(uuid[:], header[32:48])
+		var selected mainMaterializedMeta
+		for slot := uint64(0); slot < 2; slot++ {
+			image := make([]byte, rootpublication.PrimaryCapsuleSizeV6)
+			complete := true
+			for n := uint64(0); n < 3; n++ {
+				part, readErr := primary.Get(2 + slot*3 + n)
+				if readErr != nil {
+					complete = false
+					break
+				}
+				copy(image[n*page.PageSize:], part)
+			}
+			if !complete {
+				continue
+			}
+			view, decodeErr := rootpublication.DecodePrimaryCapsuleV6(image, slot, uuid)
+			if decodeErr != nil {
+				continue
+			}
+			current := view.Current()
+			base, readErr := p.Get(current.Primary.BaseRootPageID)
+			if readErr != nil || !page.VerifyChecksumNonMutating(base) || sha256.Sum256(base) != current.Primary.BaseDigest {
+				t.Fatalf("capsule slot %d DATA base integrity: %v", slot, readErr)
+			}
+			if current.Record.CommitSeq > selected.CommitSeq {
+				selected = mainMaterializedMeta{CommitSeq: current.Record.CommitSeq, UserRootPageID: current.Primary.BaseRootPageID}
+			}
+		}
+		if selected.CommitSeq == 0 {
+			t.Fatalf("no valid durable PRIMARY capsule in %s", primaryPath)
+		}
+		return selected
+	} else if !os.IsNotExist(statErr) {
+		t.Fatal(statErr)
+	}
 
 	readMetaAt := func(id uint64) (page.DurableMetaV1, bool) {
 		data, err := p.Get(id)
@@ -75,7 +133,7 @@ func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecor
 	if err != nil {
 		t.Fatalf("decode durable-root record page %d: %v", selected.RootRecordPageID, err)
 	}
-	return record
+	return mainMaterializedMeta{CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID}
 }
 
 func requireMainRootLeafLogChildren(t *testing.T, rootDir string, rootID uint64) {
@@ -399,11 +457,16 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 		t.Fatalf("expected leaf_vlog files before rewrite")
 	}
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	var before map[string][]byte
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before = offlineLeafFixtureFiles(t, mainDir)
 	}
-	if stats.RecordsCopied == 0 {
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
+		requireOfflineLeafFixtureUnchanged(t, mainDir, before)
+	} else if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	} else if stats.RecordsCopied == 0 {
 		t.Fatalf("expected offline rewrite to copy records, stats=%+v", stats)
 	}
 
@@ -421,13 +484,12 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	}
 	defer reopen.Close()
 
-	got, err := reopen.Get([]byte("rew-off-0010"))
-	if err != nil {
-		t.Fatalf("get after reopen: %v", err)
-	}
-	want := bytes.Repeat([]byte{10}, 2*1024)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("value mismatch after reopen: got=%dB want=%dB", len(got), len(want))
+	for i := 0; i < 128; i++ {
+		got, err := reopen.Get([]byte(fmt.Sprintf("rew-off-%04d", i)))
+		want := bytes.Repeat([]byte{byte(i % 251)}, 2*1024)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("reopened value %d: got=%dB want=%dB err=%v", i, len(got), len(want), err)
+		}
 	}
 }
 
@@ -441,9 +503,11 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 		t.Fatalf("open: %v", err)
 	}
 
-	// Keep the tree small so the root is an internal page with explicit
-	// leaf-log children.
-	for i := 0; i < 16; i++ {
+	// Exceed the PRIMARY directory's 49 classes so this fixture actually
+	// materializes a DATA base with leaf-log children. A 16-row fixture stays
+	// wholly in PRIMARY and cannot test rewriting DATA leaf-page records.
+	const keyCount = 64
+	for i := 0; i < keyCount; i++ {
 		key := []byte(fmt.Sprintf("rew-inline-%03d", i))
 		val := bytes.Repeat([]byte{byte(i)}, 32)
 		if err := db.Set(key, val); err != nil {
@@ -462,11 +526,17 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	metaBefore := readMainMeta(t, dir)
 	requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	mainDir := filepath.Dir(mainIndexPath(dir))
+	var before map[string][]byte
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before = offlineLeafFixtureFiles(t, mainDir)
 	}
-	if stats.RecordsCopied == 0 || stats.BytesAfter == 0 {
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
+		requireOfflineLeafFixtureUnchanged(t, mainDir, before)
+	} else if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	} else if stats.RecordsCopied == 0 || stats.BytesAfter == 0 {
 		t.Fatalf("expected rewrite to copy leaf-page records, stats=%+v", stats)
 	}
 
@@ -479,12 +549,11 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	}
 	defer reopen.Close()
 
-	got, err := reopen.Get([]byte("rew-inline-010"))
-	if err != nil {
-		t.Fatalf("get after reopen: %v", err)
-	}
-	if len(got) != 32 {
-		t.Fatalf("expected 32B value after reopen, got %dB", len(got))
+	for i := 0; i < keyCount; i++ {
+		got, err := reopen.Get([]byte(fmt.Sprintf("rew-inline-%03d", i)))
+		if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 32)) {
+			t.Fatalf("reopened inline value %d: %x %v", i, got, err)
+		}
 	}
 }
 
@@ -568,5 +637,46 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 	}
 	if len(got) != valSize {
 		t.Fatalf("expected %dB value after gc, got %dB", valSize, len(got))
+	}
+}
+
+// offlineLeafFixtureFiles binds refusal to the exact closed fixture bytes.
+func offlineLeafFixtureFiles(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	files := make(map[string][]byte)
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		name, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files[name] = data
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func requireOfflineLeafFixtureUnchanged(t *testing.T, dir string, before map[string][]byte) {
+	t.Helper()
+	after := offlineLeafFixtureFiles(t, dir)
+	if len(after) != len(before) {
+		t.Fatalf("unsupported request changed file inventory: %d -> %d", len(before), len(after))
+	}
+	for name, data := range before {
+		if !bytes.Equal(data, after[name]) {
+			t.Fatalf("unsupported request changed %s", name)
+		}
 	}
 }

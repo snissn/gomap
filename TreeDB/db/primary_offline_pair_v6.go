@@ -20,6 +20,12 @@ import (
 // uses the ordinary fixed PRIMARY owner pair; logical commit/ACK frontiers do
 // not advance merely because the physical files and pointers are replaced.
 func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
+	// Both replacement and its checked cleanup require exact relative rename
+	// and removal. Callers have already recovered any prior swap before this
+	// fresh request; reject before admitting or constructing a new scope.
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return nil, rootpublication.ErrNamespacePersistenceUnsupported
+	}
 	source := db.idx.Load()
 	if source == nil || source.pager == nil || source.primaryOwner == nil {
 		return nil, rootpublication.ErrResourceOwnership

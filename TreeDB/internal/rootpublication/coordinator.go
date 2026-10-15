@@ -937,34 +937,36 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var tail *primaryTerminalCompletionV6
 		for i := 0; i < remove; i++ {
 			entry := &c.pending[i]
-			if set := entry.candidate.resourceSet(); set != nil {
-				txn := entry.candidate.DurableRoot()
-				var node *primaryTerminalCompletionV6
-				var err error
-				if txn.isConstructedPrimaryV6() {
-					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
-				} else {
+			txn := entry.candidate.DurableRoot()
+			var node *primaryTerminalCompletionV6
+			var err error
+			if txn.isConstructedPrimaryV6() {
+				node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
+			} else {
+				if set := entry.candidate.resourceSet(); set != nil {
 					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
-					if err == nil {
-						node, err = txn.finishOrdinaryDataMetadataV6()
-					}
 				}
-				if err != nil {
-					c.removeCompletedPendingPrefixV6(completed, removedBytes)
-					c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
-					c.failWaitersLocked(c.poison)
-					c.clearPublishRequestLocked()
-					c.notifyLocked()
-					return completion
+				// An absent physical closure still owns the original DATA
+				// transaction terminal and its containing metadata receipt.
+				if err == nil {
+					node, err = txn.finishOrdinaryDataMetadataV6()
 				}
-				if node != nil {
-					if tail == nil {
-						completion.head = node
-					} else {
-						tail.next = node
-					}
-					tail = node
+			}
+			if err != nil {
+				c.removeCompletedPendingPrefixV6(completed, removedBytes)
+				c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+				c.failWaitersLocked(c.poison)
+				c.clearPublishRequestLocked()
+				c.notifyLocked()
+				return completion
+			}
+			if node != nil {
+				if tail == nil {
+					completion.head = node
+				} else {
+					tail.next = node
 				}
+				tail = node
 			}
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			*entry = pendingEntry{}
@@ -975,6 +977,12 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			c.pendingBytes -= removedBytes
 		} else {
 			c.pendingBytes = 0
+		}
+		// The consumed group is now the predecessor for admission. Its physical
+		// terminal accounting remains joined below before durable waiters/ACK.
+		// A late older Finish must never restore an older admission frontier.
+		if completion.sequence > c.durableRootSequence {
+			c.durableRootLineage, c.durableRootSequence = completion.lineage, completion.sequence
 		}
 		// Keep the original attempt outstanding through actual terminal
 		// accounting. WaitThrough cannot observe a new durable frontier yet.

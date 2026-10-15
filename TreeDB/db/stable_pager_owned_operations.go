@@ -2,6 +2,7 @@ package db
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -24,6 +25,7 @@ type stablePagerOwnedOperations struct {
 	transferred       atomic.Bool
 	snapshot          *Snapshot
 	pager             *pager.Pager
+	syncPath          string
 	counter           *atomic.Int64
 	owner             *primaryArenaOwnerV5
 	metadata          *retainedalloc.Owner
@@ -33,12 +35,12 @@ type stablePagerOwnedOperations struct {
 	failedNext        *stablePagerOwnedOperations
 }
 
-func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner) (*stablePagerOwnedOperations, error) {
+func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {
 	if snapshot == nil || snapshot.idx == nil || snapshot.db == nil || metadata == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
 	owner := snapshot.idx.primaryOwner
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stablePagerOwnedOperations{})))
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))) + retainedalloc.AllocationCharge(uint64(len(syncPath)))
 	if err := metadata.AddPending(charge); err != nil {
 		return nil, err
 	}
@@ -57,7 +59,7 @@ func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata 
 			return nil, err
 		}
 	}
-	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, counter: snapshot.stableIndexCaptureCounter, owner: owner, metadata: metadata, originalCustody: custody, charge: charge}
+	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, syncPath: strings.Clone(syncPath), counter: snapshot.stableIndexCaptureCounter, owner: owner, metadata: metadata, originalCustody: custody, charge: charge}
 	operations.refs.Store(1)
 	return operations, nil
 }
@@ -76,7 +78,7 @@ func (operations *stablePagerOwnedOperations) FlushThrough(*os.File, rootpublica
 	return nil
 }
 func (operations *stablePagerOwnedOperations) SyncThrough(file *os.File, _ rootpublication.DurableFrontier) error {
-	return operations.pager.SyncIndexDataWithStableFile(file)
+	return operations.pager.SyncIndexDataWithStableFileAtPath(file, operations.syncPath)
 }
 func (operations *stablePagerOwnedOperations) Release() (consumed bool, err error) {
 	n := operations.refs.Add(-1)
@@ -165,6 +167,7 @@ func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) error
 func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() error {
 	owner, metadata, charge := operations.owner, operations.MetadataOwner(), operations.charge
 	operations.pager = nil
+	operations.syncPath = ""
 	if operations.failure.causes[0] != nil {
 		if owner != nil {
 			owner.retainFailedPagerOperations(operations)

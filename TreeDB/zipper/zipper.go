@@ -1859,12 +1859,13 @@ const (
 )
 
 type applyRunConfig struct {
-	materializedBase   bool
-	maxParallelWorkers int
-	workerPool         *ApplyWorkerPool
-	leafPagePersister  leafPagePersistSink
-	oldPointerRefs     *PointerRefCounts
-	oldEntriesRemoved  *uint64
+	materializedBase     bool
+	maxParallelWorkers   int
+	workerPool           *ApplyWorkerPool
+	leafPagePersister    leafPagePersistSink
+	oldPointerRefs       *PointerRefCounts
+	oldEntriesRemoved    *uint64
+	unchangedPrimaryBase *unchangedPrimaryBaseEvidence
 }
 
 // Apply applies the batch to the tree rooted at rootID.

@@ -84,6 +84,22 @@ func (owner *primaryArenaOwnerV5) releaseWithOutcome(work *iterator.OrdinalScanW
 	if work != nil {
 		return false, false, ErrNativeMVCCSnapshotWork
 	}
+	if owner == nil {
+		return false, false, ErrSnapshotCapacity
+	}
+	owner.mu.Lock()
+	if owner.refs > 1 {
+		_, prior := consumePrimaryArenaEdgeLocked(owner)
+		owner.mu.Unlock()
+		return true, false, prior
+	}
+	owner.mu.Unlock()
+	return owner.releaseLastOrdinaryWithOutcome()
+}
+
+// Only a possible final edge constructs physical progress. Bind rechecks refs
+// under the same lock, so a concurrent retain cannot turn this into a last drop.
+func (owner *primaryArenaOwnerV5) releaseLastOrdinaryWithOutcome() (consumed, physicalDebt bool, err error) {
 	var receipt primaryArenaReleaseState
 	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	ready, err := bindPrimaryArenaRelease(&receipt, owner, false, &w)

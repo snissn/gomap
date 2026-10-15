@@ -757,6 +757,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		newZ.SetPrimaryDirectory(false)
 	}
 
+	var sharedBase *vacuumSharedBase
+	if replacementGen.primary != nil {
+		sharedBase = &vacuumSharedBase{zipper: newZ, pager: newPager}
+	}
 	var systemLeavesAppended bool
 	var olderReplacement *rebuiltDurableRootV1
 	var olderReplacementSource rootpublication.DurableRootRecordV1
@@ -777,7 +781,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		}
 		recordingAlloc := newVacuumRecordingAllocator(newAlloc)
 		rebuildStarted := time.Now()
-		rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+		rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootWithPublicationLockV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc, false, sharedBase)
 		systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
 		runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
 		runStats.OlderRootRebuilds++
@@ -862,7 +866,15 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	userTreeStarted := time.Now()
 	var newRoot uint64
 	userLeavesAppended := false
-	if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(baseState.RootPageID) {
+	var sharedHandled bool
+	newRoot, sharedHandled, userLeavesAppended, err = sharedBase.build(db, baseSnap, baseState.RootPageID, newAlloc)
+	if err != nil {
+		cleanupNewPager()
+		return err
+	}
+	if sharedHandled {
+		// Exact materialized base plus this version's validated PRIMARY delta.
+	} else if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(baseState.RootPageID) {
 		if db.leafPageLog == nil {
 			cleanupNewPager()
 			return fmt.Errorf("vacuum: leaf page log not configured")
@@ -971,7 +983,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			return err
 		}
 		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
-		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+		if err := sharedBase.release(newAlloc, retired); err != nil {
 			cleanupNewPager()
 			return err
 		}
@@ -1001,7 +1013,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			return err
 		}
 		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
-		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+		if err := sharedBase.release(newAlloc, retired); err != nil {
 			return err
 		}
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
@@ -1201,7 +1213,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					}
 					recordingAlloc := newVacuumRecordingAllocator(newAlloc)
 					rebuildStarted := time.Now()
-					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootWithPublicationLockV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc, false, sharedBase)
 					systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
 					runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
 					runStats.OlderRootRebuilds++
@@ -1225,7 +1237,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
 					rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
 					rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
-					if err := freeVacuumRetired(newAlloc, olderReplacement.pages); err != nil {
+					if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {
 						resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
 						successorCloseErr := successor.Close()
 						cleanupNewPager()
@@ -1484,7 +1496,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				finalSyncErr = errors.New("vacuum primary: two independent slots required")
 			} else {
 				var persistedPrimaryManifest *leafGenerationManifest
-				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest)
+				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest, sharedBase)
 				if persistedPrimaryManifest != nil {
 					stagedLeafGenerationView = newLeafGenerationView(persistedPrimaryManifest)
 					leafGenerationChanged = true
@@ -1877,7 +1889,7 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 	return db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, newPager, alloc, false)
 }
 
-func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool) (rebuilt rebuiltDurableRootV1, work rebuiltRecoverableRootWorkV1, err error) {
+func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool, sharedBases ...*vacuumSharedBase) (rebuilt rebuiltDurableRootV1, work rebuiltRecoverableRootWorkV1, err error) {
 	if roots == nil || newPager == nil || alloc == nil {
 		return rebuiltDurableRootV1{}, work, errors.New("vacuum: missing recoverable-root rebuild input")
 	}
@@ -1907,7 +1919,18 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
 		userRoot uint64
 	)
 	userLeavesAppended := false
-	if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(root.UserRootPageID) {
+	var sharedBase *vacuumSharedBase
+	if len(sharedBases) != 0 {
+		sharedBase = sharedBases[0]
+	}
+	var sharedHandled bool
+	userRoot, sharedHandled, userLeavesAppended, err = sharedBase.build(db, snapshot, root.UserRootPageID, alloc)
+	if err != nil {
+		return rebuiltDurableRootV1{}, work, err
+	}
+	if sharedHandled {
+		// Reuse only construction-local DATA, never a component in the old arena.
+	} else if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(root.UserRootPageID) {
 		rootData, readErr := snapshot.idx.pager.Get(root.UserRootPageID)
 		if readErr != nil {
 			return rebuiltDurableRootV1{}, work, readErr

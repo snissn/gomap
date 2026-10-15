@@ -565,7 +565,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 			idx:               idx,
 			state:             &candidateState,
 			vlogManager:       db.valueLogManager,
-			vlogPinned:        true,
+			vlogPinned:        set != nil,
 			reader:            newValueReader(set),
 			registryShardHint: snapshotShardHintUnset,
 		}
@@ -592,7 +592,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 	if err != nil {
 		return nil, errors.Join(err, snapshot.Close())
 	}
-	if len(freshSet.Files) == 0 {
+	if freshSet != nil && len(freshSet.Files) == 0 {
 		if releaseErr := db.valueLogManager.Release(freshSet); releaseErr != nil {
 			return nil, errors.Join(releaseErr, snapshot.Close())
 		}
@@ -748,7 +748,7 @@ func (db *DB) rebindCandidateValueLogSetWithLimitsV1(snapshot *Snapshot, limits 
 	state := *snapshot.state
 	state.ValueLogSet = fresh
 	snapshot.state = &state
-	snapshot.vlogPinned = true
+	snapshot.vlogPinned = fresh != nil
 	snapshot.reader = newValueReader(fresh)
 	if oldPinned && old != nil {
 		if err := db.valueLogManager.Release(old); err != nil {
@@ -875,7 +875,6 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		if captureErr != nil {
 			return nil, false, captureErr
 		}
-		defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
 		for _, descriptor := range diagnostics.Physical() {
 			switch descriptor.Kind {
 			case rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog:
@@ -889,6 +888,11 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 					}
 				}
 			}
+		}
+		// Descriptor generations have been copied into the original numeric
+		// maps. End this exact borrow now, before any later producer operation.
+		if err := diagnostics.CloseWithError(); err != nil {
+			return nil, false, err
 		}
 	}
 	predecessorDependencyEmpty := len(known) == 0
@@ -1047,9 +1051,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		}(additional)
 	}
 	var builder *rootpublication.StableResourceSetBuilder
-	if metadata == nil {
-		builder = rootpublication.NewStableResourceSetBuilder()
-	} else {
+	if metadata != nil {
 		var buildErr error
 		builder, buildErr = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
 		if buildErr != nil {
@@ -1075,6 +1077,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 				return errors.Join(err, db.releaseCapturedRootResources(admitted))
 			}
 			resources = admitted
+		}
+		if builder == nil {
+			builder = rootpublication.NewStableResourceSetBuilder()
 		}
 		if err := builder.Merge(resources); err != nil {
 			return errors.Join(err, db.releaseCapturedRootResources(resources))
@@ -1247,6 +1252,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	appendOnlyCertified := appendOnlyMutation && len(mutation.Added) == 0 && additional == nil
 	closureStart := time.Now()
 	if appendOnlyMutation && additional != nil {
+		if builder == nil {
+			builder = rootpublication.NewStableResourceSetBuilder()
+		}
 		appendWork, appendErr := builder.MergeAppendOnlyLogicalObligations(additional, mutation)
 		if timing != nil {
 			timing.FinalizeCandidateResourceWork.Add(appendWork)
@@ -1263,12 +1271,15 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	} else if err := merge(additional); err != nil {
 		return nil, fmt.Errorf("merge producer durable-root resources: %w", err)
 	}
-	resources, err := builder.Freeze()
-	if err != nil {
-		return nil, err
-	}
-	if timing != nil {
-		timing.FinalizeCandidateResourceWork.Add(builder.ClosureWorkSnapshot())
+	var resources *rootpublication.StableResourceSet
+	if builder != nil {
+		resources, err = builder.Freeze()
+		if err != nil {
+			return nil, err
+		}
+		if timing != nil {
+			timing.FinalizeCandidateResourceWork.Add(builder.ClosureWorkSnapshot())
+		}
 	}
 	if !appendOnlyCertified {
 		validationWork, validationErr := rootpublication.ValidateStableResourceSetLogicalObligationsWithWork(resources, requirements)

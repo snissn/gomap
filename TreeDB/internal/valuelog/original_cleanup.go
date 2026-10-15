@@ -135,7 +135,7 @@ func (e *ManagerCleanupFailure) Is(target error) bool {
 func (f *File) refundProducerMetadata() {
 	f.closeMu.Lock()
 	defer f.closeMu.Unlock()
-	if !f.producerDetached.Load() || f.terminalWalk.Load() || f.closeErr != nil || f.terminalParentErr != nil || f.constructionParentErrors[0] != nil || f.constructionParentErrors[1] != nil || f.RefCount.Load() != 0 || f.producerDeleteGuards.Load() != 0 {
+	if !f.producerDetached.Load() || f.terminalWalk.Load() || f.closeErr != nil || f.terminalParentErr != nil || f.constructionParentErrors[0] != nil || f.constructionParentErrors[1] != nil || f.RefCount.Load() != 0 || f.producerDeleteGuards.Load() != 0 || f.remapRequested.Load() {
 		return
 	}
 	// An admitted destructive caller owns deleteMu until its exact-parent

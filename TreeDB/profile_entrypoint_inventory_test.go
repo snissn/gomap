@@ -29,10 +29,10 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
-		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
+		"LeafGenerationPlan", "MaintenancePhase", "NativeMVCCBudgetV6", "NewBatch", "NewBatchWithSize",
 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetSync", "Stats", "SupportsMVCCReadCut",
-		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+		"StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
@@ -67,6 +67,12 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
 	}
 	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
+	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_mvcc_prune.go"))
+	for _, name := range []string{"NativeMVCCBudgetV6", "StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6"} {
+		for _, fragment := range []string{"db.lifecycleMu.RLock()", "defer db.lifecycleMu.RUnlock()", "db.cached == nil || db.backend == nil", "db.cached." + name + "("} {
+			profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, fragment)
+		}
+	}
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))

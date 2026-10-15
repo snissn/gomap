@@ -332,12 +332,47 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
 				t.Fatal(err)
 			}
 			d = nil
+			beforeFiles := make(map[string][]byte)
+			if !rootpublication.StableRelativeNamespaceSupported() {
+				err = filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, walkErr error) error {
+					if walkErr != nil || entry.IsDir() {
+						return walkErr
+					}
+					image, readErr := os.ReadFile(path)
+					beforeFiles[path] = image
+					return readErr
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if mode == "vacuum" {
 				err = VacuumIndexOffline(opts)
 			} else {
 				_, err = ValueLogRewriteOffline(opts)
 			}
-			if err != nil {
+			unsupported := !rootpublication.StableRelativeNamespaceSupported()
+			if unsupported {
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("fresh unsupported replacement: %v", err)
+				}
+				seen := 0
+				err = filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, walkErr error) error {
+					if walkErr != nil || entry.IsDir() {
+						return walkErr
+					}
+					want, ok := beforeFiles[path]
+					got, readErr := os.ReadFile(path)
+					if !ok || !bytes.Equal(got, want) {
+						t.Errorf("unsupported request changed or created %s", path)
+					}
+					seen++
+					return readErr
+				})
+				if err != nil || seen != len(beforeFiles) {
+					t.Fatalf("unsupported request changed file inventory: %d/%d %v", seen, len(beforeFiles), err)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			newData, err := os.Stat(filepath.Join(opts.Dir, indexFileName))
@@ -348,10 +383,14 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if os.SameFile(oldData, newData) || os.SameFile(oldPrimary, newPrimary) {
+			if unsupported {
+				if !os.SameFile(oldData, newData) || !os.SameFile(oldPrimary, newPrimary) {
+					t.Fatal("unsupported request replaced original pair")
+				}
+			} else if os.SameFile(oldData, newData) || os.SameFile(oldPrimary, newPrimary) {
 				t.Fatal("physical pair not replaced")
 			}
-			if mode == "vlog" {
+			if mode == "vlog" && !unsupported {
 				for _, segment := range oldSegments {
 					if _, e := os.Stat(segment.path); !os.IsNotExist(e) {
 						t.Fatalf("old segment retained after complete rewrite: %s %v", segment.path, e)
@@ -375,7 +414,11 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
 				if after.durable.primaryProof[slot].Record.CommitSeq != basis.primaryProof[slot].Record.CommitSeq {
 					t.Fatalf("slot %d changed exact one-hop proof", slot)
 				}
-				if r.Freelist == original.Freelist {
+				if unsupported {
+					if r.Freelist != original.Freelist {
+						t.Fatal("unsupported request changed original DATA generation")
+					}
+				} else if r.Freelist == original.Freelist {
 					t.Fatal("replacement retained old physical DATA generation")
 				}
 			}
