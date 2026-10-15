@@ -59,6 +59,9 @@ func CloneAdmittedStableResourceSetWithOrdinalWorkV6(source *StableResourceSet, 
 		allocation, err := newResourceAllocationWithWorkV6(source.metadata.owner, charge, w)
 		if err != nil {
 			directory.refs.Add(-1)
+			if err == retainedalloc.ErrWorkBudget {
+				return nil, false, nil
+			}
 			return nil, false, err
 		}
 		set := &StableResourceSet{metadata: allocation, selected: true, extras: &stableResourceSetExtras{empty: directory}}
@@ -82,6 +85,9 @@ func CloneAdmittedStableResourceSetWithOrdinalWorkV6(source *StableResourceSet, 
 	if err != nil {
 		// The source still owns its edge under source.mu; this cannot be last.
 		views.allocation.refs.Add(-1)
+	}
+	if err == retainedalloc.ErrWorkBudget {
+		return nil, false, nil
 	}
 	return set, err == nil, err
 }

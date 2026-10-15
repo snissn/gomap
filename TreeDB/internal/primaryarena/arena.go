@@ -318,7 +318,7 @@ func (a *Arena) prepareClaimV6(class Class, w *iterator.OrdinalScanWork, native 
 		return nil, false, ErrFull
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Claim{})))
-	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+	if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {
 		return nil, false, err
 	}
 	c := &Claim{native: native, metadataCharge: charge, arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}
@@ -377,7 +377,7 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(bankChunk{}))+128) {
 				return Ref{}, false, nil
 			}
-			if err := retainedalloc.AddWithOrdinalWork(&a.metadata, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{}))), w); err != nil {
+			if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{}))), w); !ready || err != nil {
 				return Ref{}, false, err
 			}
 			c.chunk = new(bankChunk)

@@ -251,7 +251,7 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 			return false, ErrNativeMVCCSnapshotWork
 		}
 		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Snapshot{})))
-		if err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); err != nil {
+		if ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); !ready || err != nil {
 			idx.wrapperMu.Unlock()
 			db.idxMu.Unlock()
 			return false, err
@@ -285,7 +285,7 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 					mutex.Unlock()
 					return false, nil
 				}
-				if err := retainedalloc.AddPendingWithOrdinalWork(metadata, fileBytes, w); err != nil {
+				if ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, fileBytes, w); !ready || err != nil {
 					mutex.Unlock()
 					return false, err
 				}

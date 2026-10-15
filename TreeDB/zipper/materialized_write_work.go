@@ -106,7 +106,7 @@ func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.Ch
 			return nil, false, err
 		}
 		charge := retainedalloc.AllocationCharge(n) + retainedalloc.AllocationCharge(frameBytes)
-		if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+		if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 			return nil, false, err
 		}
 		// Both original containing objects are admitted together. No fallible
@@ -164,7 +164,7 @@ func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref pag
 		return nil, false, e
 	}
 	charge := retainedalloc.AllocationCharge(n)
-	if e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); e != nil {
+	if ready, e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); !ready || e != nil {
 		return nil, false, e
 	}
 	f := &materializedWriteFrame{parent: parent, next: s.head, oldID: ref.Page, oldRef: ref, ops: ops}
@@ -581,7 +581,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 				return false, e
 			}
 			charge := retainedalloc.AllocationCharge(n)
-			if e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); e != nil {
+			if ready, e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); !ready || e != nil {
 				return false, e
 			}
 			next := &materializedWriteFrame{parent: f.parent, next: s.head, splitSegment: true}

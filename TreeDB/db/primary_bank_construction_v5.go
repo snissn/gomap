@@ -67,7 +67,7 @@ func newNativePrimaryBankConstructionV6(idx *indexGen, w *iterator.OrdinalScanWo
 	}
 	metadata := idx.primary.MetadataOwner()
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankConstructionV5{})))
-	if err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); !ready || err != nil {
 		return nil, false, err
 	}
 	_, _ = owner.retainLockedV6() // protected eligibility above makes this infallible
@@ -94,7 +94,7 @@ func (claims *primaryBankConstructionV5) ensureNativeCapacityV6(count int, w *it
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))) {
 		return false, nil
 	}
-	if err := retainedalloc.AddPendingWithOrdinalWork(claims.metadata, added, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(claims.metadata, added, w); !ready || err != nil {
 		return false, err
 	}
 	claims.refs = make([]primaryarena.Ref, 0, 1)

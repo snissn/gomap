@@ -528,7 +528,7 @@ func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iter
 	}
 	charge := primarySealMetadataV6(count)
 	owner := runtime.idx.primary.MetadataOwner()
-	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 		return false, err
 	}
 	prefix := make([]*freelist.PreparedCOWCandidateV1, count)

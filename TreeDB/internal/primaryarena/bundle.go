@@ -279,7 +279,7 @@ func (a *Arena) writeBundleLocked(directory Ref, image []byte, record *bundleRec
 				}
 				if b.image == nil {
 					charge := retainedalloc.AllocationCharge(uint64(len(image)))
-					if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+					if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {
 						return nil, false, err
 					}
 					b.image = make([]byte, len(image))

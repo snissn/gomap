@@ -71,7 +71,7 @@ func (a *Arena) sealMetadataWithWorkV6(r Ref, image []byte, w *iterator.OrdinalS
 			return false, retainedalloc.ErrWorkRequired
 		}
 		charge := a.edgeCharge(len(edges))
-		if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+		if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {
 			return false, err
 		}
 		b.edges = make([]Ref, 0, len(edges))

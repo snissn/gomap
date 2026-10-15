@@ -49,8 +49,11 @@ func newResourcePinnedBackingWithWorkV6(owner *retainedalloc.Owner, registry *Id
 		return nil, retainedalloc.ErrCapacity
 	}
 	charge += fileCharge
-	if err = retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
-		return nil, err
+	if ready, growthErr := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || growthErr != nil {
+		if growthErr == nil {
+			growthErr = retainedalloc.ErrWorkBudget
+		}
+		return nil, growthErr
 	}
 	backing := &resourcePinnedBacking{owner: owner, charge: charge, registry: registry}
 	backing.refs.Store(1)

@@ -857,7 +857,7 @@ func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2, w
 		if !w.Reserve(1, charge) {
 			return false, nil
 		}
-		if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+		if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 			return false, err
 		}
 		root.directory = &DependencyDirectoryReleaseWork{}

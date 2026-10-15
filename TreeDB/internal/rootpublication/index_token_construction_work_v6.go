@@ -90,6 +90,9 @@ func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *it
 			if s.token == nil {
 				a, err := newResourceAllocationWithWorkV6(s.spec.MetadataOwner, charge, w)
 				if err != nil {
+					if err == retainedalloc.ErrWorkBudget {
+						return nil, false, nil
+					}
 					return nil, false, err
 				}
 				s.token = &StableResourceToken{metadata: a}
@@ -100,6 +103,9 @@ func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *it
 				// logical obligation. Use the original empty backing shape.
 				a, err := newResourceAllocationWithWorkV6(s.spec.MetadataOwner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceObligationBacking{}))), w)
 				if err != nil {
+					if err == retainedalloc.ErrWorkBudget {
+						return nil, false, nil
+					}
 					return nil, false, err
 				}
 				s.token.obligationBacking = &resourceObligationBacking{allocation: a}
@@ -107,6 +113,9 @@ func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *it
 			if s.token.physicalBacking == nil {
 				physical, err := newResourcePinnedBackingWithWorkV6(s.spec.MetadataOwner, s.spec.PinRegistry, s.spec.File, false, w)
 				if err != nil {
+					if err == retainedalloc.ErrWorkBudget {
+						return nil, false, nil
+					}
 					return nil, false, err
 				}
 				s.token.physicalBacking = physical

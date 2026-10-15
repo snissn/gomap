@@ -11,7 +11,7 @@ func TestNativeStablePagerPartialTokenCancellationV6(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("original stable namespace capability unavailable")
 	}
-	for _, boundary := range []string{"before-token", "before-retain", "after-retain"} {
+	for _, boundary := range []string{"before-token", "growth-refusal", "token-only", "before-pinned-backing", "before-retain", "after-retain"} {
 		t.Run(boundary, func(t *testing.T) {
 			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
@@ -66,12 +66,20 @@ func TestNativeStablePagerPartialTokenCancellationV6(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Four records admit the actual original policy/descriptor boundary.
-			// Twelve then allocate the SAME partial token, before callback Retain.
-			// One more takes the original callback edge, before string copies.
+			// Four records admit the original policy/descriptor boundary. Phase1
+			// reserves12, then each SAME un-enrolled-owner growth needs1:
+			// 12 refuses before token;13 retains token;14 adds obligations;
+			// 15 adds pinned backing. A separate1 takes callback Retain.
 			limits := []uint64{4}
-			if boundary != "before-token" {
+			switch boundary {
+			case "growth-refusal":
 				limits = append(limits, 12)
+			case "token-only":
+				limits = append(limits, 13)
+			case "before-pinned-backing":
+				limits = append(limits, 14)
+			case "before-retain", "after-retain":
+				limits = append(limits, 15)
 			}
 			if boundary == "after-retain" {
 				limits = append(limits, 1)

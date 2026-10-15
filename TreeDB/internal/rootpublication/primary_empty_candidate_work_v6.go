@@ -30,6 +30,9 @@ func EmptyDependencyManifestWithWorkV6(set *StableResourceSet, w *iterator.Ordin
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyManifestV1{})))
 	allocation, err := newResourceAllocationWithWorkV6(owner, charge, w)
 	if err != nil {
+		if err == retainedalloc.ErrWorkBudget {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	// Zero encoded entries share the canonical nonfallible empty codec. No
@@ -93,7 +96,7 @@ func PrepareEmptyStableResourceSetWithOrdinalWorkV6(owner *retainedalloc.Owner, 
 	header := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceAllocation{})))
 	kindCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceKindBacking{}))) + header
 	setCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableResourceSet{}))) + header
-	if err := retainedalloc.AddPendingWithOrdinalWork(owner, kindCharge+setCharge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, kindCharge+setCharge, w); !ready || err != nil {
 		return nil, false, err
 	}
 	views := &resourceKindBacking{allocation: resourceAllocationAdmittedV6(owner, kindCharge)}

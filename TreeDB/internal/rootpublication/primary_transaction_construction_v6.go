@@ -62,7 +62,7 @@ func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.Ordi
 		return nil, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DurableRootTransaction{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTerminalCompletionV6{})))
-	if err := retainedalloc.AddPendingWithOrdinalWork(a.MetadataOwner(), charge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(a.MetadataOwner(), charge, w); !ready || err != nil {
 		return nil, false, err
 	}
 	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, nativeWorkOwned: native, terminalCompletion: &primaryTerminalCompletionV6{owner: a.MetadataOwner(), charge: charge}}}
@@ -292,7 +292,7 @@ func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.O
 		return nil, 0, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
-	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 		return nil, 0, false, err
 	}
 	return &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil

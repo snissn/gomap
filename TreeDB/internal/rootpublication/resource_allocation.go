@@ -40,7 +40,10 @@ func newResourceAllocationWithWorkV6(owner *retainedalloc.Owner, containingBytes
 		return nil, retainedalloc.ErrCapacity
 	}
 	charge := containingBytes + header
-	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+	if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
+		if err == nil {
+			err = retainedalloc.ErrWorkBudget
+		}
 		return nil, err
 	}
 	return resourceAllocationAdmittedV6(owner, charge), nil

@@ -72,3 +72,77 @@ func TestNativeAtomicOwnerGrowthPricesOriginalRollback(t *testing.T) {
 	e1.Close()
 	e2.Close()
 }
+
+// The adapter must not turn ordinary finite-vector exhaustion into the hard
+// unsupported-capability error consumed by construction failure paths.
+func TestNativeOwnerGrowthAdapterPreservesYield(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		var o Owner
+		o.Initialize(256)
+		budget := &testBudget{cap: 1 << 20}
+		enrolled, err := o.Enroll(budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, admitted := o.Bytes(), budget.bytes
+		tiny := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
+		var ready bool
+		if pending {
+			ready, err = AddPendingWithOrdinalWork(&o, 64, tiny)
+		} else {
+			ready, err = AddWithOrdinalWork(&o, 64, tiny)
+		}
+		if ready || err != nil || o.Bytes() != before || o.pending != 0 || budget.bytes != admitted {
+			t.Fatal("adapter lost effect-free yield", ready, err, o.Bytes(), o.pending, budget.bytes)
+		}
+		full := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+		if pending {
+			ready, err = AddPendingWithOrdinalWork(&o, 64, full)
+		} else {
+			ready, err = AddWithOrdinalWork(&o, 64, full)
+		}
+		if !ready || err != nil || o.Bytes() != before+64 || budget.bytes != admitted+64 {
+			t.Fatal("same owner could not resume", ready, err)
+		}
+		if pending {
+			o.RemovePending(64)
+		} else {
+			o.Remove(64)
+		}
+		enrolled.Close()
+	}
+}
+
+type growthUnsupportedLease struct{ Lease }
+type growthUnsupportedBudget struct{ budget testBudget }
+
+func (b *growthUnsupportedBudget) AcquireRetention(n uint64) (Lease, error) {
+	l, err := b.budget.AcquireRetention(n)
+	if err != nil {
+		return nil, err
+	}
+	return &growthUnsupportedLease{l}, nil
+}
+func TestNativeOwnerGrowthAdapterPreservesUnsupported(t *testing.T) {
+	var o Owner
+	o.Initialize(256)
+	b := &growthUnsupportedBudget{budget: testBudget{cap: 1 << 20}}
+	e, err := o.Enroll(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, admitted := o.Bytes(), b.budget.bytes
+	w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if ready, err := AddPendingWithOrdinalWork(&o, 64, w); ready || err != ErrWorkRequired {
+		t.Fatal(ready, err)
+	}
+	if o.Bytes() != before || o.pending != 0 || b.budget.bytes != admitted {
+		t.Fatal("unsupported capability changed original accounting")
+	}
+	// The unchanged ordinary operation does not require a bounded capability.
+	if ready, err := AddPendingWithOrdinalWork(&o, 64, nil); !ready || err != nil {
+		t.Fatal(ready, err)
+	}
+	o.RemovePending(64)
+	e.Close()
+}

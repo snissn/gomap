@@ -35,7 +35,7 @@ func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena 
 			return false, nil
 		}
 		charge := primaryRuntimeDescriptorChargeV5()
-		if err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); err != nil {
+		if ready, err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); !ready || err != nil {
 			return false, err
 		}
 		seal.commitRuntime = &primaryDurableRuntimeV5{}
@@ -47,7 +47,7 @@ func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena 
 			return false, nil
 		}
 		charge := retainedalloc.AllocationCharge(uint64(count) * uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil))))
-		if err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); err != nil {
+		if ready, err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); !ready || err != nil {
 			return false, err
 		}
 		seal.commitRetired = make([]*rootPublicationSealV1, 0, count)

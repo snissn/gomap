@@ -39,18 +39,21 @@ func (a *Arena) AdmitRootMetadata(r Ref, bytes uint64) error {
 }
 func (a *Arena) AdmitRootMetadataWithWorkV6(r Ref, bytes uint64, w *iterator.OrdinalScanWork) error {
 	if !reserve(w, 1, 2*uint64(unsafe.Sizeof(bank{}))) {
-		return retainedalloc.ErrWorkRequired
+		return retainedalloc.ErrWorkBudget
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	b, ready := a.validWithWorkV6(r, w)
 	if !ready {
-		return retainedalloc.ErrWorkRequired
+		return retainedalloc.ErrWorkBudget
 	}
 	if b == nil {
 		return ErrStale
 	}
-	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, bytes, w); err != nil {
+	if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, bytes, w); !ready || err != nil {
+		if err == nil {
+			err = retainedalloc.ErrWorkBudget
+		}
 		return err
 	}
 	b.metadataCharge += bytes

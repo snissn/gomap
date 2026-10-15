@@ -132,7 +132,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.Ordina
 			owner := c.snapshot.idx.primary.MetadataOwner()
 			charge := retainedalloc.AllocationCharge(uint64(s.count) * 8)
 			if s.count != 0 {
-				if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+				if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 					return false, err
 				}
 				s.retired = make([]uint64, s.count)

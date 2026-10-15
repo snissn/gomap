@@ -41,3 +41,29 @@ func TestPrimaryReadRootConstructionRefusesBeforeAllocationV6(t *testing.T) {
 		t.Fatal("duplicate consumed existing original owner")
 	}
 }
+
+func TestPrimaryReadRootConstructionGrowthYieldV6(t *testing.T) {
+	var p Pager
+	var metadata retainedalloc.Owner
+	metadata.Initialize(128)
+	p.SetPrimaryMetadataOwnerV6(&metadata)
+	operand := &readRootConstructionRefusalOperandV6{}
+	local := PrimaryReadRootLocalBaseV6 + 1
+	before := metadata.Bytes()
+	// Original header2 + empty-bucket lookup1 leaves no work for the SAME
+	// atomic owner growth header. No serial/node/count or operand may change.
+	w := &iterator.OrdinalScanWork{RecordLimit: 3, ByteLimit: 1 << 20}
+	if ready, err := p.PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local, &metadata, 64, operand, w); ready || err != nil || w.Records != 3 || metadata.Bytes() != before || operand.calls != 0 || p.immutableReadRoots.count != 0 {
+		t.Fatal("aggregate growth yield lost custody", ready, err, w, metadata.Bytes(), operand.calls)
+	}
+	// A fresh original vector reaches the original concrete constructor once.
+	w = &iterator.OrdinalScanWork{RecordLimit: 4, ByteLimit: 1 << 20}
+	if ready, err := p.PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local, &metadata, 64, operand, w); !ready || err != nil || w.Records != 4 || operand.calls != 1 || p.immutableReadRoots.count != 1 {
+		t.Fatal("aggregate constructor did not resume", ready, err, w, operand.calls)
+	}
+	before = metadata.Bytes()
+	w = &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if ready, err := p.PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local, &metadata, 64, operand, w); ready || err != retainedalloc.ErrWorkRequired || metadata.Bytes() != before || operand.calls != 1 || p.immutableReadRoots.count != 1 {
+		t.Fatal("duplicate capability was relaxed", ready, err)
+	}
+}

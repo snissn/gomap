@@ -138,7 +138,7 @@ func (p *Pager) PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local uint64, m
 	if bankCharge > ^uint64(0)-nodeCharge {
 		return false, retainedalloc.ErrCapacity
 	}
-	if err := retainedalloc.AddWithOrdinalWork(metadata, bankCharge+nodeCharge, w); err != nil {
+	if ready, err := retainedalloc.AddWithOrdinalWork(metadata, bankCharge+nodeCharge, w); !ready || err != nil {
 		return false, err
 	}
 	// Everything after aggregate admission is the concrete original

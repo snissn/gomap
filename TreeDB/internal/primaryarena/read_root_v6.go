@@ -148,7 +148,7 @@ func (a *Arena) prepareReadRootCertificateLockedV6(b *bank, w *iterator.OrdinalS
 		return true, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ReadRootCertificateV6{})))
-	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+	if ready, err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); !ready || err != nil {
 		return false, err
 	}
 	b.readCertificate = &ReadRootCertificateV6{}

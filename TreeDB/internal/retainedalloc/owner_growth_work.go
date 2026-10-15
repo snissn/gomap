@@ -1,6 +1,7 @@
 package retainedalloc
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"unsafe"
 )
@@ -60,26 +61,24 @@ func (o *Owner) AddPendingWithWork(bytes uint64, w *iterator.OrdinalScanWork) (b
 	return o.addWithWork(bytes, true, w)
 }
 
-// AddWithOrdinalWork preserves genuine ordinary callers. A native caller
-// always supplies its original vector; an unready atomic unit is an explicit
-// refusal and never a synchronous nil-work retry.
-func AddWithOrdinalWork(o *Owner, bytes uint64, w *iterator.OrdinalScanWork) error {
+// ErrWorkBudget is used only by error-only original allocation helpers to
+// propagate an effect-free work refusal to their typed continuation parent.
+// It is distinct from unsupported work capability (ErrWorkRequired).
+var ErrWorkBudget = errors.New("retained metadata: work vector exhausted")
+
+// AddWithOrdinalWork preserves the ready result of the original atomic growth
+// seam. Only genuine ordinary callers use the original nil-work operation.
+func AddWithOrdinalWork(o *Owner, bytes uint64, w *iterator.OrdinalScanWork) (bool, error) {
 	if w == nil {
-		return o.Add(bytes)
+		err := o.Add(bytes)
+		return err == nil, err
 	}
-	ready, err := o.AddWithWork(bytes, w)
-	if !ready && err == nil {
-		return ErrWorkRequired
-	}
-	return err
+	return o.AddWithWork(bytes, w)
 }
-func AddPendingWithOrdinalWork(o *Owner, bytes uint64, w *iterator.OrdinalScanWork) error {
+func AddPendingWithOrdinalWork(o *Owner, bytes uint64, w *iterator.OrdinalScanWork) (bool, error) {
 	if w == nil {
-		return o.AddPending(bytes)
+		err := o.AddPending(bytes)
+		return err == nil, err
 	}
-	ready, err := o.AddPendingWithWork(bytes, w)
-	if !ready && err == nil {
-		return ErrWorkRequired
-	}
-	return err
+	return o.AddPendingWithWork(bytes, w)
 }

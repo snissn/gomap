@@ -106,7 +106,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.Ordina
 				return false, nil
 			}
 			owner := runtime.idx.primary.MetadataOwner()
-			if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+			if ready, err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); !ready || err != nil {
 				return false, err
 			}
 			s.metadata, s.charge = owner, charge
@@ -158,6 +158,9 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.Ordina
 			}
 			cert := allocator.primary.ReadCertificateV6()
 			if err := runtime.idx.primary.AdmitRootMetadataWithWorkV6(cert.Reference(), retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{}))), w); err != nil {
+				if err == retainedalloc.ErrWorkBudget {
+					return false, nil
+				}
 				return false, err
 			}
 			s.member.install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: cert.Reference(), dataCommit: s.member.prepared.Candidate().Generation().CommitSeq(), certificate: cert}

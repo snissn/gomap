@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"sync"
@@ -426,4 +427,37 @@ func TestResourceKindBackingSharedSetAndScopedBorrow(t *testing.T) {
 		t.Fatal("last scoped borrower retained allocation or token")
 	}
 	borrowed.release() // once-only local release
+}
+
+// No DB, file, callback or publication: exercise the error-only allocation
+// adapter which must carry budget refusal to its original typed parent.
+func TestResourceAllocationGrowthBudgetDistinctionV6(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	empty := &iterator.OrdinalScanWork{}
+	if a, err := newResourceAllocationWithWorkV6(&owner, 64, empty); a != nil || err != retainedalloc.ErrWorkBudget || owner.Bytes() != 0 {
+		t.Fatal(a, err, owner.Bytes())
+	}
+	w := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
+	a, err := newResourceAllocationWithWorkV6(&owner, 64, w)
+	if a == nil || err != nil || w.Records != 1 || owner.Bytes() != a.charge {
+		t.Fatal("original allocation did not resume", a, err, w)
+	}
+	if !a.drop() {
+		t.Fatal("original allocation edge lost")
+	}
+	a.refund()
+	// This existing ordinary test lease deliberately lacks WorkLease. Its hard
+	// capability error must never become a resumable budget refusal.
+	b := &registryBudget{cap: 1 << 20}
+	e, err := owner.Enroll(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, admitted := owner.Bytes(), b.bytes
+	w = &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if a, err := newResourceAllocationWithWorkV6(&owner, 64, w); a != nil || err != retainedalloc.ErrWorkRequired || owner.Bytes() != before || b.bytes != admitted {
+		t.Fatal(a, err, owner.Bytes(), b.bytes)
+	}
+	e.Close()
 }
