@@ -1,0 +1,587 @@
+[
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/README.md",
+    "bytes": 2100,
+    "sha256": "103d8ad8fcea450282ad257286ea70411852c0d47e6cf4d3e018b9dc505a72c0"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/omitted-binaries.json",
+    "bytes": 863,
+    "sha256": "adb8a7b7e178dae1f2788bff4116463d76df42f7c89f9b40e26519db83f3fd17"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/create_worktree.py",
+    "bytes": 10735,
+    "sha256": "be3c805af6dd6f696a3ef897db1d5cf3efd6fa7a664b9428c81228c08146833a"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/first-composition-source.json",
+    "bytes": 2982,
+    "sha256": "4c13bbaaed749dbdf0e3df090c0422e8f5806ff63cfdc2f6d093f1dcb17f802f"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/first-freelist-focused-failure.txt",
+    "bytes": 1495,
+    "sha256": "cfa30016bbe2207be5fc688187a2d3f7251ec8954ba49589eadd13ed5a77c90b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/main-worktree-setup.json",
+    "bytes": 396,
+    "sha256": "e0a3aada323ed3aa09b0707bad5b15175b0258957248f14f9ba4f648734578d0"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/construction-status.md",
+    "bytes": 2955,
+    "sha256": "2f7bba4b5c1c2162e294109218ee3b6f5b829503b0bdd40f3f5f218d9e57de92"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/evidence-index.json",
+    "bytes": 17983,
+    "sha256": "d5793ddd2332de4fb89d7f6638960e648c679a1139c9ed444d9ed492ac840a84"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/final-freeze.md",
+    "bytes": 3986,
+    "sha256": "e35ceac308f021a28edd57bf6367db0a86ca76db74f0e66e60c460a267d8af38"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/gofmt-original.json",
+    "bytes": 2426,
+    "sha256": "f30b6423c2c4980d05c40b6d376f145cfbed6898df4f5288128f2fcae0666803"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/gofmt-semantic-diff.json",
+    "bytes": 1258,
+    "sha256": "0e00f259873d9cc54299ee28014bb63b8e692cb9aa7be3f035f46ee60665ee70"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/handoff.md",
+    "bytes": 4720,
+    "sha256": "8589dbb5d025bc666579dc5fbb2f650d4050a31b8f3a31d232d32f309f470641"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/binaries.json",
+    "bytes": 530,
+    "sha256": "3c86faba04b71c7e29a35b3f62d26a7224b04ac6c9df0917327bdbbce2252ca5"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/build-combined.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/combined-alloc.log",
+    "bytes": 225,
+    "sha256": "84c812cd751dfe613652ca384f6d0dbe27fa340a0f336ba71c0e97536a091804"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/combined-alloc.pprof",
+    "bytes": 65875,
+    "sha256": "119f057b78c7a22ca7a2efffe44109137c15f1cb2189a96b4c085fbf00ed6a96"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/combined-cpu.log",
+    "bytes": 225,
+    "sha256": "c73e72b7b79f8fc23e85b1e7729cff52dea5f2e12596a2b5090142afde75de74"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/combined-cpu.pprof",
+    "bytes": 20835,
+    "sha256": "32696b78fc920875e036420ab0a09883bd78570e7a06499ba386e91e1c95a74e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/commands.json",
+    "bytes": 11489,
+    "sha256": "8ad84e82957f1af6c14334eb1709fcd471f85bf4503766b946d3b3f9945373a4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair1-combined.log",
+    "bytes": 225,
+    "sha256": "34963b910ca7fba3d810dcfaa289fcedc1dc166c70d3cd65b9ef8ff5d28316c4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair1-ordinary.log",
+    "bytes": 225,
+    "sha256": "e591821fb151a47bbacbafd8dec914abbf44e56f968d7f34360c8c2d82a0ac44"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair2-combined.log",
+    "bytes": 225,
+    "sha256": "282c5f41f8be51886b82f7f8407c4f84e75eb23b31b086bc1edb2f6df671b542"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair2-ordinary.log",
+    "bytes": 225,
+    "sha256": "dd520325a32f9c996b54fc354bd19bf2e7d1d6a6bcbc0825e69be20b8af01fdb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair3-combined.log",
+    "bytes": 225,
+    "sha256": "43c085bee1b8e841b10b623eb41cdf238e971de790118e627c96a1cbb08d62b8"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pair3-ordinary.log",
+    "bytes": 225,
+    "sha256": "adc50011beb8e830217d25cd7f18e220eb3692a323192b348ee2112e43721a01"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pprof-cpu.log",
+    "bytes": 3766,
+    "sha256": "b60d7ab010c7033de84aa2ce10666e44c15e9d6c4ce321373eb98a243cc94a76"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pprof-write-alloc_objects.log",
+    "bytes": 7239,
+    "sha256": "b7c8c880ad4d9e698a037d2b2ce1d87f3e5f3f40f98365cdf07cf7981822ac45"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/pprof-write-alloc_space.log",
+    "bytes": 7234,
+    "sha256": "4731fc27087a276b93e8cf528cb5fbcbddef0e036211df3630231435f0771cae"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/processes-after.txt",
+    "bytes": 28818,
+    "sha256": "5aecd4e3224ec75d07ebf99c53227e62b5a78914b07272b725b5314a814684ab"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/receipt.json",
+    "bytes": 166,
+    "sha256": "64de3c648c12de6f0f467924a20d37e9f1b1518ac32cebf73f5644dcc0c7e4b6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/rows.json",
+    "bytes": 855,
+    "sha256": "d76714fdd37cfd31fc6586d62443666cf30770b16a6b3aea5d11340a1d4b2f86"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/source-after.json",
+    "bytes": 621885,
+    "sha256": "d17c5f4516d425a2851e5350cbd1a4411cfa9229dc58331ba2a26eccd6d7ef6b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/source-before.json",
+    "bytes": 621885,
+    "sha256": "d17c5f4516d425a2851e5350cbd1a4411cfa9229dc58331ba2a26eccd6d7ef6b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-combined-early/summary.json",
+    "bytes": 1757,
+    "sha256": "b1f2573f25c67ea04701d71115fea4f4124319576dc82ade65b6373f0621c29b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/binaries.json",
+    "bytes": 522,
+    "sha256": "34a52a13b58fb3c055cea82cc71a5e5f65974d7aecf4e94875448447c4dc6334"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/build-final.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/build-ready.json",
+    "bytes": 172,
+    "sha256": "6e772d62382a6c43db6a1a94119c83e6600609fce5c365f5d37ae8b85e3a4cc0"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/commands.json",
+    "bytes": 14631,
+    "sha256": "a247317f5d5623e12076ea5d856cdaa706956461c988f1d15f844a3926b8591e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/committed-source-binding.json",
+    "bytes": 734,
+    "sha256": "aac7b03f420cd92cf5661df0f519018472632d04a83604ca2b25df0b590bae80"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/final-alloc.log",
+    "bytes": 225,
+    "sha256": "b11c9394a2988a730d34686891824fde2cb1ef21e721c063637fa59e93fe81b9"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/final-alloc.pprof",
+    "bytes": 66114,
+    "sha256": "51e7d21ec2f9d3bea0dc3be2af912f6de17191d908a6737d4e6e6d34a21a5548"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/final-write-exact-alloc_objects.log",
+    "bytes": 14913,
+    "sha256": "63b75cb1f9755ec21d0669772f4c3521458b342ac726162de0ebd54d5e1f654f"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/final-write-exact-alloc_space.log",
+    "bytes": 14926,
+    "sha256": "189a40493982d0f8d2ce4766b73b256956c24968721f56b65341f7038414764e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/flat-attribution.json",
+    "bytes": 5875,
+    "sha256": "c7c512e7ceaf712a9297e519a1da192e3aff636acd9e334af2bee8258908c4fd"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/freelist-full.log",
+    "bytes": 52,
+    "sha256": "9b0aaac97181b1defe33cdc47461a2f12b63a6f3498fde4e4d3cedc3c37a0e58"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/freelist-private-snapshot-race.log",
+    "bytes": 52,
+    "sha256": "f7df0d0e9fd28d38db3c3cd8fe2e223822b60810fd754a59e8ca89b6cf28d204"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/ordinary-alloc.log",
+    "bytes": 225,
+    "sha256": "24caf8ea946199216e8a7de3546104407cbf5ed063a9bd830608adb35adb6321"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/ordinary-alloc.pprof",
+    "bytes": 73185,
+    "sha256": "b48c1ff44cf40a204528eba0ec3b927447f4934af84a864a66811512494de240"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/ordinary-write-exact-alloc_objects.log",
+    "bytes": 13726,
+    "sha256": "7353b4d0654ef565ebc3c1060c6c3ba28a67a80a359c3809ae4d1c8b99a9551e"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/ordinary-write-exact-alloc_space.log",
+    "bytes": 13755,
+    "sha256": "e5202003d227ebaa62b0ac66d35bbef4914aa30fe1817e2335f2fb0b92288ff4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair1-final.log",
+    "bytes": 225,
+    "sha256": "31c37a2c75414507275b5b74cf5713d634106eef5ea0cef13f446c19a5191f46"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair1-ordinary.log",
+    "bytes": 225,
+    "sha256": "1d2537ee75ea799b8ee3a825d28218e35c3e49d6af5302b72b60ee0174cf8b27"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair2-final.log",
+    "bytes": 225,
+    "sha256": "3b72993946df943481771ab069a5351d1d6594a46f8749369eded4a86508a283"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair2-ordinary.log",
+    "bytes": 225,
+    "sha256": "e6cfc22d2d959bce99bdb784b58f2eeb2e9ef498be6430ba0eb48a0ca0221209"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair3-final.log",
+    "bytes": 225,
+    "sha256": "5e2461866bbd86bee5813d1a2b0988bc7784864e8ef9fd15394cd72ee1437a02"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/pair3-ordinary.log",
+    "bytes": 225,
+    "sha256": "6309dc3779b773542ddbf9497e33279cf5f7ae92d6db8c570a863f0442dbc03b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/receipt.json",
+    "bytes": 147,
+    "sha256": "5b337b80f069f62237f328f2d6e23709c89c7ec7c61f768f7097cd479a6f4553"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/rows.json",
+    "bytes": 843,
+    "sha256": "97a02182eb7ec58e37b9fd5bc80fde57dd4526a869bb504c0228597d88776ea0"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/source-after.json",
+    "bytes": 621158,
+    "sha256": "0ef9a9a6d6e361fec921df69f4c43cf72aec7b3ce347af7300caf9139c9435af"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/source-before.json",
+    "bytes": 621158,
+    "sha256": "0ef9a9a6d6e361fec921df69f4c43cf72aec7b3ce347af7300caf9139c9435af"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-final-source/summary.json",
+    "bytes": 1720,
+    "sha256": "06a37277802d13d94886a4411c63a7f39e8402cb0c6813115d9d5adc3fda0b61"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/attribution-exact.json",
+    "bytes": 3896,
+    "sha256": "c9231eea5c8202a7e8b7834b30cecab3e26469c22efd4d7925adfe5912aaec55"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/binaries.json",
+    "bytes": 570,
+    "sha256": "b4a3027de71e567e90a49f15cb6baeb89f76d5067656cdf352eec6a6f3aae81c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/build-topology-only.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-alloc.log",
+    "bytes": 225,
+    "sha256": "cfafbfbf51f660e0efa56ee5c98fdda37da79b88ca0ea8e9cd58f8886f99ebbb"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-alloc.pprof",
+    "bytes": 65740,
+    "sha256": "9892844b8e672ddb307a7b6e12295fc1d30d17d73898c1e7be66e804e2556276"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-write-alloc_objects.log",
+    "bytes": 11488,
+    "sha256": "74f30a755f97600807597c730b6d5372c27b2ed3cdeab6cb2c65b45c466bc0f4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-write-alloc_space.log",
+    "bytes": 7231,
+    "sha256": "c2fd1f0ccdf1ab54071271594ca1566495807d2e24155bda4e80a7f419108578"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-write-exact-alloc_objects.log",
+    "bytes": 14792,
+    "sha256": "cdc2b9dfe3a052aa539b0eeb48e3517007aedd52cdeebcb28f777d07dcf012aa"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/combined-write-exact-alloc_space.log",
+    "bytes": 14805,
+    "sha256": "c397f92265f90e9aeb1c01dba13a6580c336dd1078b6c958cbdd62bd33d730b7"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/commands.json",
+    "bytes": 13243,
+    "sha256": "490f47d5819fa887761e45af2fb485a2f2f707075812843e4c69d3fd7d72e2e3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair1-combined.log",
+    "bytes": 225,
+    "sha256": "b85d064abf8946c2266e2f389ea5e7ef8d2d9dc6d8b825eb4d1877c4c80492d6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair1-topology-only.log",
+    "bytes": 225,
+    "sha256": "04f7dee43000b23a65bfc78aad49bae9fd1081f05fc49d262968a630424ab16a"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair2-combined.log",
+    "bytes": 225,
+    "sha256": "b6aec4ef758017fa3fe5155b58278de6e5375dbb7a3f80e82b454c331d5c1fd3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair2-topology-only.log",
+    "bytes": 225,
+    "sha256": "f7393c3862cd9f81c7e21ec05f69819da2792411d644dd1bc4c2bb19e0223d29"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair3-combined.log",
+    "bytes": 225,
+    "sha256": "f9db3699219cf95e7706f0b2017c09035acdff4b7abadddba899df706114d295"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/pair3-topology-only.log",
+    "bytes": 225,
+    "sha256": "389ee6e3faf106faa7bc02b87dc36b76c98456f9d5dac21a7e26e91f2c7af8d3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/processes-after.txt",
+    "bytes": 28882,
+    "sha256": "d618cfa5ac68f98ac954915b32275ba1e74cc4700c29e2c1ac6853a06826dcde"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/receipt.json",
+    "bytes": 160,
+    "sha256": "4c5a29e1b61d27f69e4bc6b1db2cf5f2c91c32d7eccf6202a9cb29f97e968160"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/rows.json",
+    "bytes": 870,
+    "sha256": "272f20215095396a2623711b9000ef198f0a09fc5662e31ab67208e83a6be195"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/source-after.json",
+    "bytes": 622762,
+    "sha256": "f5c76e9f3f1cbd5e5d64e5d3de8566c7c23cbda1b606eec5100fbbf014be5e55"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/source-before.json",
+    "bytes": 622762,
+    "sha256": "f5c76e9f3f1cbd5e5d64e5d3de8566c7c23cbda1b606eec5100fbbf014be5e55"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/state-clone-attribution.json",
+    "bytes": 1578,
+    "sha256": "c123c59bb378c5ee331384774795feb6050704420c58ac0f87047f4ad6466011"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/summary.json",
+    "bytes": 1821,
+    "sha256": "2e09aa5aaa376d2a63a35dd293829766312ecd87fdb006e8dcf8b76e59b3a123"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-alloc.log",
+    "bytes": 225,
+    "sha256": "4df875864876cf7620e17edfe53f22529869eaba8020eed571a19d6ac74586c2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-alloc.pprof",
+    "bytes": 67032,
+    "sha256": "6bd26099035345ef667afefb3a8c20c21aaf84a92e1304bbba4418dda4b48475"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-write-alloc_objects.log",
+    "bytes": 11356,
+    "sha256": "50bf64f5f0627743ea0488bb400a55e923b85aec7f91800c11086d0b382d7e41"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-write-alloc_space.log",
+    "bytes": 7395,
+    "sha256": "f8ebf300836c911332ddf67456317d3db6ce93fc7be848485cb67818cfc3aa48"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-write-exact-alloc_objects.log",
+    "bytes": 14754,
+    "sha256": "1c79a2e936873295f587bb2ac33f91e14bc77034b9d855fd6d5586a6515cd22b"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/public-private-incremental/topology-only-write-exact-alloc_space.log",
+    "bytes": 14772,
+    "sha256": "3c941453e889531fe89d9f4c29cb0c7816f59ed51dda96be8df3b9591c899506"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/representation-red.txt",
+    "bytes": 595,
+    "sha256": "b5e85a5a571c7387f09d7285b83e1dd24f57ba780b6ba94439f132e7632af1b9"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/run-combined-early.py",
+    "bytes": 5200,
+    "sha256": "fd8b12c7c8831e8632aa660d0727440f5593b675ea23d9441c935069c36f51b2"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/run-final-source.py",
+    "bytes": 5922,
+    "sha256": "d2ed9a1b7a84e00cbfec96c13cefbfeafdcb63b2ab24bc7bc5df2d0f52de7a44"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/run-incremental.py",
+    "bytes": 5378,
+    "sha256": "93181869873ae191fd6b9d8467ff3e9ed111fb50d7d11576623bafab96e8ab80"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/allocator_cow.go.diff",
+    "bytes": 304,
+    "sha256": "896329f83ea0ce01167e75f6f510a315ddf4aeb8b14bdd5b2cf78a227bb4a990"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/generation_v1_txn.go",
+    "bytes": 30594,
+    "sha256": "8a52674367383b1e419ac5d6fd6749d5872336087e26b68d6916177e00f4e154"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/generation_v1_txn.go.diff",
+    "bytes": 623,
+    "sha256": "f29887cbfb1521aeac7ef282c82e5822b6c6834dbf2f006fc1b8cd6f936f6c74"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/manifest.json",
+    "bytes": 1691,
+    "sha256": "fb99560f35eb346fa2638080fe53e649bdefc2b52716a8eb2e5ad033db620381"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay-final/overlay.json",
+    "bytes": 566,
+    "sha256": "b64e867ca7ab15c49c11540a5790c87bd5c2e44c8c2a22e0513582b0d54dac59"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/allocator_cow.go.diff",
+    "bytes": 304,
+    "sha256": "896329f83ea0ce01167e75f6f510a315ddf4aeb8b14bdd5b2cf78a227bb4a990"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/generation_v1_txn.go",
+    "bytes": 30897,
+    "sha256": "59c96fa261385784e4af0cd5dad102bc9bae71824b527bb59c6aad236c112b64"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/generation_v1_txn.go.diff",
+    "bytes": 641,
+    "sha256": "7e57a770ef46786d6c8957fa8893054664335c781d3c2f7a146ef1b84d621416"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/manifest.json",
+    "bytes": 1640,
+    "sha256": "b5dea9d7cabcbeb1c3bc98028e14aae4d23f299f2df18a2e50794cc28f58e182"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/private/topology-only-overlay/overlay.json",
+    "bytes": 554,
+    "sha256": "3aa9e0025a3d55e8a3b06e7efaf414a3dbedac00353f9a0babc5492b73d0ee8c"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/repair-batch-composition-source.json",
+    "bytes": 3578,
+    "sha256": "53ed4c4d5c760396a8b7ad237741642cd53f398dd58ad57db6d17dad6f4d6ee6"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/repair-batch-focused.json",
+    "bytes": 5540,
+    "sha256": "43e99f26a64987a959f2c80ffe95251249785fc62ccf63c48df3b255e74c3f89"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/repair-batch-focused.log",
+    "bytes": 515,
+    "sha256": "face24c1e92e157bd82c4ac9394dd204ef388a1cc9d74ab2364da1a988b8b75a"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/review-repair-composition-source.json",
+    "bytes": 3579,
+    "sha256": "5a06010306af8c9120a5124902b4e25b250c0a1db3618efd58cdb239a30bd7b3"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/root-construction-commit.json",
+    "bytes": 486,
+    "sha256": "3dc514c1e1e11dc72f592d5eb29e28d466d47a21a026e4dbcfc7af6c05442e97"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/setup-integration.json",
+    "bytes": 393,
+    "sha256": "053242fb4a7c64a63072c3d8041ea01bbce53287ebd3b504b493df9631e6ddb4"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/setup-private.json",
+    "bytes": 385,
+    "sha256": "be4013bcc81cad66c40cfe9876a08b2f82b9bc49c870b06ecb035b8edb5bd6a7"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/setup-topology.json",
+    "bytes": 387,
+    "sha256": "da7883b21b6d233ebc5d0952a41a293c20123a2e763b7cce1f6f8fd9ee41a73f"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/setup-zipper-main.json",
+    "bytes": 382,
+    "sha256": "4b36af16fb607f7851ca60a6acb3d71e75284d33ce192f7e8a819a292129ef4d"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/packet/setup-zipper.json",
+    "bytes": 383,
+    "sha256": "6889aa02462be2fbd5382b5248dae68cf329c7bb70d2d1050f1f79c7d2fde712"
+  },
+  {
+    "path": "artifacts/4871/20261015-allocator-allocation-workstream/review.json",
+    "bytes": 965,
+    "sha256": "1efee6e894cbe3b2a1a5a7bd43f7faa92213e8684824f731f4eb39c62b4f83d3"
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "path": "private/public-final-source/final-db.test",
+    "bytes": 60874964,
+    "sha256": "b69ce95bde5b32d6ceb73274b179565ebcbe39b48d0dd5aa0f2c8f0d00d73647",
+    "reason": "Reproducible binary: exact source, build argv and binary hash retained; runtime not archived"
+  },
+  {
+    "path": "private/public-private-incremental/topology-only-db.test",
+    "bytes": 60870909,
+    "sha256": "8d68ea3b37cb47ee44109ad140a1e3d83512d5ea33a2f5253d0d156e25d95891",
+    "reason": "Reproducible binary: exact source, build argv and binary hash retained; runtime not archived"
+  },
+  {
+    "path": "private/public-combined-early/combined-db.test",
+    "bytes": 60874668,
+    "sha256": "f242def2fa2eb12761fd2a40b6817e92a63cfcf1390040f4febd8eb219e8b0d3",
+    "reason": "Reproducible binary: exact source, build argv and binary hash retained; runtime not archived"
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/gofmt",
+    "-w",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/generation_v1_txn.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/allocator_cow.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/generation_v1_private_test.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-private-20261015/TreeDB/freelist/generation_v1_metadata_cursor_test.go"
+  ],
+  "exit": 0,
+  "before": {
+    "TreeDB/freelist/generation_v1_txn.go": "3f47ebef922a32c1216a380de261d4c3857946e8047f5de8e3a4f45553be309f",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "60ec52e4eda07b479e72a53b52926f963dbcc13c394dcd69e9b4656923913546",
+    "TreeDB/freelist/allocator_cow.go": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+    "TreeDB/freelist/generation_v1_private_test.go": "c5793d47e6cdc0ebc12d70f93badb2a38431c86d2e2e21c6fd24baf641a4ea85",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "e71d9c46a71acd3476ff871adae7bbccd40fb267cfd1c334a097370a1aac9ccb",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+  },
+  "after": {
+    "TreeDB/freelist/generation_v1_txn.go": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "4a93f586219e126e51e4ef05f72ccddf6063b08839033d1156aa5e2db2e0dc63",
+    "TreeDB/freelist/allocator_cow.go": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+    "TreeDB/freelist/generation_v1_private_test.go": "ef8082b3eed1ce843a5c0287500b370ebc7f87b768efa087a22e0b20a2679812",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "7fae09ed8b51d49b6ae5a9aa9498022d38f0bbd4ab42f3d4b195ec9a90b7c95b",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+  },
+  "unformatted": []
+}

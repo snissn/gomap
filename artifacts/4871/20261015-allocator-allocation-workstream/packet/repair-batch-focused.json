@@ -1,0 +1,77 @@
+{
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+  "environment": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "source_before": {
+    "TreeDB/db/db.go": "035c99c4238b382e1e5603e79d6273649a65918f929e97ccc4ef66759bad672e",
+    "TreeDB/db/format_config.go": "1a3ad3f7eb5dd79a8d5e0d2582af515f08d0fdc43395a73801a232ac562ecd6f",
+    "TreeDB/db/format_config_test.go": "3874e4eaa5d359dc182e32da6cc6f82278730dca7b093d36d4cbf64b83a1eb36",
+    "TreeDB/db/freelist_patricia_feature_v2_test.go": "5e727ec94fe053c2d403698cd9d2af4eb4a1fdcea61a4b1ec62ecc0082933055",
+    "TreeDB/db/open_readonly.go": "a3be4240eba7060a7b50932cbdd8adf814cdd36cc53cd519215c3922a9f4ba17",
+    "TreeDB/docs/spec/recovery.md": "55ef4e4826aa32560d384006d7c244a4bf31b005aae6f7c96b88b4249fe94082",
+    "TreeDB/docs/spec/storage-format.md": "30ff8cabc8f6657dcffad4b21029ff334d845a9eb5e5aa6e578684afd007f850",
+    "TreeDB/freelist/allocator_cow.go": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+    "TreeDB/freelist/generation_snapshot_v1.go": "0003893e0b61a899b506efff4c97d60255747965e93c605a3e1bd5b566662ba2",
+    "TreeDB/freelist/generation_topology_5131_test.go": "a600aa9ba2f862622ef525026bbee04e7c3ecbe640892e12b608e050e12f5c56",
+    "TreeDB/freelist/generation_v1_format.go": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "60ec52e4eda07b479e72a53b52926f963dbcc13c394dcd69e9b4656923913546",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "e71d9c46a71acd3476ff871adae7bbccd40fb267cfd1c334a097370a1aac9ccb",
+    "TreeDB/freelist/generation_v1_private_test.go": "c5793d47e6cdc0ebc12d70f93badb2a38431c86d2e2e21c6fd24baf641a4ea85",
+    "TreeDB/freelist/generation_v1_reservation.go": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7",
+    "TreeDB/freelist/generation_v1_test.go": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417",
+    "TreeDB/freelist/generation_v1_tree.go": "f770cca08be51fb80c417c50c11873eda5c843c296b8fab51d9f36d7de328e91",
+    "TreeDB/freelist/generation_v1_txn.go": "3f47ebef922a32c1216a380de261d4c3857946e8047f5de8e3a4f45553be309f"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/freelist",
+        "-count=1"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.4583341940306127,
+      "output": "ok  \tgithub.com/snissn/gomap/TreeDB/freelist\t0.130s\n"
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "TestFreelistPatriciaV2|TestFormatConfig_SaveLoadApply_RoundTrip|TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile",
+        "-count=1"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 12.869757940992713,
+      "output": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.031s\n"
+    }
+  ],
+  "source_after": {
+    "TreeDB/db/db.go": "035c99c4238b382e1e5603e79d6273649a65918f929e97ccc4ef66759bad672e",
+    "TreeDB/db/format_config.go": "1a3ad3f7eb5dd79a8d5e0d2582af515f08d0fdc43395a73801a232ac562ecd6f",
+    "TreeDB/db/format_config_test.go": "3874e4eaa5d359dc182e32da6cc6f82278730dca7b093d36d4cbf64b83a1eb36",
+    "TreeDB/db/freelist_patricia_feature_v2_test.go": "5e727ec94fe053c2d403698cd9d2af4eb4a1fdcea61a4b1ec62ecc0082933055",
+    "TreeDB/db/open_readonly.go": "a3be4240eba7060a7b50932cbdd8adf814cdd36cc53cd519215c3922a9f4ba17",
+    "TreeDB/docs/spec/recovery.md": "55ef4e4826aa32560d384006d7c244a4bf31b005aae6f7c96b88b4249fe94082",
+    "TreeDB/docs/spec/storage-format.md": "30ff8cabc8f6657dcffad4b21029ff334d845a9eb5e5aa6e578684afd007f850",
+    "TreeDB/freelist/allocator_cow.go": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+    "TreeDB/freelist/generation_snapshot_v1.go": "0003893e0b61a899b506efff4c97d60255747965e93c605a3e1bd5b566662ba2",
+    "TreeDB/freelist/generation_topology_5131_test.go": "a600aa9ba2f862622ef525026bbee04e7c3ecbe640892e12b608e050e12f5c56",
+    "TreeDB/freelist/generation_v1_format.go": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "60ec52e4eda07b479e72a53b52926f963dbcc13c394dcd69e9b4656923913546",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "e71d9c46a71acd3476ff871adae7bbccd40fb267cfd1c334a097370a1aac9ccb",
+    "TreeDB/freelist/generation_v1_private_test.go": "c5793d47e6cdc0ebc12d70f93badb2a38431c86d2e2e21c6fd24baf641a4ea85",
+    "TreeDB/freelist/generation_v1_reservation.go": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7",
+    "TreeDB/freelist/generation_v1_test.go": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417",
+    "TreeDB/freelist/generation_v1_tree.go": "f770cca08be51fb80c417c50c11873eda5c843c296b8fab51d9f36d7de328e91",
+    "TreeDB/freelist/generation_v1_txn.go": "3f47ebef922a32c1216a380de261d4c3857946e8047f5de8e3a4f45553be309f"
+  },
+  "elapsed_seconds": 13.748737586196512
+}

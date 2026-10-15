@@ -1,0 +1,19 @@
+Source: allocation-integration-20261015 first-composition-source.json
+Command: GOROOT=/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014 GOTOOLCHAIN=local GOWORK=off go test ./TreeDB/freelist -count=1
+Exit: 1; package runtime 0.163s
+--- FAIL: TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1
+candidate_root_membership_v1_test.go:50: retired SYSTEM certified: true <nil>
+--- FAIL: TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary
+generation_snapshot_v1_test.go:16: page 2 unused=false err=<nil> want true
+--- FAIL: TestMetadataImpossibleRunDoesNotAllocate4627
+generation_v1_metadata_cursor_test.go:129: four pages cannot hold this dirty state plus reservation and header
+--- FAIL: TestMetadataEmissionPreservesSharedDirtyBranches4627/success
+--- FAIL: TestMetadataEmissionPreservesSharedDirtyBranches4627/partial-write-failure
+generation_v1_metadata_reuse_test.go:45: emission changed retained selected/sibling identities, checksums or state
+--- FAIL: TestFreelistGenerationV1_EveryPageKindRejectsCorruption
+generation_v1_test.go:572: page type 0x6 not emitted
+--- FAIL: TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC
+generation_v1_test.go:594: type=0x5 canonical err=<nil>
+--- FAIL: TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages
+generation_v1_test.go:948: newer child under ancestor page error=<nil> want freelist generation digest mismatch
+FAIL github.com/snissn/gomap/TreeDB/freelist 0.163s

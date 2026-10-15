@@ -1,0 +1,150 @@
+{
+  "ordinary": {
+    "whole_profile_bytes": 190844824,
+    "public_write_focused_bytes": 154879392,
+    "unions": {
+      "page_encoding_and_reservation_digest": {
+        "bytes": 87462120,
+        "rows": [
+          {
+            "function": "encodeIndexPage",
+            "flat_bytes": 66269184,
+            "row": "66269184B 34.72% 34.72%  66269184B 34.72%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage"
+          },
+          {
+            "function": "encodeChunkPage",
+            "flat_bytes": 8867840,
+            "row": "8867840B  4.65% 61.68%   8867840B  4.65%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage"
+          },
+          {
+            "function": "encodeNormalizedReservationPages",
+            "flat_bytes": 4124904,
+            "row": "4124904B  2.16% 63.84%   8257032B  4.33%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages"
+          },
+          {
+            "function": "encodeGenerationPage",
+            "flat_bytes": 4100096,
+            "row": "4100096B  2.15% 65.99%   5253248B  2.75%  github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage"
+          },
+          {
+            "function": "reservationDigest",
+            "flat_bytes": 4100096,
+            "row": "4100096B  2.15% 68.14%   4132128B  2.17%  github.com/snissn/gomap/TreeDB/freelist.reservationDigest"
+          }
+        ]
+      },
+      "state_clone_including_detachment": {
+        "bytes": 34444800,
+        "rows": [
+          {
+            "function": "detachUnmaterialized",
+            "flat_bytes": 2983104,
+            "row": "2983104B  1.56% 69.70%   2983104B  1.56%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized"
+          },
+          {
+            "function": "(*stateChunk).clone",
+            "flat_bytes": 13982976,
+            "row": "13982976B  7.33% 51.21%  13982976B  7.33%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)"
+          },
+          {
+            "function": "cloneStateNode",
+            "flat_bytes": 17478720,
+            "row": "17478720B  9.16% 43.88%  17478720B  9.16%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)"
+          }
+        ]
+      },
+      "index_chunk_page_encoding": {
+        "bytes": 75137024,
+        "rows": [
+          {
+            "function": "encodeIndexPage",
+            "flat_bytes": 66269184,
+            "row": "66269184B 34.72% 34.72%  66269184B 34.72%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage"
+          },
+          {
+            "function": "encodeChunkPage",
+            "flat_bytes": 8867840,
+            "row": "8867840B  4.65% 61.68%   8867840B  4.65%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage"
+          }
+        ]
+      }
+    }
+  },
+  "final": {
+    "whole_profile_bytes": 59958616,
+    "public_write_focused_bytes": 45119128,
+    "unions": {
+      "page_encoding_and_reservation_digest": {
+        "bytes": 16457352,
+        "rows": [
+          {
+            "function": "encodeIndexPage",
+            "flat_bytes": 4100096,
+            "row": "4100096B  6.84% 45.99%   4100096B  6.84%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage"
+          },
+          {
+            "function": "encodeChunkPage",
+            "flat_bytes": 4132864,
+            "row": "4132864B  6.89% 25.43%   4132864B  6.89%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage"
+          },
+          {
+            "function": "encodeNormalizedReservationPages",
+            "flat_bytes": 4124296,
+            "row": "4124296B  6.88% 32.31%   4124296B  6.88%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages"
+          },
+          {
+            "function": "encodeGenerationPage",
+            "flat_bytes": 4100096,
+            "row": "4100096B  6.84% 39.15%   4165184B  6.95%  github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage"
+          },
+          {
+            "function": "reservationDigest",
+            "flat_bytes": 0,
+            "row": "No allocated sample at this site"
+          }
+        ]
+      },
+      "state_clone_including_detachment": {
+        "bytes": 5468048,
+        "rows": [
+          {
+            "function": "detachUnmaterialized",
+            "flat_bytes": 2737792,
+            "row": "2737792B  4.57% 50.55%   2737792B  4.57%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized"
+          },
+          {
+            "function": "(*stateChunk).clone",
+            "flat_bytes": 2313216,
+            "row": "2313216B  3.86% 54.41%   2313216B  3.86%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)"
+          },
+          {
+            "function": "cloneStateNode",
+            "flat_bytes": 417040,
+            "row": "417040B   0.7% 67.57%    417040B   0.7%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)"
+          }
+        ]
+      },
+      "index_chunk_page_encoding": {
+        "bytes": 8232960,
+        "rows": [
+          {
+            "function": "encodeIndexPage",
+            "flat_bytes": 4100096,
+            "row": "4100096B  6.84% 45.99%   4100096B  6.84%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage"
+          },
+          {
+            "function": "encodeChunkPage",
+            "flat_bytes": 4132864,
+            "row": "4132864B  6.89% 25.43%   4132864B  6.89%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage"
+          }
+        ]
+      }
+    }
+  },
+  "percent_change": {
+    "page_encoding_and_reservation_digest": -81.18345176174554,
+    "state_clone_including_detachment": -84.12518580453363,
+    "index_chunk_page_encoding": -89.04273877017008
+  },
+  "method": "Matched1000x Rate1 (1001writes including benchmark warmup), exact public Batch.Write focus. Disjoint flat allocation sites, includes mandatory dirty detachment. No cumulative frame sums. Profile percentages use whole-process denominator."
+}

@@ -1,0 +1,22 @@
+{
+  "status": "BENCHMARK_ONLY_COUNTERFACTUAL_NOT_CORRECTNESS_CANDIDATE",
+  "source_files_unmodified": true,
+  "manifest": [
+    {
+      "original": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015/TreeDB/freelist/generation_v1_txn.go",
+      "original_sha256": "3f47ebef922a32c1216a380de261d4c3857946e8047f5de8e3a4f45553be309f",
+      "replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/topology-only-overlay/generation_v1_txn.go",
+      "replacement_sha256": "59c96fa261385784e4af0cd5dad102bc9bae71824b527bb59c6aad236c112b64",
+      "purpose": "Benchmark-only topology with ordinary persistent state ownership"
+    },
+    {
+      "original": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015/TreeDB/freelist/allocator_cow.go",
+      "original_sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+      "replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/topology-only-overlay/allocator_cow.go",
+      "replacement_sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c",
+      "purpose": "Benchmark-only topology with ordinary persistent state ownership"
+    }
+  ],
+  "overlay_sha256": "3aa9e0025a3d55e8a3b06e7efaf414a3dbedac00353f9a0babc5492b73d0ee8c",
+  "fairness": "No BeginCandidate private detach or grant, ordinary allocator prepare clone, mandatory ordinary materialization detach retained once. Canonical topology and public benchmark harness identical. Private activation tests expected RED."
+}

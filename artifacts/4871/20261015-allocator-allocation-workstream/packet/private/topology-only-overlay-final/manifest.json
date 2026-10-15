@@ -1,0 +1,23 @@
+{
+  "status": "UNMEASURED_FINAL_SOURCE_REPRODUCTION_VARIANT",
+  "source_commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+  "replace": [
+    {
+      "original": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015/TreeDB/freelist/generation_v1_txn.go",
+      "original_sha256": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3",
+      "replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/topology-only-overlay-final/generation_v1_txn.go",
+      "replacement_sha256": "8a52674367383b1e419ac5d6fd6749d5872336087e26b68d6916177e00f4e154"
+    },
+    {
+      "original": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015/TreeDB/freelist/allocator_cow.go",
+      "original_sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685",
+      "replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/topology-only-overlay-final/allocator_cow.go",
+      "replacement_sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+    }
+  ],
+  "overlay_sha256": "b64e867ca7ab15c49c11540a5790c87bd5c2e44c8c2a22e0513582b0d54dac59",
+  "fairness": "Same disabling contract as measured historical overlay: no BeginCandidate detach/grant; ordinary prepare clone; mandatory ordinary materializer detach once. No source file changed.",
+  "measured_variant": "../topology-only-overlay",
+  "measured_result": "../public-private-incremental",
+  "limitations": "This regenerated variant was not compiled/run. Do not relabel historical incremental profiles as final-source captures."
+}

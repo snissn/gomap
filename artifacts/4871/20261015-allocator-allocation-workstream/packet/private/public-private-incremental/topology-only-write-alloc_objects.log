@@ -1,0 +1,105 @@
+File: topology-only-db.test
+Build ID: b4371ce1b5f657112fda3894f16b70e139042a8f
+Type: alloc_objects
+Time: 2026-10-14 18:59:55 HST
+Active filters:
+   focus=db\.\(\*Batch\)\.Write$
+Showing nodes accounting for 150834, 63.30% of 238281 total
+Dropped 35 nodes (cum <= 1191)
+      flat  flat%   sum%        cum   cum%
+     11924  5.00%  5.00%      11924  5.00%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)
+     11011  4.62%  9.63%      11011  4.62%  github.com/snissn/gomap/TreeDB/zipper.newMergeScratch (inline)
+      8008  3.36% 12.99%       8008  3.36%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewStableResourceSetBuilder (inline)
+      6006  2.52% 15.51%      69085 28.99%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate
+      6006  2.52% 18.03%       6006  2.52%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).cloneForAllocatorPrepare
+      5962  2.50% 20.53%       5962  2.50%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)
+      5005  2.10% 22.63%      37045 15.55%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).MaterializeCandidate
+      4006  1.68% 24.31%       6008  2.52%  github.com/snissn/gomap/TreeDB/freelist.sortedUnique
+      4004  1.68% 25.99%      12020  5.04%  github.com/snissn/gomap/TreeDB/freelist.BeginCandidateV1
+      4004  1.68% 27.67%      12012  5.04%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSetBuilder).Freeze
+      4004  1.68% 29.35%       4004  1.68%  github.com/snissn/gomap/TreeDB/internal/rootpublication.sortStableResourceEntries (inline)
+      4004  1.68% 31.03%       4004  1.68%  github.com/snissn/gomap/TreeDB/internal/rootpublication.stableResourcePinCounts (inline)
+      4004  1.68% 32.71%       6006  2.52%  internal/reflectlite.Swapper
+      3943  1.65% 34.37%       3943  1.65%  github.com/snissn/gomap/TreeDB/freelist.(*ReservationLedger).claimReusedMetadata
+      3027  1.27% 35.64%       3027  1.27%  github.com/snissn/gomap/TreeDB/freelist.ReservationRecordV1.pendingMetadata (inline)
+      3011  1.26% 36.90%       4012  1.68%  github.com/snissn/gomap/TreeDB/freelist.(*recordingSink).write
+      3003  1.26% 38.16%       9011  3.78%  github.com/snissn/gomap/TreeDB/freelist.appendIDExtents (inline)
+      3003  1.26% 39.42%       3003  1.26%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).AcquireBuilder
+      2996  1.26% 40.68%      14929  6.27%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Alloc
+      2972  1.25% 41.93%      11919  5.00%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate
+      2013  0.84% 42.77%       2013  0.84%  github.com/snissn/gomap/TreeDB/freelist.encodeNormalizedReservationPages
+      2009  0.84% 43.61%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+      2009  0.84% 44.46%      17034  7.15%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive
+      2002  0.84% 45.30%     110388 46.33%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+      2002  0.84% 46.14%      13019  5.46%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).retireMany
+      2002  0.84% 46.98%       2002  0.84%  github.com/snissn/gomap/TreeDB/freelist.NewCandidatePageSinkV1 (inline)
+      2002  0.84% 47.82%       2002  0.84%  github.com/snissn/gomap/TreeDB/freelist.normalizeExtents
+      2002  0.84% 48.66%       2002  0.84%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewDurableRootTransaction
+      2002  0.84% 49.50%       3003  1.26%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newPreparedRootCandidateWithExtensions
+      2002  0.84% 50.34%       2002  0.84%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).currentSetLocked
+      2002  0.84% 51.18%       2002  0.84%  internal/reflectlite.unsafe_New
+      1995  0.84% 52.02%      32042 13.45%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+      1972  0.83% 52.84%       1972  0.83%  maps.clone
+      1009  0.42% 53.27%      11021  4.63%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).reservationExtents
+      1009  0.42% 53.69%       1009  0.42%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPage
+      1001  0.42% 54.11%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).planOuterLeafBaseDependencyReuseV1
+      1001  0.42% 54.53%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareFinalizeCommitDurability
+      1001  0.42% 54.95%       3003  1.26%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1
+      1001  0.42% 55.37%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).projectedLogicalValueLogReferencesV1
+      1001  0.42% 55.79%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).publishSnapshotView
+      1001  0.42% 56.21%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*allocTracker).Pages
+      1001  0.42% 56.63%      14024  5.89%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationVisibleInstallV1).activate
+      1001  0.42% 57.05%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.newAllocTracker (inline)
+      1001  0.42% 57.47%      51065 21.43%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).PrepareCOWCandidateRetiringWithLimitsV1
+      1001  0.42% 57.89%       7013  2.94%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).retireCOWLocked
+      1001  0.42% 58.31%       1001  0.42%  github.com/snissn/gomap/TreeDB/freelist.(*CandidatePageSinkV1).WritePage
+      1001  0.42% 58.73%      18887  7.93%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutateMany
+      1001  0.42% 59.15%       2010  0.84%  github.com/snissn/gomap/TreeDB/freelist.encodeGenerationPage
+      1001  0.42% 59.57%       1001  0.42%  github.com/snissn/gomap/TreeDB/freelist.encodeIndexPage
+      1001  0.42% 59.99%      18280  7.67%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).EnqueueBuilt
+      1001  0.42% 60.41%      16278  6.83%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).enqueueLocked
+      1001  0.42% 60.83%       1001  0.42%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).notifyLocked (inline)
+      1001  0.42% 61.25%       1001  0.42%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*StableResourceSet).AcquirePhysicalDiagnostics
+      1001  0.42% 61.67%       1001  0.42%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newDurableRootGroupExtension (inline)
+      1001  0.42% 62.09%       1001  0.42%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).CloneWithPagerAllocator (inline)
+      1001  0.42% 62.51%      30047 12.61%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig
+      1001  0.42% 62.93%       1001  0.42%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).releaseApplyScratch
+       875  0.37% 63.30%        875  0.37%  github.com/snissn/gomap/TreeDB/internal/rootpublication.unionStableResourceSets
+         2 0.00084% 63.30%      12022  5.05%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).ActivateCOWCandidateV1
+         0     0% 63.30%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.(*Batch).Write (inline)
+         0     0% 63.30%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.(*Batch).write
+         0     0% 63.30%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic.func3
+         0     0% 63.30%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent (inline)
+         0     0% 63.30%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight
+         0     0% 63.30%      13013  5.46%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableRootResourcesFromBaseWithRefCountsV1
+         0     0% 63.30%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).captureDurableValueLogResourcesWithMetadataV1
+         0     0% 63.30%       2002  0.84%  github.com/snissn/gomap/TreeDB/db.(*DB).currentValueLogSetForPublication
+         0     0% 63.30%     113391 47.59%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+         0     0% 63.30%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareFlushApplyPublish
+         0     0% 63.30%       1001  0.42%  github.com/snissn/gomap/TreeDB/db.(*DB).projectedValueLogReferencesV1
+         0     0% 63.30%       5005  2.10%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).cloneVisibleResourcesWithWorkMax
+         0     0% 63.30%      14024  5.89%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4
+         0     0% 63.30%      12022  5.05%  github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate.func4.1
+         0     0% 63.30%     151494 63.58%  github.com/snissn/gomap/TreeDB/db.BenchmarkConditionalTxnBaselineBatchWrite
+         0     0% 63.30%      11933  5.01%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).Alloc
+         0     0% 63.30%      11933  5.01%  github.com/snissn/gomap/TreeDB/freelist.(*Allocator).allocCOWLocked
+         0     0% 63.30%      11874  4.98%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).mutate (inline)
+         0     0% 63.30%      19724  8.28%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).tryReusedMetadata
+         0     0% 63.30%       5021  2.11%  github.com/snissn/gomap/TreeDB/freelist.emitStatePages
+         0     0% 63.30%      17886  7.51%  github.com/snissn/gomap/TreeDB/freelist.mutateChunk (inline)
+         0     0% 63.30%      17886  7.51%  github.com/snissn/gomap/TreeDB/freelist.mutateChunkMode
+         0     0% 63.30%      14024  5.89%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).activateFromCoordinator (inline)
+         0     0% 63.30%      14024  5.89%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).activateFromCoordinatorWithWork
+         0     0% 63.30%      15015  6.30%  github.com/snissn/gomap/TreeDB/internal/rootpublication.CloneStableResourceSetForLogicalObligationsWithWork
+         0     0% 63.30%       3003  1.26%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NewPreparedRootCandidate (inline)
+         0     0% 63.30%      14024  5.89%  github.com/snissn/gomap/TreeDB/internal/rootpublication.activateDurableRootGroup
+         0     0% 63.30%        875  0.37%  github.com/snissn/gomap/TreeDB/internal/rootpublication.physicalDurabilityCount (inline)
+         0     0% 63.30%       2002  0.84%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).CurrentSetNoRefresh
+         0     0% 63.30%       1001  0.42%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).CloneWithAllocator (inline)
+         0     0% 63.30%      11011  4.62%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).acquireApplyScratch
+         0     0% 63.30%      11997  5.03%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+         0     0% 63.30%       1972  0.83%  maps.Clone[go.shape.map[uint64]struct {},go.shape.uint64,go.shape.struct {}] (inline)
+         0     0% 63.30%       2002  0.84%  sort.Slice
+         0     0% 63.30%       4004  1.68%  sort.SliceStable
+         0     0% 63.30%     151333 63.51%  testing.(*B).launch
+         0     0% 63.30%     151494 63.58%  testing.(*B).runN

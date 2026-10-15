@@ -1,0 +1,12 @@
+{
+  "ordinary": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/direct-bottleneck-profiles-20261015/ordinary-db.test",
+    "size": 60842242,
+    "sha256": "eef997f95aab5f91b7096f3e53b69a51f5c21eb9aed569c73f60df45e1f9f53a"
+  },
+  "combined": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+    "size": 60874668,
+    "sha256": "f242def2fa2eb12761fd2a40b6817e92a63cfcf1390040f4febd8eb219e8b0d3"
+  }
+}

@@ -1,0 +1,50 @@
+[
+  {
+    "pair": 1,
+    "kind": "topology-only",
+    "n": 10000,
+    "ns_per_op": 24299.0,
+    "bytes_per_op": 56005,
+    "allocs_per_op": 156
+  },
+  {
+    "pair": 1,
+    "kind": "combined",
+    "n": 10000,
+    "ns_per_op": 22229.0,
+    "bytes_per_op": 45130,
+    "allocs_per_op": 144
+  },
+  {
+    "pair": 2,
+    "kind": "combined",
+    "n": 10000,
+    "ns_per_op": 22547.0,
+    "bytes_per_op": 45130,
+    "allocs_per_op": 144
+  },
+  {
+    "pair": 2,
+    "kind": "topology-only",
+    "n": 10000,
+    "ns_per_op": 24205.0,
+    "bytes_per_op": 56005,
+    "allocs_per_op": 156
+  },
+  {
+    "pair": 3,
+    "kind": "topology-only",
+    "n": 10000,
+    "ns_per_op": 24530.0,
+    "bytes_per_op": 56005,
+    "allocs_per_op": 156
+  },
+  {
+    "pair": 3,
+    "kind": "combined",
+    "n": 10000,
+    "ns_per_op": 22352.0,
+    "bytes_per_op": 45130,
+    "allocs_per_op": 144
+  }
+]

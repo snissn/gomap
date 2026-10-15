@@ -1,0 +1,6 @@
+{"cmd": ["/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go", "test", "./TreeDB/freelist", "-run", "^TestFreelistTxnPrivateRepeatedMutationReusesChunk$", "-count=1"], "env": {"GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014", "GOTOOLCHAIN": "local", "GOWORK": "off"}, "exit": 1}
+--- FAIL: TestFreelistTxnPrivateRepeatedMutationReusesChunk (0.00s)
+    generation_v1_private_test.go:18: repeated mutation copied a transaction-private chunk
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/freelist	0.001s
+FAIL

@@ -1,0 +1,12 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "verdict": "ACCEPT",
+  "reviewer": "/root/allocator_5131_5132_review_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "effort": "high",
+  "candidate": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+  "parent": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "manifest_sha256": "5a06010306af8c9120a5124902b4e25b250c0a1db3618efd58cdb239a30bd7b3",
+  "scope": "Canonical compressed Patricia tree/direct chunk format, required feature gates, detached encoders/reservation digest, explicit private authority and clone revocation, rollback and materialization freeze, public work admission and affected callers. Initial direct-leaf reserve-before-read P1 repaired in coherent batch; repaired 19-file manifest accepted with no remaining actionable blocker. Actual Git blobs equal reviewed bytes.",
+  "limits": "Reviewer performed no edits, Go or profiles. Main projection, current-head CI and final graph qualification remain separate."
+}

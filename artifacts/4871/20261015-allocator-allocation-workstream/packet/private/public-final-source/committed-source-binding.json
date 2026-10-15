@@ -1,0 +1,10 @@
+{
+  "source_commit": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+  "composition_manifest": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/review-repair-composition-source.json",
+  "composition_manifest_sha256": "5a06010306af8c9120a5124902b4e25b250c0a1db3618efd58cdb239a30bd7b3",
+  "all_measured_go_inputs_equal_committed_current_source": true,
+  "measured_source_before_sha256": "0ef9a9a6d6e361fec921df69f4c43cf72aec7b3ce347af7300caf9139c9435af",
+  "measured_source_after_sha256": "0ef9a9a6d6e361fec921df69f4c43cf72aec7b3ce347af7300caf9139c9435af",
+  "binary_sha256": "b69ce95bde5b32d6ceb73274b179565ebcbe39b48d0dd5aa0f2c8f0d00d73647",
+  "created_utc": "2026-10-15T05:08:10.312735+00:00"
+}

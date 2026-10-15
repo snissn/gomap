@@ -1,0 +1,48 @@
+File: combined-db.test
+Build ID: 86d74b5f67ae5f051e5d6a387a9276b9ad6ca097
+Type: cpu
+Time: 2026-10-14 18:54:39 HST
+Duration: 1.94s, Total samples = 1.94s (99.83%)
+Showing nodes accounting for 1.35s, 69.59% of 1.94s total
+Showing top 40 nodes out of 366
+      flat  flat%   sum%        cum   cum%
+     0.16s  8.25%  8.25%      0.16s  8.25%  crypto/internal/fips140/sha256.blockSHANI
+     0.10s  5.15% 13.40%      0.40s 20.62%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal
+     0.07s  3.61% 17.01%      0.10s  5.15%  internal/runtime/maps.(*Iter).Next
+     0.07s  3.61% 20.62%      0.07s  3.61%  internal/runtime/syscall/linux.Syscall6
+     0.07s  3.61% 24.23%      0.10s  5.15%  runtime.scanblock
+     0.07s  3.61% 27.84%      0.09s  4.64%  runtime.tryDeferToSpanScan
+     0.06s  3.09% 30.93%      0.06s  3.09%  time.runtimeNow
+     0.05s  2.58% 33.51%      0.05s  2.58%  runtime.memmove
+     0.04s  2.06% 35.57%      0.04s  2.06%  github.com/snissn/gomap/TreeDB/node.putUint64At
+     0.04s  2.06% 37.63%      0.12s  6.19%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeInternal.func6 (inline)
+     0.04s  2.06% 39.69%      0.10s  5.15%  runtime.wbBufFlush1
+     0.03s  1.55% 41.24%      0.69s 35.57%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1
+     0.03s  1.55% 42.78%      0.03s  1.55%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).retiredSummary (inline)
+     0.03s  1.55% 44.33%      0.03s  1.55%  github.com/snissn/gomap/TreeDB/freelist.encodeChunkPageInto
+     0.03s  1.55% 45.88%      0.03s  1.55%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt
+     0.03s  1.55% 47.42%      0.15s  7.73%  runtime.mallocgcSmallNoscan
+     0.03s  1.55% 48.97%      0.04s  2.06%  runtime.scanObjectsSmall
+     0.03s  1.55% 50.52%      0.03s  1.55%  runtime.unlock2
+     0.02s  1.03% 51.55%      1.33s 68.56%  github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic
+     0.02s  1.03% 52.58%      0.10s  5.15%  github.com/snissn/gomap/TreeDB/freelist.emitStatePages
+     0.02s  1.03% 53.61%      0.05s  2.58%  github.com/snissn/gomap/TreeDB/freelist.recomputeStateNode
+     0.02s  1.03% 54.64%      0.06s  3.09%  github.com/snissn/gomap/TreeDB/node.(*Builder).AddInternalChildRef
+     0.02s  1.03% 55.67%      0.02s  1.03%  internal/runtime/atomic.(*Uint64).Add (inline)
+     0.02s  1.03% 56.70%      0.02s  1.03%  internal/runtime/maps.bitset.first (inline)
+     0.02s  1.03% 57.73%      0.02s  1.03%  internal/sync.(*Mutex).Lock (inline)
+     0.02s  1.03% 58.76%      0.02s  1.03%  internal/sync.(*Mutex).Unlock (inline)
+     0.02s  1.03% 59.79%      0.02s  1.03%  runtime.gcmarknewobject
+     0.02s  1.03% 60.82%      0.02s  1.03%  runtime.heapArenaOf (inline)
+     0.02s  1.03% 61.86%      0.02s  1.03%  runtime.memclrNoHeapPointers
+     0.02s  1.03% 62.89%      0.02s  1.03%  runtime.offAddr.lessThan (inline)
+     0.02s  1.03% 63.92%      0.05s  2.58%  runtime.scanObject
+     0.02s  1.03% 64.95%      0.03s  1.55%  runtime.typePointers.next
+     0.02s  1.03% 65.98%      0.02s  1.03%  sync/atomic.(*Int32).Add (inline)
+     0.01s  0.52% 66.49%      0.01s  0.52%  fmt.(*pp).doPrintf
+     0.01s  0.52% 67.01%      0.09s  4.64%  gcWriteBarrier
+     0.01s  0.52% 67.53%      0.01s  0.52%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.01s  0.52% 68.04%      0.01s  0.52%  github.com/snissn/gomap/TreeDB/db.(*DB).classifyRawSpanNativeFallback
+     0.01s  0.52% 68.56%      0.74s 38.14%  github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions
+     0.01s  0.52% 69.07%      0.01s  0.52%  github.com/snissn/gomap/TreeDB/db.(*DB).snapshotAcquireInFlight (inline)
+     0.01s  0.52% 69.59%      0.01s  0.52%  github.com/snissn/gomap/TreeDB/freelist.(*FreelistTxn).Allocate.func1

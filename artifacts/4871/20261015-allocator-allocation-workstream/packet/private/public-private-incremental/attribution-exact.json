@@ -1,0 +1,82 @@
+[
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-nodefraction=0",
+      "-edgefraction=0",
+      "-unit=bytes",
+      "-sample_index=alloc_space",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-alloc.pprof"
+    ],
+    "exit": 0,
+    "seconds": 0.0825115330517292,
+    "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-write-exact-alloc_space.log",
+    "log_sha256": "3c941453e889531fe89d9f4c29cb0c7816f59ed51dda96be8df3b9591c899506"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-nodefraction=0",
+      "-edgefraction=0",
+      "-unit=count",
+      "-sample_index=alloc_objects",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-alloc.pprof"
+    ],
+    "exit": 0,
+    "seconds": 0.08033735118806362,
+    "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-write-exact-alloc_objects.log",
+    "log_sha256": "1c79a2e936873295f587bb2ac33f91e14bc77034b9d855fd6d5586a6515cd22b"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-nodefraction=0",
+      "-edgefraction=0",
+      "-unit=bytes",
+      "-sample_index=alloc_space",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-alloc.pprof"
+    ],
+    "exit": 0,
+    "seconds": 0.0710051222704351,
+    "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-write-exact-alloc_space.log",
+    "log_sha256": "c397f92265f90e9aeb1c01dba13a6580c336dd1078b6c958cbdd62bd33d730b7"
+  },
+  {
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-nodefraction=0",
+      "-edgefraction=0",
+      "-unit=count",
+      "-sample_index=alloc_objects",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-alloc.pprof"
+    ],
+    "exit": 0,
+    "seconds": 0.0611181971617043,
+    "log": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-write-exact-alloc_objects.log",
+    "log_sha256": "cdc2b9dfe3a052aa539b0eeb48e3517007aedd52cdeebcb28f777d07dcf012aa"
+  }
+]

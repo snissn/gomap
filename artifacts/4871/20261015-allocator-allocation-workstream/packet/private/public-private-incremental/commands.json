@@ -1,0 +1,344 @@
+[
+  {
+    "name": "build-topology-only",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-overlay",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/topology-only-overlay/overlay.json",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 45.27768550813198,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "pair1-topology-only",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.36422598036006093,
+    "log_sha256": "04f7dee43000b23a65bfc78aad49bae9fd1081f05fc49d262968a630424ab16a"
+  },
+  {
+    "name": "pair1-combined",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.3638524552807212,
+    "log_sha256": "b85d064abf8946c2266e2f389ea5e7ef8d2d9dc6d8b825eb4d1877c4c80492d6"
+  },
+  {
+    "name": "pair2-combined",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.3640983351506293,
+    "log_sha256": "b6aec4ef758017fa3fe5155b58278de6e5375dbb7a3f80e82b454c331d5c1fd3"
+  },
+  {
+    "name": "pair2-topology-only",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.36400116980075836,
+    "log_sha256": "f7393c3862cd9f81c7e21ec05f69819da2792411d644dd1bc4c2bb19e0223d29"
+  },
+  {
+    "name": "pair3-topology-only",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.3640546379610896,
+    "log_sha256": "389ee6e3faf106faa7bc02b87dc36b76c98456f9d5dac21a7e26e91f2c7af8d3"
+  },
+  {
+    "name": "pair3-combined",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=10000x"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.3643806339241564,
+    "log_sha256": "f9db3699219cf95e7706f0b2017c09035acdff4b7abadddba899df706114d295"
+  },
+  {
+    "name": "topology-only-alloc",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x",
+      "-test.memprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-alloc.pprof",
+      "-test.memprofilerate=1"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.6144499108195305,
+    "log_sha256": "4df875864876cf7620e17edfe53f22529869eaba8020eed571a19d6ac74586c2"
+  },
+  {
+    "name": "topology-only-write-alloc_space",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-unit=bytes",
+      "-sample_index=alloc_space",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.06367645226418972,
+    "log_sha256": "f8ebf300836c911332ddf67456317d3db6ce93fc7be848485cb67818cfc3aa48"
+  },
+  {
+    "name": "topology-only-write-alloc_objects",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-unit=count",
+      "-sample_index=alloc_objects",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.11360735073685646,
+    "log_sha256": "50bf64f5f0627743ea0488bb400a55e923b85aec7f91800c11086d0b382d7e41"
+  },
+  {
+    "name": "combined-alloc",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.timeout=60s",
+      "-test.benchtime=1000x",
+      "-test.memprofile=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-alloc.pprof",
+      "-test.memprofilerate=1"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.6144483298994601,
+    "log_sha256": "cfafbfbf51f660e0efa56ee5c98fdda37da79b88ca0ea8e9cd58f8886f99ebbb"
+  },
+  {
+    "name": "combined-write-alloc_space",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-unit=bytes",
+      "-sample_index=alloc_space",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.06375939585268497,
+    "log_sha256": "c2fd1f0ccdf1ab54071271594ca1566495807d2e24155bda4e80a7f419108578"
+  },
+  {
+    "name": "combined-write-alloc_objects",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "tool",
+      "pprof",
+      "-top",
+      "-nodecount=0",
+      "-unit=count",
+      "-sample_index=alloc_objects",
+      "-focus=db\\.\\(\\*Batch\\)\\.Write$",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/combined-alloc.pprof"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-integration-20261015",
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.1135645885951817,
+    "log_sha256": "74f30a755f97600807597c730b6d5372c27b2ed3cdeab6cb2c65b45c466bc0f4"
+  }
+]

@@ -1,0 +1,75 @@
+{
+  "status": "MATCHED_FIXED_COUNT_INCREMENTAL_DIAGNOSTIC",
+  "rows": [
+    {
+      "pair": 1,
+      "kind": "topology-only",
+      "n": 10000,
+      "ns_per_op": 24299.0,
+      "bytes_per_op": 56005,
+      "allocs_per_op": 156
+    },
+    {
+      "pair": 1,
+      "kind": "combined",
+      "n": 10000,
+      "ns_per_op": 22229.0,
+      "bytes_per_op": 45130,
+      "allocs_per_op": 144
+    },
+    {
+      "pair": 2,
+      "kind": "combined",
+      "n": 10000,
+      "ns_per_op": 22547.0,
+      "bytes_per_op": 45130,
+      "allocs_per_op": 144
+    },
+    {
+      "pair": 2,
+      "kind": "topology-only",
+      "n": 10000,
+      "ns_per_op": 24205.0,
+      "bytes_per_op": 56005,
+      "allocs_per_op": 156
+    },
+    {
+      "pair": 3,
+      "kind": "topology-only",
+      "n": 10000,
+      "ns_per_op": 24530.0,
+      "bytes_per_op": 56005,
+      "allocs_per_op": 156
+    },
+    {
+      "pair": 3,
+      "kind": "combined",
+      "n": 10000,
+      "ns_per_op": 22352.0,
+      "bytes_per_op": 45130,
+      "allocs_per_op": 144
+    }
+  ],
+  "medians": {
+    "topology-only": {
+      "ns_per_op": 24299.0,
+      "bytes_per_op": 56005,
+      "allocs_per_op": 156
+    },
+    "combined": {
+      "ns_per_op": 22352.0,
+      "bytes_per_op": 45130,
+      "allocs_per_op": 144
+    }
+  },
+  "percent_change": {
+    "ns_per_op": -8.01267541874151,
+    "bytes_per_op": -19.41790911525757,
+    "allocs_per_op": -7.692307692307687
+  },
+  "limitations": [
+    "Benchmark-only topology counterfactual; private activation tests expected RED and this is not a production correctness candidate.",
+    "Same10000key fixture and stopped-timer checkpoint every8writes; no setup/maintenance moved.",
+    "Observer profiles separate from timing; clone metric must include flat detachUnmaterialized,stateChunk.clone,cloneStateNode rows."
+  ]
+}

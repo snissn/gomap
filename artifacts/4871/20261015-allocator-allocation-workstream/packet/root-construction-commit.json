@@ -1,0 +1,10 @@
+{
+  "head": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+  "parent": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+  "branch": "codex/4871-allocation-integration-20261015",
+  "manifest_sha256": "5a06010306af8c9120a5124902b4e25b250c0a1db3618efd58cdb239a30bd7b3",
+  "files": 19,
+  "status": "PUSHED_READBACK_VERIFIED",
+  "at_utc": "2026-10-15T05:06:49.025875+00:00",
+  "qualification": "Coherent construction on ordinary source; main delivery, reviewbinding and finalgraph gates separate"
+}

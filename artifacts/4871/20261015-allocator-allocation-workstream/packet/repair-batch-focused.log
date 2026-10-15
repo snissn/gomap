@@ -1,0 +1,4 @@
+["/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go", "test", "./TreeDB/freelist", "-count=1"]
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.130s
+["/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go", "test", "./TreeDB/db", "-run", "TestFreelistPatriciaV2|TestFormatConfig_SaveLoadApply_RoundTrip|TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile", "-count=1"]
+ok  	github.com/snissn/gomap/TreeDB/db	0.031s

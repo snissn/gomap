@@ -1,0 +1,13 @@
+--- TreeDB/freelist/generation_v1_txn.go
++++ overlay/generation_v1_txn.go
+@@ -249,10 +249,6 @@
+ 		ledger = NewReservationLedger()
+ 	}
+ 	t := &FreelistTxn{base: base, ledger: ledger, root: base.root, highWater: base.highWater, changedChunks: map[uint64]struct{}{}, replacedMetadata: map[uint64]struct{}{}}
+-	// The base can itself be an unmaterialized model. Zero page identities
+-    // carry no ownership authority until this explicit detachment boundary.
+-    t.root = detachUnmaterialized(t.root, 0)
+-    t.privatePreparation = true
+     if base.ref.HeaderPageID != 0 {
+         t.replacedMetadata[base.ref.HeaderPageID] = struct{}{}
+ 	}

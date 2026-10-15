@@ -1,0 +1,38 @@
+{
+  "topology-only": {
+    "entries": [
+      {
+        "flat_bytes": 13736448,
+        "line": "13736448B 18.99% 18.99%  13736448B 18.99%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)"
+      },
+      {
+        "flat_bytes": 2480192,
+        "line": "2480192B  3.43% 60.53%   2480192B  3.43%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)"
+      },
+      {
+        "flat_bytes": 60896,
+        "line": "60896B 0.084% 76.41%     60896B 0.084%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized"
+      }
+    ],
+    "flat_state_clone_bytes": 16277536
+  },
+  "combined": {
+    "entries": [
+      {
+        "flat_bytes": 2737792,
+        "line": "2737792B  4.57% 50.55%   2737792B  4.57%  github.com/snissn/gomap/TreeDB/freelist.detachUnmaterialized"
+      },
+      {
+        "flat_bytes": 2313216,
+        "line": "2313216B  3.86% 54.41%   2313216B  3.86%  github.com/snissn/gomap/TreeDB/freelist.(*stateChunk).clone (inline)"
+      },
+      {
+        "flat_bytes": 417040,
+        "line": "417040B   0.7% 67.57%    417040B   0.7%  github.com/snissn/gomap/TreeDB/freelist.cloneStateNode (inline)"
+      }
+    ],
+    "flat_state_clone_bytes": 5468048
+  },
+  "percent_change": -66.40739728666549,
+  "method": "Matched1000x Rate1 allocation captures, exact public Batch.Write stack focus; sum disjoint flat allocation sites detachUnmaterialized/stateChunk.clone/cloneStateNode, no cumulative frames. Includes1001publicwrites (warmup1+1000 fixed benchmark iterations), excludes WriteSync seed and stopped-timer Checkpoint stacks."
+}

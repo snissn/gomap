@@ -1,0 +1,50 @@
+[
+  {
+    "pair": 1,
+    "kind": "ordinary",
+    "n": 6523,
+    "ns_per_op": 47293.0,
+    "bytes_per_op": 154768,
+    "allocs_per_op": 286
+  },
+  {
+    "pair": 1,
+    "kind": "combined",
+    "n": 16150,
+    "ns_per_op": 22465.0,
+    "bytes_per_op": 45129,
+    "allocs_per_op": 144
+  },
+  {
+    "pair": 2,
+    "kind": "ordinary",
+    "n": 6724,
+    "ns_per_op": 46819.0,
+    "bytes_per_op": 154774,
+    "allocs_per_op": 286
+  },
+  {
+    "pair": 2,
+    "kind": "combined",
+    "n": 16113,
+    "ns_per_op": 22209.0,
+    "bytes_per_op": 45128,
+    "allocs_per_op": 144
+  },
+  {
+    "pair": 3,
+    "kind": "ordinary",
+    "n": 6861,
+    "ns_per_op": 46531.0,
+    "bytes_per_op": 154767,
+    "allocs_per_op": 286
+  },
+  {
+    "pair": 3,
+    "kind": "combined",
+    "n": 16160,
+    "ns_per_op": 22288.0,
+    "bytes_per_op": 45128,
+    "allocs_per_op": 144
+  }
+]

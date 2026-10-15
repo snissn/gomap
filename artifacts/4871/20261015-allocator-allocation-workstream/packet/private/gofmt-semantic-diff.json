@@ -1,0 +1,32 @@
+[
+  {
+    "path": "TreeDB/freelist/generation_v1_txn.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "b86c615e5ba6398a44d2c91c383f34087df09d80fbec48b24471a655ec4823e3"
+  },
+  {
+    "path": "TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "4a93f586219e126e51e4ef05f72ccddf6063b08839033d1156aa5e2db2e0dc63"
+  },
+  {
+    "path": "TreeDB/freelist/allocator_cow.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685"
+  },
+  {
+    "path": "TreeDB/freelist/generation_v1_private_test.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "ef8082b3eed1ce843a5c0287500b370ebc7f87b768efa087a22e0b20a2679812"
+  },
+  {
+    "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "7fae09ed8b51d49b6ae5a9aa9498022d38f0bbd4ab42f3d4b195ec9a90b7c95b"
+  },
+  {
+    "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+    "formatted_integration_equals_original_private": true,
+    "sha256": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+  }
+]
