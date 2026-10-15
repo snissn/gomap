@@ -1385,36 +1385,52 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	var meta durabilitycut.Event
 	var observeMu sync.Mutex
 	observing := true
+	cutReturned := false
+	targetPrimary := filepath.Clean(filepath.Join(dir, "index.db.primary"))
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !cowEventBelongsToDB(dir, event) {
+			return nil
+		}
 		observeMu.Lock()
 		defer observeMu.Unlock()
 		if !observing {
 			return nil
 		}
-		if snapshot != nil {
-			return cutErr
+		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary
+		if cutReturned {
+			if targetMeta {
+				return cutErr
+			}
+			return nil
 		}
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaWrite {
-			meta, snapshot = event, model.Clone()
+		if targetMeta {
+			// Keep only scalar event operands, never the borrowed stable handles.
+			meta = durabilitycut.Event{Point: event.Point, Resource: event.Resource, Path: event.Path, Offset: event.Offset, Length: event.Length}
+			snapshot = model.Clone()
+			cutReturned = true
 			return cutErr
 		}
 		return nil
 	})
+	deactivate := sync.OnceFunc(func() {
+		// Drain callbacks that already fetched the observer before restore.
+		observeMu.Lock()
+		observing = false
+		observeMu.Unlock()
+		restore()
+	})
+	defer deactivate()
 	err = db.Checkpoint()
-	restore()
-	observeMu.Lock()
-	observing = false
-	capturedSnapshot, capturedMeta := snapshot, meta
-	observeMu.Unlock()
-	snapshot, meta = capturedSnapshot, capturedMeta
+	deactivate()
 	// The SAME actual post-meta interruption may reach the checkpoint through
 	// its poisoned admission gate after the asynchronous publisher records it.
-	observedMetaPoison := snapshot != nil && meta.Point == durabilitycut.AfterMetaWrite &&
-		meta.Resource == durabilitycut.ResourceMeta && errors.Is(err, backenddb.ErrRecoveryRequired)
-	if snapshot == nil || (!errors.Is(err, cutErr) && !observedMetaPoison) {
+	capturedExactCut := cutReturned && snapshot != nil && meta.Point == durabilitycut.AfterMetaWrite &&
+		meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetPrimary
+	observedMetaPoison := capturedExactCut && errors.Is(err, backenddb.ErrRecoveryRequired)
+	if !capturedExactCut || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)
 	}
 	_ = db.Close()
