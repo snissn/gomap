@@ -351,3 +351,66 @@ func (a *Arena) CloneReadRootForPromotionV6(source Ref, w *iterator.OrdinalScanW
 	a.counters.Bytes += bytes
 	return ref, true, nil
 }
+
+func (a *Arena) AcquirePromotionCustodyV6(root, parent Ref, edge, parentEdge MetadataEdge, w *iterator.OrdinalScanWork) (Ref, Ref, bool, error) {
+	if !reserve(w, 4, 8*uint64(unsafe.Sizeof(bank{}))+4*uint64(unsafe.Sizeof(Ref{}))) {
+		return Ref{}, Ref{}, false, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.capsuleFormat {
+		return Ref{}, Ref{}, false, ErrStale
+	}
+	refs := [4]Ref{root, parent}
+	banks := [4]*bank{a.valid(root), a.valid(parent)}
+	edges := [2]MetadataEdge{edge, parentEdge}
+	for i, e := range edges {
+		b := a.slot(e.PageID)
+		if b == nil || !b.sealed || b.refs == 0 || (e.Class != Dependency && e.Class != Manifest) || b.class != e.Class || (e.Digest != ([32]byte{}) && b.digest != e.Digest) {
+			return Ref{}, Ref{}, false, ErrStale
+		}
+		refs[i+2] = Ref{e.PageID, b.incarnation}
+		banks[i+2] = b
+	}
+	for i, b := range banks {
+		if b == nil || !b.sealed || b.refs == 0 || (i < 2 && (b.class != Directory || Local(refs[i].PageID) < pager.PrimaryReadRootLocalBaseV6)) {
+			return Ref{}, Ref{}, false, ErrStale
+		}
+		multiplicity := uint64(0)
+		for _, other := range banks {
+			if other == b {
+				multiplicity++
+			}
+		}
+		if b.refs > ^uint64(0)-multiplicity {
+			return Ref{}, Ref{}, false, ErrStale
+		}
+	}
+	for _, b := range banks {
+		b.refs++
+	}
+	a.counters.RootAcquires += 2
+	a.counters.EdgeReads += 4
+	a.counters.EdgeWrites += 2
+	a.counters.Bytes += 8*uint64(unsafe.Sizeof(bank{})) + 4*uint64(unsafe.Sizeof(Ref{}))
+	return refs[2], refs[3], true, nil
+}
+
+// AcquireCapsuleDependencyV6 restores one independent slot/proof closure edge.
+// Recovery and rebuild use the same actual bank validation as fresh promotion.
+func (a *Arena) AcquireCapsuleDependencyV6(edge MetadataEdge, w *iterator.OrdinalScanWork) (Ref, bool, error) {
+	if !reserve(w, 1, 2*uint64(unsafe.Sizeof(bank{}))) {
+		return Ref{}, false, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.slot(edge.PageID)
+	if !a.capsuleFormat || b == nil || !b.sealed || b.refs == 0 || b.refs == ^uint64(0) || (edge.Class != Dependency && edge.Class != Manifest) || b.class != edge.Class || (edge.Digest != ([32]byte{}) && b.digest != edge.Digest) {
+		return Ref{}, false, ErrStale
+	}
+	b.refs++
+	a.counters.EdgeReads++
+	a.counters.EdgeWrites++
+	a.counters.Bytes += 2 * uint64(unsafe.Sizeof(bank{}))
+	return Ref{edge.PageID, b.incarnation}, true, nil
+}

@@ -51,29 +51,7 @@ func (backing *resourceEntryBacking) release() error {
 	if backing == nil {
 		return nil
 	}
-	if err := backing.allocation.cleanupResult(); err != nil {
-		return err
-	}
-	if !backing.allocation.drop() {
-		return nil
-	}
-	for i := range backing.entries {
-		entry := &backing.entries[i]
-		if entry.outgoing != nil {
-			entry.outgoing.release()
-			entry.outgoing = nil
-		}
-		if entry.tokenMetadataOwned {
-			if err := entry.token.releaseMetadata(); err != nil {
-				return backing.allocation.cleanupFailed(backing, err)
-			}
-			entry.tokenMetadataOwned = false
-		}
-	}
-	clear(backing.entries)
-	backing.entries = nil
-	backing.allocation.refund()
-	return nil
+	return releaseResourceMetadataV6(backing.allocation, backing)
 }
 
 // Bind keeps the token's immutable descriptor allocation independently of its

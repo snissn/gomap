@@ -31,9 +31,10 @@ type primaryTransactionConstructionV6 struct {
 	cleanupReceipt  *PrimaryConstructionReleaseWork
 }
 type PrimaryPromotionV6 struct {
-	Image        []byte
-	View         PrimaryCapsuleViewV6
-	Root, Parent primaryarena.Ref
+	Image                  []byte
+	View                   PrimaryCapsuleViewV6
+	Root, Parent           primaryarena.Ref
+	Closure, ParentClosure primaryarena.Ref
 }
 
 func NewPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
@@ -217,21 +218,30 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
-	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || c.promotion != nil || parent == nil || parentRoot == (primaryarena.Ref{}) {
+	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || (c.promotion != nil && c.promotion.Root != (primaryarena.Ref{})) || parent == nil || parentRoot == (primaryarena.Ref{}) {
 		return nil, false, ErrDurableRootOwnership
 	}
 	target := uint64(1) - parent.Slot()
-	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
-	if err := c.arena.MetadataOwner().AddPending(charge); err != nil {
-		return nil, false, err
+	promotion := c.promotion
+	charge := uint64(0)
+	if promotion == nil {
+		var ready bool
+		var err error
+		promotion, charge, ready, err = allocatePrimaryPromotionStorageV6(c.arena.MetadataOwner(), w)
+		if !ready || err != nil {
+			return nil, ready, err
+		}
 	}
-	chargeTransferred := false
+	image := promotion.Image
+	chargeTransferred := charge == 0
 	defer func() {
 		if !chargeTransferred {
+			image = nil
+			promotion.Image = nil
+			promotion = nil
 			c.arena.MetadataOwner().RemovePending(charge)
 		}
 	}()
-	image := make([]byte, PrimaryCapsuleSizeV6)
 	view, ready, err := ConstructPrimaryCapsuleV6(image, target, DurablePrimaryRootRecordV5{Record: record, Primary: projection}, t.input.PreparedPrimary, parent, w)
 	if !ready || err != nil {
 		return nil, ready, err
@@ -240,29 +250,19 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	if record.Directory.RootPageID != 0 {
 		edge = primaryarena.MetadataEdge{PageID: record.Directory.RootPageID, Class: primaryarena.Dependency}
 	}
-	promotionRoot, ready, err := c.arena.CloneReadRootForPromotionV6(c.root, w)
+	parentRecord := parent.Current().Record
+	parentEdge := primaryarena.MetadataEdge{PageID: parentRecord.Manifest.FirstPageID, Class: primaryarena.Manifest}
+	if parentRecord.Directory.RootPageID != 0 {
+		parentEdge = primaryarena.MetadataEdge{PageID: parentRecord.Directory.RootPageID, Class: primaryarena.Dependency}
+	}
+	closure, parentClosure, ready, err := c.arena.AcquirePromotionCustodyV6(c.root, parentRoot, edge, parentEdge, w)
 	if !ready || err != nil {
 		return nil, ready, err
 	}
-	retained := false
-	defer func() {
-		if !retained {
-			// Ordinary synchronous unwind owns this exact new image and group edges.
-			cleanup := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-			_, dropErr := c.arena.Drop(promotionRoot, cleanup)
-			returnErr = errors.Join(returnErr, dropErr)
-		}
-	}()
-	if ready, err = c.arena.BindReadRootDependencyV6(promotionRoot, edge, w); !ready || err != nil {
-		return nil, ready, err
-	}
-	if ready, err = c.arena.Acquire(parentRoot, w); !ready || err != nil {
-		return nil, ready, err
-	}
-	c.promotion = &PrimaryPromotionV6{Image: image, View: view, Root: promotionRoot, Parent: parentRoot}
+	*promotion = PrimaryPromotionV6{Image: image, View: view, Root: c.root, Parent: parentRoot, Closure: closure, ParentClosure: parentClosure}
+	c.promotion = promotion
 	c.metadataCharge += charge
 	chargeTransferred = true
-	retained = true
 	return c.promotion, true, nil
 }
 
@@ -349,6 +349,10 @@ func (t *DurableRootTransaction) PublicationProjectionV6() any {
 	}
 	return t.input.PublicationProjection
 }
+
+// PublicationCandidateV6 borrows the constructor's descriptor while publication
+// is pending. Finish or recovery consumption clears that containing storage;
+// callers must not retain this borrowed view across terminal completion.
 func (t *DurableRootTransaction) PublicationCandidateV6() *PreparedRootCandidate {
 	if t == nil || t.constructionV6 == nil || !t.constructionV6.candidateBound {
 		return nil
@@ -371,7 +375,7 @@ func (t *DurableRootTransaction) adoptPrimaryCandidateV6(candidate PreparedRootC
 // TransferPrimaryPromotionImageV6 follows actual slot installation. The slot
 // owns the image and copied view; pending callbacks retain only the descriptor.
 // No new allocation, physical edge, or admission is manufactured here.
-func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() {
+func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
@@ -379,10 +383,10 @@ func (t *DurableRootTransaction) TransferPrimaryPromotionImageV6() {
 		panic("promotion transfer lost owner")
 	}
 	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6)
-	c.arena.AdoptPendingRootMetadata(c.promotion.Root, charge)
 	c.metadataCharge -= charge
 	c.promotion.Image = nil
 	c.promotion.View = PrimaryCapsuleViewV6{}
+	return charge
 }
 
 // Recovery prepares the SAME constructor before any resource Set is released.
@@ -440,3 +444,17 @@ func (t *DurableRootTransaction) releasePrimaryRecoveryLockedV6() (*primaryTermi
 	t.phase = durableRootConsumed
 	return completion, nil
 }
+
+func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, uint64, bool, error) {
+	if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
+		return nil, 0, false, nil
+	}
+	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
+	if err := owner.AddPending(charge); err != nil {
+		return nil, 0, false, err
+	}
+	return &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil
+}
+
+// Fresh promotion selects actual parent/target and acquires independent physical
+// closure edges. These head-bound operands never survive as private preparation.

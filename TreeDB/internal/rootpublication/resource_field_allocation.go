@@ -118,12 +118,10 @@ func (backing *resourceFieldBacking) retain() bool {
 	return backing == nil || backing.allocation.retain()
 }
 func (backing *resourceFieldBacking) release() {
-	if backing == nil || !backing.allocation.drop() {
+	if backing == nil {
 		return
 	}
-	clear(backing.cells[:cap(backing.cells)])
-	backing.cells = nil
-	backing.allocation.refund()
+	_ = releaseResourceMetadataV6(backing.allocation, backing)
 }
 func (backing *resourceFieldBacking) find(field ReachabilityField) (resourceFieldCell, bool) {
 	if backing == nil {

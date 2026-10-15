@@ -244,9 +244,17 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) (retErr error) {
 		if e != nil {
 			return e
 		}
+		runtime.closures[i], _, e = a.AcquireCapsuleDependencyV6(primaryCapsuleDependencyEdgeV6(v.Current().Record), nil)
+		if e != nil {
+			return e
+		}
 		runtime.dataFloor[i] = v.Current().Primary.DataCommitSeq
 		if parent := v.Parent(); parent.Record.CommitSeq != 0 {
 			runtime.proofs[i], e = copyCapsuleReadImageV6(a, v.ParentDirectory(), parent.Record)
+			if e != nil {
+				return e
+			}
+			runtime.proofClosures[i], _, e = a.AcquireCapsuleDependencyV6(primaryCapsuleDependencyEdgeV6(parent.Record), nil)
 			if e != nil {
 				return e
 			}
@@ -287,13 +295,12 @@ func (db *DB) recoverPrimaryCapsuleV6(idx *indexGen) (retErr error) {
 	db.durableRoot.primary = runtime
 	for i, image := range images {
 		if image != nil {
-			a.AdoptPendingRootMetadata(runtime.records[i], imageCharge)
-			runtime.metadataCharge -= imageCharge
+			runtime.capsuleCharges[i] = imageCharge
 		}
 	}
 	a.AdoptPendingRootMetadata(current, primaryStateDescriptorChargeV5())
 	runtime.metadataCharge -= primaryStateDescriptorChargeV5()
-	unusedCharge := runtime.metadataCharge - primaryRuntimeDescriptorChargeV5()
+	unusedCharge := runtime.metadataCharge - primaryRuntimeDescriptorChargeV5() - runtime.capsuleCharges[0] - runtime.capsuleCharges[1]
 	runtime.metadataCharge -= unusedCharge
 	a.MetadataOwner().RemovePending(unusedCharge)
 	runtime.slotResources = [2]*rootpublication.StableResourceSet{} // transferred to DB slots

@@ -28,17 +28,19 @@ type primaryStateRootV5 struct {
 	certificate *primaryarena.ReadRootCertificateV6
 }
 type primaryDurableRuntimeV5 struct {
-	projection     rootpublication.PrimaryProjectionV5
-	slots          [2]rootpublication.PrimaryProjectionV5
-	records        [2]primaryarena.Ref
-	proofs         [2]primaryarena.Ref
-	proofRecords   [2]rootpublication.DurablePrimaryRootRecordV5
-	proofResources [2]*rootpublication.StableResourceSet
-	slotResources  [2]*rootpublication.StableResourceSet
-	dataFloor      [4]uint64
-	current        *primaryStateRootV5
-	capsuleImages  [2][]byte
-	capsuleViews   [2]rootpublication.PrimaryCapsuleViewV6
+	projection              rootpublication.PrimaryProjectionV5
+	slots                   [2]rootpublication.PrimaryProjectionV5
+	records                 [2]primaryarena.Ref
+	proofs                  [2]primaryarena.Ref
+	closures, proofClosures [2]primaryarena.Ref
+	capsuleCharges          [2]uint64
+	proofRecords            [2]rootpublication.DurablePrimaryRootRecordV5
+	proofResources          [2]*rootpublication.StableResourceSet
+	slotResources           [2]*rootpublication.StableResourceSet
+	dataFloor               [4]uint64
+	current                 *primaryStateRootV5
+	capsuleImages           [2][]byte
+	capsuleViews            [2]rootpublication.PrimaryCapsuleViewV6
 	// The containing descriptor is independently pending until all original
 	// physical and resource edges complete. Root wrappers retain their own
 	// root-owned charges and never subsidize this descriptor.
@@ -46,6 +48,10 @@ type primaryDurableRuntimeV5 struct {
 	metadata                *retainedalloc.Owner
 	metadataCharge          uint64
 	disposalAttempted       bool
+	disposalPhase           uint8
+	disposalIndex           int
+	disposalNative          bool
+	disposalQueue           primaryarena.ReleaseQueue
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
@@ -55,6 +61,10 @@ type primaryDurableRuntimeV5 struct {
 	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
+	disposalPhase     uint8
+	disposalIndex     int
+	disposalNative    bool
+	disposalQueue     primaryarena.ReleaseQueue
 	disposalMu        sync.Mutex
 	disposalAttempted bool
 	disposalErr       error
@@ -720,6 +730,7 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	primary := &primaryDurableRuntimeV5{
 		projection: base.primary.projection, slots: base.primary.slots,
 		records: base.primary.records, proofs: base.primary.proofs,
+		closures: base.primary.closures, proofClosures: base.primary.proofClosures, capsuleCharges: base.primary.capsuleCharges,
 		proofRecords: base.primary.proofRecords, proofResources: base.primary.proofResources,
 		dataFloor: base.primary.dataFloor, current: base.primary.current,
 		capsuleImages: base.primary.capsuleImages, capsuleViews: base.primary.capsuleViews,
@@ -730,6 +741,9 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 		if !descriptorPublished {
 			clear(primary.records[:])
 			clear(primary.proofs[:])
+			clear(primary.closures[:])
+			clear(primary.proofClosures[:])
+			clear(primary.capsuleCharges[:])
 			clear(primary.proofResources[:])
 			clear(primary.capsuleImages[:])
 			clear(primary.capsuleViews[:])
@@ -748,6 +762,9 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	}
 	if seal.primary.promotion != nil {
 		primary.records[seal.target] = seal.primary.promotion.Root
+		primary.closures[seal.target] = seal.primary.promotion.Closure
+		primary.proofClosures[seal.target] = seal.primary.promotion.ParentClosure
+		primary.capsuleCharges[seal.target] = 0 // target image charge transfers only after installation
 		primary.capsuleImages[seal.target] = seal.primary.promotion.Image
 		primary.capsuleViews[seal.target] = seal.primary.promotion.View
 	} else {
@@ -800,6 +817,10 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	for slot := range base.primary.records {
 		if uint64(slot) != seal.target {
 			base.primary.records[slot], base.primary.proofs[slot] = primaryarena.Ref{}, primaryarena.Ref{}
+			base.primary.closures[slot], base.primary.proofClosures[slot] = primaryarena.Ref{}, primaryarena.Ref{}
+			primary.metadataCharge += base.primary.capsuleCharges[slot]
+			base.primary.metadataCharge -= base.primary.capsuleCharges[slot]
+			base.primary.capsuleCharges[slot] = 0
 			base.primary.proofResources[slot] = nil
 			base.primary.capsuleImages[slot] = nil
 			base.primary.capsuleViews[slot] = rootpublication.PrimaryCapsuleViewV6{}
@@ -811,9 +832,13 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	member.primaryRecordTransferred = true
 	seal.primary.recordTransferred = true
 	if seal.primary.promotion != nil {
-		member.transaction.TransferPrimaryPromotionImageV6()
+		charge := member.transaction.TransferPrimaryPromotionImageV6()
+		primary.capsuleCharges[seal.target] = charge
+		primary.metadataCharge += charge
 		seal.primary.promotion.Root = primaryarena.Ref{}
 		seal.primary.promotion.Parent = primaryarena.Ref{}
+		seal.primary.promotion.Closure = primaryarena.Ref{}
+		seal.primary.promotion.ParentClosure = primaryarena.Ref{}
 	}
 	seal.primary.proof = primaryarena.Ref{}
 	seal.primary.proofResources = nil
@@ -849,73 +874,8 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 }
 
 func (seal *primaryPublicationSealV5) release() error {
-	if seal == nil {
-		return nil
-	}
-	seal.disposalMu.Lock()
-	defer seal.disposalMu.Unlock()
-	if seal.disposalAttempted {
-		return seal.disposalErr
-	}
-	seal.disposalAttempted = true
-	a := seal.prepared.Arena()
-	var first error
-	drop := func(ref *primaryarena.Ref) {
-		if *ref == (primaryarena.Ref{}) {
-			return
-		}
-		consumed, err := a.Drop(*ref, nil)
-		if err == nil && !consumed {
-			err = rootpublication.ErrResourceOwnership
-		}
-		if err == nil {
-			*ref = primaryarena.Ref{}
-		} else if first == nil {
-			first = err
-		}
-	}
-	if seal.promotion != nil {
-		drop(&seal.promotion.Root)
-		drop(&seal.promotion.Parent)
-		if seal.promotion.Root == (primaryarena.Ref{}) && seal.promotion.Parent == (primaryarena.Ref{}) {
-			seal.promotion.Image = nil
-			seal.promotion.View = rootpublication.PrimaryCapsuleViewV6{}
-		}
-	}
-	drop(&seal.proof)
-	// Manifest bank preparation also precedes resource-edge consumption.
-	if first == nil {
-		if err := seal.manifestBanks.release(); err != nil {
-			first = err
-		} else {
-			seal.manifestBanks = nil
-		}
-	}
-	if first == nil {
-		if err := seal.proofResources.ReleaseWithError(); err != nil {
-			first = err
-		} else {
-			seal.proofResources = nil
-		}
-		if err := seal.token.ReleaseWithError(); err != nil {
-			if first == nil {
-				first = err
-			}
-		} else {
-			seal.token = nil
-		}
-	}
-	if first != nil {
-		seal.disposalFailure.payload = seal
-		seal.disposalFailure.retainCause(0, first)
-		seal.disposalErr = &seal.disposalFailure
-		a.MetadataOwner().CleanupFailed()
-		return seal.disposalErr
-	}
-	seal.promotion = nil
-	seal.prepared = nil
-	seal.projection = rootpublication.PrimaryProjectionV5{}
-	return nil
+	_, err := continuePrimaryPublicationSealReleaseV6(seal, nil, nil)
+	return err
 }
 
 func (state *DBState) primaryRetentionCommitV5() uint64 {

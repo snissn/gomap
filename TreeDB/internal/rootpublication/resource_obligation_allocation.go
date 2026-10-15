@@ -112,29 +112,20 @@ func (backing *resourceObligationBacking) retain() bool {
 	return backing == nil || backing.allocation.retain()
 }
 func (backing *resourceObligationBacking) release() {
-	if backing == nil || !backing.allocation.drop() {
+	if backing == nil {
 		return
 	}
-	clear(backing.values[:cap(backing.values)])
-	backing.values = nil
-	backing.allocation.refund()
+	_ = releaseResourceMetadataV6(backing.allocation, backing)
 }
 
 func (node *stableLogicalObligationIndexNode) retainAllocation() bool {
 	return node == nil || node.allocation.retain()
 }
 func releaseOwnedResourceObligationIndex(node *stableLogicalObligationIndexNode) {
-	if node == nil || !node.allocation.drop() {
+	if node == nil {
 		return
 	}
-	left, right, backing := node.left, node.right, node.backing
-	node.left, node.right, node.backing = nil, nil, nil
-	node.key = stableLogicalObligationIndex{}
-	node.obligation = StableLogicalObligation{}
-	releaseOwnedResourceObligationIndex(left)
-	releaseOwnedResourceObligationIndex(right)
-	backing.release()
-	node.allocation.refund()
+	_ = releaseResourceMetadataV6(node.allocation, node)
 }
 func cloneOwnedResourceObligationIndex(root *stableLogicalObligationIndexNode, owner *retainedalloc.Owner) (*stableLogicalObligationIndexNode, error) {
 	if owner == nil || (root != nil && (root.allocation == nil || root.allocation.owner != owner || root.backing == nil || root.backing.allocation == nil || root.backing.allocation.owner != owner)) {

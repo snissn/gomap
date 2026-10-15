@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"math"
+	"sync"
 	"unsafe"
 )
 
@@ -13,6 +14,12 @@ import (
 // dependency-tree and manifest bank builders. It is transferred to a seal when
 // needed; it is not another publication or retirement registry.
 type primaryBankConstructionV5 struct {
+	releaseMu      sync.Mutex
+	releasePhase   uint8
+	releaseIndex   int
+	releaseNative  bool
+	releaseQueue   primaryarena.ReleaseQueue
+	releaseOwner   primaryArenaReleaseWork
 	idx            *indexGen
 	owner          *primaryArenaOwnerV5
 	metadata       *retainedalloc.Owner
@@ -42,7 +49,7 @@ func newPrimaryBankConstructionV5(idx *indexGen) (*primaryBankConstructionV5, er
 }
 
 func (claims *primaryBankConstructionV5) ensureCapacity(count int) error {
-	if claims.closed || count < len(claims.refs) {
+	if claims.closed || claims.releasePhase != 0 || count < len(claims.refs) {
 		return rootpublication.ErrResourceOwnership
 	}
 	if count <= cap(claims.refs) {
@@ -88,34 +95,16 @@ func (claims *primaryBankConstructionV5) claim(class primaryarena.Class, count i
 // Every consumed bank edge is cleared immediately. Failed cleanup retains the
 // exact remaining references and embedded error on the existing physical owner.
 func (claims *primaryBankConstructionV5) release() error {
-	if claims == nil {
-		return nil
+	completion, ready, err := continuePrimaryBankConstructionReleaseV6(claims, nil)
+	claims = nil
+	if ready {
+		completion.complete()
+		return err
 	}
-	if claims.closed {
-		return claims.cleanupErr
+	if err != nil {
+		return err
 	}
-	claims.closed = true
-	for i, ref := range claims.refs {
-		if ref == (primaryarena.Ref{}) {
-			continue
-		}
-		consumed, err := claims.idx.primary.Drop(ref, nil)
-		if !consumed || err != nil {
-			return claims.retainFailure(err)
-		}
-		claims.refs[i] = primaryarena.Ref{}
-	}
-	consumed, debt, err := claims.owner.releaseWithOutcome(nil)
-	if !consumed || debt {
-		return claims.retainFailure(err)
-	}
-	metadata, charge := claims.metadata, claims.charge
-	clear(claims.refs[:cap(claims.refs)])
-	claims.refs = nil
-	claims.idx, claims.owner, claims.metadata, claims.charge = nil, nil, nil, 0
-	claims.cleanupErr = err // prior sibling's already-owned error, not this refunded object
-	metadata.RemovePending(charge)
-	return err
+	return rootpublication.ErrResourceOwnership
 }
 
 func (claims *primaryBankConstructionV5) retainFailure(err error) error {

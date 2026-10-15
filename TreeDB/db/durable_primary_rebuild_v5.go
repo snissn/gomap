@@ -257,11 +257,8 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		projection.ArenaHighWater = a.Pager().PageCount()
 		value := rootpublication.DurablePrimaryRootRecordV5{Record: record, Primary: projection}
 		if a.CapsuleFormatV6() {
-			// The copied logical root retains its own actual dependency edge.
-			// Fixed images are installed only after all roots/dependencies sync.
-			if ok, e := a.BindReadRootDependencyV6(bundle.Directory, primaryCapsuleDependencyEdgeV6(record), nil); !ok || e != nil {
-				return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
-			}
+			// The rebuilt logical image remains independent of slot dependency custody.
+			// Fixed images install only after all roots/dependencies sync.
 			scratch.built[scratch.index(seq)] = rebuiltPrimaryOwnedRecordV5{bundle: bundle, record: value}
 		} else {
 			digest, e := sealPrimaryRecordV5(a, bundle.Record, value)
@@ -385,6 +382,10 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 				return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 			}
 			runtime.records[slot] = root
+			runtime.closures[slot], _, e = a.AcquireCapsuleDependencyV6(primaryCapsuleDependencyEdgeV6(view.Current().Record), nil)
+			if e != nil {
+				return selected, nil, e
+			}
 			runtime.dataFloor[slot] = generation.CommitSeq()
 			if parent := selected.ParentRecords[slot]; parent.Record.CommitSeq != 0 {
 				proof := scratch.built[scratch.index(parent.Record.CommitSeq)].bundle.Directory
@@ -392,6 +393,10 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 					return selected, nil, errors.Join(e, rootpublication.ErrResourceOwnership)
 				}
 				runtime.proofs[slot] = proof
+				runtime.proofClosures[slot], _, e = a.AcquireCapsuleDependencyV6(primaryCapsuleDependencyEdgeV6(parent.Record), nil)
+				if e != nil {
+					return selected, nil, e
+				}
 				runtime.dataFloor[slot+2] = generation.CommitSeq()
 			}
 		}
@@ -403,8 +408,7 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
 		}
 		for i, image := range images {
 			if image != nil {
-				a.AdoptPendingRootMetadata(runtime.records[i], imageCharge)
-				runtime.metadataCharge -= imageCharge
+				runtime.capsuleCharges[i] = imageCharge
 			}
 		}
 		a.AdoptPendingRootMetadata(current, primaryStateDescriptorChargeV5())

@@ -223,7 +223,7 @@ func TestPrimarySharedTransactionV6SinglePublicationOwner(t *testing.T) {
 	if transaction.PublicationCandidateV6() != nil || transaction.PublicationProjectionV6() != nil {
 		t.Fatal("completed transaction retains candidate/runtime publication closure")
 	}
-	if candidate.DurableRoot() != transaction {
-		t.Fatal("borrowed candidate changed transaction identity")
+	if candidate.DurableRoot() != nil || candidate.Resources() != nil {
+		t.Fatal("expired borrowed candidate retains terminal publication ownership")
 	}
 }

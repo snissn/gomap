@@ -31,8 +31,9 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	if e != nil {
 		return e
 	}
-	charge := retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6) + primaryStateDescriptorChargeV5()
-	runtimeCharge := primaryRuntimeDescriptorChargeV5()
+	imageCharge := retainedalloc.AllocationCharge(rootpublication.PrimaryCapsuleSizeV6)
+	charge := primaryStateDescriptorChargeV5()
+	runtimeCharge := primaryRuntimeDescriptorChargeV5() + imageCharge
 	if e = a.MetadataOwner().AddPending(runtimeCharge); e != nil {
 		return e
 	}
@@ -54,9 +55,15 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	if e != nil {
 		return e
 	}
-	if ok, e := a.BindReadRootDependencyV6(b.Directory, primaryCapsuleDependencyEdgeV6(r), nil); !ok || e != nil {
-		return e
+	closure, ok, e := a.AcquireCapsuleDependencyV6(primaryCapsuleDependencyEdgeV6(r), nil)
+	if !ok || e != nil {
+		return errors.Join(e, rootpublication.ErrResourceOwnership)
 	}
+	defer func() {
+		if !runtimeOwned {
+			a.Drop(closure, nil)
+		}
+	}()
 	// b still owns this exact immutable producer bank throughout validation.
 	certificate, ready, e := a.BorrowReadRootCertificateV6(b.Directory, nil)
 	if e != nil {
@@ -97,14 +104,15 @@ func (db *DB) initializeCapsuleAuthorityV6(idx *indexGen, b primaryarena.Publica
 	}
 	db.installDurableRootSelectionV1(durableRootSelectionV1{Slot: 0, Meta: meta, Record: actual.Record, Freelist: g, Manifest: m, SlotCommits: [2]uint64{r.CommitSeq, 0}, SlotMetas: [2]page.DurableMetaV1{meta, {}}, SlotRecords: [2]rootpublication.DurableRootRecordV1{actual.Record, {}}, SlotResources: [2]*rootpublication.StableResourceSet{resources, nil}})
 	db.meta.UserRootPageID = b.Directory.PageID
-	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: actual.Primary, slots: [2]rootpublication.PrimaryProjectionV5{actual.Primary, {}}, records: [2]primaryarena.Ref{b.Directory, {}}, dataFloor: [4]uint64{g.CommitSeq()}, current: &primaryStateRootV5{arena: a, ref: b.Directory, dataCommit: g.CommitSeq(), certificate: certificate}, capsuleImages: [2][]byte{image, nil}, capsuleViews: [2]rootpublication.PrimaryCapsuleViewV6{view, {}}}
+	db.durableRoot.primary = &primaryDurableRuntimeV5{projection: actual.Primary, slots: [2]rootpublication.PrimaryProjectionV5{actual.Primary, {}}, records: [2]primaryarena.Ref{b.Directory, {}}, closures: [2]primaryarena.Ref{closure, {}}, capsuleCharges: [2]uint64{imageCharge, 0}, dataFloor: [4]uint64{g.CommitSeq()}, current: &primaryStateRootV5{arena: a, ref: b.Directory, dataCommit: g.CommitSeq(), certificate: certificate}, capsuleImages: [2][]byte{image, nil}, capsuleViews: [2]rootpublication.PrimaryCapsuleViewV6{view, {}}}
 	bindReservedPrimaryRuntimeV5(db.durableRoot.primary, a)
+	db.durableRoot.primary.metadataCharge += imageCharge
 	runtimeOwned = true
 	return nil
 }
 
 // copyCapsuleReadImageV6 is a complete independent RAM root. The physical
-// capsule image is copied before slot reuse; component/dependency custody is
+// capsule image is copied before slot reuse; component custody is
 // acquired from the already recovered immutable bank namespace.
 func copyCapsuleReadImageV6(a *primaryarena.Arena, physical []byte, r rootpublication.DurableRootRecordV1) (primaryarena.Ref, error) {
 	d, e := node.DecodePrimaryDirectory(physical)
@@ -162,9 +170,6 @@ func copyCapsuleReadImageV6(a *primaryarena.Arena, physical []byte, r rootpublic
 		return primaryarena.Ref{}, e
 	}
 	if ok, e = a.SealDirectory(root, image, groups, nil); !ok || e != nil {
-		return primaryarena.Ref{}, e
-	}
-	if ok, e = a.BindReadRootDependencyV6(root, primaryCapsuleDependencyEdgeV6(r), nil); !ok || e != nil {
 		return primaryarena.Ref{}, e
 	}
 	owned = false

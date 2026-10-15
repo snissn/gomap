@@ -20,35 +20,10 @@ type resourceEntryOutgoing struct {
 }
 
 func (out *resourceEntryOutgoing) release() {
-	if out == nil || !out.allocation.drop() {
+	if out == nil {
 		return
 	}
-	if out.frontier != nil {
-		if out.frontierValue.exactRIDs != nil {
-			clear(out.frontierValue.exactRIDs.values[:cap(out.frontierValue.exactRIDs.values)])
-			out.frontierValue.exactRIDs.values = nil
-		}
-		out.frontierValue = DurableFrontier{}
-		out.frontier.drop()
-		out.frontier.refund()
-		out.frontier = nil
-	}
-	releaseOwnedResourceObligationIndex(out.index)
-	out.index = nil
-	out.obligations.release()
-	out.obligations = nil
-	if out.directory != nil {
-		out.directory.Release()
-		out.directory = nil
-	}
-	out.fields.release()
-	out.fields = nil
-	out.cache.mu.Lock()
-	value := out.cache.value
-	out.cache.value = nil
-	out.cache.mu.Unlock()
-	value.releaseOwned()
-	out.allocation.refund()
+	_ = releaseResourceMetadataV6(out.allocation, out)
 }
 
 // Only a constructor-owned token from the same governing owner is accepted.

@@ -120,6 +120,9 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
+	disposalPhase   uint8
+	disposalNative  bool
+	disposalIndex   int
 	disposalMu      sync.Mutex
 	disposalErr     error
 	disposalFailure originalDBCleanupFailure
@@ -252,58 +255,9 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 }
 
 func (seal *rootPublicationSealV1) release() error {
-	if seal == nil {
-		return nil
-	}
-	seal.disposalMu.Lock()
-	defer seal.disposalMu.Unlock()
-	if seal.released {
-		return seal.disposalErr
-	}
-	seal.released = true
-	var first error
-	if seal.primary != nil {
-		first = seal.primary.release()
-		if first == nil {
-			seal.primary = nil
-		}
-	}
-	// A refused physical root preparation leaves its exact resource edges intact.
-	if first == nil {
-		if err := seal.resources.ReleaseWithError(); err != nil {
-			first = err
-		} else {
-			seal.resources = nil
-		}
-		if err := seal.token.ReleaseWithError(); err != nil {
-			if first == nil {
-				first = err
-			}
-		} else {
-			seal.token = nil
-		}
-	}
-	if first != nil {
-		seal.disposalFailure.payload = seal
-		seal.disposalFailure.retainCause(0, first)
-		seal.disposalErr = &seal.disposalFailure
-		if seal.metadata != nil {
-			seal.metadata.CleanupFailed()
-		}
-		return seal.disposalErr
-	}
-	seal.prefix = nil
-	seal.manifest.ReleaseOwnedMetadataV1()
-	seal.manifest = nil
-	seal.prepared = nil
-	seal.base = rootPublicationSealBaseV1{}
-	owner, charge := seal.metadata, seal.metadataCharge
-	seal.metadata, seal.metadataCharge = nil, 0
-	seal.idx = nil
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
-	return nil
+	completion, _, err := continueRootPublicationSealReleaseV6(seal, nil, nil)
+	completion.complete()
+	return err
 }
 
 func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
@@ -731,7 +685,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		return nil, false, errors.New("missing actual DATA generation")
 	}
 	profile := runtime.idx.allocator.COWPrepareProfileV1()
-	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || profile.AllocatedPages != 0 || profile.ChangedChunks != 0
+	// Only inherited BeginCandidate metadata bookkeeping may stay deferred.
+	// Actual allocator edits and explicit output retirement/allocation obligations
+	// always take the original COW producer path.
+	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
+		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
 	if dataChanged {
 		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
 		if err != nil {
