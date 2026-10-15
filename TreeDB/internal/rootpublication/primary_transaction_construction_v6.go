@@ -32,6 +32,10 @@ type primaryTransactionConstructionV6 struct {
 	cleanupReceipt       *PrimaryConstructionReleaseWork
 	finishReleaseStarted bool
 	finishReleaseDone    bool
+	// SAME constructor owns the original Set wrapper accounting after its
+	// protected shared edges are consumed in the publication turn.
+	setRelease         StableResourceSetReleaseWorkV6
+	setReleaseConsumed bool
 }
 type PrimaryPromotionV6 struct {
 	Image        []byte
@@ -449,11 +453,21 @@ func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.Ordinal
 	// Immutable state/slot/reader refs independently own the root. Scrub this
 	// mutable constructor, then move its original accounting custody out of the
 	// call; defer unlock runs before the terminal can be consumed by its caller.
+	completion := c.terminalCompletion
+	completion.charge = c.metadataCharge
+	if c.setReleaseConsumed {
+		// The disposing callback has returned and mutable parent aliases are
+		// gone before transferring by-value accounting into the SAME terminal.
+		c.resources = nil
+		_, charge, err := c.setRelease.takeCompletionExpected(completion.owner)
+		if err != nil {
+			return nil, false, t.recordPhysicalCleanupFailureLocked(err)
+		}
+		completion.charge += charge
+	}
 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
 	t.clearDurableRootCallbacksV6()
 	t.constructionV6 = nil
-	completion := c.terminalCompletion
-	completion.charge = c.metadataCharge
 	*c = primaryTransactionConstructionV6{}
 	t.owner = ResourceOwnerReleased
 	t.phase = durableRootConsumed
