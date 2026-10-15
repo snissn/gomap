@@ -1,0 +1,12 @@
+{
+  "gofmt": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "diff_check": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+}

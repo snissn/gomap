@@ -1,0 +1,18 @@
+{
+  "head": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "source_file_count": 10242,
+  "changed_file_count": 27,
+  "current_equals_final_freeze": true,
+  "source_freeze_sha256": "a32742f07bc4b8695ffa2c67bc4aafc49879ca205e6fb0cac927ae30deecdf77",
+  "no_active_owned_runtime": true,
+  "writer_runtime_role": "released to coordinator",
+  "artifacts": {
+    "HANDOFF.md": "d6f7475b32e4fb8f1b2f5ed3b2158c6bd2a991380823cd7599f253329ed5f102",
+    "changed-files-final.json": "08ca14faadd5434034a70bfe42da5537544a782d8baa4d35119c783b4c590fcc",
+    "test-inventory-final.json": "01190d93a3be96dc5743b8d41c1d3777f8804fcd65e5c2a8d70af28065679aea",
+    "failed-check-disposition.json": "39dc4ab153f015a8ecdc357c50dae0bc6794001fe4babe663fcdbc2b0eb2d82a",
+    "callsite-disposition.md": "d7cf0cf07fdb6833fb41788d8b5dbc6843c899cfa36dbf56265d841093a65134",
+    "admission-callback-audit.md": "09eb28ae0b743be5323e9393ea0a8b5eb16d85c1405d08388fafe6e8f28303c2",
+    "format-check-final.json": "6fe82e378e4227c227799da4125d52e4de0a901918edc011db991697237d6066"
+  }
+}

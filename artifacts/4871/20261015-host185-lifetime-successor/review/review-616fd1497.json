@@ -1,0 +1,144 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "repository": "snissn/gomap",
+  "pr": 5127,
+  "base_sha": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "head_sha_or_manifest": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "head_tree": "ff0930180692ab50e08b346b83e7d7b19a5cb74c",
+  "disposition": "ACCEPT",
+  "acceptance_scope": "Exact source and bounded measurement harness only; hosted correctness and performance pending.",
+  "candidate_edits_by_reviewer": false,
+  "candidate_edits": false,
+  "construction_role": false,
+  "reviewer_runtime_campaigns": [],
+  "unavailability_evidence": "Required exact Sol6.1 model cannot be pinned by hosted manual review; not requested. No hosted failure or response is claimed.",
+  "findings": [
+    {
+      "id": "R1",
+      "status": "FIXED_SOURCE_REVIEWED"
+    },
+    {
+      "id": "R2",
+      "status": "FIXED_SOURCE_REVIEWED"
+    },
+    {
+      "id": "R3",
+      "status": "FIXED_SOURCE_REVIEWED"
+    },
+    {
+      "id": "R4",
+      "status": "FIXED_SOURCE_REVIEWED"
+    },
+    {
+      "id": "R5",
+      "status": "FIXED_SOURCE_REVIEWED"
+    }
+  ],
+  "blocking_source_findings": [],
+  "reviewed_successor_paths": [
+    ".github/ci/ci_impact.json",
+    ".github/scripts/test_mvcc_primary_cost_gate.py",
+    ".github/workflows/treedb-tests.yml",
+    "TreeDB/cow_power_loss_test.go",
+    "TreeDB/db/compact_storage.go",
+    "TreeDB/db/compact_storage_audit.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/durable_root_bench_test.go",
+    "TreeDB/db/durable_root_owner_continuity_test.go",
+    "TreeDB/db/leaf_generation_gc.go",
+    "TreeDB/db/leaf_generation_pack.go",
+    "TreeDB/db/native_mvcc_dependency_release_v6.go",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go",
+    "TreeDB/db/ordered_root_publish.go",
+    "TreeDB/db/primary_dependency_cleanup_test.go",
+    "TreeDB/db/primary_joint_completed_v6_test.go",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go",
+    "TreeDB/db/primary_offline_pair_v6_test.go",
+    "TreeDB/db/primary_platform_refusal_test.go",
+    "TreeDB/db/snapshot_cleanup_completion_test.go",
+    "TreeDB/db/state_value_log_lifetime.go",
+    "TreeDB/db/state_value_log_lifetime_test.go",
+    "TreeDB/db/vacuum_online.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/db/value_reader.go",
+    "TreeDB/db/vlog_rewrite.go",
+    "TreeDB/db/vlog_rewrite_test.go",
+    "TreeDB/docs/spec/contracts.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/mvcc/cow_c3_admission_test.go",
+    "scripts/mvcc_primary_cost_gate.py"
+  ],
+  "successor_path_count": 31,
+  "whole_foundation_diff": {
+    "paths": 534,
+    "insertions": 86309,
+    "deletions": 5235,
+    "coverage": "Continued selective deep contract review; not every line."
+  },
+  "identity_checks": {
+    "head_and_tree_match": true,
+    "clean_worktree": true,
+    "source_manifest_paths": 10244,
+    "source_hash_mismatches": [],
+    "worker_freeze_paths": 10242,
+    "worker_freeze_exceptions": [
+      ".github/ci/ci_impact.json",
+      ".github/scripts/test_mvcc_primary_cost_gate.py",
+      ".github/workflows/treedb-tests.yml",
+      "scripts/mvcc_primary_cost_gate.py"
+    ]
+  },
+  "checks_performed": [
+    "Read-only Git/source/policy/evidence inspection",
+    "All 31 successor diffs and adjacent publishers/consumers",
+    "All nine production state.Store exclusions and complete production ValueLogSet inventory",
+    "Original R1-R3 repair retention",
+    "Complete new Python PRIMARY harness, seven controls, workflow and Go workload",
+    "Independent all-file SHA256 manifest verification",
+    "Selected final normal/race command and raw result inspection; Windows compile receipt inspection"
+  ],
+  "checks_not_performed": [
+    "Reviewer tests/builds/benchmarks",
+    "Hosted CI/GitHub review",
+    "Windows runtime",
+    "Any timing collection"
+  ],
+  "evidence": {
+    "final-normal-03": "PASS freeze-bound 50 top-level/103 subtests",
+    "final-race-db-02": "PASS freeze-bound count2 26 top-level/36 subtests",
+    "final-race-public-02": "PASS freeze-bound 8 top-level/49 subtests",
+    "windows-all-final-01": "PASS compile-only three packages",
+    "primary_integration": "Recorded self-check PASS; no timing"
+  },
+  "pending_gates": [
+    "New exact-head hosted correctness/platform/race",
+    "Windows C3 runtime attribution/result",
+    "M0 p99 variability",
+    "Original raw five cost comparisons",
+    "New bounded PRIMARY comparison"
+  ],
+  "limitations": [
+    "Observed process CPU sampled every250ms may miss processes entirely between observations",
+    "Prior-head CI/timings are not current-head qualification",
+    "Native actual producer/Q32 and final graphs remain separate"
+  ],
+  "policy_paths": [
+    "AGENTS.md",
+    "TreeDB/AGENTS.md",
+    "CONTRIBUTING.md"
+  ],
+  "full_review": "review-616fd1497.md",
+  "prior_reviews_preserved": [
+    "review-f0415773.md",
+    "review-f0415773.json",
+    "review-a8c52ed66.md",
+    "review-a8c52ed66.json"
+  ],
+  "mergeable": false,
+  "merge_authorized": false,
+  "review_runtime_lease_released": true,
+  "written_utc": "2026-10-15T18:18:50.171112+00:00"
+}

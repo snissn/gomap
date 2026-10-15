@@ -1,0 +1,180 @@
+{
+  "source_inventory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/failure-inventory-07.json",
+  "source_inventory_sha256": "655ed391d88544f11cba371a6148f857e1eff1f5e991588c314878ad5194d996",
+  "dispositions": [
+    {
+      "job": "windows-core-1",
+      "test": "TestC3CapturedCutMaterializesOutsideFloorAdmission",
+      "disposition": "UNRESOLVED cause: failure-only exact stage and all-goroutine stacks added at unchanged10s join. Linux four cells pass; Windows runtime pending.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-1.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+      "disposition": "Fixture now asserts actual unsupported bounded physical close refusal before admission/allocation, epoch/ref effects unchanged. Supported SAME empty Set pin/refresh assertion retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestPrimaryJointCompletedV6PhysicalProofRefusal",
+      "disposition": "Complete shared completed-pair fixture now returns capability outcome after actual offline typed namespace refusal with pair/persistent-input preservation and recovered pointer reads. All four consumers preserve original supported physical/recovery fault controls.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestPrimaryJointCrashProcessV6",
+      "disposition": "Complete shared crash fixture now exercises actual Windows typed online refusal before subprocess/cut creation, asserts pair/state/no-private-child unchanged. All five consumers branch on returned capability outcome. Supported exit81/cut/marker/fallback guarantees unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair",
+      "disposition": "Complete shared crash fixture now exercises actual Windows typed online refusal before subprocess/cut creation, asserts pair/state/no-private-child unchanged. All five consumers branch on returned capability outcome. Supported exit81/cut/marker/fallback guarantees unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestPrimaryOfflineVlogV6CacheInvalidationRecovery",
+      "disposition": "Before unsupported hooks/corruption, actual offline operation must return typed namespace refusal with exact pair and all persistent input bytes unchanged, no private pair; explicit recovered roots/pointer reads checked. Original supported cache/fallback/recovery oracle retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-2",
+      "test": "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+      "disposition": "Complete direct offline-scope consumer audit: actual scope capture on unsupported platform returns nil + typed namespace refusal with unchanged index/state/charge/pair/no-private-child before fault creation. Original supported parent/physical custody oracles retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-2.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-3",
+      "test": "TestPrimaryJointRecoveryV6OriginalFailurePropagation",
+      "disposition": "Complete shared completed-pair fixture now returns capability outcome after actual offline typed namespace refusal with pair/persistent-input preservation and recovered pointer reads. All four consumers preserve original supported physical/recovery fault controls.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-3.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-3",
+      "test": "TestPrimaryJointVacuumV6OfflineUsesPairAuthority",
+      "disposition": "Before unsupported hooks/corruption, actual offline operation must return typed namespace refusal with exact pair and all persistent input bytes unchanged, no private pair; explicit recovered roots/pointer reads checked. Original supported cache/fallback/recovery oracle retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-3.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-3",
+      "test": "TestPrimaryOfflineVlogV6IndependentFallback",
+      "disposition": "Before unsupported hooks/corruption, actual offline operation must return typed namespace refusal with exact pair and all persistent input bytes unchanged, no private pair; explicit recovered roots/pointer reads checked. Original supported cache/fallback/recovery oracle retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-3.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-3",
+      "test": "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+      "disposition": "Complete direct offline-scope consumer audit: actual scope capture on unsupported platform returns nil + typed namespace refusal with unchanged index/state/charge/pair/no-private-child before fault creation. Original supported parent/physical custody oracles retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-3.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-4",
+      "test": "TestOfflineRewriteNoSegmentsOriginalSourceCompletion",
+      "disposition": "Fixture models process shutdown of retained original startup LOCK only AFTER actual fatal physical-refusal, retained original metadata/receipt/no-retry and LOCK-held oracles. Production sticky pager/owner custody unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-4.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-6",
+      "test": "TestPrimaryDependencyFailedLeaseRemainsOnActualOwner",
+      "disposition": "Actual original lease now implements existing bounded directory eligibility using SAME physical pager capability under lease.mu. Unsupported Bind refuses before consuming refs/charges/phase; SAME ordinary directory release consumes sibling and preserves original sticky custody.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-6.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-6",
+      "test": "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+      "disposition": "Actual typed unsupported online refusal checked BEFORE physical blocker is created, pair/state/no-private-child unchanged. Supported original physical-cut ErrResourcePinned and independent fallback/read oracles retained.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-6.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-6",
+      "test": "TestPrimaryJointCrashProcessV6",
+      "disposition": "Complete shared crash fixture now exercises actual Windows typed online refusal before subprocess/cut creation, asserts pair/state/no-private-child unchanged. All five consumers branch on returned capability outcome. Supported exit81/cut/marker/fallback guarantees unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-6.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-6",
+      "test": "TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback",
+      "disposition": "Complete shared crash fixture now exercises actual Windows typed online refusal before subprocess/cut creation, asserts pair/state/no-private-child unchanged. All five consumers branch on returned capability outcome. Supported exit81/cut/marker/fallback guarantees unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-6.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-6",
+      "test": "TestOfflineReplacementOriginalPagerCompletion",
+      "disposition": "Fixture models process shutdown of retained original startup LOCK only AFTER actual fatal physical-refusal, retained original metadata/receipt/no-retry and LOCK-held oracles. Production sticky pager/owner custody unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-6.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-7",
+      "test": "TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests",
+      "disposition": "Exercise actual Windows online refusal before unsupported private cohort build; unchanged pair/state/no-private-child checked. Continue original held snapshot/token/custody and final physical/governor drain. Supported injected pre-cut build-failure oracle unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-7.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "windows-core-8",
+      "test": "TestVacuumAdmissionReturnsOriginalRecoverableCleanupFailure",
+      "disposition": "Fixture expects actual earlier platform ErrVacuumUnsupported plus original cleanup error on Windows; supported ErrVacuumInProgress and all exact original cleanup/sticky custody remain.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-8.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "race-check (linux)-3",
+      "test": "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck",
+      "disposition": "Exact-DB observer filter, original Model mutex around Observe/Clone, active flag + callback drain before restore; actual stable/volatile completed-cut oracle unchanged.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/race-check_linux_-3.log",
+      "validation": "Exact-final final-normal-03; final-race-db-02; final-race-public-02 as applicable. Windows crosscompile only locally; successor hosted runtime required."
+    },
+    {
+      "job": "minima-m0-guard / root-owned exact check inventory",
+      "test": "M0 tail variability gate",
+      "disposition": "UNRESOLVED: hosted p99 CV24.5% exceeds original10% bound. No gate/benchmark/source adjustment or attributed regression. Root owns matched evidence and refresh."
+    },
+    {
+      "job": "ubuntu-latest-3",
+      "test": "TestSnapshotAllocationAdmissionRefusesRefreshedExactView",
+      "disposition": "Confirmed same fixture self-deadlock: admission synchronously called SAME DB Refresh under original capture rootReuse read gate. Repaired competing actual publisher/refused admission/after-return original Set retirement/fresh retry control; no production gate or timeout change. Exact-final normal and repeated race pass, successor hosted runtime pending.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/ubuntu-latest-3.log",
+      "source_log_sha256": "0da42dc3c414be2cfaac5826fe7a540c487357a4afd7476ee23385337dc7fb21"
+    },
+    {
+      "job": "macos-latest-3",
+      "test": "TestSnapshotAllocationAdmissionRefusesRefreshedExactView",
+      "disposition": "Confirmed same fixture self-deadlock: admission synchronously called SAME DB Refresh under original capture rootReuse read gate. Repaired competing actual publisher/refused admission/after-return original Set retirement/fresh retry control; no production gate or timeout change. Exact-final normal and repeated race pass, successor hosted runtime pending.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/macos-latest-3-log",
+      "source_log_sha256": "eb7967f44b03568a6d6e5f894626d4b0709a0101b398e3d3144ec6c632770df3"
+    },
+    {
+      "job": "windows-core-5",
+      "test": "TestSnapshotAllocationAdmissionRefusesRefreshedExactView",
+      "disposition": "Confirmed same fixture self-deadlock: admission synchronously called SAME DB Refresh under original capture rootReuse read gate. Repaired competing actual publisher/refused admission/after-return original Set retirement/fresh retry control; no production gate or timeout change. Exact-final normal and repeated race pass, successor hosted runtime pending.",
+      "source_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/a8c52-ci/windows-core-5-log",
+      "source_log_sha256": "291d97cd67ba4ad7dcc502bd1a0e93850d65520e1639d773b454b838cf8bd0be"
+    }
+  ],
+  "root_reported_final_a8_checks": {
+    "success": 43,
+    "failure": 10,
+    "cancelled": 3,
+    "note": "Root refreshed final check status; original inventory07 retains extracted product-test failures. Required aggregate and CodeRabbit included in root total. All3platform cancellations confirmed same repaired admission test; successor exact-head CI pending."
+  },
+  "final_source_freeze": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/freeze-final.json",
+  "final_source_freeze_sha256": "a32742f07bc4b8695ffa2c67bc4aafc49879ca205e6fb0cac927ae30deecdf77"
+}

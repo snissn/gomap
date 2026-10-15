@@ -1,0 +1,100 @@
+{
+  "id": 116567931006,
+  "run_id": 38777236329,
+  "workflow_name": "TreeDB: vet+test",
+  "head_branch": "codex/5111-ordinary-data-primary-publication",
+  "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38777236329",
+  "run_attempt": 1,
+  "node_id": "CR_kwDOIdn7C88AAAAbI_14fg",
+  "head_sha": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116567931006",
+  "html_url": "https://github.com/snissn/gomap/actions/runs/38777236329/job/116567931006",
+  "status": "completed",
+  "conclusion": "cancelled",
+  "created_at": "2026-10-15T17:25:39Z",
+  "started_at": "2026-10-15T17:28:06Z",
+  "completed_at": "2026-10-15T17:53:23Z",
+  "name": "ubuntu-latest-3",
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 1,
+      "started_at": "2026-10-15T17:28:07Z",
+      "completed_at": "2026-10-15T17:28:08Z"
+    },
+    {
+      "name": "Checkout",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 2,
+      "started_at": "2026-10-15T17:28:08Z",
+      "completed_at": "2026-10-15T17:28:30Z"
+    },
+    {
+      "name": "Setup Go",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 3,
+      "started_at": "2026-10-15T17:28:30Z",
+      "completed_at": "2026-10-15T17:28:31Z"
+    },
+    {
+      "name": "Test",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "number": 4,
+      "started_at": "2026-10-15T17:28:31Z",
+      "completed_at": "2026-10-15T17:53:20Z"
+    },
+    {
+      "name": "Summarize test timings",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 5,
+      "started_at": "2026-10-15T17:53:20Z",
+      "completed_at": "2026-10-15T17:53:20Z"
+    },
+    {
+      "name": "Upload test timing log",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 6,
+      "started_at": "2026-10-15T17:53:20Z",
+      "completed_at": "2026-10-15T17:53:21Z"
+    },
+    {
+      "name": "Post Setup Go",
+      "status": "completed",
+      "conclusion": "skipped",
+      "number": 11,
+      "started_at": "2026-10-15T17:53:21Z",
+      "completed_at": "2026-10-15T17:53:21Z"
+    },
+    {
+      "name": "Post Checkout",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 12,
+      "started_at": "2026-10-15T17:53:21Z",
+      "completed_at": "2026-10-15T17:53:21Z"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 13,
+      "started_at": "2026-10-15T17:53:21Z",
+      "completed_at": "2026-10-15T17:53:21Z"
+    }
+  ],
+  "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116567931006",
+  "labels": [
+    "ubuntu-latest"
+  ],
+  "runner_id": 1000546944,
+  "runner_name": "GitHub Actions 1000546944",
+  "runner_group_id": 0,
+  "runner_group_name": "GitHub Actions"
+}

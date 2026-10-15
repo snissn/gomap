@@ -1,0 +1,12 @@
+{
+  "before": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "head": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+  "branch": "refs/heads/codex/5111-ordinary-data-primary-publication",
+  "readback": {
+    "baseRefOid": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "headRefOid": "616fd1497b3e483f40bfbf3cefe4538d250bb33a",
+    "isDraft": true,
+    "url": "https://github.com/snissn/gomap/pull/5127"
+  },
+  "at_utc": "2026-10-15T18:19:36.312761+00:00"
+}

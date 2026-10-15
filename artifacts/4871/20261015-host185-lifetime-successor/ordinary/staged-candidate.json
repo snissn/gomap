@@ -1,0 +1,91 @@
+{
+  "staged_tree": "55f16ddb71564416d0c461bccc7e6925d236b751",
+  "parent": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "source_files": 10242,
+  "product_changes": {
+    "TreeDB/cow_power_loss_test.go": "088343c58b21022b886e350f8a3859c8f5b7af1c3fb24021caf12cb3677b5455",
+    "TreeDB/db/compact_storage.go": "7acadc655c860ecf9ce67b51a90b37ccd4cda1faa765aeb87f54324d1ac015e2",
+    "TreeDB/db/compact_storage_audit.go": "0da6001071cdf3c4af7c042b9c37aacfc49d506016efe3073dcd5b068c3beeeb",
+    "TreeDB/db/db.go": "e74220617ef6274b6ff2c866b69cd622cab8c6813f32c668fce138a045007a4f",
+    "TreeDB/db/durable_root_bench_test.go": "ddcb7d9b1f2af926e7c4c8050d3adc6c919fbe69899529e7df4cf882ba23717e",
+    "TreeDB/db/durable_root_owner_continuity_test.go": "49db37787b16ed7d6adfc755ad138aa5d5e7d5e0661f74482c0e45908b26fa35",
+    "TreeDB/db/leaf_generation_gc.go": "60817d0b0baf580f6f6108e54f38477641755073a8df4c5805c490e286bcc969",
+    "TreeDB/db/leaf_generation_pack.go": "39b18287c150e43e7e46bedd48679b65ceab88633e1a7e73b6687f8118086021",
+    "TreeDB/db/native_mvcc_dependency_release_v6.go": "9b8c2c5cbe9a1570ba52a306c375ed02d07445aa8715cf7e196c800b3ac3f95c",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go": "656196ae9d66a2d32a92cda1ab347866e5d4238f5403372fdd81886790693165",
+    "TreeDB/db/ordered_root_publish.go": "8bb484d2e64057cf3adcb449c411bf684ff8475d291200370261de97d73cd674",
+    "TreeDB/db/primary_dependency_cleanup_test.go": "c073340a7fd9ff318469698435a742870d1e15bcc5bfd60adabc930266a6a0ea",
+    "TreeDB/db/primary_joint_completed_v6_test.go": "79f8200b9812d61ea037a68e1f04aefcd2d909e3102fe802a6526093d4ac880b",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": "f86371c6b36909baa024b120ee1c6cc77a11499842fe7628d68206b5219d9fda",
+    "TreeDB/db/primary_offline_pair_v6_test.go": "8b79c3bb1dbc5543a8e7ffc4df3d300bea98b193045fcbedbd8e414d3f645bbb",
+    "TreeDB/db/primary_platform_refusal_test.go": "af949c3ce68bd0bec9f77572036629a71ec7239b4de536c4fe159915be46f43d",
+    "TreeDB/db/snapshot_cleanup_completion_test.go": "5940e578607171e1cec626ee79ebb32016e94e306fd731cdfe30c2eb8642db41",
+    "TreeDB/db/state_value_log_lifetime.go": "021349d896b671be9a93e56003c9da13cad792eb329bccb5d6c0ca3defb96187",
+    "TreeDB/db/state_value_log_lifetime_test.go": "47502a8d10eea7180e90291d9f25f86cc0558b0747cf4369bbf2c21ec9e977ab",
+    "TreeDB/db/vacuum_online.go": "6fa641605954ae45bb25e2b23868a0a7cccf0f6cba7691914e4859d3d21f41ab",
+    "TreeDB/db/vacuum_original_completion_test.go": "ddec61da74283c4ae508dd55e4d51fd640840c013e8c310c08795d381ff885f1",
+    "TreeDB/db/value_reader.go": "55d66aa2a2ace14a7356b1699ef1be119c70a2b92bae5f7b14e8280c4072c29b",
+    "TreeDB/db/vlog_rewrite.go": "d1a75940c6798fb96d8c57534c90bdac62b461af45c965ecb51f1158e41975a3",
+    "TreeDB/db/vlog_rewrite_test.go": "ae27c5cd95f8b6d4b08d5282ef662c6360ecb1a1881601cc9970f667053c67b6",
+    "TreeDB/docs/spec/contracts.md": "60076c6e7d752e8a58d3941772d6d0f2cbf288e9a84d5c0b081c7de788967747",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "629b678f4bd7786a1a9792f972e9b6eaaf520aba1e7ef7667e4386a88327f494",
+    "TreeDB/mvcc/cow_c3_admission_test.go": "c19926829c03b38a6baa303b149b1b70c54d4006ee4ade9fa052b740ce29056e"
+  },
+  "freeze_sha256": "a32742f07bc4b8695ffa2c67bc4aafc49879ca205e6fb0cac927ae30deecdf77",
+  "source_diff_from_freeze": [
+    ".github/ci/ci_impact.json"
+  ],
+  "metadata_checks": [
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.6214780299924314
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.3218474732711911
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 12.447527271229774
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_ci_impact.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 3.7360316421836615
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_ci_contract.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.03570991102606058
+    },
+    {
+      "argv": [
+        "python3",
+        ".github/scripts/test_treedb_windows_core_headroom.py"
+      ],
+      "exit": 0,
+      "elapsed_s": 0.2450197641737759
+    }
+  ],
+  "at_utc": "2026-10-15T18:12:20.735412+00:00"
+}

@@ -1,0 +1,13 @@
+{
+  "workflow_source_sha256": "2af83f60eef92736fec7657325415a1373c01c985e0fc63733658ec5062b97bd",
+  "base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate_source_base": "a8c52ed66fc587d4823f020cf15ea1c3ee8c1ebc",
+  "harness_sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11",
+  "status": "prepared-not-integrated-not-run",
+  "prepared_files": {
+    "mvcc_primary_cost_gate.py": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+    "test_mvcc_primary_cost_gate.py": "ec83929794d0e821a209af9a1a63a98d2f4ec48a725c64626f470da6a621b23c",
+    "treedb-tests.yml": "91f2f95355b4d3b9af9d81f0d5cd7d7f6d5a907edf7ca37b53dae8d305904865"
+  },
+  "self_checks": "7 passed; sampled process CPU retains departed processes and distinguishes recycled PIDs; no product timing collected"
+}
