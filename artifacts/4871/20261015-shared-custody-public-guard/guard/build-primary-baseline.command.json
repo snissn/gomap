@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-c",
+    "-tags=treedb_test",
+    "-trimpath",
+    "-buildvcs=false",
+    "-o",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+    "-overlay",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary-overlay.json",
+    "./TreeDB/mvcc"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "1"
+  },
+  "outer_timeout": 120
+}

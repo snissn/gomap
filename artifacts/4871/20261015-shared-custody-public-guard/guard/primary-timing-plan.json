@@ -1,0 +1,115 @@
+{
+  "plan": [
+    {
+      "index": 1,
+      "pair": 1,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    },
+    {
+      "index": 2,
+      "pair": 1,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    },
+    {
+      "index": 3,
+      "pair": 2,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    },
+    {
+      "index": 4,
+      "pair": 2,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    },
+    {
+      "index": 5,
+      "pair": 3,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    },
+    {
+      "index": 6,
+      "pair": 3,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ]
+    }
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "1"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "parent": "2a46465e8b4aeb8c3fff13a610518d289aa85d53",
+  "paths": 42,
+  "manifest_sha256": "01ff82a20c60b63f202be48e5c6e1cda37e81c14d9f85ab985ecf190a7da8840",
+  "source_inputs": 3753,
+  "census_sha256": "899465951eca13045238ec8ea3754ded7ca66aabebf14ad1e7e7a33b5130ef5d",
+  "state": {
+    "head": "177fb0c8db1d19c79d3d975126b4b0b64019568e",
+    "index_sha256": "15e7969ca2030be0be4a993aa26eef00799794e8e6ce62e6b0daf6643075d1e7",
+    "staged": ""
+  },
+  "tested_receipt": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/green-callback-final.receipt.json",
+  "native_touched": false,
+  "protected_foreign_excluded": [
+    "cmd/treedb_column_graph_demo/main.go"
+  ],
+  "evidence_stage": "focused callback/slot custody + public guard viability; NOT final qualification"
+}

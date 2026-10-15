@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/mvcc
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkCommitAtPrimaryOnlyAfterDataGeneration 	     128	    525691 ns/op	         1.000 generation_advances/op	  386906 B/op	     535 allocs/op
+PASS

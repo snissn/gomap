@@ -1,0 +1,14 @@
+[
+  {
+    "role": "baseline",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline.test",
+    "sha256": "eaf5b47ff1a770495d13b984885eef18f67f3fddcfe9ddd4c774f9fee3c978d1",
+    "bytes": 60886719
+  },
+  {
+    "role": "candidate",
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate.test",
+    "sha256": "97b31089b2672cd617a0e1b647fd4ae1fe7fa2cb86bea24f7b7e116fb4fdbb20",
+    "bytes": 61033137
+  }
+]

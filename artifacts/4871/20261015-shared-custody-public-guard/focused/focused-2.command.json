@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/db",
+    "-run",
+    "^(TestPrimaryPromotionSharesImmutableLogicalRootV6|TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6|TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6|TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6|TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6|TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor|TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot|TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose)$",
+    "-count=1",
+    "-timeout=100s",
+    "-v"
+  ],
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015",
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  },
+  "toolchain": "go version go1.26.3 linux/amd64"
+}

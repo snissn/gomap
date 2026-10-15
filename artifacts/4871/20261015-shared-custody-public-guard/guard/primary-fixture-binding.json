@@ -1,0 +1,6 @@
+{
+  "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5130-allocation-integration-20261015/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+  "sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11",
+  "baseline": "same test fixture only over exact2a production",
+  "candidate": "same test fixture over frozen40"
+}

@@ -1,0 +1,16 @@
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/selected_import
+    resource_release_callback_reentry_v6_test.go:82: public Set inspection blocked until its release callback returned
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/same_owner_clone
+    resource_release_callback_reentry_v6_test.go:82: public Set inspection blocked until its release callback returned
+--- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6 (2.00s)
+    --- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/selected_import (1.00s)
+    --- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/same_owner_clone (1.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	2.003s
+=== RUN   TestPrimarySharedTransactionV6SinglePublicationOwner
+    primary_shared_transaction_v6_test.go:227: borrowed candidate changed transaction identity
+--- FAIL: TestPrimarySharedTransactionV6SinglePublicationOwner (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.012s
+FAIL

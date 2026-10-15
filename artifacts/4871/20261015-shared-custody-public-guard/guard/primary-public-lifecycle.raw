@@ -1,0 +1,3 @@
+=== RUN   TestCommitAtPrimaryOnlyRetainsActualDataGeneration
+--- PASS: TestCommitAtPrimaryOnlyRetainsActualDataGeneration (0.04s)
+PASS

@@ -1,0 +1,187 @@
+{
+  "samples": [
+    {
+      "index": 1,
+      "pair": 1,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.1387011557817459,
+      "raw_sha256": "c7baa135889663c383cf206906036fd1e8398eea0696b539623236f356f40231",
+      "iterations": 128,
+      "ns_per_op": 531168.0,
+      "bytes_per_op": 386915.0,
+      "allocs_per_op": 535.0,
+      "generation_advances_per_op": 1.0
+    },
+    {
+      "index": 2,
+      "pair": 1,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.09716701274737716,
+      "raw_sha256": "d4162c7b2393f74a92a8c31b1e0a96ac0ae7c4910a224e70ed322b1b88bbf790",
+      "iterations": 128,
+      "ns_per_op": 500906.0,
+      "bytes_per_op": 368446.0,
+      "allocs_per_op": 475.0,
+      "generation_advances_per_op": 0.0
+    },
+    {
+      "index": 3,
+      "pair": 2,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.09449146734550595,
+      "raw_sha256": "7e412eae4eeddd845a9812bddc7fbdb5f08fe950a0240f6b6ca73d479f65d678",
+      "iterations": 128,
+      "ns_per_op": 501221.0,
+      "bytes_per_op": 368447.0,
+      "allocs_per_op": 475.0,
+      "generation_advances_per_op": 0.0
+    },
+    {
+      "index": 4,
+      "pair": 2,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.09832426533102989,
+      "raw_sha256": "aa833850c243b48cfa9d359f0c2e7dc1ad6a15a3fa74d5a2ca8409e4fd4f213a",
+      "iterations": 128,
+      "ns_per_op": 525691.0,
+      "bytes_per_op": 386906.0,
+      "allocs_per_op": 535.0,
+      "generation_advances_per_op": 1.0
+    },
+    {
+      "index": 5,
+      "pair": 3,
+      "role": "baseline",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/baseline-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.09688448021188378,
+      "raw_sha256": "6eb2f63b69d982263ab4612c1669edbb95327d68268ebeb03392575aee317297",
+      "iterations": 128,
+      "ns_per_op": 522458.0,
+      "bytes_per_op": 386907.0,
+      "allocs_per_op": 535.0,
+      "generation_advances_per_op": 1.0
+    },
+    {
+      "index": 6,
+      "pair": 3,
+      "role": "candidate",
+      "argv": [
+        "taskset",
+        "-c",
+        "0",
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-shared-custody-integration-20261015/guard/candidate-primary.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkCommitAtPrimaryOnlyAfterDataGeneration$",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=60s",
+        "-test.benchtime=128x"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "elapsed_s": 0.09494615206494927,
+      "raw_sha256": "8d0c45cdb9b240fb25fb4f0b49a1e0861aef7344386d28df5dc48de7913b6067",
+      "iterations": 128,
+      "ns_per_op": 502382.0,
+      "bytes_per_op": 368444.0,
+      "allocs_per_op": 475.0,
+      "generation_advances_per_op": 0.0
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 525691.0,
+      "bytes_per_op": 386907.0,
+      "allocs_per_op": 535.0,
+      "generation_advances_per_op": 1.0
+    },
+    "candidate": {
+      "ns_per_op": 501221.0,
+      "bytes_per_op": 368446.0,
+      "allocs_per_op": 475.0,
+      "generation_advances_per_op": 0.0
+    }
+  },
+  "percent_change": {
+    "ns_per_op": -4.654825743640279,
+    "bytes_per_op": -4.771430860646097,
+    "allocs_per_op": -11.214953271028039,
+    "generation_advances_per_op": -100.0
+  },
+  "gates": {
+    "latency": true,
+    "bytes": true,
+    "objects": true
+  },
+  "pass_guard": true,
+  "scope": "Short unchanged public PRIMARY-only durable CommitAt post-DATA diagnostic, combined routing and slot custody versus exact2a. Setup/Stats/Close outside timer. Not isolated custody attribution, final qualification or native ACK."
+}

@@ -1,0 +1,16 @@
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/selected
+    resource_release_callback_reentry_v6_test.go:45: NewStableResourceToken: stable resource ownership violation
+=== RUN   TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/imported
+    resource_release_callback_reentry_v6_test.go:58: stable resource ownership violation
+--- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6 (0.00s)
+    --- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/selected (0.00s)
+    --- FAIL: TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6/imported (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.001s
+=== RUN   TestPrimarySharedTransactionV6SinglePublicationOwner
+    primary_shared_transaction_v6_test.go:227: borrowed candidate changed transaction identity
+--- FAIL: TestPrimarySharedTransactionV6SinglePublicationOwner (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.014s
+FAIL

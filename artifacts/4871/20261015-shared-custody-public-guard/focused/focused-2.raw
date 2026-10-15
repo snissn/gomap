@@ -1,0 +1,30 @@
+=== RUN   TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose
+=== RUN   TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest
+    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=5 parentCommit=26 oldest=26 classifiedUnused=false free=false
+    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false
+=== RUN   TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory
+    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=25 parentCommit=26 oldest=26 classifiedUnused=false free=false
+    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false
+--- PASS: TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose (0.13s)
+    --- PASS: TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest (0.07s)
+    --- PASS: TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory (0.06s)
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered
+--- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor (0.01s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh (0.01s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered (0.01s)
+=== RUN   TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot
+--- PASS: TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6
+--- PASS: TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6 (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6
+--- PASS: TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6 (0.00s)
+=== RUN   TestPrimaryPromotionSharesImmutableLogicalRootV6
+--- PASS: TestPrimaryPromotionSharesImmutableLogicalRootV6 (0.01s)
+=== RUN   TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6
+--- PASS: TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6 (0.01s)
+=== RUN   TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6
+--- PASS: TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6 (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.169s
