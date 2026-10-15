@@ -75,8 +75,7 @@ func (a *Allocator) BeginCOWPublicationScopeV6(scope *COWPublicationScopeV6, pre
 	// Eight visits per prefix cover validation, ID construction, map lookup and
 	// insertion, actual ledger publication, and final marking. Map bytes are an
 	// explicit conservative work bound, not exact Go heap allocation admission.
-	records := uint64(3) + 8*uint64(len(prefix)) + uint64(len(a.cow.activated))
-	bytes := uint64(unsafe.Sizeof(*a.cow)) + 256 + uint64(len(prefix))*(uint64(unsafe.Sizeof(CandidateIDV1{}))+128) + uint64(len(a.cow.activated))*16
+	records, bytes := a.cowPublicationBaseAdmissionV6(uint64(len(prefix)), uint64(len(a.cow.activated)))
 	add := func(r, b uint64) bool {
 		if r > ^uint64(0)-records || b > ^uint64(0)-bytes {
 			return false
@@ -123,6 +122,10 @@ func (a *Allocator) BeginCOWPublicationScopeV6(scope *COWPublicationScopeV6, pre
 	return true, nil
 }
 
+func (a *Allocator) cowPublicationBaseAdmissionV6(prefix, activated uint64) (uint64, uint64) {
+	return 3 + 8*prefix + activated, uint64(unsafe.Sizeof(*a.cow)) + 256 + prefix*(uint64(unsafe.Sizeof(CandidateIDV1{}))+128) + activated*16
+}
+
 // Commit consumes the original canonical ledger exactly once without further
 // work admission or lock acquisition. The scope remains locked until Close so
 // the enclosing SAME durable install can complete before exposing successors.
@@ -146,4 +149,102 @@ func (scope *COWPublicationScopeV6) Close() {
 	scope.allocator, scope.self, scope.prefix, scope.active = nil, nil, nil, false
 	a.cow.ledger.mu.Unlock()
 	a.mu.Unlock()
+}
+
+// Scalar-only pre-effect test observation of this SAME private preparation.
+// No reservation, page, root, allocator or callback alias escapes.
+type NativeCOWGeometryForTestV6 struct {
+	SourceMatches, PreVisible, TailWritten, Append               bool
+	Owners, Candidates, IDs, Data, NewIDs, Burned, Coverage      uint64
+	TailStart, TailCount, LiveHighWater, RequiredHighWater       uint64
+	Activated, ActivatedCapacity, MetadataPages                  uint64
+	MetadataFirst, MetadataLast                                  uint64
+	ClaimRecords, ClaimBytes, ActivationRecords, ActivationBytes uint64
+	PublicationRecords, PublicationBytes                         uint64
+	PageSizesValid                                               bool
+}
+
+func (s *COWPreparationWorkV6) MaintenanceNativeGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeCOWGeometryForTestV6, ready bool) {
+	if s == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(g))) {
+		return g, false
+	}
+	a := s.allocator
+	if a == nil {
+		return g, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*a))+2*uint64(unsafe.Sizeof(FreelistTxn{}))) {
+		return g, false
+	}
+	if a.cow == nil || a.cow.txn == nil || s.ledger == nil || s.private == nil || s.result == nil {
+		return g, false
+	}
+	g.SourceMatches = s.sourceLocked(a)
+	g.LiveHighWater, g.RequiredHighWater = a.cow.txn.highWater, s.result.Generation().HighWater()
+	g.Activated, g.ActivatedCapacity = uint64(len(a.cow.activated)), uint64(cap(a.cow.activated))
+	g.ActivationRecords, g.ActivationBytes = a.activationAdmissionV6()
+	l := s.ledger
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(reservation{}))) {
+		return g, false
+	}
+	r := l.candidates[s.candidateID]
+	if r == nil {
+		return g, false
+	}
+	g.PreVisible = r.state == CandidatePreVisible
+	g.Owners, g.Candidates, g.IDs, g.Data = uint64(len(l.owners)), uint64(len(l.candidates)), uint64(len(r.ids)), uint64(len(s.private.allocated))
+	g.Burned, g.Coverage = uint64(len(l.burnedTails)), uint64(len(r.abandonedCoverage))
+	g.TailStart, g.TailCount, g.TailWritten = r.tailStart, r.tailCount, r.tailWriteAttempted
+	g.Append = r.tailReserved && !r.reusedMetadata
+	g.ClaimRecords, g.ClaimBytes = s.claimDataAdmissionLockedV6(g.ActivationRecords+1, g.ActivationBytes+48)
+	for i := range s.private.allocated {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(allocatedPage{}))+32) {
+			return g, false
+		}
+		id := s.private.allocated[i].id
+		if _, exists := l.owners[id]; exists {
+			continue
+		}
+		unique := true
+		for j := 0; j < i; j++ {
+			if !w.Reserve(1, uint64(unsafe.Sizeof(allocatedPage{}))) {
+				return g, false
+			}
+			if s.private.allocated[j].id == id {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			g.NewIDs++
+		}
+	}
+	g.MetadataPages, g.PageSizesValid = uint64(len(s.result.pages)), true
+	for i := range s.result.pages {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(PageImageV1{}))) {
+			return g, false
+		}
+		g.PageSizesValid = g.PageSizesValid && len(s.result.pages[i].Data) == 4096
+		id := s.result.pages[i].PageID
+		if i == 0 || id < g.MetadataFirst {
+			g.MetadataFirst = id
+		}
+		if id > g.MetadataLast {
+			g.MetadataLast = id
+		}
+	}
+	// The same single prepared member is appended by its original activation.
+	// This is the existing scope formula, not a lower-cost publication plan.
+	n := g.IDs + g.NewIDs
+	coverage := uint64(0)
+	if g.Coverage != 0 {
+		coverage = reservationBoundMulV1(g.Burned, 2+g.Coverage)
+	}
+	g.PublicationRecords, g.PublicationBytes = a.cowPublicationBaseAdmissionV6(1, g.Activated+1)
+	g.PublicationRecords += 2 + n + coverage
+	g.PublicationBytes += 2*uint64(unsafe.Sizeof(COWPublicationScopeV6{})) + uint64(unsafe.Sizeof(PreparedCOWCandidateV1{})) + 32 + 32*n + coverage*uint64(unsafe.Sizeof(reservationInterval{}))
+	return g, true
 }

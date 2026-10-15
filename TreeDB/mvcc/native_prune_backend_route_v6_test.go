@@ -170,6 +170,7 @@ func testNativeMVCCRealBackendRouteCustodyV6(t *testing.T, mode string) {
 		if count, same := c.preparation.MaintenanceNativeIndexCaptureScalarsForTest(); count != 2 || !same {
 			t.Fatalf("actual two original index operands not retained: count=%d sameGeneration=%v", count, same)
 		}
+		testNativePreEffectGeometryV6(t, c)
 
 		if got, e := d.Get(oldKey); e != nil || !bytes.Equal(got, oldValue) {
 			t.Fatalf("refused output became visible: %x %v", got, e)
@@ -215,4 +216,54 @@ func testNativeMVCCRealBackendRouteCustodyV6(t *testing.T, mode string) {
 		return
 	}
 	t.Fatalf("real route did not reach finite seam: phase=%d", c.phase)
+}
+
+// Source-bound scalar observations at the original missing-publication seam.
+// Each probe uses its own unchanged Q32/1MiB work; no grant drives publication.
+func testNativePreEffectGeometryV6(t *testing.T, c *PruneCursor) {
+	t.Helper()
+	w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	basis, ready := c.preparation.MaintenanceNativeBasisGeometryForTestV6(&w)
+	if !ready || !basis.SameIndex || !basis.SameExpectedSequence || !basis.SameParent || !basis.SameRecord || !basis.HeadersReady || basis.CandidatePhase != 8 || basis.SealPhase != 13 {
+		t.Fatalf("pre-effect basis probe refused/changed: %+v ready=%v work=%+v", basis, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=db.nativeAuthorityAdmissionV6 geometry=%+v probeWork=%d/%d", basis, w.Records, w.Bytes)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	allocator, ready := c.preparation.MaintenanceNativeAllocatorGeometryForTestV6(&w)
+	if !ready || !allocator.SourceMatches || !allocator.PreVisible || !allocator.PageSizesValid {
+		t.Fatalf("pre-effect allocator probe refused/changed: %+v ready=%v work=%+v", allocator, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=freelist.claimDataAdmissionLockedV6+activationAdmissionV6+cowPublicationBaseAdmissionV6 geometry=%+v probeWork=%d/%d", allocator, w.Records, w.Bytes)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	coordinator, ready := c.preparation.MaintenanceNativeCoordinatorGeometryForTestV6(&w)
+	if !ready || coordinator.Pending != 0 || coordinator.Builders != 0 || coordinator.Publishing {
+		t.Fatalf("pre-effect coordinator probe refused/changed: %+v ready=%v work=%+v", coordinator, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=rootpublication.enqueueLockedWithWorkV6+notifyLocked+installTimerLocked geometry=%+v probeWork=%d/%d", coordinator, w.Records, w.Bytes)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	resources, ready := c.preparation.MaintenanceNativeResourcesGeometryForTestV6(&w)
+	if !ready || !resources.SameBacking || !resources.SameEmpty || !resources.MetadataOwnerMatches {
+		t.Fatalf("pre-effect Set probe refused/changed: %+v ready=%v work=%+v", resources, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=rootpublication.consumeSharedWithVisibleV6 geometry=%+v probeWork=%d/%d", resources, w.Records, w.Bytes)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	data, ready := c.preparation.MaintenanceNativeIndexGeometryForTestV6(0, allocator.RequiredHighWater, allocator.MetadataFirst, allocator.MetadataLast, allocator.MetadataPages, &w)
+	if !ready || !data.SameSnapshot || !data.SameNativeCallback || !data.Token.StableNamespace || !data.Token.NativeNamespace {
+		t.Fatalf("pre-effect DATA index probe refused/changed: %+v ready=%v work=%+v", data, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=pager.syncDirtyChunksWithFileWork+materializePrimarySealV5.DATA geometry=%+v probeWork=%d/%d", data, w.Records, w.Bytes)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	primary, ready := c.preparation.MaintenanceNativeIndexGeometryForTestV6(1, 0, 0, 0, 0, &w)
+	if !ready || !primary.SameSnapshot || !primary.SameNativeCallback || !primary.Token.StableNamespace || !primary.Token.NativeNamespace {
+		t.Fatalf("pre-effect PRIMARY index probe refused/changed: %+v ready=%v work=%+v", primary, ready, w)
+	}
+	t.Logf("native-geometry sourceSymbol=pager.syncDirtyChunksWithFileWork+StableNamespaceToken.Stabilize.PRIMARY geometry=%+v probeWork=%d/%d", primary, w.Records, w.Bytes)
+	knownRecords := 1 + 2 + 4 + allocator.ClaimRecords + 1 + basis.PublisherRecords + data.Pager.SyncRecords + primary.Pager.SyncRecords + basis.RuntimeScopeRecords + allocator.PublicationRecords + basis.CapsuleRecords + resources.ConsumeRecords + basis.ConsumeRecords + 1 + 5*allocator.MetadataPages
+	knownBytes := basis.ActivationDispatchBytes + basis.ActivationMemberBytes + basis.ActivationInstallBytes + allocator.ClaimBytes + basis.TurnReleaseBytes + basis.PublisherBytes + data.Pager.SyncBytes + primary.Pager.SyncBytes + basis.RuntimeScopeBytes + allocator.PublicationBytes + basis.CapsuleBytes + resources.ConsumeBytes + basis.ConsumeBytes + basis.TurnReleaseBytes + allocator.MetadataPages*(2*4096+1024)
+	t.Logf("native-geometry bound=incomplete knownComposedRecords=%d knownComposedBytes=%d dirtyForecastExact=%v/%v opaque=runtime-channel-and-timer-backing unimplemented=final-basis-Cut,builder-enqueue-receipt-timer-notify,seal-install,empty-dependency,token-wrapper-and-stable-namespace,physical-growth-tail-and-page-visit,ReleaseTurn-waiter-timer-notify,physical-Finish noAllowanceChosen=true Q32=RED ACK=0", knownRecords, knownBytes, data.Pager.ForecastExact, primary.Pager.ForecastExact)
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	after, ready := c.preparation.MaintenanceNativeBasisGeometryForTestV6(&w)
+	if !ready || after != basis || c.phase != 26 {
+		t.Fatalf("pre-effect probe changed original basis: before=%+v after=%+v ready=%v phase=%d", basis, after, ready, c.phase)
+	}
 }

@@ -98,3 +98,121 @@ func NewPreparedPrimaryEmptyCandidateWithWorkV6(spec CandidateSpec, w *iterator.
 	candidate, err := NewPreparedRootCandidate(spec)
 	return candidate, err == nil, err
 }
+
+type NativeCoordinatorGeometryForTestV6 struct {
+	Pending, PendingCapacity, Builders, Dispatch, NativeDispatch, Receipts, Waiters, PinKinds, HighWaterKinds uint64
+	Publishing, Preparing, Timer, RealClock                                                                   bool
+	BuilderBytes, ReceiptBytes, PendingEntryBytes                                                             uint64
+	ChannelBackingOpaque, TimerBackingOpaque                                                                  bool
+}
+
+func (c *Coordinator) MaintenanceNativeGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeCoordinatorGeometryForTestV6, ready bool) {
+	if c == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))) {
+		return g, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	g.Pending, g.PendingCapacity, g.Builders = uint64(len(c.pending)), uint64(cap(c.pending)), c.activeBuilders
+	g.Dispatch, g.NativeDispatch, g.Waiters = c.activeDispatch, c.nativeDispatchV6, uint64(len(c.waiters))
+	g.PinKinds, g.HighWaterKinds = uint64(len(c.resourceActivePins)), uint64(len(c.resourcePinHighWater))
+	g.Publishing, g.Preparing, g.Timer = c.publishing, c.preparing, c.timer != nil
+	_, g.RealClock = c.clock.(realClock)
+	for receipt := c.nativePublicationsV6; receipt != nil; {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*receipt))) {
+			return g, false
+		}
+		g.Receipts++
+		receipt = receipt.next
+	}
+	g.BuilderBytes = uint64(unsafe.Sizeof(builderLease{})) + uint64(unsafe.Sizeof(builderHandle{})) + uint64(unsafe.Sizeof(BuilderToken{}))
+	g.ReceiptBytes, g.PendingEntryBytes = uint64(unsafe.Sizeof(BuilderHandoffReceipt{})), uint64(unsafe.Sizeof(pendingEntry{}))
+	// No risky mirrors of unexported runtime layouts. The final report must
+	// price each actual notify/timer call and leave these retained sizes opaque.
+	g.ChannelBackingOpaque, g.TimerBackingOpaque = true, true
+	return g, true
+}
+
+type NativeEmptySetGeometryForTestV6 struct {
+	Entries, Kinds, Directories, MetadataRefs, BackingRefs, EmptyRefs uint64
+	VisibleEntries, VisibleKinds, VisibleDirectories                  uint64
+	Selected, SameBacking, SameEmpty, Empty, MetadataOwnerMatches     bool
+	ConsumeRecords, ConsumeBytes                                      uint64
+	ConsumeBoundComplete                                              bool
+}
+
+func (set *StableResourceSet) MaintenanceNativeEmptyGeometryForTestV6(visible *StableResourceSet, w *iterator.OrdinalScanWork) (g NativeEmptySetGeometryForTestV6, ready bool) {
+	if set == nil || visible == nil || set == visible || w == nil || !w.Reserve(3, 2*uint64(unsafe.Sizeof(*set))+2*uint64(unsafe.Sizeof(*visible))+2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(resourceKindBacking{}))+2*uint64(unsafe.Sizeof(resourceAllocation{}))+2*uint64(unsafe.Sizeof(DependencyDirectoryV2{}))) {
+		return g, false
+	}
+	first, second := set, visible
+	if uintptr(unsafe.Pointer(first)) > uintptr(unsafe.Pointer(second)) {
+		first, second = second, first
+	}
+	first.mu.Lock()
+	defer first.mu.Unlock()
+	second.mu.Lock()
+	defer second.mu.Unlock()
+	g.Entries, g.VisibleEntries = uint64(len(set.entries)), uint64(len(visible.entries))
+	g.Selected, g.SameBacking = set.selected, set.kindViews == visible.kindViews
+	if set.metadata != nil {
+		g.MetadataRefs = uint64(set.metadata.refs.Load())
+		g.MetadataOwnerMatches = visible.metadata != nil && set.metadata.owner == visible.metadata.owner
+	}
+	if set.kindViews != nil {
+		g.Kinds = uint64(len(set.kindViews.cells))
+		if set.kindViews.allocation != nil {
+			g.BackingRefs = uint64(set.kindViews.allocation.refs.Load())
+		}
+	}
+	if visible.kindViews != nil {
+		g.VisibleKinds = uint64(len(visible.kindViews.cells))
+	}
+	g.Directories, g.VisibleDirectories = uint64(len(set.physicalDependencyDirectoriesLocked())), uint64(len(visible.physicalDependencyDirectoriesLocked()))
+	empty := set.emptyDependencyDirectoryLocked()
+	g.Empty, g.SameEmpty = empty != nil, empty == visible.emptyDependencyDirectoryLocked()
+	if empty != nil {
+		g.EmptyRefs = uint64(empty.refs.Load())
+	}
+	// Exact original narrow empty branch in consumeSharedWithVisibleV6.
+	if g.Entries == 0 && g.Kinds == 0 && g.Directories == 0 && g.VisibleEntries == 0 && g.VisibleKinds == 0 && g.VisibleDirectories == 0 && g.SameBacking && g.SameEmpty {
+		g.ConsumeRecords = 1 + 1 + 1 + 2 // outer, header, nil-or-empty slot, fixed effects
+		g.ConsumeBytes = 2*uint64(unsafe.Sizeof(NativePublicationV6{})) + 4*uint64(unsafe.Sizeof(*set)) + 4*uint64(unsafe.Sizeof(StableResourceSetReleaseWorkV6{})) + 2*uint64(unsafe.Sizeof(*visible)) + uint64(unsafe.Sizeof((*DependencyDirectoryV2)(nil)))
+		if empty != nil {
+			g.ConsumeRecords++
+		}
+		if set.kindViews != nil {
+			g.ConsumeRecords++
+			g.ConsumeBytes += 2*uint64(unsafe.Sizeof(*set.kindViews)) + 2*uint64(unsafe.Sizeof(resourceAllocation{}))
+		}
+		g.ConsumeBoundComplete = true
+	}
+	return g, true
+}
+
+type NativeIndexTokenGeometryForTestV6 struct {
+	Released, Owned, Imported, NativeNamespace, StableNamespace, Linked bool
+	PathBytes, RequiredRIDs, StableRIDs                                 uint64
+}
+
+func (token *StableResourceToken) MaintenanceNativeIndexGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeIndexTokenGeometryForTestV6, ready bool) {
+	if token == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*token))+2*uint64(unsafe.Sizeof(StableNamespaceToken{}))+2*uint64(unsafe.Sizeof(g))) {
+		return g, false
+	}
+	g.Released, g.Owned, g.Imported = token.released.Load(), token.ownedOperations != nil, token.importedSource != nil
+	if token.pinned != nil {
+		g.PathBytes = uint64(len(token.pinned.Name()))
+	}
+	if token.frontier.exactRIDs != nil {
+		g.RequiredRIDs = uint64(len(token.frontier.exactRIDs.values))
+	}
+	if token.syncedFrontier.exactRIDs != nil {
+		g.StableRIDs = uint64(len(token.syncedFrontier.exactRIDs.values))
+	}
+	if ns := token.namespace; ns != nil {
+		ns.mu.Lock()
+		g.StableNamespace, g.Linked = ns.state.Load() == namespaceStable, ns.hasLinkedResource
+		_, g.NativeNamespace = ns.adapter.(nativeNamespaceAdapter)
+		ns.mu.Unlock()
+	}
+	return g, true
+}

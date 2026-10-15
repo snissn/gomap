@@ -8,7 +8,121 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+// These test observations are fixed by-value scalars on the existing phase26
+// producer. Every call has its own ordinary Q32 grant; none grants publication
+// authority or retains an observation cursor/physical operand.
+type NativeBasisGeometryForTestV6 struct {
+	CandidatePhase, SealPhase                                                                                      uint8
+	SameIndex, SameExpectedSequence, SameParent, SameRecord, HeadersReady                                          bool
+	LeafGenerations, ConditionalActive                                                                             bool
+	Prefix, Debt, DebtCapacity, Seals, SealCapacity, Visible, VisibleCapacity                                      uint64
+	RuntimeScopeRecords, RuntimeScopeBytes, ActivationDispatchBytes, ActivationMemberBytes, ActivationInstallBytes uint64
+	PublisherRecords, PublisherBytes, ConsumeRecords, ConsumeBytes, TurnReleaseBytes, CapsuleRecords, CapsuleBytes uint64
+}
+
+func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeBasisGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeBasisGeometryForTestV6, ready bool) {
+	if c == nil || w == nil || !w.Reserve(6, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(rootPublicationRuntimeV1{}))+4*uint64(unsafe.Sizeof(durableRootRuntimeV1{}))) {
+		return g, false
+	}
+	db, s := c.db, &c.sealPreparation
+	if db == nil || s.seal == nil || c.candidatePreparation.member == nil {
+		return g, false
+	}
+	runtime, member := db.rootPublication, c.candidatePreparation.member
+	if runtime == nil {
+		return g, false
+	}
+	db.rootReuseMu.RLock()
+	defer db.rootReuseMu.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	db.conditionalOracle.mu.Lock()
+	g.ConditionalActive = len(db.conditionalOracle.active) != 0
+	db.conditionalOracle.mu.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	g.CandidatePhase, g.SealPhase = c.candidatePreparation.phase, s.phase
+	g.SameIndex, g.SameExpectedSequence = db.idx.Load() == runtime.idx && c.snapshot.idx == runtime.idx, db.meta.CommitSeq == c.rootPreparation.expectedSequence
+	base := db.durableRoot
+	g.SameRecord = base.slot == s.parentSlot && base.record == s.parentRecord && base.meta == s.parentMeta
+	g.SameParent = base.primary != nil && base.primary.records[base.slot] == s.parentRoot && s.seal.primary.promotion != nil && s.seal.primary.promotion.Parent == s.parentRoot
+	g.HeadersReady = member.install.activationState != nil && member.install.activationSnapshot != nil
+	g.LeafGenerations = member.install.leafGenerationView != nil
+	g.Prefix, g.Debt, g.DebtCapacity = uint64(len(s.seal.prefix)), uint64(len(runtime.debt)), uint64(cap(runtime.debt))
+	g.Seals, g.SealCapacity = uint64(len(runtime.seals)), uint64(cap(runtime.seals))
+	g.Visible, g.VisibleCapacity = uint64(len(runtime.visibleMembers)-runtime.visibleHead), uint64(cap(runtime.visibleMembers))
+	// One SAME member/allocator debt/seal is installed in the proposed turn.
+	g.RuntimeScopeRecords, g.RuntimeScopeBytes = nativeAuthorityAdmissionV6(g.Prefix, g.Debt+1, g.Seals+1, g.Visible+1)
+	input := rootpublication.DurableRootCallbackInput{}
+	g.ActivationDispatchBytes = 2*uint64(unsafe.Sizeof(input)) + 2*uint64(unsafe.Sizeof(uint8(0))) + 2*uint64(unsafe.Sizeof(rootpublication.ResourceOwnerState(0)))
+	g.ActivationMemberBytes = 2*uint64(unsafe.Sizeof(input)) + 12*uint64(unsafe.Sizeof(member))
+	g.ActivationInstallBytes = 2*uint64(unsafe.Sizeof(page.MetaPageBody{})) + uint64(unsafe.Sizeof(DBState{})) + uint64(unsafe.Sizeof(snapshotView{}))
+	g.PublisherRecords, g.PublisherBytes = 3+g.Visible, uint64(unsafe.Sizeof(rootPublicationSealV1{}))+128+16*(g.Visible+1)
+	g.ConsumeRecords, g.ConsumeBytes = 4, g.ActivationDispatchBytes+2*uint64(unsafe.Sizeof(input))+6*uint64(unsafe.Sizeof(member))+32
+	g.TurnReleaseBytes = uint64(unsafe.Sizeof(rootpublication.NativePublicationV6{})) + 128
+	g.CapsuleRecords, g.CapsuleBytes = 7, 29696
+	return g, true
+}
+
+func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeAllocatorGeometryForTestV6(w *iterator.OrdinalScanWork) (freelist.NativeCOWGeometryForTestV6, bool) {
+	if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) {
+		return freelist.NativeCOWGeometryForTestV6{}, false
+	}
+	return c.allocatorPreparation.preparation.MaintenanceNativeGeometryForTestV6(w)
+}
+
+func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeCoordinatorGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeCoordinatorGeometryForTestV6, bool) {
+	if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.db == nil || c.db.rootPublication == nil {
+		return rootpublication.NativeCoordinatorGeometryForTestV6{}, false
+	}
+	return c.db.rootPublication.coordinator.MaintenanceNativeGeometryForTestV6(w)
+}
+
+func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeResourcesGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeEmptySetGeometryForTestV6, bool) {
+	if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.candidatePreparation.member == nil {
+		return rootpublication.NativeEmptySetGeometryForTestV6{}, false
+	}
+	return c.candidatePreparation.resources.MaintenanceNativeEmptyGeometryForTestV6(c.candidatePreparation.member.resources, w)
+}
+
+type NativeIndexGeometryForTestV6 struct {
+	Token                            rootpublication.NativeIndexTokenGeometryForTestV6
+	Pager                            pager.NativeMaterializationGeometryForTestV6
+	SameSnapshot, SameNativeCallback bool
+	OperationRefs                    uint64
+}
+
+func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeIndexGeometryForTestV6(index int, target, first, last, pages uint64, w *iterator.OrdinalScanWork) (g NativeIndexGeometryForTestV6, ready bool) {
+	if c == nil || w == nil || !w.Reserve(2, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(Snapshot{}))+2*uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))+2*uint64(unsafe.Sizeof(g))) || index < 0 || index > 1 || c.sealPreparation.seal == nil {
+		return g, false
+	}
+	capture, seal := &c.sealPreparation.indexCaptures[index], c.sealPreparation.seal
+	token := seal.token
+	if index == 1 {
+		token = seal.primary.token
+	}
+	var ok bool
+	g.Token, ok = token.MaintenanceNativeIndexGeometryForTestV6(w)
+	if !ok || capture.snapshot == nil {
+		return g, false
+	}
+	snapshot := capture.snapshot
+	snapshot.iteratorMu.Lock()
+	operations := snapshot.stablePagerCompletion
+	if operations == nil {
+		snapshot.iteratorMu.Unlock()
+		return g, false
+	}
+	g.SameSnapshot = operations.snapshot == snapshot && snapshot.idx == c.db.rootPublication.idx && snapshot.stableIndexCaptureTransferred
+	g.SameNativeCallback, g.OperationRefs = operations.native == capture, uint64(operations.refs.Load())
+	p, pathBytes := operations.pager, uint64(len(operations.syncPath))
+	snapshot.iteratorMu.Unlock()
+	g.Pager, ok = p.MaintenanceNativeGeometryForTestV6(target, first, last, pages, pathBytes, w)
+	return g, ok
+}
 
 // Containing storage belongs to the SAME admitted selected-delete producer.
 // A copied immutable parent is evidence, never a current-root/slot authority.

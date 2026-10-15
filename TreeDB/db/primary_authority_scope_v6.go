@@ -38,9 +38,7 @@ func (s *nativeAuthorityScopeV6) begin(runtime *rootPublicationRuntimeV1, seal *
 	// All current validation and compaction shapes are admitted before a
 	// variable traversal. These bounds cover prefix validation, debt copy and
 	// clear, seal partition and clear, and fixed two-slot ownership transfers.
-	records := uint64(11) + 2*uint64(len(seal.prefix)) + 4*uint64(len(runtime.debt)) + 3*uint64(len(runtime.seals)) + 2*uint64(len(runtime.visibleMembers)-runtime.visibleHead)
-	bytes := 2*uint64(unsafe.Sizeof(*s)) + 4*uint64(unsafe.Sizeof(primaryDurableRuntimeV5{})) +
-		uint64(len(seal.prefix))*16 + uint64(len(runtime.debt))*32 + uint64(len(runtime.seals))*32 + 2*uint64(len(runtime.visibleMembers)-runtime.visibleHead)*16
+	records, bytes := nativeAuthorityAdmissionV6(uint64(len(seal.prefix)), uint64(len(runtime.debt)), uint64(len(runtime.seals)), uint64(len(runtime.visibleMembers)-runtime.visibleHead))
 	if !w.Reserve(records, bytes) {
 		if records > w.RecordLimit || bytes > w.ByteLimit {
 			return false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: bytes}
@@ -78,6 +76,11 @@ func (s *nativeAuthorityScopeV6) begin(runtime *rootPublicationRuntimeV1, seal *
 	}
 	ready = true
 	return true, nil
+}
+
+func nativeAuthorityAdmissionV6(prefix, debt, seals, visible uint64) (uint64, uint64) {
+	return 11 + 2*prefix + 4*debt + 3*seals + 2*visible,
+		2*uint64(unsafe.Sizeof(nativeAuthorityScopeV6{})) + 4*uint64(unsafe.Sizeof(primaryDurableRuntimeV5{})) + 16*prefix + 32*debt + 32*seals + 32*visible
 }
 
 func (s *nativeAuthorityScopeV6) Close() {

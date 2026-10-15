@@ -390,11 +390,7 @@ func (s *COWPreparationWorkV6) claimDataLockedV6(extraRecords, extraBytes uint64
 	if r == nil || r.state != CandidatePreVisible {
 		return false, ErrCandidateConsumed
 	}
-	n := uint64(len(s.private.allocated))
-	records, bytes := l.claimStorageBoundLockedV1(s.candidateID, n, 0)
-	records = reservationBoundAddV1(records, reservationBoundMulV1(n, 1+uint64(len(l.burnedTails))+uint64(len(l.candidates))))
-	records = reservationBoundAddV1(records, extraRecords)
-	bytes = reservationBoundAddV1(bytes, extraBytes)
+	records, bytes := s.claimDataAdmissionLockedV6(extraRecords, extraBytes)
 	if ok, err := appendReserve(w, records, bytes); !ok || err != nil {
 		return false, err
 	}
@@ -410,6 +406,15 @@ func (s *COWPreparationWorkV6) claimDataLockedV6(extraRecords, extraBytes uint64
 		}
 	}
 	return true, nil
+}
+
+// Original read-only pricing shared by the real claim and its pre-effect probe.
+// The caller holds the original allocator and ledger locks.
+func (s *COWPreparationWorkV6) claimDataAdmissionLockedV6(extraRecords, extraBytes uint64) (uint64, uint64) {
+	l, n := s.ledger, uint64(len(s.private.allocated))
+	records, bytes := l.claimStorageBoundLockedV1(s.candidateID, n, 0)
+	records = reservationBoundAddV1(records, reservationBoundMulV1(n, 1+uint64(len(l.burnedTails))+uint64(len(l.candidates))))
+	return reservationBoundAddV1(records, extraRecords), reservationBoundAddV1(bytes, extraBytes)
 }
 
 // Cancel consumes only this constructor's original previsible ledger claim.

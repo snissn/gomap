@@ -7,7 +7,61 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"unsafe"
 )
+
+// NativeMaterializationGeometryForTestV6 is by-value pre-effect geometry only.
+// Dirty forecasts are labelled upper bounds unless one real destination chunk
+// establishes exact union membership. No mapping/file/pager alias is returned.
+type NativeMaterializationGeometryForTestV6 struct {
+	Pages, Target, Chunks, ChunkSize, VerifiedChunks, PrefetchWords, DirtyWords uint64
+	Dirty, Span, SyncConcurrency, PathBytes, PolicyTarget                       uint64
+	ForecastDirty, ForecastSpan, SyncRecords, SyncBytes                         uint64
+	CapacityCovered, ForecastExact, FileBacked, Closing, MappedFlush, Populate  bool
+}
+
+func (p *Pager) MaintenanceNativeGeometryForTestV6(target, first, last, pages uint64, pathBytes uint64, w *iterator.OrdinalScanWork) (g NativeMaterializationGeometryForTestV6, ready bool) {
+	if p == nil || w == nil || !w.Reserve(3, 2*uint64(unsafe.Sizeof(*p))+2*uint64(unsafe.Sizeof(g))+128) {
+		return g, false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	g.Pages, g.Target, g.Chunks, g.ChunkSize = p.numPages.Load(), target, uint64(len(p.chunks)), uint64(p.chunkSize)
+	g.Closing, g.FileBacked, g.MappedFlush, g.Populate = p.closing, !p.memoryOnly && p.file != nil, mappedRangeSyncRequired(), p.mmapPopulate
+	g.PolicyTarget = uint64(max(0, p.growTarget.Load()))
+	if v := p.verified.Load(); v != nil {
+		g.VerifiedChunks = uint64(len(v.chunks))
+	}
+	if v := p.prefetched.Load(); v != nil {
+		g.PrefetchWords = uint64(len(v.words))
+	}
+	g.DirtyWords, g.Dirty, g.Span = uint64(len(p.dirtyChunks.words)), uint64(p.dirtyChunks.count), uint64(p.dirtyChunks.high-p.dirtyChunks.low)
+	g.SyncConcurrency, g.PathBytes = uint64(max(1, p.syncConcurrency.Load())), pathBytes
+	local := p.localPageCount(max(g.Pages, target))
+	words := (g.Chunks + 63) / 64
+	g.CapacityCovered = local <= g.Chunks*g.ChunkSize/page.PageSize && g.VerifiedChunks >= (local+verifiedChunkPages-1)/verifiedChunkPages && g.PrefetchWords >= words && g.DirtyWords >= words
+	g.ForecastDirty, g.ForecastSpan, g.ForecastExact = g.Dirty, g.Span, pages == 0
+	if pages != 0 {
+		left, right := first*page.PageSize/g.ChunkSize, last*page.PageSize/g.ChunkSize
+		low, high := left/64, right/64+1
+		if g.Dirty != 0 {
+			low = min(low, uint64(p.dirtyChunks.low))
+			high = max(high, uint64(p.dirtyChunks.high))
+		}
+		g.ForecastSpan = high - low
+		g.ForecastDirty = min(g.Chunks, g.Dirty+pages)
+		if left == right && left/64 < g.DirtyWords {
+			g.ForecastDirty, g.ForecastExact = g.Dirty, true
+			if !p.dirtyChunks.contains(int(left)) {
+				g.ForecastDirty++
+			}
+		}
+	}
+	workers := min(g.SyncConcurrency, g.ForecastDirty)
+	g.SyncRecords = 5 + 4*g.ForecastSpan + 5*g.ForecastDirty + workers
+	g.SyncBytes = 6144 + 128*g.ForecastSpan + 256*g.ForecastDirty + 1024*workers + 8*g.PathBytes
+	return g, true
+}
 
 func pagerReserve(work *iterator.OrdinalScanWork, records, bytes uint64) (bool, error) {
 	if work == nil {
