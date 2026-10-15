@@ -1,0 +1,1907 @@
+{
+  "at_utc": "2026-10-15T05:40:17.570324+00:00",
+  "repo": "snissn/gomap",
+  "ref": "codex/5130-post-zipper-evidence-20261015",
+  "open_pr_count": 271,
+  "matching_pr_heads": [],
+  "mapping": [
+    {
+      "number": 5127,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5111-ordinary-data-primary-publication",
+      "head_sha": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+      "draft": true
+    },
+    {
+      "number": 5125,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5099-captured-closure-reuse",
+      "head_sha": "c9f85aebbf6a80d833913848ccef4d90acc0d1a8",
+      "draft": true
+    },
+    {
+      "number": 5124,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5098-default-harness-handoff-20261008",
+      "head_sha": "28da479a02b629a906d0bf3fc38c1e639fb68e0d",
+      "draft": true
+    },
+    {
+      "number": 5123,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5108-allocator-handoff-20261008",
+      "head_sha": "46e5c249e5714be644a406c52addcae312ad372f",
+      "draft": true
+    },
+    {
+      "number": 5122,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5093-5113-composed-handoff-20261008",
+      "head_sha": "169a34dc320d713ee08acbd3096b03178cf77d00",
+      "draft": true
+    },
+    {
+      "number": 5121,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5116-manifest-writer-authority",
+      "head_sha": "c3db45d456e77f002d6f474932063f4c4ce19b16",
+      "draft": true
+    },
+    {
+      "number": 5120,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5028-matched-work-allocation",
+      "head_sha": "efbd86120a862cb2ef00aa3646024eed1b1d3134",
+      "draft": true
+    },
+    {
+      "number": 5112,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5098-common-rollover-observer",
+      "head_sha": "8844d70630b38266722264e0922a5c6e0ee67440",
+      "draft": true
+    },
+    {
+      "number": 5104,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/r1-5092-captured-row-executor",
+      "head_sha": "113e5b2d3623c5ed5211d2f2dbe407ea46a110e5",
+      "draft": true
+    },
+    {
+      "number": 5082,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/cow-c4-sustained-tools",
+      "head_sha": "3ca129567fa98d1857c310ababa5774700beb798",
+      "draft": true
+    },
+    {
+      "number": 5054,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5016-certified-prune",
+      "head_sha": "a6b778ffeb9a401848d5eaf6d177547a5f21aef8",
+      "draft": true
+    },
+    {
+      "number": 5037,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5015-rewrite-exact-closure",
+      "head_sha": "4ba7bfad3c29d176fe7686f14cfe49276a9b3d3a",
+      "draft": true
+    },
+    {
+      "number": 5006,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/5004-grouped-frame-offsets",
+      "head_sha": "90219d64ced3539accff5d0e50d9b5fa6424ed20",
+      "draft": true
+    },
+    {
+      "number": 4885,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/issue-4812-quiesced-ann-domain-move-v1",
+      "head_sha": "44760c5e7cf7527b7211ca9bc6c8f5ae6b44c431",
+      "draft": false
+    },
+    {
+      "number": 4821,
+      "head_repo": "snissn/gomap",
+      "head_branch": "astra/post-pipeline-wal-validation",
+      "head_sha": "e7a7310a7a58a17c8cb20892513a592fe19b1bcc",
+      "draft": true
+    },
+    {
+      "number": 4818,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/column-allocation-cleanup",
+      "head_sha": "de340126c2a2691e0fead7e821738d0dc6279d52",
+      "draft": true
+    },
+    {
+      "number": 4626,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/feature-workflow-smoke-20260905",
+      "head_sha": "06b877bb23b24d58fcfef058c6bf5f90a1742b86",
+      "draft": false
+    },
+    {
+      "number": 4585,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/cohere10m-lifecycle-docs-20260901",
+      "head_sha": "96bd67f05c660847acdc1707f820812ed8172c38",
+      "draft": false
+    },
+    {
+      "number": 4082,
+      "head_repo": "snissn/gomap",
+      "head_branch": "ci/root-test-headroom-4081",
+      "head_sha": "603915e1dffd498c882299e15e56c4a8c8c743c5",
+      "draft": false
+    },
+    {
+      "number": 3569,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/3558-key-arena-pool",
+      "head_sha": "4178d916c2a2e61e7380f2e1c051e8ef890df31e",
+      "draft": true
+    },
+    {
+      "number": 3568,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/3537-leaf-ref-cache-buildpage-reuse",
+      "head_sha": "4c33610eaccc8e7fe09d57b9b0b6a207148e466c",
+      "draft": true
+    },
+    {
+      "number": 3528,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/3526-setwithrevision",
+      "head_sha": "a2292ba96f81e1d40c5a7cbe1081b37d1c354660",
+      "draft": false
+    },
+    {
+      "number": 3433,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/q2-lazy-global-rank-boundary-20260701",
+      "head_sha": "86a1a773b01ee13ed29b18e54fcdc0cc4b7bb84e",
+      "draft": true
+    },
+    {
+      "number": 2603,
+      "head_repo": "snissn/gomap",
+      "head_branch": "snissn/2587-manager",
+      "head_sha": "21f57662db13396dbbb012bab0a2204232202486",
+      "draft": false
+    },
+    {
+      "number": 2330,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/vector-search-profile-dir",
+      "head_sha": "0a73a0ed332954e91191ad96da0ae6b9926dd9f3",
+      "draft": false
+    },
+    {
+      "number": 2206,
+      "head_repo": "snissn/gomap",
+      "head_branch": "snissn/vector-search-profile-20260602",
+      "head_sha": "78e0856fcead64784d9846b224233ac8a8cc0564",
+      "draft": false
+    },
+    {
+      "number": 1767,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/gpu-dot-tournament-bench",
+      "head_sha": "8622eabc9f363c7f08c14d4e4eff513cd2b15001",
+      "draft": false
+    },
+    {
+      "number": 1719,
+      "head_repo": "snissn/gomap",
+      "head_branch": "coderabbitai/utg/b56d12a",
+      "head_sha": "a513194b96b325749ea4f923b32618f44d93a7e4",
+      "draft": false
+    },
+    {
+      "number": 1656,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/raft-r3a-doc-alignment",
+      "head_sha": "b10366c1d9b7ce94442a00507880c411eb4dc146",
+      "draft": false
+    },
+    {
+      "number": 1639,
+      "head_repo": "snissn/gomap",
+      "head_branch": "coderabbitai/utg/a174be3",
+      "head_sha": "bebbe736fe3df3046c75630901a548635123eef0",
+      "draft": false
+    },
+    {
+      "number": 1635,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-prefix-search-bench-prod-opt",
+      "head_sha": "4ddce22a46fda8ce6d9064d8e6486cbbc31a2682",
+      "draft": false
+    },
+    {
+      "number": 1503,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/update-combine-m21-global-merge",
+      "head_sha": "176458036f0e640bc16c89be2cf161a7282212e2",
+      "draft": true
+    },
+    {
+      "number": 1502,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/update-combiner-pr0",
+      "head_sha": "713998a55eb6889c51c6741191555b61d11666bb",
+      "draft": true
+    },
+    {
+      "number": 1496,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-log-batch-locking",
+      "head_sha": "9e8d47f85419aedbed27c72f802382fbb7eaee0d",
+      "draft": true
+    },
+    {
+      "number": 1495,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/gateway-write-update-allocs",
+      "head_sha": "ad00ee527bc08a92616fb272259eafdae5b769ef",
+      "draft": true
+    },
+    {
+      "number": 1494,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/read-bottleneck-report-gates",
+      "head_sha": "a1b4cd5ea195a488df32fd31f5564fbe15270f45",
+      "draft": false
+    },
+    {
+      "number": 1387,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-aggregate-refresh-full-validation",
+      "head_sha": "f064dea634fe09b58a6d8f2f01ad5ae6b438c0b6",
+      "draft": true
+    },
+    {
+      "number": 1386,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-aggregate-refresh-validation",
+      "head_sha": "e44f1f6b15d56b861ef4de8ee7415af4a6604000",
+      "draft": true
+    },
+    {
+      "number": 1384,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-batch-shape-measurement",
+      "head_sha": "4ecfcacfe1176b6faa7df9028ea24455a5697c0b",
+      "draft": true
+    },
+    {
+      "number": 1383,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-semantic-delta-arena",
+      "head_sha": "9a85723ae4620abf65d06aca32565a35a38f1de8",
+      "draft": false
+    },
+    {
+      "number": 1382,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-semantic-checkpoint-shallow",
+      "head_sha": "d1357ceabb8200f71c799d184a0527ffa1e1c4b0",
+      "draft": false
+    },
+    {
+      "number": 1381,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/read-suite-getmany-unique-arena",
+      "head_sha": "adac971eb4e84fc1262be23a2b052959ece6c4d5",
+      "draft": false
+    },
+    {
+      "number": 1380,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-semantic-record-allocation",
+      "head_sha": "d3dbd8b514beff7515cf6207249f430f5bbed843",
+      "draft": false
+    },
+    {
+      "number": 1379,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-semantic-value-diff-fastpath",
+      "head_sha": "972f35cffaf0d84e76dbecc98d61958646b02e8a",
+      "draft": false
+    },
+    {
+      "number": 1378,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/benchmark-report-run-compare",
+      "head_sha": "bda00c9348a39e965b905dd93fe3e548ef84c89e",
+      "draft": true
+    },
+    {
+      "number": 1377,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6s-childwork-pool",
+      "head_sha": "5d183d0501566a3a105c7a887ec4955e5be92a2b",
+      "draft": false
+    },
+    {
+      "number": 1376,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6r-builder-fence-reuse",
+      "head_sha": "3352231e340f557ef2d281a7fd311dccb3e7a7be",
+      "draft": false
+    },
+    {
+      "number": 1375,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6q-pregrow-parallel-retired",
+      "head_sha": "a277b11090230618db27916e0b50a7c90a2b50da",
+      "draft": false
+    },
+    {
+      "number": 1374,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6p-internal-parallel-worker-cap",
+      "head_sha": "758c0497727a03388c0ff59131aabab0fbdfd6cf",
+      "draft": false
+    },
+    {
+      "number": 1373,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6o-internal-parallel-stats",
+      "head_sha": "834e0a3164e8f6caca0afe3e3cb5b7a87394de8d",
+      "draft": false
+    },
+    {
+      "number": 1372,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6b-sparse-parallel-apply-next",
+      "head_sha": "a3b5f0fb86e4cdd9f2f3b88400b727502e05eefd",
+      "draft": false
+    },
+    {
+      "number": 1371,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6b-apply-bench",
+      "head_sha": "15f5d48b7f3f566f1c9257e38dbac6494643c858",
+      "draft": false
+    },
+    {
+      "number": 1370,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6b-leafspan-bench",
+      "head_sha": "643b4d35c5a979c339c7c21a3cf061abb34ebe22",
+      "draft": false
+    },
+    {
+      "number": 1369,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6n-readonly-prepare-pool",
+      "head_sha": "1ba46ce024a1d7da25ae526891a9f4487d81a99b",
+      "draft": false
+    },
+    {
+      "number": 1368,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6m-readonly-prepare-apply-split",
+      "head_sha": "2059354c45659ff6c68aec8b7a4b691ab62e6f4b",
+      "draft": false
+    },
+    {
+      "number": 1367,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6l-readonly-prepare-benchmarks",
+      "head_sha": "1d9b27749346ecae52f905599fd548154ebd980e",
+      "draft": false
+    },
+    {
+      "number": 1366,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6k-readonly-prepare-docs",
+      "head_sha": "c9df2e4168457956579d884d40fa7562bd6e4eac",
+      "draft": false
+    },
+    {
+      "number": 1365,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6j-collection-readonly-reuse",
+      "head_sha": "f20627dc1d0508c74d84524f09403b0bc1895748",
+      "draft": false
+    },
+    {
+      "number": 1364,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6i-readonly-prepare-reporting",
+      "head_sha": "8d3522504f0e19ef58f8d23dd417593c35de34ff",
+      "draft": false
+    },
+    {
+      "number": 1363,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6h-collection-readonly-prepare",
+      "head_sha": "3a5e3baef0f02df1daec488284d278600b6f8f34",
+      "draft": false
+    },
+    {
+      "number": 1362,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6g-readonly-worker-stats",
+      "head_sha": "9557d8a6c6d68cd4b3e2ff1d85c6e504930793e5",
+      "draft": false
+    },
+    {
+      "number": 1361,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6f-ordered-readonly-prepare-reuse",
+      "head_sha": "b0c9abdb4ca568bb1a8a721151e906f78e0f58ee",
+      "draft": false
+    },
+    {
+      "number": 1360,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6e-ordered-readonly-prepare-stats",
+      "head_sha": "1025ad0a969c2666b8acddeb206f0b2804a11cfe",
+      "draft": false
+    },
+    {
+      "number": 1359,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6d-apply-readonly-prepare",
+      "head_sha": "73d46f01533e186769eb62625b503df893c41d7e",
+      "draft": false
+    },
+    {
+      "number": 1358,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/perf-keyupdate-lock-allocation",
+      "head_sha": "06afde37174cb6aa6e91183818829dc92aa5d7ae",
+      "draft": false
+    },
+    {
+      "number": 1357,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6c-leaf-span-workers",
+      "head_sha": "08e05b676eb77777e94d528d8b591edd70787595",
+      "draft": false
+    },
+    {
+      "number": 1356,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6b-leaf-span-summary",
+      "head_sha": "0efc12cad0d726712523bd26d42622734e33a41b",
+      "draft": false
+    },
+    {
+      "number": 1355,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr6a-leaf-span-plan",
+      "head_sha": "0384ce5ba1c8353fe64e3b9cc7d0485f4b5754f8",
+      "draft": false
+    },
+    {
+      "number": 1354,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr5c-prepared-output-stats",
+      "head_sha": "843b12191c4aaf4d9bce65a00cc06c181f640af8",
+      "draft": false
+    },
+    {
+      "number": 1353,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr5b-prepared-side-output",
+      "head_sha": "34264414a596d881d531258679a14b63f0466142",
+      "draft": false
+    },
+    {
+      "number": 1352,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr5a-prepared-output-tracker",
+      "head_sha": "f109f0e70919e53ba525092da5af1c28ba7dfa6c",
+      "draft": false
+    },
+    {
+      "number": 1351,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/read-suite-iterator-unsafe-forward-v2",
+      "head_sha": "14b1b97373adc8ec256cfc6b62ee5434106b469e",
+      "draft": false
+    },
+    {
+      "number": 1348,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/read-suite-getmany-arena",
+      "head_sha": "180ee1136d0c02f1b6defa5d5b1f17c52702c9b9",
+      "draft": false
+    },
+    {
+      "number": 1347,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/random-readparallel-alloc-profile",
+      "head_sha": "e9d9ecded71f22077d2b99705c173f8aa491fb6f",
+      "draft": false
+    },
+    {
+      "number": 1346,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr4b-ordered-apply-result",
+      "head_sha": "dbc9de393e24a2107066ce518813fe2e657e267e",
+      "draft": false
+    },
+    {
+      "number": 1345,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr4b-readonly-zipper-prepare",
+      "head_sha": "e25b3641c33a7a83f5c671cc50aabd6b6080f487",
+      "draft": false
+    },
+    {
+      "number": 1343,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr4a-prepared-root-metadata",
+      "head_sha": "27d82719b0ee8bcf356470f76f8ca275242887d4",
+      "draft": false
+    },
+    {
+      "number": 1342,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr4a-engine-install-guard",
+      "head_sha": "a618097d12f6a0cac3cfc9cb5734f5f10b93ada5",
+      "draft": false
+    },
+    {
+      "number": 1341,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3c-indexed-publish-preflight",
+      "head_sha": "03dc17f1f2355dd8a02916af766e3a9ccd5bb4ac",
+      "draft": false
+    },
+    {
+      "number": 1340,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-effective-secondary-coalescing",
+      "head_sha": "98245fc35b836d448136ce721de8e45fea543041",
+      "draft": false
+    },
+    {
+      "number": 1337,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-bench-report-acceptance-pr3b",
+      "head_sha": "87bb5d60efe502a5e730b9a1a26c787089660d5d",
+      "draft": false
+    },
+    {
+      "number": 1336,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3b-semantic-raw-material",
+      "head_sha": "f55c7aa83f4cc7c2f9ccc0b3a5956c13afa7408d",
+      "draft": false
+    },
+    {
+      "number": 1335,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-pr3a-indexed-coordinator-lifecycle",
+      "head_sha": "31eb7d0ae7b4b5d5e26495eb945bc9208bb42a79",
+      "draft": false
+    },
+    {
+      "number": 1279,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/1242-round2-synthesis-doc",
+      "head_sha": "0b176c511a0427bffed7efdcc3bac968f47c19c5",
+      "draft": false
+    },
+    {
+      "number": 1147,
+      "head_repo": "snissn/gomap",
+      "head_branch": "add-tidesdb-support-to-unified-bench",
+      "head_sha": "4a1ec5d229dca2f7e83c7389d3d147533efadc8d",
+      "draft": false
+    },
+    {
+      "number": 1145,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/mmap-reader-epoch-1135",
+      "head_sha": "46a277a4ca448cbd22115b0d0caf6421e8ef1dab",
+      "draft": false
+    },
+    {
+      "number": 1131,
+      "head_repo": "snissn/gomap",
+      "head_branch": "add-wildcat-unified-bench",
+      "head_sha": "ff68d0ac5cd7071399c495654ac344c2069c527e",
+      "draft": false
+    },
+    {
+      "number": 1071,
+      "head_repo": "snissn/gomap",
+      "head_branch": "opt/collections-read-alloc",
+      "head_sha": "c0b10c9c4b38c104fa5f0890d29b16cab3357dd6",
+      "draft": false
+    },
+    {
+      "number": 1064,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/native-fastpath-r21-trainer-compare",
+      "head_sha": "488c2ffacce866c4cac7545958321f2b24be4c1b",
+      "draft": false
+    },
+    {
+      "number": 1050,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/pr1046-additive-r2-repeated-values",
+      "head_sha": "8a26ece39807d2a61e9b4b2fd714aca7ce9e3d82",
+      "draft": false
+    },
+    {
+      "number": 1049,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/pr1046-additive-r1-low-risk",
+      "head_sha": "43b1e263a517b51ed727c568b1f1303ebebf2784",
+      "draft": false
+    },
+    {
+      "number": 1048,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-leaf-split-slices",
+      "head_sha": "4a896daf2870be9b777b32b89382123d10f7caaf",
+      "draft": false
+    },
+    {
+      "number": 1046,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-leaf-item-arena",
+      "head_sha": "d9310b092d0ab7eae29df07568791f7ac5ee65db",
+      "draft": false
+    },
+    {
+      "number": 1044,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-generation-length-index-prealloc",
+      "head_sha": "2dc5ed287fecddfd4cba2e231dfec259e91e84b2",
+      "draft": false
+    },
+    {
+      "number": 1043,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-adaptive-split-sibling-capacity",
+      "head_sha": "7f1596c99cae14f901048c161e24aedb740ffe1c",
+      "draft": false
+    },
+    {
+      "number": 1042,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-log-contended-batch-drain",
+      "head_sha": "9ddb42364f116721a566bc0dce7fe38d19c88913",
+      "draft": false
+    },
+    {
+      "number": 1041,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-log-contended-append-prep",
+      "head_sha": "ba586919b9629e9b6482b622878ed2c5f0ab3954",
+      "draft": false
+    },
+    {
+      "number": 1040,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/sealed-leaf-mmap-read-path",
+      "head_sha": "861deb89ebcea14f69f4bf1e16038682ea910a5a",
+      "draft": false
+    },
+    {
+      "number": 1039,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-stable-flush-streaming",
+      "head_sha": "224f61fae04dd32f1b2ae9483e1799b077f3d137",
+      "draft": false
+    },
+    {
+      "number": 1038,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-direct-leaf-split",
+      "head_sha": "fe3f19c71572cf1bb100ce30ca1a612ba175259a",
+      "draft": false
+    },
+    {
+      "number": 1037,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-load-fast-path",
+      "head_sha": "177e05a992c66c84c3c176b7c765b6029f468359",
+      "draft": false
+    },
+    {
+      "number": 1036,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-split-insert-capacity",
+      "head_sha": "1bdeb940dd0b744b21c60dcdc5ddadc95be86859",
+      "draft": false
+    },
+    {
+      "number": 1035,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-right-split-capacity",
+      "head_sha": "346347e491812a59bf3c15be705518948fa54637",
+      "draft": false
+    },
+    {
+      "number": 1034,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-arena-chunk-pool",
+      "head_sha": "dc90f69b1978598abaa46253e9e75963701e0304",
+      "draft": false
+    },
+    {
+      "number": 1033,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-combined-entry-copy",
+      "head_sha": "d92c3b04317d5891ecd8a0de6d8ab5ba261d1bf2",
+      "draft": false
+    },
+    {
+      "number": 1032,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-copy-adaptive-arena",
+      "head_sha": "c33758354664e3249f72b3f7e59fab6f7817cc34",
+      "draft": false
+    },
+    {
+      "number": 1031,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-copy-index-applier",
+      "head_sha": "24691d727ec60351855efae57a1b938b1c2438fa",
+      "draft": false
+    },
+    {
+      "number": 1030,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-compact-entry-layout",
+      "head_sha": "343485c6fb7dc62e39a9ec9c3c6c299b642f1a10",
+      "draft": false
+    },
+    {
+      "number": 1029,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/batch-repeated-value-dedupe",
+      "head_sha": "dbd7b25b1bed0606085c95a42402d3bb89ac54a5",
+      "draft": false
+    },
+    {
+      "number": 1028,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/btree-memtable-balanced-perf",
+      "head_sha": "320ce18310f864be4ede4b57c2799198b0e5de5b",
+      "draft": false
+    },
+    {
+      "number": 1027,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-entry-slice-reuse",
+      "head_sha": "1f99d72b68ccf13c693d7cb120805f406119b29b",
+      "draft": false
+    },
+    {
+      "number": 1026,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/stream-stable-flush-sources",
+      "head_sha": "3187d186d2ed61b68b5e1e6bd378945d1dde31c0",
+      "draft": false
+    },
+    {
+      "number": 1025,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-repeated-value-dedupe",
+      "head_sha": "45ea199c905e1b89fbccd56a15f563475c4a125c",
+      "draft": false
+    },
+    {
+      "number": 1024,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/delete-heavy-backend-apply-cap",
+      "head_sha": "6e41d5ef2774976eb1fee4a9086aa4cd5e5a6140",
+      "draft": false
+    },
+    {
+      "number": 1023,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/delete-heavy-streaming-flush",
+      "head_sha": "3cbf30c9a291a8b6cda4ca9684c63232ed4c47b0",
+      "draft": false
+    },
+    {
+      "number": 1022,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/compact-leaf-decode-aliased-dst",
+      "head_sha": "1826769fe91964e8ab4e02e15759927f0e26a1bf",
+      "draft": false
+    },
+    {
+      "number": 1020,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/adaptive-delete-append-only-followup",
+      "head_sha": "7ec73585e3fb8eaba994671271f97f2de207bc01",
+      "draft": false
+    },
+    {
+      "number": 1019,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-compact-entry-mainline",
+      "head_sha": "3ac45cfd40c16e1700951a1e8032ae9721f01e72",
+      "draft": false
+    },
+    {
+      "number": 1018,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-log-batch-alloc-cleanups",
+      "head_sha": "1944d6d52ee68683e9a1346b03f53893611342e5",
+      "draft": false
+    },
+    {
+      "number": 1017,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-compact-entry-layout",
+      "head_sha": "3001762ee40c09fbbd6921cca0dbd198b95cd02c",
+      "draft": false
+    },
+    {
+      "number": 1016,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-predictive-growth-hint",
+      "head_sha": "a824ebae9c671f38bf3f12dda3744e09ed907afa",
+      "draft": false
+    },
+    {
+      "number": 1014,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/compact-leaf-payload-allocs",
+      "head_sha": "c845a19f2547faa421fb9527486160e6c99a9b6f",
+      "draft": false
+    },
+    {
+      "number": 1015,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/unified-bench-batch-delete-reuse",
+      "head_sha": "a5c6ec18e610813885d4cf97d404d97cb6cce87d",
+      "draft": false
+    },
+    {
+      "number": 1013,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-entry-hint",
+      "head_sha": "c7710c851ecf16835faf20c6afb9616e33df99dd",
+      "draft": false
+    },
+    {
+      "number": 1012,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/append-only-lazy-latest-index",
+      "head_sha": "b050d32231aa5eb59000084f834c060b74d89b43",
+      "draft": false
+    },
+    {
+      "number": 989,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/leaf-pack-no-candidate-preflight",
+      "head_sha": "e2e7ada32a3baf2ab3400633c13a7c78fe1758c8",
+      "draft": true
+    },
+    {
+      "number": 988,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/vlog-leaf-decode-buffer-reuse",
+      "head_sha": "f86cc8702fde1e2d40771c838ac070862076a9b0",
+      "draft": true
+    },
+    {
+      "number": 982,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/flush-build-stable-hashsorted-runs",
+      "head_sha": "4a7c2b8de4352d2c3267088bbfcf0e74a2bcc1a0",
+      "draft": true
+    },
+    {
+      "number": 981,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/flush-build-stable-append-only-runs",
+      "head_sha": "24c92a297e53f8198960b05bbffdb0f7b1572a2a",
+      "draft": true
+    },
+    {
+      "number": 980,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/disable-live-compact-leaf-payload",
+      "head_sha": "cca8b1e8dde9de9a4c3e12b5adbdf9ecd91811f0",
+      "draft": true
+    },
+    {
+      "number": 964,
+      "head_repo": "snissn/gomap",
+      "head_branch": "split-value-leaf-logs",
+      "head_sha": "0c75043187adf623d52adcaa99331843eae02bbd",
+      "draft": false
+    },
+    {
+      "number": 963,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-stale-plan-tail-fill",
+      "head_sha": "f69c28d42c2d4d027a1cb3fe08944344f640cc75",
+      "draft": false
+    },
+    {
+      "number": 962,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-skip-leafref-traversal-nonleaf-sources",
+      "head_sha": "9f0476d97f3ff7b2ab51b477eeed0f8a38c0f2a1",
+      "draft": true
+    },
+    {
+      "number": 961,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-leafref-rewrite-observability",
+      "head_sha": "40b061cd300fbde5e291d1ee740f6cf8dd8c7ea1",
+      "draft": true
+    },
+    {
+      "number": 960,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-rewrite-penalty-followups",
+      "head_sha": "ad3d58e2c454c08e498c8c6bc6f04b1c14fa74f0",
+      "draft": true
+    },
+    {
+      "number": 959,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-durable-debt-ledger-state",
+      "head_sha": "46b4a6e1ac5e17cce1db11f23517c406f871163d",
+      "draft": true
+    },
+    {
+      "number": 958,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-debt-ledger-commit-path-authority",
+      "head_sha": "ac41fed85c7d8d4a037777d74ed49e0d775bd4f8",
+      "draft": true
+    },
+    {
+      "number": 957,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-locator-commit-path-authority",
+      "head_sha": "8b6972ae99561ed8a7f7bdd0851ffa56d6e5d478",
+      "draft": true
+    },
+    {
+      "number": 956,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-debt-ledger-ref-reads",
+      "head_sha": "eb1325b372f728ebbc740766c8c2b36384592015",
+      "draft": true
+    },
+    {
+      "number": 955,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-locator-backed-rewrite-scan",
+      "head_sha": "468bb10973da0dab8f2a6fc2a07d57c0a725e857",
+      "draft": true
+    },
+    {
+      "number": 954,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-locator-catalog-scaffold",
+      "head_sha": "11e0aa19ae79c8b0e4e3295f984b26fbd3665064",
+      "draft": true
+    },
+    {
+      "number": 953,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-planner-from-debt-ledger",
+      "head_sha": "24ef9d49366e6e21129fe64b922e6d00673d6d6c",
+      "draft": true
+    },
+    {
+      "number": 952,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-debt-ledger-scaffold",
+      "head_sha": "f1ba2b9d9fe7651c7787016794dc5b9325cd715f",
+      "draft": true
+    },
+    {
+      "number": 951,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/948-rewrite-accounting",
+      "head_sha": "9d79f5c13933b21a1f70cd91747e086da4b787ae",
+      "draft": true
+    },
+    {
+      "number": 950,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/950-online-rewrite-throughput",
+      "head_sha": "1d9ef7d88ba4eed51703e4840ba2a87aec4066e2",
+      "draft": false
+    },
+    {
+      "number": 949,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/948-runtime-debt-contract",
+      "head_sha": "7202f52c30eaf2e4887b6f8c6eae0bfbfffd0392",
+      "draft": false
+    },
+    {
+      "number": 947,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/943-replay-floor-metrics",
+      "head_sha": "0b75d8f1ac8a567ada108074cad062006199a277",
+      "draft": false
+    },
+    {
+      "number": 946,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/943-retained-prune-convergence",
+      "head_sha": "2260c01f950641885fbd2913b3e00f82871222a2",
+      "draft": false
+    },
+    {
+      "number": 945,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/943-walon-steady-resume",
+      "head_sha": "c95c1be36daa5192cf032ebb84265aca45b38a47",
+      "draft": false
+    },
+    {
+      "number": 944,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/943-restore-like-bench",
+      "head_sha": "b47eb4412dcfd27514b8c8658de09ecb46093ee3",
+      "draft": false
+    },
+    {
+      "number": 898,
+      "head_repo": "snissn/gomap",
+      "head_branch": "mikers/vlog-scheduler-disable-reason",
+      "head_sha": "aff5e6822eb7b4417849d06af7227dec4edbae8c",
+      "draft": false
+    },
+    {
+      "number": 883,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/incremental-vlog-rewrite-instrumentation-pass-16",
+      "head_sha": "9750b7750a7bf8f7ec40411601557dd68cbbbd1a",
+      "draft": true
+    },
+    {
+      "number": 850,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/compression-sanity-followup",
+      "head_sha": "893004475d423bcaedb78f52732016a5c07d1653",
+      "draft": false
+    },
+    {
+      "number": 849,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/disk-compression-sanity",
+      "head_sha": "b74dee7ca1b9f997fd7e9c171e132675c1912ce8",
+      "draft": false
+    },
+    {
+      "number": 845,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-maint-v2-phasehook-base",
+      "head_sha": "fbce9c5d37d7adb07e875324cade3e3af517fc4d",
+      "draft": false
+    },
+    {
+      "number": 843,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-maint-a-plus-c",
+      "head_sha": "45e774698f705e96c48598cb0b5df268727f3dd8",
+      "draft": false
+    },
+    {
+      "number": 841,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/leafref-checksum-skip",
+      "head_sha": "acadc2f96a9ce0c0dbb3cea406c5af00a349925c",
+      "draft": false
+    },
+    {
+      "number": 840,
+      "head_repo": "snissn/gomap",
+      "head_branch": "exp/merge-clamp-origin-main",
+      "head_sha": "a7d2e30d2ab0efb8809d5b7c299d96c22a613499",
+      "draft": false
+    },
+    {
+      "number": 839,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/readappend-fallback-reuse",
+      "head_sha": "4f77739f8339b218622e33955353e239c8bb6292",
+      "draft": false
+    },
+    {
+      "number": 838,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/entry-slice-telemetry-counters",
+      "head_sha": "8726ba6da5d580cd17260c03d6ea9397187c7ba6",
+      "draft": false
+    },
+    {
+      "number": 837,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/direct-arena-retention-telemetry-oldest-eviction",
+      "head_sha": "91c3938870a116bd24947265eb1b8d5d9e80331b",
+      "draft": false
+    },
+    {
+      "number": 835,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/append-only-lease-trim-pool-reuse",
+      "head_sha": "fd23711dbca664162f4eb381add5e71fa77767db",
+      "draft": false
+    },
+    {
+      "number": 834,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/get-cap-trim-retention",
+      "head_sha": "606d9954b961cf1addcb3c641fba391fb0eced92",
+      "draft": false
+    },
+    {
+      "number": 833,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/valuelog-decode-scratch-holder-pool",
+      "head_sha": "8dd5f6d2f04e075733e08692358413dbee7eb03e",
+      "draft": false
+    },
+    {
+      "number": 832,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-sealed-lazy-mmap-stat-churn",
+      "head_sha": "864e646a8a235ecdd99ec677db4429131b067908",
+      "draft": false
+    },
+    {
+      "number": 831,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/append-only-retention-entry-hint",
+      "head_sha": "872f4a6c991ee7a072f886fcd31f503346c9d059",
+      "draft": false
+    },
+    {
+      "number": 830,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-mmap-expvar-telemetry",
+      "head_sha": "6474be19be250da947f5758557f19419c0c35bbb",
+      "draft": false
+    },
+    {
+      "number": 829,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-mmap-sealed-byte-budget",
+      "head_sha": "9785c9b4ddc5b835965aae2a92cdfc1895af4d4c",
+      "draft": false
+    },
+    {
+      "number": 828,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-mmap-telemetry-split",
+      "head_sha": "63445721253f97cef18f6b188966b51111901cc7",
+      "draft": false
+    },
+    {
+      "number": 827,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/batch-arena-tail-compaction",
+      "head_sha": "5d2bdb829f3bb93976da9dd9265ee48c67bd1edd",
+      "draft": false
+    },
+    {
+      "number": 826,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/rss-pressure-pool-governor",
+      "head_sha": "1c2c3611ed757d888c498540e078af032546ab43",
+      "draft": false
+    },
+    {
+      "number": 825,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/zipper-nodeview-scratch-standalone",
+      "head_sha": "059e70cb9f34a836d41aa9dbe3aefbf167bc7a17",
+      "draft": false
+    },
+    {
+      "number": 820,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/zipper-scratch-reuse-tuning",
+      "head_sha": "547b3c31b2c5200915b33a6a4d62fde01942b9db",
+      "draft": false
+    },
+    {
+      "number": 819,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/batch-arena-reserve-tuning",
+      "head_sha": "168e7accb6b518c84707a14906a5d7e7283e867e",
+      "draft": false
+    },
+    {
+      "number": 818,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/appendonly-entry-reuse-depth",
+      "head_sha": "7e9b61f4db96919991de97f686ae4ceeb6410a2a",
+      "draft": false
+    },
+    {
+      "number": 817,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/appendonly-direct-arena-adaptive-retain",
+      "head_sha": "4c2cf9e0e34ef5b1da2d141b2fb80b92620b438f",
+      "draft": false
+    },
+    {
+      "number": 816,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/appendonly-direct-writer-pool",
+      "head_sha": "ea091d2c8ad6ce0ab47a2e2b1d57d1eb240edf56",
+      "draft": false
+    },
+    {
+      "number": 810,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/batch-mem",
+      "head_sha": "d6719e5061198a6be38a56b633b7489c8638da19",
+      "draft": true
+    },
+    {
+      "number": 809,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/zipper-leaf-cache",
+      "head_sha": "00a1b355ccbb0e3a1c012bbf13b5b2923e983d04",
+      "draft": true
+    },
+    {
+      "number": 808,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/vlog-writer-mem",
+      "head_sha": "4d11d633f7239f2f9836efc934f4bd88ba65b216",
+      "draft": true
+    },
+    {
+      "number": 787,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/762-l0-rewrite-planner",
+      "head_sha": "4d0d37bfbea9cfcc4655b27276f42e000f590fa9",
+      "draft": false
+    },
+    {
+      "number": 784,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/762-assert-idle-lane-rotation",
+      "head_sha": "5ec330dd2897608fdce7f317093d355d7a5683b5",
+      "draft": false
+    },
+    {
+      "number": 783,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/762-maintenance-v2",
+      "head_sha": "4610ae130ffdd5d9b26069f83447974d10795be6",
+      "draft": false
+    },
+    {
+      "number": 760,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/read-profile-bottleneck",
+      "head_sha": "e61399ce1c3888f1b2f4efe311180e4c89afa5e8",
+      "draft": true
+    },
+    {
+      "number": 748,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase52-root-domain-lifecycle",
+      "head_sha": "75dfe0b038f56846d62db5f94dd174957bc266fb",
+      "draft": false
+    },
+    {
+      "number": 747,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase51-root-domain-manager",
+      "head_sha": "cee32f363aad46da0f05cfd587c79abf9f585621",
+      "draft": false
+    },
+    {
+      "number": 746,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase50-root-domain-publish",
+      "head_sha": "fd9019f8f245b998d572a3a63b0d73ba559cb344",
+      "draft": false
+    },
+    {
+      "number": 745,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase49-root-domain-scheduler",
+      "head_sha": "d0b8cf2de0ada2c888cb8d8a75f488df90e059dd",
+      "draft": false
+    },
+    {
+      "number": 744,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase48-named-root-domains",
+      "head_sha": "e83f0e4ddbc4e7cf9435288705f3690305e976f1",
+      "draft": false
+    },
+    {
+      "number": 743,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase47-collections-native-batch",
+      "head_sha": "95602e9784c8f5b25704a27b8a25a15abc9bbb93",
+      "draft": false
+    },
+    {
+      "number": 742,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase46-root-native-publish",
+      "head_sha": "5b9bc2817c034cc788a6c1127edfe33e57ff46b3",
+      "draft": false
+    },
+    {
+      "number": 741,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase45-root-domain-flush",
+      "head_sha": "19a1aac415aa1a3700cbb7b212a2382a6010a663",
+      "draft": false
+    },
+    {
+      "number": 740,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase44-root-domains",
+      "head_sha": "9abeca6d07999564b6bd3cbf1d0fd0add9dcf409",
+      "draft": false
+    },
+    {
+      "number": 739,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase43-named-root-flush-units",
+      "head_sha": "f7b39379d6ba8d1417de0ad5de13889602af4a8f",
+      "draft": false
+    },
+    {
+      "number": 738,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase42-warm-root-merge-apply",
+      "head_sha": "73e1ebfb9cb42258eb33d69cfb181c08569800dc",
+      "draft": false
+    },
+    {
+      "number": 737,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase41-batch-native-probes",
+      "head_sha": "863282077f523b8c1a01b6f979e90e434f8cba41",
+      "draft": false
+    },
+    {
+      "number": 736,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase40-named-root-flush-model",
+      "head_sha": "bfeda1ec52cf86034505b3e937a42b3a93f3de19",
+      "draft": false
+    },
+    {
+      "number": 735,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase39-warm-root-merge-apply",
+      "head_sha": "2b5702822477eba151fd1f0a5fc199030c0d6b70",
+      "draft": false
+    },
+    {
+      "number": 734,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase38-batch-ingest-iterators",
+      "head_sha": "58e28ee5758b9dca870a508a569a804de4c0c272",
+      "draft": false
+    },
+    {
+      "number": 733,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase37-root-stream-apply",
+      "head_sha": "4fcc054afb7084c6c1997b54ce126f8837ae8df8",
+      "draft": false
+    },
+    {
+      "number": 732,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase36-named-root-stream-flush",
+      "head_sha": "b4cb95e30db2641d9193c4bbab82f119422b1b14",
+      "draft": false
+    },
+    {
+      "number": 731,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase35-collection-batch-ingest",
+      "head_sha": "06be8f331e77d07abaf305c66d84e58276c619f9",
+      "draft": false
+    },
+    {
+      "number": 729,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase34-root-bulk-ops",
+      "head_sha": "35f5585a7715034b14173e608c3b6c372f441a41",
+      "draft": false
+    },
+    {
+      "number": 728,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase33-native-named-root-flush",
+      "head_sha": "0f0ac5d609e61ca127d6427c797f69b44612de26",
+      "draft": false
+    },
+    {
+      "number": 727,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase32-owned-staging-writes",
+      "head_sha": "aefcc09008204e4ec5a1aebd42391e93ce846476",
+      "draft": false
+    },
+    {
+      "number": 726,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase31-staging-descriptor-perf",
+      "head_sha": "b4d1bebdec25ed25dac9d925b1ef8e37edbf6a4b",
+      "draft": false
+    },
+    {
+      "number": 725,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase30-shared-root-memtable",
+      "head_sha": "7a7da4fec0b3347e8d1401260d45579a4d6e7eab",
+      "draft": false
+    },
+    {
+      "number": 724,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase29-named-root-iterators",
+      "head_sha": "39f55e084deeef6f7b895049f0c1410e0ef3c406",
+      "draft": false
+    },
+    {
+      "number": 723,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase28-named-root-prefix-memtable",
+      "head_sha": "b845976fb2e31442d81038e53460d59e87ce2576",
+      "draft": false
+    },
+    {
+      "number": 722,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase27-named-root-memtable",
+      "head_sha": "f9d642994c1d9752f568d9e590bbd3e1e6c4b2bb",
+      "draft": false
+    },
+    {
+      "number": 721,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase26-unique-prefix-fastpath",
+      "head_sha": "90a778afac6e4bb0ffa1e048071e0172cec8a0b1",
+      "draft": false
+    },
+    {
+      "number": 720,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase25-collections-cached-default",
+      "head_sha": "70f1cbefe0f12367e9583b22b39b7c3289fe9d7d",
+      "draft": false
+    },
+    {
+      "number": 719,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase24-cached-multi-root-publish",
+      "head_sha": "53e09485ae2d030ba08f2826b5e636b860f5fbef",
+      "draft": false
+    },
+    {
+      "number": 718,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase23-cached-named-root-reads",
+      "head_sha": "4813d6fe17f30f04400e4865077a2e8cde624f20",
+      "draft": false
+    },
+    {
+      "number": 717,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase22-cached-system-root",
+      "head_sha": "65720842012ec3145dbb5f9ad6f09736cf88fb1e",
+      "draft": false
+    },
+    {
+      "number": 716,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase21-cached-reopen-matrix",
+      "head_sha": "aa2c7c5fa49a0a79255c0316e358fe3edacf1c7c",
+      "draft": false
+    },
+    {
+      "number": 714,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase20-collections-cached-api-matrix",
+      "head_sha": "03c7e0d8613efb07d96935ace4fdd480b0f63ba6",
+      "draft": false
+    },
+    {
+      "number": 713,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase19-indexed-delete-perf",
+      "head_sha": "46684e1984c757418b2a299f38b774ccac92a335",
+      "draft": false
+    },
+    {
+      "number": 712,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase18-vlog-read-perf",
+      "head_sha": "d712812e0eec12384fc55c6e2a2cc92c6458c9b4",
+      "draft": false
+    },
+    {
+      "number": 710,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase17-throughput-perf",
+      "head_sha": "5c7ab4ced060704c4dc4c7a36a6fa419134b05f5",
+      "draft": false
+    },
+    {
+      "number": 709,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase16-zipper-perf",
+      "head_sha": "debe2bff8cf0f5feef449d9e955ffab3d25f7f18",
+      "draft": false
+    },
+    {
+      "number": 708,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase15-db-perf",
+      "head_sha": "b61f4cac5c69c60167d018ccea7ae3dc91319202",
+      "draft": false
+    },
+    {
+      "number": 707,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase14-collections-perf",
+      "head_sha": "01c47441f3b0fc49ac8a38f77146952f3d9beeb6",
+      "draft": false
+    },
+    {
+      "number": 706,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase13-collections-benchmarks",
+      "head_sha": "992f2b24f6557096c56684c6a4ac0ff451158305",
+      "draft": false
+    },
+    {
+      "number": 705,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase12-closeout",
+      "head_sha": "36a8a2310d979ff55880f0fdc6820195f1b350a2",
+      "draft": false
+    },
+    {
+      "number": 704,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase11-multi-root-atomic-publish",
+      "head_sha": "0184662a204a5ddb90a09d003104d6c55fdb3f1b",
+      "draft": false
+    },
+    {
+      "number": 701,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase10-secondary-index-roots",
+      "head_sha": "d071ae007a8323157864b22944e272e055aeaff0",
+      "draft": false
+    },
+    {
+      "number": 700,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase9-primary-root-store",
+      "head_sha": "1a50dc89403d9da545d820a241c55424135955c9",
+      "draft": false
+    },
+    {
+      "number": 699,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase8-root-catalog",
+      "head_sha": "c601436b94d3a7c0ad1a7fa46fa847804c67be01",
+      "draft": false
+    },
+    {
+      "number": 697,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase7-ops-hardening",
+      "head_sha": "ef8f9d0d3e9a7ca4e204c73d39598b4a40494b80",
+      "draft": false
+    },
+    {
+      "number": 696,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase6-docs-observability",
+      "head_sha": "e10d49794d5d6f2dd2251b337149b5719f8224ed",
+      "draft": false
+    },
+    {
+      "number": 695,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase5-recovery-gc",
+      "head_sha": "eca3628b7eaab477f104679aa7d5c2501117655b",
+      "draft": false
+    },
+    {
+      "number": 694,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase4-transaction-coherence",
+      "head_sha": "aa2059025ad224c71fb346907bb7b0e693edc807",
+      "draft": false
+    },
+    {
+      "number": 693,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase3-secondary-index",
+      "head_sha": "51e99a3624376cc821afc7ca9e5d0995f395be73",
+      "draft": false
+    },
+    {
+      "number": 691,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr/688-phase2-collection-primary-vlog",
+      "head_sha": "b07c69dbe4f4536115e4b9233b2865a31b3d4058",
+      "draft": false
+    },
+    {
+      "number": 676,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/vlog-maintenance-audit",
+      "head_sha": "2a34e0900e676c5c64ad833735506c399e4aa9ec",
+      "draft": false
+    },
+    {
+      "number": 675,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/vlog-generation-maintenance-safety",
+      "head_sha": "d59b4626506014fbb43f6896325cdf63519625c9",
+      "draft": false
+    },
+    {
+      "number": 674,
+      "head_repo": "snissn/gomap",
+      "head_branch": "mikers/leaf-rc3",
+      "head_sha": "0f89ea0961935db9ebf53c1adeeec988ce8991d5",
+      "draft": false
+    },
+    {
+      "number": 673,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-celestia-maintenance",
+      "head_sha": "5a0c428b564da53c3ca4d831a20c582477597259",
+      "draft": false
+    },
+    {
+      "number": 672,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-defaults-vlogrewrite-after-run",
+      "head_sha": "774c325d9baa37f2c8073ce89d8d9016ed822916",
+      "draft": false
+    },
+    {
+      "number": 671,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-vlog-rewrite-leafref",
+      "head_sha": "1214835398a92666a87e4d25afd2c9fb2dd12299",
+      "draft": false
+    },
+    {
+      "number": 670,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treedb-opt-sprint-01",
+      "head_sha": "d8f54ba74cccd5cc7e61bd4a7fc460ed760b33d2",
+      "draft": false
+    },
+    {
+      "number": 668,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr3/treedb-remove-outer-leaf-mode",
+      "head_sha": "308bc2a9540628e725433723b854bc3c5b33b513",
+      "draft": false
+    },
+    {
+      "number": 667,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr2/treedb-maintenance-format-wiring",
+      "head_sha": "85b52da43e35e609b1e4e6f8a638836daeb78240",
+      "draft": false
+    },
+    {
+      "number": 666,
+      "head_repo": "snissn/gomap",
+      "head_branch": "pr1b/treedb-maintenance-mode-format",
+      "head_sha": "6874e8a5cbacfca1a3e588977f7388374943dc5c",
+      "draft": false
+    },
+    {
+      "number": 664,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-leafvlog-gc",
+      "head_sha": "62c43f3d4f67006538fd0141ead5d637d67dec2b",
+      "draft": false
+    },
+    {
+      "number": 663,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-leafref-append-allocs",
+      "head_sha": "0f58c638a73c8e319b06236dbb50d71df4af4e2a",
+      "draft": false
+    },
+    {
+      "number": 662,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/unifiedbench-final-checkpoint",
+      "head_sha": "b2d1219f205664155294f1546276b94691d7b1ae",
+      "draft": false
+    },
+    {
+      "number": 661,
+      "head_repo": "snissn/gomap",
+      "head_branch": "fix/treedb-leafvlog-vacuum-rewrite",
+      "head_sha": "4a4cb0c6dd01d187020e04118e90451f0a8d77a2",
+      "draft": false
+    },
+    {
+      "number": 660,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treedb-memtable-read-index",
+      "head_sha": "564df1bcc49e885239d4411c0727dee77ac61235",
+      "draft": false
+    },
+    {
+      "number": 658,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/route-write-root-cause-pr656",
+      "head_sha": "c539bb5f3bca5016302b31dae042e6e54dd2c1e5",
+      "draft": false
+    },
+    {
+      "number": 656,
+      "head_repo": "snissn/gomap",
+      "head_branch": "mikers/fixCheckpoints",
+      "head_sha": "9779cb16a9147621d23f7fc1c9f9112db52e09d9",
+      "draft": false
+    },
+    {
+      "number": 655,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/654-large-value-sweep-test",
+      "head_sha": "58ddb849b6b52134a9633f50da2e81626dc36937",
+      "draft": false
+    },
+    {
+      "number": 654,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/654-route-pointer-threshold-default",
+      "head_sha": "e0d72352635c41251341ad635844b853197a2bb5",
+      "draft": false
+    },
+    {
+      "number": 653,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/652-default-v1-leaflog-route",
+      "head_sha": "1e3fa79598629a3eee613a438905652b2c29700e",
+      "draft": false
+    },
+    {
+      "number": 651,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/649-alloc-final-pass",
+      "head_sha": "6098262d4727d8fdc02d3e2d9a462908f1b9a44c",
+      "draft": false
+    },
+    {
+      "number": 650,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/649-planb-rewrite-setindex",
+      "head_sha": "065c34d3e89e0a7b73f3645f7e28b60abf779047",
+      "draft": false
+    },
+    {
+      "number": 648,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/vlog-generational-impl",
+      "head_sha": "6e6e2a72bb2e2310c096ea434442b4e965208f31",
+      "draft": false
+    },
+    {
+      "number": 617,
+      "head_repo": "snissn/gomap",
+      "head_branch": "bench/pathological-fence-validation",
+      "head_sha": "f4c1516c7d241dc58242a8aa102c52df8e36b7a4",
+      "draft": false
+    },
+    {
+      "number": 611,
+      "head_repo": "snissn/gomap",
+      "head_branch": "track1/pr-a-guardrails",
+      "head_sha": "b0aaa1b2328fb79cdaac24f724fbea77b41ef3f7",
+      "draft": false
+    },
+    {
+      "number": 599,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treedb-coverage-wave2-encoding-20260221",
+      "head_sha": "b8e8178f041b52e9fcfc4d1c7866362621fdf435",
+      "draft": false
+    },
+    {
+      "number": 598,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treedb-coverage-wave1-20260221",
+      "head_sha": "674ca7218fa8a5ffe2369172e299e95fd5198a2f",
+      "draft": false
+    },
+    {
+      "number": 595,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treemap-coverage-phase2-integration-20260221",
+      "head_sha": "8098e2272a133dd503f9582e3495983fa06151a6",
+      "draft": false
+    },
+    {
+      "number": 594,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treemap-coverage-phase1-20260221",
+      "head_sha": "ba3a7a22196aed289874f67b431cce60c61f8c79",
+      "draft": false
+    },
+    {
+      "number": 578,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/unified-bench-read-under-write-parallel-20260221",
+      "head_sha": "b9017f7e06e64aff21fa197bc2c36e9c4e06155c",
+      "draft": false
+    },
+    {
+      "number": 577,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/walonfast-batch-writeRegular-arena-allocs-20260221",
+      "head_sha": "18ae48e9f16f3f567d16020650b93a697635fc67",
+      "draft": false
+    },
+    {
+      "number": 575,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/treemap-v2-maintenance-20260220",
+      "head_sha": "3f05ca7d53ed725df021fd741814622abc7f6ae2",
+      "draft": false
+    },
+    {
+      "number": 482,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/value-log-append-zero-copy-2",
+      "head_sha": "a354aabbdcdefe69942868a6e7d7efb2263edeef",
+      "draft": false
+    },
+    {
+      "number": 480,
+      "head_repo": "snissn/gomap",
+      "head_branch": "perf/unified-bench-snapshot-read-writers",
+      "head_sha": "00b650cc3a9d3e04cbfbd5470bc605ed044a2fa6",
+      "draft": false
+    },
+    {
+      "number": 473,
+      "head_repo": "snissn/gomap",
+      "head_branch": "feature/pebblecompat-shared-object-ingest",
+      "head_sha": "ab3216514c785be277e84542392f696e007cbe32",
+      "draft": true
+    },
+    {
+      "number": 455,
+      "head_repo": "snissn/gomap",
+      "head_branch": "codex/read-gate-harness",
+      "head_sha": "8e81a4a98df7610d72f90c3911d9bfed68bc42fe",
+      "draft": false
+    }
+  ],
+  "decision": "NON_PR_EVIDENCE_ONLY; [skip ci] supported by prior5936 publication with0runs; actualimplementation8ed alreadypushed withoutskip and retainsrequiredCI"
+}

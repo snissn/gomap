@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-10-15T05:36:22.707426+00:00",
+  "pr": {
+    "headRefOid": "eda3ff1155af36ef773f23d9fd8e796a13ccf582",
+    "mergeCommit": {
+      "oid": "9029eb4e06fb99913c08dd2b3d7424f310445469"
+    },
+    "mergedAt": "2026-10-15T05:35:42Z",
+    "state": "MERGED",
+    "url": "https://github.com/snissn/gomap/pull/5134"
+  },
+  "main_at_readback": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "merge_parents": [
+    "3f87d74b98e8b1e809d151611be03785f85e2283",
+    "eda3ff1155af36ef773f23d9fd8e796a13ccf582"
+  ],
+  "changed_paths": [
+    "TreeDB/zipper/clone_scratch_public_test.go",
+    "TreeDB/zipper/clone_scratch_test.go",
+    "TreeDB/zipper/scratch-reuse.md",
+    "TreeDB/zipper/zipper.go"
+  ],
+  "readback": {
+    "9029eb4e06fb99913c08dd2b3d7424f310445469": {
+      "TreeDB/zipper/zipper.go": {
+        "bytes": 134598,
+        "sha256": "5ed8b0a965a3257de92804a149ce64e5c0d8d454c65f123647dd660001c88f28",
+        "blob": "db6bd8757db063685c23c9aa17d55bdb393fdb2f"
+      },
+      "TreeDB/zipper/clone_scratch_test.go": {
+        "bytes": 5778,
+        "sha256": "9b96e1912daeba1659cd9d7ff71e525e0aab1724add0162a8a35e952147926a2",
+        "blob": "66c7c7024f2fc4014cb943a8279d2b1e0050037d"
+      },
+      "TreeDB/zipper/clone_scratch_public_test.go": {
+        "bytes": 1900,
+        "sha256": "0daf133c32b65e5e224e65cdcf43bcf0616b36951cb4fc4ce619095be56ba210",
+        "blob": "6dc9bba5b4cf4d34791d3899790372e008e29698"
+      },
+      "TreeDB/zipper/scratch-reuse.md": {
+        "bytes": 2299,
+        "sha256": "e1161c7e6d52948f6bcebd23b431bcffbf0f9f4675fb039c51231c162ced8a66",
+        "blob": "fafe11e5758539c1d44c497fe85e3c4d4f8e734f"
+      }
+    }
+  },
+  "issue": {
+    "closedAt": "2026-10-15T05:35:43Z",
+    "state": "CLOSED",
+    "stateReason": "COMPLETED",
+    "url": "https://github.com/snissn/gomap/issues/5133"
+  },
+  "cleanup": "No deletion performed; root remains cleanup owner."
+}

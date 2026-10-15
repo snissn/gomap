@@ -1,0 +1,18 @@
+[
+  "TreeDB/db/db.go",
+  "TreeDB/db/format_config.go",
+  "TreeDB/db/format_config_test.go",
+  "TreeDB/db/freelist_patricia_feature_v2_test.go",
+  "TreeDB/db/open_readonly.go",
+  "TreeDB/freelist/allocator_cow.go",
+  "TreeDB/freelist/generation_topology_5131_test.go",
+  "TreeDB/freelist/generation_v1_format.go",
+  "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+  "TreeDB/freelist/generation_v1_metadata_reuse.go",
+  "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+  "TreeDB/freelist/generation_v1_private_test.go",
+  "TreeDB/freelist/generation_v1_reservation.go",
+  "TreeDB/freelist/generation_v1_test.go",
+  "TreeDB/freelist/generation_v1_tree.go",
+  "TreeDB/freelist/generation_v1_txn.go"
+]

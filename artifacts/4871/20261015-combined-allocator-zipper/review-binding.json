@@ -1,0 +1,10 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "verdict": "ACCEPT_REUSED_UNCHANGED_18_BLOBS",
+  "source": "8edabf94adc7b711786451b8c4c958a746254554",
+  "reviewed_source": "cf93b0b64c3688d59d6e265cf3db52b35e572275",
+  "manifest_sha256": "2ed6e8ace61a4da3fb16edbf4b48be7d370b20759659ed5bf67cbb8bbece39f8",
+  "source_evidence": "5936ecf934248b7956a3030196be0208051b68a9",
+  "basis": "All18 actual allocator Git blobs remain identical; finalmain adds only independently reviewed and qualified4-file zipper change. Fullfreelist/focusedDB and3publicpairs rerun on final combined source.",
+  "limits": "Current-head PR gates/merge and full sprint qualification remain separate."
+}

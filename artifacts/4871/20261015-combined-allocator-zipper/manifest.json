@@ -1,0 +1,282 @@
+[
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/README.md",
+    "bytes": 2031,
+    "sha256": "90498e2177d8d75655635a6efc4e5dfa74decb81e9e565acd6e8d10c52dfde81"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/ci-publication-classification.json",
+    "bytes": 57683,
+    "sha256": "e7e6f24dd9992fef992d87537c64e54898cdf1f7abf55ffe4d448c94b785b813"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/omitted-binaries.json",
+    "bytes": 716,
+    "sha256": "1ff955f74e48a698767f4902540af8681944ad1ea030460f77e37fb554e79b5f"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/prior-released-binary-cleanup.json",
+    "bytes": 8363,
+    "sha256": "f921510ceb9dbe3553770ee6730f9e852fbddc3750675ec8f56ba9bc24113987"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/README.md",
+    "bytes": 1918,
+    "sha256": "03f2bf3724477f69783a46a3bb44e28aac505691c01d1f0da3f3b768314eacf4"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/allocator-go-paths.json",
+    "bytes": 713,
+    "sha256": "6fcc8c2797e93797bda2c250acc654eb22e1610791b2a4084da99152720d1eea"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-effective-all-go-module-inputs.json",
+    "bytes": 552198,
+    "sha256": "6974c409895e6a73da4875da687f24e304896d35bbce4ec030262b3455a3ff32"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-input-manifest.json",
+    "bytes": 6466,
+    "sha256": "3029a6894114ad42edc7110443da34974fc447163c35e88d8082968acf573911"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/db/db.go",
+    "bytes": 192264,
+    "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/db/format_config.go",
+    "bytes": 22154,
+    "sha256": "ffd7310820a6b4ec82aef893edf22b873d60293334ba9424897673440810a09b"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/db/format_config_test.go",
+    "bytes": 9403,
+    "sha256": "1037c0f27b95339e911a8cb90d683b1402a182e7aa47ba1577a5964a92bc4145"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "bytes": 11,
+    "sha256": "1097383eea45b4bbc761fb199ac474ea081f5711c3755d51c46b89f410ada1ec"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/db/open_readonly.go",
+    "bytes": 15338,
+    "sha256": "ede962c80e4d19dc038d82ad5da42b6d0bd3594aa32d2cb8fb8e9a1a9a5f6492"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_topology_5131_test.go",
+    "bytes": 17,
+    "sha256": "8f2cd0ef2ba03f159bb406bcc6d04add2cbe6f0dfb420480dbbda4c94139c718"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_format.go",
+    "bytes": 16940,
+    "sha256": "2afc9c54341f53ddaa111ff75ed66487d0da24113a429b142428eb82e7254f2a"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+    "bytes": 11207,
+    "sha256": "1a7a18060fb6155785e8de0a7f5d69e8bf1aa219853929b4dd9f91278bba4f9c"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "bytes": 8235,
+    "sha256": "c170ada872470ac6d1416116b4db754f3dc6009924715559e6e6f29161ca28ad"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "bytes": 21375,
+    "sha256": "a627e0177e96d127e94413c95ec62efb1318384be688363c57965dbb9188988a"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_private_test.go",
+    "bytes": 17,
+    "sha256": "8f2cd0ef2ba03f159bb406bcc6d04add2cbe6f0dfb420480dbbda4c94139c718"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_reservation.go",
+    "bytes": 21922,
+    "sha256": "9eb8520d208c1e262efe683db460d18a9203383cc15af12123b411a007467edc"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_test.go",
+    "bytes": 42954,
+    "sha256": "67bdd50eab6dc968ea3689ecdb31af82f557687b71f542fe5b4b67c330b3dedc"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_tree.go",
+    "bytes": 9317,
+    "sha256": "893c69410a8113a3ebdf88543621c8801aa644754e3e3ecd7cc6fceff05e328a"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-inputs/TreeDB/freelist/generation_v1_txn.go",
+    "bytes": 28890,
+    "sha256": "f6b2584ad301c25f5cb4ca9d6733ce94e9ccfba1a969e69d519eec48d5d188e0"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/baseline-overlay.json",
+    "bytes": 4866,
+    "sha256": "93d33de56f0b44c909aaf709fb095c7af6264817e71fa051c840c62b089d013c"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/binaries.json",
+    "bytes": 565,
+    "sha256": "14b6c720ce9b640a332daee90fb77be9d5f31195f2247eabc4d8e8f4a9fd5ed0"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/build-baseline.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/build-candidate.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/commands.json",
+    "bytes": 8885,
+    "sha256": "979730def5f3129169195ad77a6ebf3589c8953c23dc4a0cc3157b5ada8fefd7"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/db-allocator-format-reopen.raw",
+    "bytes": 46,
+    "sha256": "1702e0d7d6e0869c2fadc98ec3d1333260902e3ac73cb626f33f3fde479ad43e"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/freelist-full.raw",
+    "bytes": 52,
+    "sha256": "01f8e6f08021ba514ec0e2c385eaa148736c4bac4fdd80e2b73045a3bc545fb7"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair1-baseline.raw",
+    "bytes": 225,
+    "sha256": "d3e29c9ca8d421726c12aa2304f87ef70091d03f1406295df25fe705d9b226bc"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair1-candidate.raw",
+    "bytes": 225,
+    "sha256": "d4df28f02c6b1542098b6a77127605b1380e675fc5e96bb8bb9563a6f2d4d171"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair2-baseline.raw",
+    "bytes": 225,
+    "sha256": "fe582fb4d51fd3a2bd0dea99b72352b88119383f99e11bd5188cf8cd25cb1bd1"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair2-candidate.raw",
+    "bytes": 225,
+    "sha256": "a67528d5c6d474b1d4870eedea3f751efa2b1b7fce012fbccb5a7ae2ea683c53"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair3-baseline.raw",
+    "bytes": 225,
+    "sha256": "0f4b3bd3130d403940d2ad68e51fc45bbf8c8df3113f3a3cbc6ea77f723f84a2"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/pair3-candidate.raw",
+    "bytes": 225,
+    "sha256": "ee4357e46e9ef188393bf11c0e9bc4fc31052c677029e0087bbb6c34929724f6"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/qualification-inputs.json",
+    "bytes": 2071,
+    "sha256": "70b194d291a3aabd2b0d79e26179b826c5fd492d8587ecb5c1644f123c3d4d13"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/receipt.json",
+    "bytes": 166,
+    "sha256": "77195b3fbbd850e17a8e61871ac28ea9e5e442ae2a5d2503dda1513823b0e65b"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/rows.json",
+    "bytes": 855,
+    "sha256": "89f1847813c413c3f284cf2133d55815e634f106d9dc3e27e249cb9449ebc26f"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/source-after.json",
+    "bytes": 552205,
+    "sha256": "431a2e2cca23d3f36e9c43b061a7746dc6fc9a033df059f0777e6ac3326fd343"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/source-before.json",
+    "bytes": 552205,
+    "sha256": "431a2e2cca23d3f36e9c43b061a7746dc6fc9a033df059f0777e6ac3326fd343"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/source-vs-final-main.patch",
+    "bytes": 80861,
+    "sha256": "2ef6f560a6a30d6f1ccaa9d3becf42626275abb652e0a1f2708da3d78ae08076"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/public-combined-final/summary.json",
+    "bytes": 1998,
+    "sha256": "716cdfae4e78bc815b62a7835eb5141ff6a1432bf0b524bef8ce73f9882ffb9b"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/root-base-integration.json",
+    "bytes": 717,
+    "sha256": "c62fa17d38ec369056f111d8cba547a53b9c9e3d359fc46d177ed36b97b2dc0e"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/qualification/run-post-zipper.py",
+    "bytes": 8436,
+    "sha256": "cde10b97017169070cc86acf158315b5e0682fcdcf3b2b20c56b4f7df13e4cb2"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/review-binding.json",
+    "bytes": 669,
+    "sha256": "0acfffb498c0371908d5865a96d6ec4ce3796e60f52a8ef1c85d79170b6eec07"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/format-equivalence.json",
+    "bytes": 491,
+    "sha256": "82e725e7e7dc21cf3d5ecdba1d2b151d01309e151bdae4b58cd4e53a62071a2a"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/format-only.patch",
+    "bytes": 542,
+    "sha256": "3d217b7896b17238343552dc0f0ed49c4187ff0002f62f2e9ff14ef7f0158753"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/merge-readback.json",
+    "bytes": 1907,
+    "sha256": "978218eb6365f57fc1a4138cd72f33f1a3d24be4f281da6e8559af6b310be767"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/pending-gate-snapshot.json",
+    "bytes": 35482,
+    "sha256": "00bec2456312e6fb78dbd795ed1733725c6b5fbaebecd010dc51a211521c1b97"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/premerge-gates.json",
+    "bytes": 125004,
+    "sha256": "f9800ecb6ccccf73e06cc38ee776e14e3b8322abe6f542684abdc77d6d319adb"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/release-inventory.json",
+    "bytes": 1044,
+    "sha256": "1f80abc271bd892e5173adb02b6f8a1755daa87a6719aa00be0ee87728705e05"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/report.md",
+    "bytes": 1256,
+    "sha256": "fdd7da6954b84803679aaf69316edbb83655898c503c7cfdd699f184812eef09"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/source-comparison.json",
+    "bytes": 273,
+    "sha256": "fc5ef19b4b6d9b67437a50b8b2dd1b3e69ff106f8889aca913fa3cdd537bca70"
+  },
+  {
+    "path": "artifacts/4871/20261015-combined-allocator-zipper/zipper-finalization/source-final.json",
+    "bytes": 551726,
+    "sha256": "391823463b526368d5da01495959014c7e563c14368e1ca95a1d863ceff0ddf6"
+  }
+]

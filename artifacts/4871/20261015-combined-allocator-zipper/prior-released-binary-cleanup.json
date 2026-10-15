@@ -1,0 +1,243 @@
+{
+  "started_utc": "2026-10-15T05:32:00.127912+00:00",
+  "allowlist_sha256": "bc06973e6f1ee4120a7bdafe875688ad4ccbe10b2ca4b3090b1572ba0aa33c27",
+  "artifact": "71d6bbd802bba83e4bad9d3eb87123f2da84e975",
+  "removed": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-final-source/final-db.test",
+      "estimated_bytes": 60874964,
+      "allocated_blocks_bytes": 60878848,
+      "identity": {
+        "device": 66306,
+        "inode": 108297238,
+        "mtime_ns": 1792040714115161259,
+        "bytes": 60874964,
+        "mode": 33277
+      },
+      "sha256": "b69ce95bde5b32d6ceb73274b179565ebcbe39b48d0dd5aa0f2c8f0d00d73647"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test",
+      "estimated_bytes": 60870909,
+      "allocated_blocks_bytes": 60878848,
+      "identity": {
+        "device": 66306,
+        "inode": 107784261,
+        "mtime_ns": 1792040392309400785,
+        "bytes": 60870909,
+        "mode": 33277
+      },
+      "sha256": "8d68ea3b37cb47ee44109ad140a1e3d83512d5ea33a2f5253d0d156e25d95891"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test",
+      "estimated_bytes": 60874668,
+      "allocated_blocks_bytes": 60874752,
+      "identity": {
+        "device": 66306,
+        "inode": 108046398,
+        "mtime_ns": 1792040074137678736,
+        "bytes": 60874668,
+        "mode": 33277
+      },
+      "sha256": "f242def2fa2eb12761fd2a40b6817e92a63cfcf1390040f4febd8eb219e8b0d3"
+    }
+  ],
+  "kept": [],
+  "scope": "Exact original3 ELF files only; owner-released; unrelated long-running services and proven cleanup SSH ancestor excluded from target-consumer uncertainty.",
+  "protected_file_count": 120,
+  "protected_before_sha256": "de9c29ad1a8b6ba004300f5885c4efcadbe4da68148c60ec606dbe1666cd9542",
+  "cleanup_ancestor_chain": {
+    "1215843": {
+      "cmd": "python3 -",
+      "parent": 1215842
+    },
+    "1215842": {
+      "cmd": "sshd-session: mikers@notty",
+      "parent": 1215801
+    },
+    "1215801": {
+      "cmd": "sshd-session: mikers [priv]",
+      "parent": 158697
+    },
+    "158697": {
+      "cmd": "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+      "parent": 1
+    }
+  },
+  "free_bytes_before": 275224219648,
+  "consumer_checks": [
+    {
+      "checked": 118,
+      "hits": {
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-final-source/final-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test": []
+      },
+      "unrelated_unreadable": [
+        {
+          "pid": "2148",
+          "cmd": "/usr/lib/systemd/systemd --user --deserialize=65",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2175",
+          "cmd": "(sd-pam)",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2448",
+          "cmd": "/usr/bin/ssh-agent -D",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.820000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "1215842",
+          "cmd": "sshd-session: mikers@notty",
+          "reason": "proven ancestor SSH transport of this Python-only cleanup command",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        }
+      ],
+      "uncertain_relevant": []
+    },
+    {
+      "checked": 118,
+      "hits": {
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-final-source/final-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test": []
+      },
+      "unrelated_unreadable": [
+        {
+          "pid": "2148",
+          "cmd": "/usr/lib/systemd/systemd --user --deserialize=65",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2175",
+          "cmd": "(sd-pam)",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2448",
+          "cmd": "/usr/bin/ssh-agent -D",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.820000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "1215842",
+          "cmd": "sshd-session: mikers@notty",
+          "reason": "proven ancestor SSH transport of this Python-only cleanup command",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        }
+      ],
+      "uncertain_relevant": []
+    },
+    {
+      "checked": 118,
+      "hits": {
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-private-incremental/topology-only-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-final-source/final-db.test": [],
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-workstream-20261015/private/public-combined-early/combined-db.test": []
+      },
+      "unrelated_unreadable": [
+        {
+          "pid": "2148",
+          "cmd": "/usr/lib/systemd/systemd --user --deserialize=65",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2175",
+          "cmd": "(sd-pam)",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.650000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "2448",
+          "cmd": "/usr/bin/ssh-agent -D",
+          "reason": "known unrelated service predates binary creation",
+          "started_utc": "2026-09-04T04:49:40.820000+00:00",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        },
+        {
+          "pid": "1215842",
+          "cmd": "sshd-session: mikers@notty",
+          "reason": "proven ancestor SSH transport of this Python-only cleanup command",
+          "surfaces": [
+            "exe",
+            "fd",
+            "maps"
+          ]
+        }
+      ],
+      "uncertain_relevant": []
+    }
+  ],
+  "free_bytes_after": 275406852096,
+  "observed_filesystem_free_delta_bytes": 182632448,
+  "estimated_removed_logical_bytes": 182620541,
+  "removed_allocated_blocks_bytes": 182632448,
+  "protected_files_unchanged": true,
+  "common_git_identity_unchanged": true,
+  "worktree_registrations_unchanged": true,
+  "removed_absent": true,
+  "elapsed_seconds": 0.2684778696857393,
+  "status": "COMPLETE"
+}

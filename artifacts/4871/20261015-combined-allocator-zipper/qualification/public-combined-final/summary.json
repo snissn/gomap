@@ -1,0 +1,79 @@
+{
+  "status": "POST_ZIPPER_MAIN_ALLOCATOR_PUBLIC_QUALIFICATION",
+  "baseline_final_main": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "candidate_head": "8edabf94adc7b711786451b8c4c958a746254554",
+  "rows": [
+    {
+      "pair": 1,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 46386.0,
+      "bytes_per_op": 141606,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 1,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 21541.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    },
+    {
+      "pair": 2,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 20851.0,
+      "bytes_per_op": 31943,
+      "allocs_per_op": 127
+    },
+    {
+      "pair": 2,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 45735.0,
+      "bytes_per_op": 141606,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 3,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 46647.0,
+      "bytes_per_op": 141607,
+      "allocs_per_op": 269
+    },
+    {
+      "pair": 3,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 21164.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 46386.0,
+      "bytes_per_op": 141606,
+      "allocs_per_op": 269
+    },
+    "candidate": {
+      "ns_per_op": 21164.0,
+      "bytes_per_op": 31944,
+      "allocs_per_op": 127
+    }
+  },
+  "percent_change": {
+    "ns_per_op": -54.374164618634936,
+    "bytes_per_op": -77.44163382907504,
+    "allocs_per_op": -52.788104089219324
+  },
+  "limitations": [
+    "Three short fixed1000x paired fresh-process CPU0/GOMAXPROCS1 runs; latency directional.",
+    "Baseline retains merged zipper and restores only allocator-owned Go inputs to final main.",
+    "Same unmodified main10000key/Checkpoint8 public Batch.Write fixture.",
+    "No wholeDB/race repetition or allocation profile/flat-encoding-union recapture.",
+    "No additive effect is assumed from prior pure-main measurements."
+  ]
+}

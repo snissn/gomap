@@ -1,0 +1,18 @@
+{
+  "source_before": "cf93b0b64c3688d59d6e265cf3db52b35e572275",
+  "final_main": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "candidate_head": "8edabf94adc7b711786451b8c4c958a746254554",
+  "parents": [
+    "cf93b0b64c3688d59d6e265cf3db52b35e572275",
+    "9029eb4e06fb99913c08dd2b3d7424f310445469"
+  ],
+  "allocator_reviewed_blobs_unchanged": 18,
+  "zipper_files_equal_final_main": [
+    "TreeDB/zipper/clone_scratch_public_test.go",
+    "TreeDB/zipper/clone_scratch_test.go",
+    "TreeDB/zipper/scratch-reuse.md",
+    "TreeDB/zipper/zipper.go"
+  ],
+  "status": "INTEGRATED_FINAL_MAIN_ONCE_NO_PUSH_NO_GO",
+  "next": "Bounded focused checks and three public pairs, then root pushes and opens coherent allocator PR"
+}

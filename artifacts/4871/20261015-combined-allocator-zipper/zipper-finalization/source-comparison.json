@@ -1,0 +1,10 @@
+{
+  "head": "eda3ff1155af36ef773f23d9fd8e796a13ccf582",
+  "compared_inputs": 3471,
+  "changed_inputs": [
+    "TreeDB/zipper/zipper.go"
+  ],
+  "other_inputs_byte_identical": true,
+  "working_tree_clean": true,
+  "previous_head": "cb5960399df0c23e320193b64d8b6a5db5844c3e"
+}

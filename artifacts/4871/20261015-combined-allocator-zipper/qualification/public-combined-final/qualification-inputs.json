@@ -1,0 +1,48 @@
+{
+  "candidate": "8edabf94adc7b711786451b8c4c958a746254554",
+  "baseline": "9029eb4e06fb99913c08dd2b3d7424f310445469",
+  "changed": [
+    "TreeDB/db/db.go",
+    "TreeDB/db/format_config.go",
+    "TreeDB/db/format_config_test.go",
+    "TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "TreeDB/db/open_readonly.go",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/docs/spec/storage-format.md",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/freelist/generation_topology_5131_test.go",
+    "TreeDB/freelist/generation_v1_format.go",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "TreeDB/freelist/generation_v1_private_test.go",
+    "TreeDB/freelist/generation_v1_reservation.go",
+    "TreeDB/freelist/generation_v1_test.go",
+    "TreeDB/freelist/generation_v1_tree.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "owned_go": [
+    "TreeDB/db/db.go",
+    "TreeDB/db/format_config.go",
+    "TreeDB/db/format_config_test.go",
+    "TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "TreeDB/db/open_readonly.go",
+    "TreeDB/freelist/allocator_cow.go",
+    "TreeDB/freelist/generation_topology_5131_test.go",
+    "TreeDB/freelist/generation_v1_format.go",
+    "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "TreeDB/freelist/generation_v1_private_test.go",
+    "TreeDB/freelist/generation_v1_reservation.go",
+    "TreeDB/freelist/generation_v1_test.go",
+    "TreeDB/freelist/generation_v1_tree.go",
+    "TreeDB/freelist/generation_v1_txn.go"
+  ],
+  "unchanged_fixture": {
+    "path": "TreeDB/db/conditional_kv_contract_bench_test.go",
+    "sha256": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6"
+  },
+  "runner_sha256": "cde10b97017169070cc86acf158315b5e0682fcdcf3b2b20c56b4f7df13e4cb2",
+  "pathlist_sha256": "6fcc8c2797e93797bda2c250acc654eb22e1610791b2a4084da99152720d1eea"
+}

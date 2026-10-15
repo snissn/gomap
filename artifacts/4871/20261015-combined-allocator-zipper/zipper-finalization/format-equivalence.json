@@ -1,0 +1,12 @@
+{
+  "base_head": "cb5960399df0c23e320193b64d8b6a5db5844c3e",
+  "path": "TreeDB/zipper/zipper.go",
+  "before_sha256": "b3cf909881fd91c29c06a7ade658df4316ff45a8a16bf85d78ebf8d169e36657",
+  "after_sha256": "5ed8b0a965a3257de92804a149ce64e5c0d8d454c65f123647dd660001c88f28",
+  "gofmt_command": "toolchains/go1.26.3-from-185-20261014/bin/gofmt",
+  "whitespace_removed_bytes_equal": true,
+  "changed_paths": [
+    "TreeDB/zipper/zipper.go"
+  ],
+  "timestamp": "2026-10-15T05:08:23.705966+00:00"
+}

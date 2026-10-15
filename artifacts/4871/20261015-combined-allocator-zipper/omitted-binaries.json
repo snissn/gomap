@@ -1,0 +1,14 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-post-zipper-5130-20261015/public-combined-final/baseline-db.test",
+    "bytes": 55399063,
+    "sha256": "9aacec4dda6cd533f7b68c43fa0872735b8b4fc0bbafeb9dc013da3c6086c2c4",
+    "reason": "Reproducible binary; exact source, command and input manifest retained"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-post-zipper-5130-20261015/public-combined-final/candidate-db.test",
+    "bytes": 55430793,
+    "sha256": "582e647fcc8f998399f26f1730feb934d3b5bcecbfb16897f443b01d91644811",
+    "reason": "Reproducible binary; exact source, command and input manifest retained"
+  }
+]

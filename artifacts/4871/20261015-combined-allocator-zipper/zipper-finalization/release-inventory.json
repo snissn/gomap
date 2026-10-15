@@ -1,0 +1,20 @@
+{
+  "lane_released_worktrees": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/allocation-zipper-main-20261015"
+  ],
+  "deletion_performed": false,
+  "cleanup_owner": "root",
+  "original_dirty_source_recoverable": true,
+  "original_tracked_patch": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015/candidate-final.patch",
+  "original_new_files": "byte identical to pushed/merged main files",
+  "original_extra_ignored_or_untracked_files": false,
+  "main_worktree_clean": true,
+  "remaining_lane_cwd_processes": [],
+  "not_released": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-zipper-5133-20261015",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "common Git root, toolchain, any foreign worktree"
+  ],
+  "evidence_retention": "Keep evidence and published artifact; root may separately decide generated-binary release after all graph consumers."
+}
