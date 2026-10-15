@@ -1,0 +1,385 @@
+{
+  "status": "SEPARATE_DIAGNOSTIC_OVERLAY_REAL_PUBLIC_ENTRYPOINT",
+  "rows": [
+    {
+      "generation": 2,
+      "private_paths": 0,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 3,
+      "private_paths": 1,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 4,
+      "private_paths": 1,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 5,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 6,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 7,
+      "private_paths": 9,
+      "private_reuses": 8,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 8,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 9,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 10,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 11,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 12,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 13,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 14,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 15,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 16,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 17,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 18,
+      "private_paths": 2,
+      "private_reuses": 0,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 19,
+      "private_paths": 15,
+      "private_reuses": 13,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 20,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 21,
+      "private_paths": 16,
+      "private_reuses": 14,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 22,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 23,
+      "private_paths": 8,
+      "private_reuses": 6,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 24,
+      "private_paths": 3,
+      "private_reuses": 2,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 2,
+      "private_paths": 0,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 3,
+      "private_paths": 1,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 4,
+      "private_paths": 1,
+      "private_reuses": 0,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 5,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 6,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 7,
+      "private_paths": 9,
+      "private_reuses": 8,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 8,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 9,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 10,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 11,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 12,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 13,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 14,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 15,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 16,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 17,
+      "private_paths": 13,
+      "private_reuses": 12,
+      "cow_pages": 3,
+      "cow_bytes": 12288
+    },
+    {
+      "generation": 18,
+      "private_paths": 2,
+      "private_reuses": 0,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 19,
+      "private_paths": 15,
+      "private_reuses": 13,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 20,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 21,
+      "private_paths": 16,
+      "private_reuses": 14,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 22,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 23,
+      "private_paths": 8,
+      "private_reuses": 6,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 24,
+      "private_paths": 6,
+      "private_reuses": 4,
+      "cow_pages": 5,
+      "cow_bytes": 20480
+    },
+    {
+      "generation": 25,
+      "private_paths": 4,
+      "private_reuses": 3,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 26,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 27,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 28,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 29,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 30,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    },
+    {
+      "generation": 31,
+      "private_paths": 2,
+      "private_reuses": 1,
+      "cow_pages": 4,
+      "cow_bytes": 16384
+    }
+  ],
+  "totals": {
+    "private_paths": 295,
+    "private_reuses": 235,
+    "cow_pages": 189,
+    "cow_bytes": 774144
+  },
+  "instrumented_source_sha256": "19b4ec436db3a5d5ce0e68fa7ae9f2532b5067524d5cf5fe3c8709859e0a9271",
+  "binary_sha256": "8985d5a08f48bbe933961117d856649c6e22777f7af88386b6c2b5b7e40c43e8",
+  "limitation": "Includes Open/10000keyseed and Go benchmark warmup; aggregate counters are activation proof, not timed1000x denominator. Diagnostic printing never enters timed comparison binaries."
+}

@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-5130-20261015/baseline-db.test",
+    "bytes": 55403689,
+    "sha256": "e55fd6a40815867f35b654d4251c9eab9ca8f57769fc6329c2411b014d2072e1"
+  },
+  "candidate": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/allocation-main-5130-20261015/candidate-db.test",
+    "bytes": 55432035,
+    "sha256": "eb34b260215fcfa2a18ee0143b42571b54c95e85d54713f70a1e3d663e14dbe2"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "verdict": "ACCEPT",
+  "reviewer": "/root/allocator_5131_5132_review_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "effort": "high",
+  "candidate": "cf93b0b64c3688d59d6e265cf3db52b35e572275",
+  "parent": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "manifest_sha256": "2ed6e8ace61a4da3fb16edbf4b48be7d370b20759659ed5bf67cbb8bbece39f8",
+  "scope": "All 18 actual Git blobs match the reviewed source manifest. Twelve blobs exactly reuse accepted construction source. Main port differences reviewed: inline append accounting, public snapshot classification, writable and both readonly format gates, recovery/publication ordering, private capability, alias revocation, freeze, rollback, detached sink, and documentation.",
+  "findings": [],
+  "limits": "Read-only review, no tests rerun. Focused validation and short public benchmarks bind the same source. Final-base integration, current-head CI and full graph qualification remain open."
+}

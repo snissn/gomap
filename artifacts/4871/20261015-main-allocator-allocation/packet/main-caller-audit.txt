@@ -1,0 +1,21 @@
+TreeDB/db/append_only_page_allocator_test.go:22:	if err := allocator.EnableCOWV1(base, freelist.NewReservationLedger()); err != nil {
+TreeDB/db/append_only_page_allocator_test.go:23:		t.Fatalf("EnableCOWV1: %v", err)
+TreeDB/db/db.go:3356:	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+TreeDB/db/dependency_directory_v2.go:16:// before PrepareCOWCandidateRetiringV1 freezes the allocator. The ordinary
+TreeDB/db/durable_root_runtime.go:1471:	prepared, err := idx.allocator.PrepareCOWCandidateRetiringV1(
+TreeDB/db/durable_root_runtime.go:2076:	if err := idx.allocator.EnableCOWV1(base, ledger); err != nil {
+TreeDB/db/durable_root_runtime.go:2094:	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, auxiliaryCount, freelist.NewCandidatePageSinkV1())
+TreeDB/db/durable_root_runtime.go:2209:	if err := allocator.EnableCOWV1(base, ledger); err != nil {
+TreeDB/db/durable_root_runtime.go:2219:	prepared, err := allocator.PrepareCOWCandidateV1(2, meta.CommitSeq, candidateID, capability, auxiliaryCount, freelist.NewCandidatePageSinkV1())
+TreeDB/db/durable_root_runtime.go:2307:	if err := allocator.EnableCOWV1(current.Freelist, freelist.NewReservationLedger()); err != nil {
+TreeDB/db/durable_root_runtime.go:2330:	prepared, err := allocator.PrepareCOWCandidateV1(
+TreeDB/db/leaf_generation_pack_publication_test.go:46:	if err := allocator.EnableCOWV1(base, freelist.NewReservationLedger()); err != nil {
+TreeDB/db/leaf_generation_pack_publication_test.go:47:		t.Fatalf("EnableCOWV1: %v", err)
+TreeDB/db/leaf_generation_pack_publication_test.go:70:	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateID, capability, 1, freelist.NewMemoryPageStoreV1())
+TreeDB/db/leaf_generation_pack_publication_test.go:72:		t.Fatalf("PrepareCOWCandidateV1: %v", err)
+TreeDB/db/root_publication_activation.go:586:	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+TreeDB/db/root_publication_activation.go:654:				return runtime.idx.allocator.ActivateCOWCandidateV1(member.prepared)
+TreeDB/db/root_publication_activation.go:1129:	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+TreeDB/db/root_publication_activation.go:1202:	if err := runtime.idx.allocator.ActivateCOWCandidateV1(prepared); err != nil {
+TreeDB/db/root_publication_activation.go:1409:	if err := seal.idx.allocator.PublishActivatedCOWPrefixV1(seal.prefix, nextCapability); err != nil {
+TreeDB/db/vacuum_online.go:1394:		if err := newAlloc.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {

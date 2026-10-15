@@ -1,0 +1,12 @@
+{
+  "status": "COMMITTED_BLOBS_BOUND_REVIEW_ACCEPT",
+  "head": "cf93b0b64c3688d59d6e265cf3db52b35e572275",
+  "parent": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "branch": "codex/5130-allocator-main-20261015",
+  "manifest_sha256": "2ed6e8ace61a4da3fb16edbf4b48be7d370b20759659ed5bf67cbb8bbece39f8",
+  "changed_paths": 18,
+  "reviewer": "/root/allocator_5131_5132_review_sol61",
+  "review": "INTERNAL_SUBAGENT_REVIEW Sol6.1 ACCEPT exact18blobs",
+  "at_utc": "2026-10-15T05:17:24.376053+00:00",
+  "remaining": "Push/PR after independent zipper finalizer advancesmain; currentheadCI/review/merge, original finalgraph acceptance"
+}

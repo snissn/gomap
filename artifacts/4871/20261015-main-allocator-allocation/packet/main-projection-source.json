@@ -1,0 +1,97 @@
+{
+  "base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "frozen_source": "7a6fd35f56dc6ddb70ae76e91c36656e7055a8df",
+  "frozen_manifest_sha256": "5a06010306af8c9120a5124902b4e25b250c0a1db3618efd58cdb239a30bd7b3",
+  "files": [
+    {
+      "path": "TreeDB/db/db.go",
+      "bytes": 192817,
+      "sha256": "4397ead6af220f981968ffec95230b8727b49a848f61de2d3eb2734c64e6d5c3"
+    },
+    {
+      "path": "TreeDB/db/format_config.go",
+      "bytes": 23893,
+      "sha256": "1a3ad3f7eb5dd79a8d5e0d2582af515f08d0fdc43395a73801a232ac562ecd6f"
+    },
+    {
+      "path": "TreeDB/db/format_config_test.go",
+      "bytes": 9498,
+      "sha256": "3874e4eaa5d359dc182e32da6cc6f82278730dca7b093d36d4cbf64b83a1eb36"
+    },
+    {
+      "path": "TreeDB/db/freelist_patricia_feature_v2_test.go",
+      "bytes": 5419,
+      "sha256": "5e727ec94fe053c2d403698cd9d2af4eb4a1fdcea61a4b1ec62ecc0082933055"
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "bytes": 15518,
+      "sha256": "fbb0fc7babc0cd962ce5e22026b17016cc2e94b2b9aff79f1f6ae19742f11c80"
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "bytes": 43143,
+      "sha256": "29a936c7743cdb6ad54b212d0d75f152d5e0a4dd1ee4984031dc156708dede65"
+    },
+    {
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "bytes": 219087,
+      "sha256": "8b6259010d7aff75ebe13301b8a241e9a6c2df79fe4e2bbedfd22f9c7ca98906"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "bytes": 24925,
+      "sha256": "dfe59d36f0ec68b5d12413c95df04050b3b465d38976adf4f57ae7e0d95ea685"
+    },
+    {
+      "path": "TreeDB/freelist/generation_topology_5131_test.go",
+      "bytes": 7745,
+      "sha256": "30553d1a30f5e4b4ec3dadfcb22f08a33ea0af741c88f6428d383cb7caf2c104"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "bytes": 18951,
+      "sha256": "9b6e9d08e8fcf08835d36bf49e7123ed2cabe3803984f6e994532a970d0e609b"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+      "bytes": 11211,
+      "sha256": "c88a0113133109d4a6d0796e23ae89f9f88d7c2119b4bf869352b6d36ab928cb"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_reuse.go",
+      "bytes": 8092,
+      "sha256": "4a93f586219e126e51e4ef05f72ccddf6063b08839033d1156aa5e2db2e0dc63"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+      "bytes": 21535,
+      "sha256": "7fae09ed8b51d49b6ae5a9aa9498022d38f0bbd4ab42f3d4b195ec9a90b7c95b"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_private_test.go",
+      "bytes": 6462,
+      "sha256": "ef8082b3eed1ce843a5c0287500b370ebc7f87b768efa087a22e0b20a2679812"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_reservation.go",
+      "bytes": 21889,
+      "sha256": "f868504b607cc697b05208bfc5db472a679f6e458ebd226e28aae698f2925af7"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_test.go",
+      "bytes": 42810,
+      "sha256": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_tree.go",
+      "bytes": 13327,
+      "sha256": "f770cca08be51fb80c417c50c11873eda5c843c296b8fab51d9f36d7de328e91"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "bytes": 30586,
+      "sha256": "fa270814b5b2a51c10390e557843851c44d1df84bc99c65806d55a0f53257971"
+    }
+  ]
+}

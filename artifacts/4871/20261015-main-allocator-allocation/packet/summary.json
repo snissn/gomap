@@ -1,0 +1,75 @@
+{
+  "status": "MAIN_PROJECTION_PAIRED_PUBLIC_DIAGNOSTIC",
+  "rows": [
+    {
+      "pair": 1,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 46627.0,
+      "bytes_per_op": 152734,
+      "allocs_per_op": 281
+    },
+    {
+      "pair": 1,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 22385.0,
+      "bytes_per_op": 43073,
+      "allocs_per_op": 139
+    },
+    {
+      "pair": 2,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 22547.0,
+      "bytes_per_op": 43074,
+      "allocs_per_op": 139
+    },
+    {
+      "pair": 2,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 46297.0,
+      "bytes_per_op": 152734,
+      "allocs_per_op": 281
+    },
+    {
+      "pair": 3,
+      "kind": "baseline",
+      "n": 1000,
+      "ns_per_op": 45559.0,
+      "bytes_per_op": 152734,
+      "allocs_per_op": 281
+    },
+    {
+      "pair": 3,
+      "kind": "candidate",
+      "n": 1000,
+      "ns_per_op": 22473.0,
+      "bytes_per_op": 43074,
+      "allocs_per_op": 139
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "ns_per_op": 46297.0,
+      "bytes_per_op": 152734,
+      "allocs_per_op": 281
+    },
+    "candidate": {
+      "ns_per_op": 22473.0,
+      "bytes_per_op": 43074,
+      "allocs_per_op": 139
+    }
+  },
+  "percent_change": {
+    "ns_per_op": -51.4590578223211,
+    "bytes_per_op": -71.79802794400723,
+    "allocs_per_op": -50.533807829181484
+  },
+  "limitations": [
+    "Three fixed1000x short fresh-process paired runs; GOMAXPROCS1 CPU0.",
+    "Same unchanged main10000key seed fixture, checkpoint outside timer every8writes.",
+    "No claim of whole-main acceptance or native-path performance."
+  ]
+}

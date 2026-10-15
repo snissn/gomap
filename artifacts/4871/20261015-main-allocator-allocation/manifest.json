@@ -1,0 +1,257 @@
+[
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/README.md",
+    "bytes": 1947,
+    "sha256": "1059aabfb96342439a876a4fc3b00722f2263f74988188d40e3575a8103b86f1"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/omitted-binaries.json",
+    "bytes": 705,
+    "sha256": "ce40ae0ab5d0e2dd4b1039194b2982dc1b9aa934222fd0b767a1766370ddc613"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-allocator_cow.go",
+    "bytes": 25216,
+    "sha256": "19b4ec436db3a5d5ce0e68fa7ae9f2532b5067524d5cf5fe3c8709859e0a9271"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-build.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-commands.json",
+    "bytes": 1848,
+    "sha256": "aa9fb5123c813c1b56d43c2ff9380cfe8d27fc1a6c3baab117b2c2298c22d727"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-overlay.json",
+    "bytes": 257,
+    "sha256": "7b6298c1a3533a8f82817fbbf0808d7d4d282e019a4767f7575d08556d4a0f27"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-public.raw",
+    "bytes": 5325,
+    "sha256": "6d9971259afdc81c1e550048696fdcaa5f60f72a5aa47a10dee7aa9244025ec1"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/activation-summary.json",
+    "bytes": 7863,
+    "sha256": "00c22872794f8336437288eca0e1965032e51c58b06af40ef1a12ddf39ffe8fe"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/baseline-projection-inputs.json",
+    "bytes": 2796,
+    "sha256": "5cdfcdf4ba9f9deab36f43f19934502566081e3682860f95836b4156e1707609"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/binaries.json",
+    "bytes": 497,
+    "sha256": "566baf829af0db47d97940d97fdb58e5a48ed55150a25514fd17356580bde8d2"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/build-baseline.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/build-candidate.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/handoff.md",
+    "bytes": 3512,
+    "sha256": "5d4785c2534e4f67d9bfdc432c9d1596714d7552985519416cbd744ad346c9d9"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay.json",
+    "bytes": 4418,
+    "sha256": "110cada9a580876a5326a08a9df9475da9e7514628f44d52550f36d6c977971d"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/db/db.go",
+    "bytes": 192264,
+    "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/db/format_config.go",
+    "bytes": 22154,
+    "sha256": "ffd7310820a6b4ec82aef893edf22b873d60293334ba9424897673440810a09b"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/db/format_config_test.go",
+    "bytes": 9403,
+    "sha256": "1037c0f27b95339e911a8cb90d683b1402a182e7aa47ba1577a5964a92bc4145"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/db/freelist_patricia_feature_v2_test.go",
+    "bytes": 11,
+    "sha256": "1097383eea45b4bbc761fb199ac474ea081f5711c3755d51c46b89f410ada1ec"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/db/open_readonly.go",
+    "bytes": 15338,
+    "sha256": "ede962c80e4d19dc038d82ad5da42b6d0bd3594aa32d2cb8fb8e9a1a9a5f6492"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/allocator_cow.go",
+    "bytes": 24918,
+    "sha256": "45c57475cf751221599efb02c3efef5c18996c67b2420b94fed411468038742c"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_topology_5131_test.go",
+    "bytes": 17,
+    "sha256": "8f2cd0ef2ba03f159bb406bcc6d04add2cbe6f0dfb420480dbbda4c94139c718"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_format.go",
+    "bytes": 16940,
+    "sha256": "2afc9c54341f53ddaa111ff75ed66487d0da24113a429b142428eb82e7254f2a"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_metadata_cursor_test.go",
+    "bytes": 11207,
+    "sha256": "1a7a18060fb6155785e8de0a7f5d69e8bf1aa219853929b4dd9f91278bba4f9c"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "bytes": 8235,
+    "sha256": "c170ada872470ac6d1416116b4db754f3dc6009924715559e6e6f29161ca28ad"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_metadata_reuse_test.go",
+    "bytes": 21375,
+    "sha256": "a627e0177e96d127e94413c95ec62efb1318384be688363c57965dbb9188988a"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_private_test.go",
+    "bytes": 17,
+    "sha256": "8f2cd0ef2ba03f159bb406bcc6d04add2cbe6f0dfb420480dbbda4c94139c718"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_reservation.go",
+    "bytes": 21922,
+    "sha256": "9eb8520d208c1e262efe683db460d18a9203383cc15af12123b411a007467edc"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_test.go",
+    "bytes": 42954,
+    "sha256": "67bdd50eab6dc968ea3689ecdb31af82f557687b71f542fe5b4b67c330b3dedc"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_tree.go",
+    "bytes": 9317,
+    "sha256": "893c69410a8113a3ebdf88543621c8801aa644754e3e3ecd7cc6fceff05e328a"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-baseline-overlay/TreeDB/freelist/generation_v1_txn.go",
+    "bytes": 28890,
+    "sha256": "f6b2584ad301c25f5cb4ca9d6733ce94e9ccfba1a969e69d519eec48d5d188e0"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-caller-audit.txt",
+    "bytes": 2623,
+    "sha256": "06faceffd9227d33c7fc5c589a3f67a36f6e0d3def05cd06f9ecefce85f41e1a"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-focused.json",
+    "bytes": 7608,
+    "sha256": "433b2cbd7861cf155c87385044e877e96cfb8cd5ef3fb5da99f3e72bcaa6067e"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-focused.log",
+    "bytes": 515,
+    "sha256": "d094554aa42440c4d3d578eedf339bfb69b1c606a9aa8c6beda2d3b3e934d109"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-projection-source.json",
+    "bytes": 3354,
+    "sha256": "2ed6e8ace61a4da3fb16edbf4b48be7d370b20759659ed5bf67cbb8bbece39f8"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/main-projection.patch",
+    "bytes": 80780,
+    "sha256": "b869b0e44a0bbf7889426921f09682bbed920dd3967452bf187c722d52d1baed"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair1-baseline.raw",
+    "bytes": 225,
+    "sha256": "0764a52cdc9ba9297cb1ca5e87361e9914f85e8d59db681ab0695db8a928c5f6"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair1-candidate.raw",
+    "bytes": 225,
+    "sha256": "a5c81d1a9d8c73e045e2c6b19f55cddf39cedbeedc2b6a2da7b44a2777e91c7c"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair2-baseline.raw",
+    "bytes": 225,
+    "sha256": "409490cbbf93c3345f781f5f2bbbabb6986b08a0e720140a18a2b3325f7374d4"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair2-candidate.raw",
+    "bytes": 225,
+    "sha256": "1b11158d0c43140a026ba9beab38ce93d0214f8cd9d6bc345d79f434ef2bf907"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair3-baseline.raw",
+    "bytes": 225,
+    "sha256": "c70c8418100cb14ff66740436105f061b0343975addd823c656f8f14cdfa11de"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/pair3-candidate.raw",
+    "bytes": 225,
+    "sha256": "8fef577b1d5cefe478cb384ccda4b08faa0558646ec2ecf6d7a313b73c027068"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/projection-source-before-format.json",
+    "bytes": 3625,
+    "sha256": "e15e02e57072b53e343417818bf7b7023e69c9021b64ff42611eec1df209e311"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/public-commands.json",
+    "bytes": 7019,
+    "sha256": "63bea64767fee0f303c3b989c559eedf517cd2e44c2601be8596ca48180e4d41"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/root-main-commit.json",
+    "bytes": 631,
+    "sha256": "13a67402adb727f993d4d2c6dff0e4fb194ad6cc7664dd74f923a80829ccfbaa"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/rows.json",
+    "bytes": 855,
+    "sha256": "fee2074cd111b58137084c4296b32bb7e90e7009d82dd0f972a31aec030294ff"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/run-main-public.py",
+    "bytes": 3485,
+    "sha256": "573a7c994994168cf029fb15df7a71115f39c25e581aa8b00b267590a9152d53"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/source-after.json",
+    "bytes": 549088,
+    "sha256": "f17ce2bdbbaf4d1e6af4dd1040ddf4b221c8fbd48914150a4956d2d29b6dffdc"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/source-before.json",
+    "bytes": 549088,
+    "sha256": "f17ce2bdbbaf4d1e6af4dd1040ddf4b221c8fbd48914150a4956d2d29b6dffdc"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/source-status-final.txt",
+    "bytes": 748,
+    "sha256": "1df9d2a746dbfd9379ff3d90ca74e749d943f75e0e0abb805fd22a111fb144ec"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/packet/summary.json",
+    "bytes": 1661,
+    "sha256": "8fe1a7eb724cfa20e8f7f12c5880d7aa43f05a0461aeaaf6ea9ba320347da6eb"
+  },
+  {
+    "path": "artifacts/4871/20261015-main-allocator-allocation/review.json",
+    "bytes": 981,
+    "sha256": "bc0ed5b0d2e16f3e214be7f98427423c9a422566344e4b1d945839e0d384b38f"
+  }
+]

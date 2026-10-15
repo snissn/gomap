@@ -1,0 +1,59 @@
+ALLOCATOR_ACTIVATION generation=2 private_paths=0 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=3 private_paths=1 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=4 private_paths=1 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=5 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=6 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=7 private_paths=9 private_reuses=8 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=8 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=9 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=10 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=11 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=12 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=13 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=14 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=15 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=16 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=17 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=18 private_paths=2 private_reuses=0 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=19 private_paths=15 private_reuses=13 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=20 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=21 private_paths=16 private_reuses=14 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=22 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=23 private_paths=8 private_reuses=6 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=24 private_paths=3 private_reuses=2 cow_pages=4 cow_bytes=16384
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkConditionalTxnBaselineBatchWrite 	ALLOCATOR_ACTIVATION generation=2 private_paths=0 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=3 private_paths=1 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=4 private_paths=1 private_reuses=0 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=5 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=6 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=7 private_paths=9 private_reuses=8 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=8 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=9 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=10 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=11 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=12 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=13 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=14 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=15 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=16 private_paths=2 private_reuses=1 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=17 private_paths=13 private_reuses=12 cow_pages=3 cow_bytes=12288
+ALLOCATOR_ACTIVATION generation=18 private_paths=2 private_reuses=0 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=19 private_paths=15 private_reuses=13 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=20 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=21 private_paths=16 private_reuses=14 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=22 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=23 private_paths=8 private_reuses=6 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=24 private_paths=6 private_reuses=4 cow_pages=5 cow_bytes=20480
+ALLOCATOR_ACTIVATION generation=25 private_paths=4 private_reuses=3 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=26 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=27 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=28 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=29 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=30 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+ALLOCATOR_ACTIVATION generation=31 private_paths=2 private_reuses=1 cow_pages=4 cow_bytes=16384
+       8	     36619 ns/op	   44763 B/op	     140 allocs/op
+PASS

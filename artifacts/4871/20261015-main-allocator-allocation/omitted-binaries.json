@@ -1,0 +1,20 @@
+[
+  {
+    "path": "activation-db.test",
+    "bytes": 55431819,
+    "sha256": "8985d5a08f48bbe933961117d856649c6e22777f7af88386b6c2b5b7e40c43e8",
+    "reason": "Reproducible binary; exact source, commands and binary hashes retained"
+  },
+  {
+    "path": "baseline-db.test",
+    "bytes": 55403689,
+    "sha256": "e55fd6a40815867f35b654d4251c9eab9ca8f57769fc6329c2411b014d2072e1",
+    "reason": "Reproducible binary; exact source, commands and binary hashes retained"
+  },
+  {
+    "path": "candidate-db.test",
+    "bytes": 55432035,
+    "sha256": "eb34b260215fcfa2a18ee0143b42571b54c95e85d54713f70a1e3d663e14dbe2",
+    "reason": "Reproducible binary; exact source, commands and binary hashes retained"
+  }
+]
