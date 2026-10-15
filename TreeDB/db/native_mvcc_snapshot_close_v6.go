@@ -114,19 +114,30 @@ func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (b
 			}
 			state.finalizePhase = 7
 		case 7:
-			// Until the shared generation's actual physical Close continuation is
-			// bound, retirement refuses before discovering/removing its generation.
-			// Current captures release only their real containing borrower edge.
-			if s.idx != nil {
-				s.idx.wrapperMu.Lock()
-				terminal := s.idx.physicalCompleted
-				s.idx.wrapperMu.Unlock()
-				if terminal || s.db == nil || s.db.idx.Load() != s.idx {
-					return false, ErrNativeMVCCSnapshotWork
-				}
-			}
 			if !w.Reserve(2, 4*uint64(unsafe.Sizeof(*s))+64) {
 				return false, nil
+			}
+			// Eligibility and actual borrower consumption share the original
+			// discovery/wrapper locks. A prior current-generation observation
+			// cannot authorize a later terminal decrement after a yield.
+			if idx := s.idx; idx != nil {
+				if s.db == nil {
+					return false, ErrNativeMVCCSnapshotWork
+				}
+				s.db.idxMu.Lock()
+				idx.wrapperMu.Lock()
+				if s.db.idx.Load() != idx || idx.refs.Load() <= 0 || idx.physicalCompleted || idx.closeCompleted || s.indexWrapperBorrowed && idx.wrapperBorrowCountV6() == 0 {
+					idx.wrapperMu.Unlock()
+					s.db.idxMu.Unlock()
+					return false, ErrNativeMVCCSnapshotWork
+				}
+				if s.indexWrapperBorrowed {
+					idx.dropWrapperBorrowV6()
+					s.indexWrapperBorrowed = false
+				}
+				s.idx = nil
+				idx.wrapperMu.Unlock()
+				s.db.idxMu.Unlock()
 			}
 			if state.epochLive {
 				s.finishNativeMVCCCaptureEpochV6()
@@ -142,23 +153,6 @@ func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (b
 			s.treeRoot = 0
 			s.reader = valueReader{}
 			s.state = nil
-			if s.indexWrapperBorrowed && s.idx != nil {
-				// The original live generation retains its physical and constructor
-				// metadata. Its containing edge decrement performs no physical disposal.
-				s.idx.wrapperMu.Lock()
-				if s.idx.physicalCompleted {
-					s.idx.wrapperMu.Unlock()
-					return false, ErrNativeMVCCSnapshotWork
-				}
-				if s.idx.wrapperBorrowCountV6() == 0 {
-					s.idx.wrapperMu.Unlock()
-					return false, ErrSnapshotCapacity
-				}
-				s.idx.dropWrapperBorrowV6()
-				s.idx.wrapperMu.Unlock()
-				s.indexWrapperBorrowed = false
-			}
-			s.idx = nil
 			state.finalizePhase = 8
 		case 8:
 			if s.vlogWrapperBorrowed {

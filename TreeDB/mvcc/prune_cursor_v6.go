@@ -564,9 +564,30 @@ func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error
 			if !ready || err != nil {
 				return err
 			}
-			// Output alone confers no visible/durable/physical completion. The
-			// actual finite candidate/seal route must replace this refusal before
-			// any selected row can be acknowledged.
+			c.phase = 24
+		case 24:
+			ready, err := c.preparation.StepNativeMVCCBackendRootV6(w)
+			if !ready || err != nil {
+				return err
+			}
+			// A sealed private directory still confers no visible/durable/physical
+			// completion. Private COW/member/seal preparation remains required.
+			c.phase = 25
+		case 25:
+			ready, err := c.preparation.StepNativeMVCCAllocatorV6(w)
+			if !ready || err != nil {
+				return err
+			}
+			c.phase = 26
+		case 26:
+			ready, err := c.preparation.StepNativeMVCCCandidateV6(w)
+			if !ready || err != nil {
+				return err
+			}
+			ready, err = c.preparation.StepNativeMVCCSealPreparationV6(w)
+			if !ready || err != nil {
+				return err
+			}
 			return rootpublication.ErrNativeMVCCRootWorkRequiredV6
 		case 22:
 			stats.Pruned += uint64(len(c.batchEntries))

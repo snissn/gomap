@@ -572,21 +572,9 @@ func (a *Arena) sealDirectoryConstructedV6(r Ref, image []byte, groups [groupCou
 		}
 		return ok, e
 	}
-	b.metadataCharge += certificateCharge
-	for _, g := range groups {
-		if g != nil {
-			g.refs++
-		}
-	}
-	b.groups = groups
-	b.image = physical
-	b.directory = d.WithPhysicalImage(physical)
-	b.digest = sha256.Sum256(b.image)
-	b.sealed = true
-	if owner != nil {
-		b.privatePublication = false
-		b.readCertificate = &ReadRootCertificateV6{arena: a, ref: r, directory: b.directory, image: b.image, digest: b.digest}
-		*cert = b.readCertificate
+	certificate := a.installSealedDirectoryLockedV6(b, r, d, groups, physical, owner, certificateCharge)
+	if cert != nil {
+		*cert = certificate
 	}
 	a.counters.EdgeReads += uint64(d.Count()) + count
 	a.counters.EdgeWrites += count
@@ -595,6 +583,26 @@ func (a *Arena) sealDirectoryConstructedV6(r Ref, image []byte, groups [groupCou
 	}
 	a.counters.Bytes += bytes
 	return true, nil
+}
+
+// installSealedDirectoryLockedV6 is the original nonfallible seal install.
+// Both validation policies call it only after the SAME pager write succeeds.
+func (a *Arena) installSealedDirectoryLockedV6(b *bank, r Ref, d node.PrimaryDirectoryView, groups [groupCount]*Group, physical []byte, owner ReadRootConstructionV6, certificateCharge uint64) *ReadRootCertificateV6 {
+	b.metadataCharge += certificateCharge
+	for _, g := range groups {
+		if g != nil {
+			g.refs++
+		}
+	}
+	b.groups, b.image = groups, physical
+	b.directory = d.WithPhysicalImage(physical)
+	b.digest = sha256.Sum256(physical)
+	b.sealed = true
+	if owner != nil {
+		b.privatePublication = false
+		b.readCertificate = &ReadRootCertificateV6{arena: a, ref: r, directory: b.directory, image: b.image, digest: b.digest}
+	}
+	return b.readCertificate
 }
 
 // RefAcquireBytesV6 describes the actual fixed bank operand; it reads no state.

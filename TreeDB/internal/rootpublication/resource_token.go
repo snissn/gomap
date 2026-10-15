@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 	"unsafe"
@@ -648,6 +649,19 @@ func initializeStableResourceToken(spec StableResourceSpec, normalized []StableL
 	if syncThrough == nil {
 		syncThrough = func(file *os.File, _ DurableFrontier) error { return stableio.SyncFile(file) }
 	}
+	initialized, err := completeStableResourceTokenV6(spec, logicalObligations, token, stability, pinned, pinnedRefs, identity, identityPin, flush, syncThrough)
+	if err != nil {
+		return nil, err
+	}
+	token = initialized
+	closeOnError = false
+	physicalTransferred = true
+	return token, nil
+}
+
+// The final original descriptor install is shared by synchronous registration
+// and the retained exact-index constructor. Neither caller grants publication.
+func completeStableResourceTokenV6(spec StableResourceSpec, logicalObligations []StableLogicalObligation, token *StableResourceToken, stability ResourceStability, pinned *os.File, pinnedRefs *atomic.Int64, identity StableIdentity, identityPin *IdentityPin, flush, syncThrough resourceOperation) (*StableResourceToken, error) {
 	if token == nil {
 		token = &StableResourceToken{}
 	}
@@ -676,8 +690,6 @@ func initializeStableResourceToken(spec StableResourceSpec, normalized []StableL
 			return nil, err
 		}
 	}
-	closeOnError = false
-	physicalTransferred = true
 	return token, nil
 }
 
@@ -1624,6 +1636,34 @@ func newStableNamespaceCreationProof(parent, child *os.File, name string, adapte
 	return newStableNamespaceCreationProofWithMetadata(parent, child, name, adapter, nil)
 }
 func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name string, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner) (*StableNamespaceCreationProof, error) {
+	return newStableNamespaceCreationProofWithMetadataModeV6(parent, child, name, adapter, metadata, false)
+}
+
+// NewOwnedStableNamespaceCreationProofWithWorkV6 admits the original fixed
+// creation path. A failed constructed proof is returned in original custody;
+// its caller must use the existing finite proof release, never ordinary unwind.
+func NewOwnedStableNamespaceCreationProofWithWorkV6(parent, child *os.File, name string, metadata *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*StableNamespaceCreationProof, bool, error) {
+	if metadata == nil || parent == nil || child == nil || w == nil {
+		return nil, false, retainedalloc.ErrWorkRequired
+	}
+	parentBytes, err := StableFileMetadataCharge(uint64(len(parent.Name()) + len("#stable-pin")))
+	if err != nil {
+		return nil, false, err
+	}
+	childBytes, err := StableFileMetadataCharge(uint64(len(child.Name()) + len("#stable-sync-pin")))
+	if err != nil {
+		return nil, false, err
+	}
+	// Exact native link validation (parent/child/link identities and temporary
+	// child handle), two retained duplicates, one sync, two owned headers,
+	// one copied name and fixed validation/control observations. No table scan.
+	if !w.Reserve(18, 2*uint64(unsafe.Sizeof(StableNamespaceCreationProof{}))+4*(parentBytes+childBytes)+4*uint64(len(name))) {
+		return nil, false, nil
+	}
+	proof, err := newStableNamespaceCreationProofWithMetadataModeV6(parent, child, name, nativeNamespaceAdapter{}, metadata, true)
+	return proof, proof != nil && err == nil, err
+}
+func newStableNamespaceCreationProofWithMetadataModeV6(parent, child *os.File, name string, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner, retained bool) (*StableNamespaceCreationProof, error) {
 	if parent == nil || child == nil || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: incomplete namespace creation proof", ErrUnresolvedResource)
 	}
@@ -1668,6 +1708,9 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
 		proof.name = strings.Clone(name)
 	}
 	fail := func(cause error) (*StableNamespaceCreationProof, error) {
+		if retained {
+			return proof, cause
+		}
 		closeErr := proof.ReleaseWithError()
 		if closeErr != nil && metadata != nil {
 			proof.cleanupFailure.add(cause)
@@ -1699,7 +1742,7 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
 // Bind returns an already-stable normal namespace token after proving the
 // retained parent still links the original child. It never syncs again.
 func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*StableNamespaceToken, error) {
-	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, nil, false)
+	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, nil, false, nil)
 }
 
 // BindWithMetadata admits only the new independent descriptor/duplicate handle.
@@ -1709,9 +1752,25 @@ func (proof *StableNamespaceCreationProof) BindWithMetadata(parent *os.File, par
 	if metadata == nil {
 		return nil, ErrResourceOwnership
 	}
-	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, metadata, true)
+	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, metadata, true, nil)
 }
-func (proof *StableNamespaceCreationProof) bindWithMetadata(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner, supplied bool) (*StableNamespaceToken, error) {
+
+// BindWithMetadataWithWorkV6 admits this SAME cached proof's independent
+// descriptor. It never establishes a fresh proof or performs namespace sync.
+func (proof *StableNamespaceCreationProof) BindWithMetadataWithWorkV6(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*StableNamespaceToken, bool, error) {
+	if metadata == nil || w == nil {
+		return nil, false, retainedalloc.ErrWorkRequired
+	}
+	token, err := proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, metadata, true, w)
+	if token != nil {
+		// Ordinary Bind returns an unretained constructor descriptor, whose
+		// ReleaseWithError acts only at refs==0. The finite producer needs an
+		// explicit original edge while its token constructor can yield.
+		token.refs.Store(1)
+	}
+	return token, token != nil, err
+}
+func (proof *StableNamespaceCreationProof) bindWithMetadata(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner, supplied bool, w *iterator.OrdinalScanWork) (*StableNamespaceToken, error) {
 	if proof == nil || proof.released.Load() {
 		return nil, ErrResourceOwnership
 	}
@@ -1734,6 +1793,20 @@ func (proof *StableNamespaceCreationProof) bindWithMetadata(parent *os.File, par
 	}
 	if name != proof.name {
 		return nil, ErrResourceConflict
+	}
+	if w != nil {
+		if _, native := proof.adapter.(nativeNamespaceAdapter); !native || proof.metadata == nil || proof.parent == nil {
+			return nil, retainedalloc.ErrWorkRequired
+		}
+		fileBytes, err := StableFileMetadataCharge(uint64(len(proof.parent.Name()) + len("#stable-pin")))
+		if err != nil {
+			return nil, err
+		}
+		// Two exact identity operations, one duplicate, two copied strings,
+		// original descriptor install and fixed unsuccessful-duplicate unwind.
+		if !w.Reserve(8, 2*uint64(unsafe.Sizeof(StableNamespaceToken{}))+2*fileBytes+2*uint64(len(name)+len(diagnosticPath))) {
+			return nil, nil
+		}
 	}
 	parentID, err := proof.adapter.Identity(parent)
 	if err != nil {

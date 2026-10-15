@@ -196,75 +196,12 @@ func (root *resourceReleaseFrameV6) tokenNamespace(f *resourceReleaseFrameV6, t 
 	if w == nil {
 		return true, ns.release()
 	}
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-	fail := func(e error) (bool, error) {
-		ns.cleanupFailure.add(e)
-		ns.cleanupErr = &ns.cleanupFailure
-		if ns.metadata != nil {
-			ns.metadata.CleanupFailed()
-		}
-		if ns.cleanupRegistry != nil {
-			ns.cleanupRegistry.retainFailedNamespace(ns)
-		}
-		return false, e
+	completion, ready, err := ns.ReleaseWithWorkV6(&t.releaseWork.namespacePhase, w)
+	if !ready || err != nil {
+		return false, err
 	}
-	s := &t.releaseWork
-	if s.namespacePhase == 0 {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-			return false, nil
-		}
-		if ns.refs.Load() <= 0 {
-			return fail(ErrResourceOwnership)
-		}
-		if ns.refs.Add(-1) > 0 {
-			s.namespacePhase = 3
-			return true, nil
-		}
-		ns.released.Store(true)
-		s.namespacePhase = 1
-	}
-	if s.namespacePhase == 1 {
-		if ns.persistence != nil && ns.persistence != ns.parent {
-			if !w.Reserve(1, 128) {
-				return false, nil
-			}
-			if e := ns.persistence.Close(); e != nil {
-				return fail(e)
-			}
-			ns.persistence = nil
-		}
-		s.namespacePhase = 2
-	}
-	if s.namespacePhase == 2 {
-		if ns.parent != nil {
-			if !w.Reserve(1, 128) {
-				return false, nil
-			}
-			parent := ns.parent
-			if e := parent.Close(); e != nil {
-				return fail(e)
-			}
-			ns.parent = nil
-			if ns.persistence == parent {
-				ns.persistence = nil
-			}
-		}
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-			return false, nil
-		}
-		// Namespace storage can have a distinct original owner. Detach all token
-		// aliases before its final accounting release; no namespace callback remains.
-		owner, charge := ns.metadata, ns.metadataCharge
-		ns.metadata, ns.metadataCharge = nil, 0
-		ns.oldName, ns.newName, ns.diagnosticPath = "", "", ""
-		ns.adapter, ns.cleanupRegistry = nil, nil
-		t.namespace = nil
-		s.namespacePhase = 3
-		if owner != nil {
-			owner.RemovePending(charge)
-		}
-	}
+	t.namespace = nil
+	completion.Complete()
 	return true, nil
 }
 

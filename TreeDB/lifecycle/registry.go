@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -155,6 +156,10 @@ func (r *ReaderRegistry) Unregister(id int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.unregisterLockedV6(id)
+}
+
+func (r *ReaderRegistry) unregisterLockedV6(id int64) {
 	if id <= 0 {
 		return
 	}
@@ -200,6 +205,46 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 		return fastMin
 	}
 	return min
+}
+
+// MinPinnedSeqWithWorkV6 performs the SAME coherent registry observation after
+// admitting its actual locked geometry. A large dirty fallback vector refuses
+// before scanning or changing its cache; the fixed fast shards are always
+// included. No registry mutex survives a returned refusal.
+func (r *ReaderRegistry) MinPinnedSeqWithWorkV6(w *iterator.OrdinalScanWork) (uint64, bool, error) {
+	if r == nil || w == nil {
+		return 0, false, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	records := uint64(1 + fastReaderShardCount)
+	if r.dirty {
+		records += uint64(len(r.seqs))
+	}
+	bytes := uint64(fastReaderShardCount*16 + 32)
+	if r.dirty {
+		bytes += 8 * uint64(len(r.seqs))
+	}
+	if !w.Reserve(records, bytes) {
+		if records > w.RecordLimit || bytes > w.ByteLimit {
+			return 0, false, &iterator.OrdinalUnitTooLarge{Records: records, Bytes: bytes}
+		}
+		return 0, false, nil
+	}
+	fastMin := r.loadFastMin()
+	if r.dirty {
+		min := uint64(math.MaxUint64)
+		for _, seq := range r.seqs {
+			if seq < min {
+				min = seq
+			}
+		}
+		r.min, r.dirty = min, false
+	}
+	if fastMin < r.min {
+		return fastMin, true, nil
+	}
+	return r.min, true, nil
 }
 
 func (r *ReaderRegistry) loadFastMin() uint64 {

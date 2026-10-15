@@ -146,78 +146,18 @@ func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (St
 	}
 	if s.phase == 2 {
 		if ns := t.namespace; ns != nil {
-			ns.mu.Lock()
-			if s.namespacePhase == 0 {
-				if !reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-					ns.mu.Unlock()
-					return empty, false, nil
-				}
-				if ns.refs.Load() <= 0 {
-					ns.mu.Unlock()
-					return fail(ErrResourceOwnership)
-				}
-				if ns.refs.Add(-1) > 0 {
-					t.namespace = nil
-					s.namespacePhase = 3
-				} else {
-					ns.released.Store(true)
-					s.namespacePhase = 1
-				}
+			completion, ready, err := ns.ReleaseWithWorkV6(&s.namespacePhase, w)
+			if err != nil {
+				return fail(err)
 			}
-			if s.namespacePhase == 1 {
-				if ns.persistence != nil && ns.persistence != ns.parent {
-					if !reserve(1, 128) {
-						ns.mu.Unlock()
-						return empty, false, nil
-					}
-					if err := ns.persistence.Close(); err != nil {
-						ns.cleanupFailure.add(err)
-						ns.cleanupErr = &ns.cleanupFailure
-						ns.metadata.CleanupFailed()
-						if ns.cleanupRegistry != nil {
-							ns.cleanupRegistry.retainFailedNamespace(ns)
-						}
-						ns.mu.Unlock()
-						return fail(err)
-					}
-					ns.persistence = nil
-				}
-				s.namespacePhase = 2
+			if !ready {
+				return empty, false, nil
 			}
-			if s.namespacePhase == 2 {
-				if ns.parent != nil {
-					if !reserve(1, 128) {
-						ns.mu.Unlock()
-						return empty, false, nil
-					}
-					parent := ns.parent
-					if err := parent.Close(); err != nil {
-						ns.cleanupFailure.add(err)
-						ns.cleanupErr = &ns.cleanupFailure
-						ns.metadata.CleanupFailed()
-						if ns.cleanupRegistry != nil {
-							ns.cleanupRegistry.retainFailedNamespace(ns)
-						}
-						ns.mu.Unlock()
-						return fail(err)
-					}
-					ns.parent = nil
-					if ns.persistence == parent {
-						ns.persistence = nil
-					}
-				}
-				if !reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-					ns.mu.Unlock()
-					return empty, false, nil
-				}
-				s.refundCharge += ns.metadataCharge
-				ns.metadata, ns.metadataCharge = nil, 0
-				ns.oldName, ns.newName, ns.diagnosticPath = "", "", ""
-				ns.adapter, ns.cleanupRegistry = nil, nil
-				t.namespace = nil
-				s.namespacePhase = 3
+			if completion.owner != nil && completion.owner != s.refundOwner {
+				return fail(ErrResourceOwnership)
 			}
-			ns.mu.Unlock()
+			t.namespace = nil
+			s.refundCharge += completion.charge
 		}
 		s.phase = 3
 	}

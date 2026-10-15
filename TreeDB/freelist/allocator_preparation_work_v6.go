@@ -243,6 +243,10 @@ func (s *COWPreparationWorkV6) advance(a *Allocator, w *iterator.OrdinalScanWork
 			}
 			s.phase = 8
 		case 8:
+			// Original live DATA allocation remains available to a newer ordinary
+			// candidate while private metadata has its own original ledger claim.
+			// Exact-source adoption claims DATA atomically before visibility.
+			s.materialize.deferDataClaimV6 = true
 			result, ready, e := s.materialize.Step(s.private, s.generationID, s.commitSeq, s.candidateID, s.sink, w)
 			if !ready || e != nil {
 				return false, e
@@ -272,6 +276,25 @@ func (s *COWPreparationWorkV6) PreparedForConstructionV6() *PreparedCOWCandidate
 	return s.prepared
 }
 
+// ValidateSourceWithWorkV6 checks the original live operands without taking
+// the prepared slot or consuming any ledger claim. Adoption repeats this exact
+// check under its mutation lock; a successful observation grants no authority.
+func (s *COWPreparationWorkV6) ValidateSourceWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || s.allocator == nil || s.cancelled || s.adopted || w == nil {
+		return false, ErrGenerationFormat
+	}
+	a := s.allocator
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ok, err := appendReserve(w, 1, 256); !ok || err != nil {
+		return false, err
+	}
+	if !s.sourceLocked(a) {
+		return false, ErrCOWPreparationStaleV6
+	}
+	return true, nil
+}
+
 // Adopt is the final allocator-cut operation. After true, the caller must
 // activate or abort this SAME prepared candidate in this public call; it may
 // not yield with the prepared slot installed. PrepareCOWActivationWithWorkV1
@@ -289,8 +312,10 @@ func (s *COWPreparationWorkV6) Adopt(w *iterator.OrdinalScanWork) (*PreparedCOWC
 	if !s.sourceLocked(a) {
 		return nil, false, ErrCOWPreparationStaleV6
 	}
-	if ok, e := appendReserve(w, 1, 6*8); !ok || e != nil {
-		return nil, false, e
+	s.ledger.mu.Lock()
+	defer s.ledger.mu.Unlock()
+	if ready, err := s.claimDataLockedV6(1, 6*8, w); !ready || err != nil {
+		return nil, false, err
 	}
 	return s.adoptLockedV6(a), true, nil
 }
@@ -342,7 +367,7 @@ func (s *COWPreparationWorkV6) AdoptAndActivateV6(activation *COWActivationWorkV
 		return nil, false, ErrCandidateConsumed
 	}
 	records, bytes := a.activationAdmissionV6()
-	if ok, err := appendReserve(w, records+1, bytes+6*8); !ok || err != nil {
+	if ready, err := s.claimDataLockedV6(records+1, bytes+6*8, w); !ready || err != nil {
 		return nil, false, err
 	}
 	if err := ledger.transitionLockedV6(s.candidateID, CandidateVisible); err != nil {
@@ -351,6 +376,40 @@ func (s *COWPreparationWorkV6) AdoptAndActivateV6(activation *COWActivationWorkV
 	prepared := s.adoptLockedV6(a)
 	a.installActivatedCandidateV6(prepared, activation)
 	return prepared, true, nil
+}
+
+// claimDataLockedV6 finishes the SAME metadata reservation at the original
+// adoption cut. Caller holds allocator then ledger locks and has already
+// validated the exact live transaction. All DATA checks/storage are admitted
+// before any claim effect, alongside the caller's entire remaining activation.
+// Previsible preparation never monopolizes DATA allocated on the shared live
+// transaction, so ordinary writers can supersede it without assisting its work.
+func (s *COWPreparationWorkV6) claimDataLockedV6(extraRecords, extraBytes uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	l := s.ledger
+	r := l.candidates[s.candidateID]
+	if r == nil || r.state != CandidatePreVisible {
+		return false, ErrCandidateConsumed
+	}
+	n := uint64(len(s.private.allocated))
+	records, bytes := l.claimStorageBoundLockedV1(s.candidateID, n, 0)
+	records = reservationBoundAddV1(records, reservationBoundMulV1(n, 1+uint64(len(l.burnedTails))+uint64(len(l.candidates))))
+	records = reservationBoundAddV1(records, extraRecords)
+	bytes = reservationBoundAddV1(bytes, extraBytes)
+	if ok, err := appendReserve(w, records, bytes); !ok || err != nil {
+		return false, err
+	}
+	for _, allocation := range s.private.allocated {
+		if l.reservedByOtherLocked(s.candidateID, allocation.id) {
+			return false, ErrPageReserved
+		}
+	}
+	for _, allocation := range s.private.allocated {
+		if _, exists := l.owners[allocation.id]; !exists {
+			l.owners[allocation.id] = s.candidateID
+			r.ids = append(r.ids, allocation.id)
+		}
+	}
+	return true, nil
 }
 
 // Cancel consumes only this constructor's original previsible ledger claim.

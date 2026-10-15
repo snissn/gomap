@@ -180,26 +180,30 @@ type NativeMVCCSelectionSourceV6 interface {
 // its unsealed constructor does not select a current root, mutate the floor,
 // install output, or report a delete ACK.
 type NativeMVCCCurrentDeleteV6 struct {
-	db                  *DB
-	snapshot            *Snapshot
-	selection           tree.NativeMVCCSelectionV6
-	source              NativeMVCCSelectionSourceV6
-	record              node.LeafEntry
-	records             []node.LeafEntry
-	request             mvccadmission.Request
-	authorityScope      nativeAuthorityScopeV6
-	transaction         *rootpublication.DurableRootTransaction
-	output              *zipper.MaterializedWriteWork
-	outputSequence      uint64
-	outputInput         zipper.MaterializedInputV6
-	inputWork           *zipper.MaterializedInputWorkV6
-	outputInputReady    bool
-	outputAdoptionReady bool
-	outputDiagnostic    bool
-	outputScope         NativeMVCCPrivateOutputScopeV6
-	outputReader        *NativeMVCCFrameReaderV6
-	release             rootpublication.PrimaryConstructionReleaseWork
-	phase               uint8
+	db                   *DB
+	snapshot             *Snapshot
+	selection            tree.NativeMVCCSelectionV6
+	source               NativeMVCCSelectionSourceV6
+	record               node.LeafEntry
+	records              []node.LeafEntry
+	request              mvccadmission.Request
+	authorityScope       nativeAuthorityScopeV6
+	rootPreparation      nativeMVCCRootPreparationV6
+	allocatorPreparation nativeMVCCAllocatorPreparationV6
+	candidatePreparation nativeMVCCCandidatePreparationV6
+	sealPreparation      nativeMVCCSealPreparationV6
+	transaction          *rootpublication.DurableRootTransaction
+	output               *zipper.MaterializedWriteWork
+	outputSequence       uint64
+	outputInput          zipper.MaterializedInputV6
+	inputWork            *zipper.MaterializedInputWorkV6
+	outputInputReady     bool
+	outputAdoptionReady  bool
+	outputDiagnostic     bool
+	outputScope          NativeMVCCPrivateOutputScopeV6
+	outputReader         *NativeMVCCFrameReaderV6
+	release              rootpublication.PrimaryConstructionReleaseWork
+	phase                uint8
 }
 
 func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error) {
@@ -387,6 +391,18 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	if c.phase == 6 {
 		c.outputReader = nil
 		return true, nil
+	}
+	if ready, err := c.sealPreparation.closeStep(w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := c.candidatePreparation.closeStep(w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := c.allocatorPreparation.closeStep(w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := c.rootPreparation.closeStep(w); !ready || err != nil {
+		return false, err
 	}
 	if c.outputReader != nil {
 		ready, err := c.outputReader.CancelProjectionFrame(w)

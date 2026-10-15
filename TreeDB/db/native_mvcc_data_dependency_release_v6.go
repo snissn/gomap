@@ -24,7 +24,11 @@ type dataDependencyLeaseV6 struct {
 	failure    originalDBCleanupFailure
 }
 
-func (lease *dataDependencyLeaseV6) SupportsBoundedDependencyDirectoryReleaseV6() bool { return false }
+func (lease *dataDependencyLeaseV6) SupportsBoundedDependencyDirectoryReleaseV6() bool {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.closed || lease.db != nil && lease.generation != nil && lease.db.idx.Load() == lease.generation && lease.generation.pager.SupportsBoundedPhysicalClose()
+}
 
 func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref rootpublication.DependencyDirectoryRefV2, totalPages uint64) (*rootpublication.DependencyDirectoryV2, error) {
 	metadata := idx.metadata
@@ -61,10 +65,8 @@ func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref r
 }
 
 func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
-	// No native caller may transfer this legacy DATA route before its registry
-	// and last physical generation release are work-bearing.
 	if work != nil {
-		return false, true, completion, retainedalloc.ErrWorkRequired
+		return lease.releaseCurrentWithWorkV6(work)
 	}
 	lease.mu.Lock()
 	if lease.closed {
@@ -100,5 +102,42 @@ func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryWorkV6(work *itera
 	lease.failure.payload = nil
 	lease.closed = true
 	lease.mu.Unlock()
+	return true, true, completion, nil
+}
+
+// The live DB generation owns its own physical reference. Under the SAME
+// discovery exclusion this path can consume only the original directory's
+// registry and containing borrow; no last physical Close is reachable. Retired
+// generations explicitly require their original retirement continuation.
+func (lease *dataDependencyLeaseV6) releaseCurrentWithWorkV6(w *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		return lease.err == nil, true, completion, lease.err
+	}
+	db, idx := lease.db, lease.generation
+	if db == nil || idx == nil {
+		return false, false, completion, retainedalloc.ErrWorkRequired
+	}
+	db.idxMu.Lock()
+	defer db.idxMu.Unlock()
+	idx.wrapperMu.Lock()
+	defer idx.wrapperMu.Unlock()
+	if db.idx.Load() != idx || idx.refs.Load() <= 0 || idx.physicalCompleted || idx.closeCompleted || idx.wrapperBorrowCountV6() == 0 || !idx.pager.SupportsBoundedPhysicalClose() {
+		return false, false, completion, retainedalloc.ErrWorkRequired
+	}
+	if !w.Reserve(3, 2*uint64(unsafe.Sizeof(*lease))+2*uint64(unsafe.Sizeof(*idx))+64) {
+		return false, false, completion, nil
+	}
+	if ready, err := idx.registry.UnregisterExistingStorageWithWorkV6(lease.registryID, w); !ready || err != nil {
+		return false, false, completion, err
+	}
+	lease.registryID = 0
+	idx.dropWrapperBorrowV6()
+	completion = rootpublication.DependencyDirectoryReleaseCompletionV6{Metadata: lease.metadata, Charge: lease.charge}
+	lease.generation, lease.db, lease.metadata = nil, nil, nil
+	lease.charge = 0
+	lease.failure.payload = nil
+	lease.closed = true
 	return true, true, completion, nil
 }

@@ -86,8 +86,10 @@ type DurableRootTransactionSpec struct {
 	// RetireWithWork owns superseded producer operands transferred at the
 	// original fence. It runs after turn release on the SAME Finish receipt,
 	// outside transaction/publication locks, and retains custody on refusal.
-	RetireWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
-	Abort          func(DurableRootCallbackInput) error
+	RetireWithWork        func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	AbortWithWork         func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	AbortCompleteWithWork func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	Abort                 func(DurableRootCallbackInput) error
 	// AbortComplete consumes callback payload only after BOTH original physical
 	// callback cleanup and constructor root cleanup have actually succeeded.
 	AbortComplete         func(DurableRootCallbackInput) error
@@ -119,6 +121,8 @@ type DurableRootTransaction struct {
 	activateWithWork       func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	consumeWithWork        func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	retireWithWork         func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	abortWithWork          func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
+	abortCompleteWithWork  func(DurableRootCallbackInput, *iterator.OrdinalScanWork) (bool, error)
 	abort                  func(DurableRootCallbackInput) error
 	abortComplete          func(DurableRootCallbackInput) error
 	physicalCleanupError   error
@@ -237,6 +241,7 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 		activate: spec.Activate, consume: spec.Consume,
 		activateWithWork: spec.ActivateWithWork, consumeWithWork: spec.ConsumeWithWork, retireWithWork: spec.RetireWithWork,
 		abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
+		abortWithWork: spec.AbortWithWork, abortCompleteWithWork: spec.AbortCompleteWithWork,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
 	}, nil
 }
@@ -406,6 +411,9 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		}
 		if transaction.ownerLockedV6() != owner || (transaction.phase != durableRootPrepared && transaction.phase != durableRootConstructingV6) {
 			return ErrDurableRootOwnership
+		}
+		if transaction.requiresNativeCallbackWorkV6() {
+			return ErrNativeMVCCRootWorkRequiredV6
 		}
 		if transaction.phase == durableRootConstructingV6 {
 			return transaction.abortConstructionLockedV6(&terminal)

@@ -50,6 +50,29 @@ func (t *DurableRootTransaction) SealPrimaryCurrentAbsenceV6(current primaryaren
 	return ready, err
 }
 
+// SealPrimaryConstructionWithWorkV6 advances canonical directory validation
+// in the SAME native constructor. The original producer admits/retains work;
+// no root or prepared allocator slot is installed across a yielded return.
+func (t *DurableRootTransaction) SealPrimaryConstructionWithWorkV6(image []byte, groups [1]*primaryarena.Group, work *primaryarena.DirectorySealWorkV6, w *iterator.OrdinalScanWork) (bool, error) {
+	if t == nil || work == nil || w == nil {
+		return false, ErrDurableRootOwnership
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.constructionV6
+	if c == nil || !c.nativeWorkOwned || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.componentCount != 0 {
+		return false, ErrDurableRootOwnership
+	}
+	cert, ready, err := work.Step(c.arena, c.root, image, groups, t, w)
+	if ready && err == nil {
+		if c.certificate != nil && c.certificate != cert {
+			return false, ErrDurableRootOwnership
+		}
+		c.certificate = cert
+	}
+	return ready, err
+}
+
 var ErrNativeMVCCRootWorkRequiredV6 = errors.New("native MVCC transaction requires its original work-bearing caller")
 
 // PrimaryConstructionReleaseWork belongs to the disposing original parent.
@@ -62,6 +85,7 @@ type PrimaryConstructionReleaseWork struct {
 	finishing   bool
 	removal     retainedalloc.RemovalWork
 	phase       uint8
+	owner       ResourceOwnerState
 }
 type primaryConstructionReleaseState struct {
 	owner  *retainedalloc.Owner
@@ -82,11 +106,11 @@ func (s *PrimaryConstructionReleaseWork) Bind(t *DurableRootTransaction, w *iter
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase != durableRootConstructingV6 || t.constructionV6 == nil || !t.constructionV6.nativeWorkOwned || t.constructionV6.cleanupReceipt != nil {
+	if (t.phase != durableRootConstructingV6 && t.phase != durableRootPrepared) || t.constructionV6 == nil || !t.constructionV6.nativeWorkOwned || t.constructionV6.cleanupReceipt != nil || (t.ownerLockedV6() != ResourceOwnerBuilder && t.ownerLockedV6() != ResourceOwnerCandidate) {
 		return false, ErrDurableRootOwnership
 	}
 	t.constructionV6.cleanupReceipt = s
-	s.transaction = t
+	s.transaction, s.owner = t, t.ownerLockedV6()
 	return true, nil
 }
 func (s *PrimaryConstructionReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
@@ -113,6 +137,10 @@ func (s *PrimaryConstructionReleaseWork) ContinueWork(w *iterator.OrdinalScanWor
 		return false, ErrDurableRootOwnership
 	}
 	t.mu.Lock()
+	if t.ownerLockedV6() != s.owner {
+		t.mu.Unlock()
+		return false, ErrDurableRootOwnership
+	}
 	var terminal primaryConstructionReleaseState
 	ready, err := t.abortNativeMVCCConstructionStepLockedV6(w, &terminal, &s.removal)
 	if ready && err == nil {
@@ -145,6 +173,18 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 		return false, nil
 	}
 	if c.cleanupPhase == 0 {
+		if c.nativeWorkOwned && t.phase == durableRootPrepared {
+			if t.abortWithWork == nil || t.abortCompleteWithWork == nil {
+				return false, ErrNativeMVCCRootWorkRequiredV6
+			}
+			ready, err := t.abortWithWork(t.input, w)
+			if err != nil {
+				return false, t.recordPhysicalCleanupFailureLocked(err)
+			}
+			if !ready {
+				return false, nil
+			}
+		}
 		c.cleanupPhase = 1
 	}
 	for c.cleanupPhase == 1 && c.componentCount > 0 {
@@ -173,16 +213,42 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 			}
 			c.root = primaryarena.Ref{}
 		}
+		c.cleanupPhase = 7
+	}
+	// A native prepared transaction may retain a private promotion. Its SAME
+	// four independent edges must join the original queue before aliases or
+	// image/storage admission are withdrawn. No newer publication is consumed.
+	for c.cleanupPhase == 7 && c.promotion != nil && c.cleanupPromotionIndex < 4 {
+		refs := [4]*primaryarena.Ref{&c.promotion.Root, &c.promotion.Parent, &c.promotion.Closure, &c.promotion.ParentClosure}
+		ref := refs[c.cleanupPromotionIndex]
+		if *ref != (primaryarena.Ref{}) {
+			ready, err := c.arena.DropToReleaseQueue(*ref, &c.cleanupQueue, w)
+			if err != nil {
+				return false, t.recordPhysicalCleanupFailureLocked(err)
+			}
+			if !ready {
+				return false, nil
+			}
+			*ref = primaryarena.Ref{}
+		}
+		c.cleanupPromotionIndex++
+	}
+	if c.cleanupPhase == 7 {
 		c.cleanupPhase = 3
 	}
 	if c.cleanupPhase == 3 {
 		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*t))+2*uint64(unsafe.Sizeof(*c))) {
 			return false, nil
 		}
-		if t.abortComplete != nil {
-			if c.nativeWorkOwned {
-				return false, t.recordPhysicalCleanupFailureLocked(ErrNativeMVCCRootWorkRequiredV6)
+		if c.nativeWorkOwned && t.phase == durableRootPrepared {
+			ready, err := t.abortCompleteWithWork(t.input, w)
+			if err != nil {
+				return false, t.recordPhysicalCleanupFailureLocked(err)
 			}
+			if !ready {
+				return false, nil
+			}
+		} else if t.abortComplete != nil {
 			if err := t.abortComplete(t.input); err != nil {
 				return false, t.recordPhysicalCleanupFailureLocked(err)
 			}
@@ -194,6 +260,22 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 		c.candidate, c.members = PreparedRootCandidate{}, [1]*DurableRootTransaction{}
 		t.input = DurableRootCallbackInput{}
 		t.clearDurableRootCallbacksV6()
+		c.cleanupPhase = 6
+	}
+	if c.cleanupPhase == 6 {
+		if c.nativeWorkOwned && c.resources != nil {
+			completion, ready, err := c.resources.ReleaseFromWithWorkV6(t.owner, w)
+			if err != nil {
+				return false, t.recordPhysicalCleanupFailureLocked(err)
+			}
+			if !ready {
+				return false, nil
+			}
+			c.resources = nil
+			// Candidate and callback aliases were detached in phase3. Only
+			// this by-value accounting receipt survives the Set release call.
+			completion.Complete()
+		}
 		c.cleanupPhase = 4
 	}
 	for c.cleanupPhase == 4 {

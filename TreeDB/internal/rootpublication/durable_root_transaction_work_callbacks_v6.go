@@ -30,6 +30,7 @@ func (transaction *DurableRootTransaction) clearDurableRootCallbacksV6() {
 	transaction.activate, transaction.consume = nil, nil
 	transaction.activateWithWork, transaction.consumeWithWork, transaction.retireWithWork = nil, nil, nil
 	transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil
+	transaction.abortWithWork, transaction.abortCompleteWithWork = nil, nil
 }
 
 // RequiresNativeCallbackWorkV6 reports the SAME constructor's callback policy.

@@ -212,9 +212,13 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
 	if state.retired {
 		return nil, ErrResourceConflict
 	}
+	return registry.pinStateLockedV6(identity, state), nil
+}
+
+func (registry *IdentityPinRegistry) pinStateLockedV6(identity StableIdentity, state *identityPinState) *IdentityPin {
 	state.pins++
 	registry.activePins++
-	return &IdentityPin{registry: registry, identity: identity, state: state}, nil
+	return &IdentityPin{registry: registry, identity: identity, state: state}
 }
 
 func (registry *IdentityPinRegistry) release(identity StableIdentity) error {

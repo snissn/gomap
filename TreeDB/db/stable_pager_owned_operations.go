@@ -33,6 +33,9 @@ type stablePagerOwnedOperations struct {
 	charge            uint64
 	failure           primaryCleanupFailureV5
 	failedNext        *stablePagerOwnedOperations
+	// Nil on the ordinary producer. Native controls live in the actual
+	// admitted publication frame through this SAME callback's physical Finish.
+	native *nativeStablePagerCaptureV6
 }
 
 func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {
@@ -81,6 +84,18 @@ func (operations *stablePagerOwnedOperations) SyncThrough(file *os.File, _ rootp
 	return operations.pager.SyncIndexDataWithStableFileAtPath(file, operations.syncPath)
 }
 func (operations *stablePagerOwnedOperations) Release() (consumed bool, err error) {
+	// The retained producer owns the last action. Ordinary constructor unwind
+	// may drop an independent nonlast edge, but cannot drain native custody.
+	if operations.native != nil {
+		for n := operations.refs.Load(); ; n = operations.refs.Load() {
+			if n <= 1 {
+				return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+			}
+			if operations.refs.CompareAndSwap(n, n-1) {
+				return true, nil
+			}
+		}
+	}
 	n := operations.refs.Add(-1)
 	if n < 0 {
 		panic("unbalanced pager callback backing")

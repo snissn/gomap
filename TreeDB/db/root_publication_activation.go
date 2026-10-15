@@ -67,6 +67,8 @@ type rootPublicationVisibleMemberV1 struct {
 	next                     page.MetaPageBody
 	prepared                 *freelist.PreparedCOWCandidateV1
 	allocatorActivation      *freelist.COWActivationWorkV1
+	allocatorPreparation     *freelist.COWPreparationWorkV6
+	abortPhase               uint8
 	resources                *rootpublication.StableResourceSet
 	install                  *rootPublicationVisibleInstallV1
 	preparedLimits           *PreparedRootPublicationLimits
@@ -898,9 +900,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if transaction != nil {
 		memberMetadata = primaryVisibleMetadataV6()
 		if transaction.RequiresNativeCallbackWorkV6() {
-			// These three real work-bearing callback environments coexist with
+			// These five real work-bearing callback environments coexist with
 			// the ordinary error/abort callbacks on the SAME transaction spec.
-			memberMetadata += 3 * retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{})))
+			memberMetadata += 5 * retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{})))
 		}
 		if e := runtime.idx.primary.MetadataOwner().AddPending(memberMetadata); e != nil {
 			return nil, false, e

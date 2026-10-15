@@ -34,7 +34,10 @@ func (registry *IdentityPinRegistry) ObserveWithWorkV6(identity StableIdentity, 
 	if registry.closing {
 		return false, retainedalloc.ErrClosed
 	}
-	state := registry.states.get(identity)
+	state, _, ready := registry.captureStateLockedV6(identity, w)
+	if !ready {
+		return false, nil
+	}
 	if state == nil {
 		t := &registry.states
 		capacity := len(t.cells)

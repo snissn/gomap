@@ -121,6 +121,12 @@ func (runtime *rootPublicationRuntimeV1) visibleTransactionSpecV6(member *rootPu
 	}
 	if native {
 		member.retirementReleaseSet = releasePrimaryResourceSetWithWorkV6
+		spec.AbortWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			return runtime.abortNativeVisibleMemberV6(member, transactionCOW, input, work)
+		}
+		spec.AbortCompleteWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
+			return runtime.completeNativeVisibleMemberAbortV6(member, transactionCOW, input, work)
+		}
 		spec.ActivateWithWork = func(input rootpublication.DurableRootCallbackInput, work *iterator.OrdinalScanWork) (bool, error) {
 			return runtime.activateNativeVisibleMemberV6(member, transactionCOW, input, work)
 		}

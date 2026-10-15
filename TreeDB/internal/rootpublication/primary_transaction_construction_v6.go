@@ -25,13 +25,14 @@ type primaryTransactionConstructionV6 struct {
 	metadataCharge     uint64
 	terminalCompletion *primaryTerminalCompletionV6
 	// This is custody on the SAME transaction, admitted in its containing allocation.
-	nativeWorkOwned      bool
-	cleanupPhase         uint8
-	cleanupQueue         primaryarena.ReleaseQueue
-	cleanupReceipt       *PrimaryConstructionReleaseWork
-	finishReleaseStarted bool
-	finishReleaseDone    bool
-	finishRetirementDone bool
+	nativeWorkOwned       bool
+	cleanupPhase          uint8
+	cleanupPromotionIndex uint8
+	cleanupQueue          primaryarena.ReleaseQueue
+	cleanupReceipt        *PrimaryConstructionReleaseWork
+	finishReleaseStarted  bool
+	finishReleaseDone     bool
+	finishRetirementDone  bool
 	// SAME constructor owns the original Set wrapper accounting after its
 	// protected shared edges are consumed in the publication turn.
 	setRelease         StableResourceSetReleaseWorkV6
@@ -171,6 +172,7 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
 	t.input = DurableRootCallbackInput{Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload, PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection}
 	t.activate, t.consume, t.abort, t.abortComplete, t.fail = spec.Activate, spec.Consume, spec.Abort, spec.AbortComplete, spec.Fail
 	t.activateWithWork, t.consumeWithWork, t.retireWithWork = spec.ActivateWithWork, spec.ConsumeWithWork, spec.RetireWithWork
+	t.abortWithWork, t.abortCompleteWithWork = spec.AbortWithWork, spec.AbortCompleteWithWork
 	c.resources = resources
 	c.metadataCharge += spec.PrimaryMetadataBytesV6
 	t.phase = durableRootPrepared
@@ -266,6 +268,19 @@ func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.O
 // Fresh promotion selects actual parent/target and acquires independent physical
 // closure edges. These head-bound operands never survive as private preparation.
 func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (result *PrimaryPromotionV6, completed bool, returnErr error) {
+	return t.preparePrimaryPromotionV6(record, projection, parent, parentRoot, w, false)
+}
+
+// PreparePrivatePrimaryPromotionV6 retains the SAME constructor's immutable
+// capsule/closure operands before the native final turn. It grants no slot or
+// visibility authority. Its caller must revalidate the exact captured parent,
+// target, allocator prefix and expected base sequence before enqueue. Stale
+// preparation is disposed by this transaction's original finite abort.
+func (t *DurableRootTransaction) PreparePrivatePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, bool, error) {
+	return t.preparePrimaryPromotionV6(record, projection, parent, parentRoot, w, true)
+}
+
+func (t *DurableRootTransaction) preparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork, private bool) (result *PrimaryPromotionV6, completed bool, returnErr error) {
 	if t == nil || w == nil {
 		return nil, false, ErrDurableRootOwnership
 	}
@@ -275,7 +290,11 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
-	if c == nil || t.phase != durableRootActivated || t.ownerLockedV6() != ResourceOwnerCoordinator || (c.promotion != nil && c.promotion.Root != (primaryarena.Ref{})) || parent == nil || parentRoot == (primaryarena.Ref{}) {
+	eligible := t.phase == durableRootActivated && t.ownerLockedV6() == ResourceOwnerCoordinator
+	if private {
+		eligible = c != nil && c.nativeWorkOwned && c.cleanupPhase == 0 && c.cleanupReceipt == nil && t.phase == durableRootPrepared && t.ownerLockedV6() == ResourceOwnerCandidate
+	}
+	if c == nil || !eligible || (c.promotion != nil && c.promotion.Root != (primaryarena.Ref{})) || parent == nil || parentRoot == (primaryarena.Ref{}) {
 		return nil, false, ErrDurableRootOwnership
 	}
 	target := uint64(1) - parent.Slot()

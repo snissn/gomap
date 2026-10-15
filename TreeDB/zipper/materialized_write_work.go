@@ -605,6 +605,41 @@ func (s *MaterializedWriteWork) VisitPages(visit func(allocated, retired uint64)
 	}
 }
 
+// MaterializedPageVisitWorkV6 observes the original completed output without
+// transferring any installed-page rollback edge. Its original producer embeds
+// this control and retains the output until observation and adoption complete.
+type MaterializedPageVisitWorkV6 struct {
+	self   *MaterializedPageVisitWorkV6
+	output *MaterializedWriteWork
+	next   *materializedWriteFrame
+}
+
+func (s *MaterializedWriteWork) VisitPagesWithWorkV6(cursor *MaterializedPageVisitWorkV6, visit func(uint64, uint64, *iterator.OrdinalScanWork) (bool, error), w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || s.phase != 1 || cursor == nil || visit == nil || w == nil {
+		return false, ErrMaterializedWriteContinuation
+	}
+	if cursor.self == nil {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*cursor))) {
+			return false, nil
+		}
+		cursor.self, cursor.output, cursor.next = cursor, s, s.head
+	} else if cursor.self != cursor || cursor.output != s {
+		return false, ErrMaterializedWriteContinuation
+	}
+	for cursor.next != nil {
+		f := cursor.next
+		if !w.Reserve(1, 3*8) {
+			return false, nil
+		}
+		ready, err := visit(f.result.Page, f.oldID, w)
+		if !ready || err != nil {
+			return false, err
+		}
+		cursor.next = f.next
+	}
+	return true, nil
+}
+
 // AdoptPagesWithWorkV6 moves one original page pair at a time into the
 // accepting BuildGroup. A callback returning ready has taken custody; it must
 // retain that custody on every later refusal/error. No page pair is replayed.

@@ -25,6 +25,7 @@ type metadataReuseWorkV1 struct {
 	extents                                         []ReservationExtentV1
 	phase                                           uint8
 	begun, reused                                   bool
+	deferDataClaimV6                                bool
 }
 
 type metadataFreeSearchFrameV1 struct {
@@ -254,7 +255,11 @@ func (s *metadataReuseWorkV1) step(t *FreelistTxn, candidate CandidateIDV1, w *i
 			s.count = need
 			s.phase = 8
 		case 8:
-			claimed, ready, e := t.ledger.claimReusedMetadataWithWorkV1(candidate, s.start, s.count, t.highWater, t.allocated, t.abandonedAppends, w)
+			data := t.allocated
+			if s.deferDataClaimV6 {
+				data = nil
+			}
+			claimed, ready, e := t.ledger.claimReusedMetadataWithWorkV1(candidate, s.start, s.count, t.highWater, data, t.abandonedAppends, w)
 			if !ready || e != nil {
 				return false, e
 			}

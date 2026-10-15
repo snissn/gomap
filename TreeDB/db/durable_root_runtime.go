@@ -1925,22 +1925,28 @@ func (db *DB) acquireDurableCandidateStableIndexSnapshotV1(idx *indexGen, closeT
 	if db.idx.Load() != idx {
 		return nil
 	}
-	snapshot := db.snapPool.Get()
-	idx.retainWrapperBorrow()
-	snapshot.indexWrapperBorrowed = true
-	snapshot.db = db
-	snapshot.idx = idx
-	snapshot.closed.Store(false)
-	snapshot.readState.Store(0)
-	db.durableCandidateIndexCaptures.Add(1)
-	snapshot.stableIndexCapture = true
-	snapshot.stableIndexCaptureCounter = &db.durableCandidateIndexCaptures
+	snapshot := db.newDurableCandidateStableIndexSnapshotV1(idx)
 	if db.vacuumCutoverInProgress.Load() || db.idx.Load() != idx || (db.closing.Load() && !closeTeardownPinned) {
 		if closeErr := snapshot.Close(); closeErr != nil {
 			db.retainOriginalCleanupError(closeErr)
 		}
 		return nil
 	}
+	return snapshot
+}
+
+// The original fixed maintenance wrapper constructor is shared by ordinary and
+// retained native capture. Its caller owns the current-generation exclusion.
+func (db *DB) newDurableCandidateStableIndexSnapshotV1(idx *indexGen) *Snapshot {
+	snapshot := db.snapPool.Get()
+	idx.retainWrapperBorrow()
+	snapshot.indexWrapperBorrowed = true
+	snapshot.db, snapshot.idx = db, idx
+	snapshot.closed.Store(false)
+	snapshot.readState.Store(0)
+	db.durableCandidateIndexCaptures.Add(1)
+	snapshot.stableIndexCapture = true
+	snapshot.stableIndexCaptureCounter = &db.durableCandidateIndexCaptures
 	return snapshot
 }
 

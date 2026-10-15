@@ -27,6 +27,7 @@ type CandidateMaterializationWorkV1 struct {
 	start, reserved, statePages uint64
 	phase                       uint8
 	private, detachBegun        bool
+	deferDataClaimV6            bool
 	firstErr                    error
 	result                      *FreelistCandidateV1
 }
@@ -80,6 +81,7 @@ func (s *CandidateMaterializationWorkV1) advance(w *iterator.OrdinalScanWork) (b
 	for {
 		switch s.phase {
 		case 0:
+			s.reuse.deferDataClaimV6 = s.deferDataClaimV6
 			ready, e := s.reuse.step(t, s.candidateID, w)
 			if !ready || e != nil {
 				return false, e
@@ -171,7 +173,11 @@ func (s *CandidateMaterializationWorkV1) advance(w *iterator.OrdinalScanWork) (b
 			}
 			s.phase = 9
 		case 9:
-			start, count, ready, e := t.ledger.reserveTailWithWorkV1(s.candidateID, t.highWater, s.statePages, s.dataIDs, s.extents, w)
+			dataIDs := s.dataIDs
+			if s.deferDataClaimV6 {
+				dataIDs = nil
+			}
+			start, count, ready, e := t.ledger.reserveTailWithWorkV1(s.candidateID, t.highWater, s.statePages, dataIDs, s.extents, w)
 			if !ready || e != nil {
 				return false, e
 			}

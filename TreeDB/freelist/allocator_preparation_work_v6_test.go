@@ -242,3 +242,121 @@ func TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6(t *testing.T) {
 		t.Fatal("original private cancellation lost foreground custody")
 	}
 }
+
+func newPrivateMetadataPlacementAllocatorV6(t *testing.T, reuse bool) *Allocator {
+	if !reuse {
+		return newPrivatePrepareAllocatorV6(t)
+	}
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := p.Alloc(128); err != nil {
+		t.Fatal(err)
+	}
+	free := []uint64{2}
+	for id := uint64(16); id < 64; id++ {
+		free = append(free, id)
+	}
+	a := New(p, 0)
+	if err := a.EnableCOWV1(MustNewFreelistGenerationV1(1, 128, free, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := a.Alloc(0); id == 0 || err != nil {
+		t.Fatal(id, err)
+	}
+	return a
+}
+
+func TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "append", true: "reuse"}[reuse], func(t *testing.T) {
+			a := newPrivateMetadataPlacementAllocatorV6(t, reuse)
+			s, activation := prepareAtomicPrivateCandidateV6(t, a, "metadata-only-native")
+			ledger := a.cow.ledger
+			claim := ledger.candidates[s.candidateID]
+			dataID := s.private.allocated[0].id
+			if claim == nil || claim.reusedMetadata != reuse || len(claim.ids) != 0 || ledger.Reserved(dataID) {
+				t.Fatal("private metadata captured shared DATA", claim)
+			}
+			foreground, err := a.Alloc(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := candidateIDFromString("ordinary-while-private")
+			ordinary, err := a.PrepareCOWCandidateV1(2, 2, id, ReuseCapability{}, 0, NewCandidatePageSinkV1())
+			if err != nil {
+				t.Fatal("ordinary prepare blocked by private candidate", err)
+			}
+			materializeAllocatorCOWCandidateForTest(t, a.pager, ordinary)
+			if err := a.ActivateCOWCandidateV1(ordinary); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.PublishActivatedCOWPrefixV1([]*PreparedCOWCandidateV1{ordinary}, ReuseCapability{}); err != nil {
+				t.Fatal(err)
+			}
+			current := a.cow.generation
+			if _, ready, err := s.AdoptAndActivateV6(activation, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); ready || !errors.Is(err, ErrCOWPreparationStaleV6) {
+				t.Fatal("stale private claim accepted", ready, err)
+			}
+			done := false
+			for calls := 0; calls < 512; calls++ {
+				var err error
+				done, err = s.Cancel(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if done {
+					break
+				}
+			}
+			if !done || a.cow.generation != current || a.cow.prepared != nil || current.Allocatable(dataID) || current.Allocatable(foreground) || ledger.candidates[candidateIDFromString("metadata-only-native")] != nil {
+				t.Fatal("private cancel damaged newer ordinary allocation")
+			}
+		})
+	}
+}
+
+func TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "append", true: "reuse"}[reuse], func(t *testing.T) {
+			a := newPrivateMetadataPlacementAllocatorV6(t, reuse)
+			s, activation := prepareAtomicPrivateCandidateV6(t, a, "late-data-conflict")
+			ledger := a.cow.ledger
+			dataID := s.private.allocated[0].id
+			foreign := candidateIDFromString("foreign-original-reservation")
+			if err := ledger.reserve(foreign, []uint64{dataID}); err != nil {
+				t.Fatal(err)
+			}
+			original, stats := a.cow.txn, a.stats
+			claim := ledger.candidates[s.candidateID]
+			work := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+			_, ready, err := s.AdoptAndActivateV6(activation, &work)
+			t.Logf("late DATA claim refusal work=%d/%d", work.Records, work.Bytes)
+			if ready || !errors.Is(err, ErrPageReserved) || a.cow.prepared != nil || a.cow.txn != original || a.stats != stats || s.adopted || claim.state != CandidatePreVisible || len(claim.ids) != 0 || len(ledger.owners) != 1 || ledger.owners[dataID] != foreign {
+				t.Fatal("late conflict partially claimed or adopted", ready, err)
+			}
+			done := false
+			for calls := 0; calls < 512; calls++ {
+				done, err = s.Cancel(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if done {
+					break
+				}
+			}
+			if !done || ledger.candidates[foreign] == nil || ledger.owners[dataID] != foreign || ledger.candidates[candidateIDFromString("late-data-conflict")] != nil {
+				t.Fatal("native cancellation consumed foreign claim")
+			}
+			if err := ledger.RollbackPreVisible(foreign); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

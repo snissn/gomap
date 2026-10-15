@@ -79,6 +79,13 @@ func (runtime *rootPublicationRuntimeV1) activateNativeVisibleMemberV6(
 		if member.allocatorActivation == nil {
 			return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
 		}
+		if member.allocatorPreparation != nil {
+			prepared, ready, err := member.allocatorPreparation.AdoptAndActivateV6(member.allocatorActivation, work)
+			if ready && err == nil && prepared != member.prepared {
+				return false, rootpublication.ErrDurableRootOwnership
+			}
+			return ready, err
+		}
 		return runtime.idx.allocator.ActivateCOWCandidateWithWorkV1(member.prepared, member.allocatorActivation, work)
 	})
 	if !ready || err != nil {

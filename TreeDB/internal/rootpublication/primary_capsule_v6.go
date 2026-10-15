@@ -51,6 +51,20 @@ func (v PrimaryCapsuleViewV6) CopyOwned() PrimaryCapsuleViewV6 {
 	return v
 }
 
+// CopyIntoWithWorkV6 uses the original producer's admitted backing. The view
+// remains the same validated immutable capsule; no file or authority is opened.
+func (v PrimaryCapsuleViewV6) CopyIntoWithWorkV6(dst []byte, w *iterator.OrdinalScanWork) (PrimaryCapsuleViewV6, bool, error) {
+	if w == nil || len(dst) != PrimaryCapsuleSizeV6 || len(v.image) != PrimaryCapsuleSizeV6 {
+		return PrimaryCapsuleViewV6{}, false, ErrPrimaryCapsuleV6
+	}
+	if !w.Reserve(1, 2*PrimaryCapsuleSizeV6) {
+		return PrimaryCapsuleViewV6{}, false, nil
+	}
+	copy(dst, v.image)
+	v.image = dst
+	return v, true, nil
+}
+
 // capsuleDigestV6 hashes all three pages with only the outer CRC/digest fields
 // normalized. It neither allocates a second complete image nor mutates a view.
 func capsuleDigestV6(image []byte) [32]byte {
