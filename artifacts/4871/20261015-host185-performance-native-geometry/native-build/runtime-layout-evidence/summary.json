@@ -1,0 +1,17 @@
+{
+  "type_sizes": {
+    "runtime.timer": 96,
+    "runtime.hchan": 112,
+    "runtime.timeTimer": 112,
+    "time.Time": 24,
+    "time.Timer": 16
+  },
+  "binary_sha256": "2eb578fb87bd29d1f403bf40291b8cc15ac65895ee0978025dff7424fb6e9ef5",
+  "go_version_m": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-hook-work/get-source-audit/reset-current.test: go1.26.3\n\tpath\tgithub.com/snissn/gomap/TreeDB/db.test\n\tmod\tgithub.com/snissn/gomap\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n",
+  "runtime_sources_sha256": {
+    "runtime/chan.go": "65b95334e2688452efaa5ebf0dde2b94052d383ed0f281658a9a8bc20a948838",
+    "runtime/time.go": "38c7dde4ad56b211cda6216c67e8f4c1b1f3a3ea544ff25b62fc83126e8a5f5c",
+    "time/sleep.go": "9ee80a355252f5b71e9066175eea7a7c67e75724a483ab45258d6e5b5f023507"
+  },
+  "scope": "Linux amd64 Go1.26.3 diagnostic only; object size and backing payload, not allocator sizeclass or scheduler transitive heap"
+}

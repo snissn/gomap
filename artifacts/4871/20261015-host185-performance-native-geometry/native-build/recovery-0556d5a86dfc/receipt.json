@@ -1,0 +1,15 @@
+{
+  "head": "0556d5a86dfc96f7f0eb258a951469e58d0da02a",
+  "tree": "c2b6671b8895f9764116e381abed398bc0b04b13",
+  "parent": "2bb79593fd5b5a6a1dc919bae32cd6158345daac",
+  "branch": "codex/4878-native-185-20261015",
+  "source_files": 10308,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/pre-effect-geometry/root-verified-source.json",
+  "source_manifest_sha256": "81cee3e8625b2e46cf1ed514dd46f32bb43e9413ab3b68ee4fcd66aa5d4b29c9",
+  "source_unchanged": true,
+  "qualified": false,
+  "gate": "Q32 RED, ACK0; actual publication/Consume/Finish and paused-Finish/newer-writer remain outstanding",
+  "remote_verified": true,
+  "at_utc": "2026-10-15T19:33:10.304598+00:00",
+  "remote_ref": "0556d5a86dfc96f7f0eb258a951469e58d0da02a\trefs/heads/codex/4878-native-185-20261015"
+}

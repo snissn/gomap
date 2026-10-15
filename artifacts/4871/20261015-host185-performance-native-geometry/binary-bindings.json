@@ -1,0 +1,50 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/baseline-caching.test",
+    "bytes": 32696518,
+    "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/baseline-db.test",
+    "bytes": 55518772,
+    "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/baseline-treedb.test",
+    "bytes": 52438387,
+    "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/candidate-caching.test",
+    "bytes": 36980931,
+    "sha256": "6fe6f34eb76de25086db0565b304221aef0c2cda717a2f2d9d6eec8f52be32c7",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/candidate-db.test",
+    "bytes": 61387384,
+    "sha256": "22f60c81652b9f4589ca0935b3ec0f77c49392a3699a783b6422e9db6e1380ee",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/measured-binaries/candidate-treedb.test",
+    "bytes": 56883826,
+    "sha256": "2a2cd75bf3a3eb067529db72cf0b77eb6ffa197c6a3c037697c3c7637d9ca071",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/primary/baseline-primary.test",
+    "bytes": 25225278,
+    "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/performance-185/30ee-hosted/raw-primary/primary/candidate-primary.test",
+    "bytes": 29169378,
+    "sha256": "01dfe042a37ad3d866b42dee95021c097a431421e4e28c7dddea5f74e4b55632",
+    "reason": "binary retained locally; hash and provenance published"
+  }
+]

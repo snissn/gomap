@@ -1,0 +1,22 @@
+{
+  "ACK": 0,
+  "Q32": "RED",
+  "allowanceChosen": false,
+  "bound": "incomplete",
+  "changedPaths": [
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "TreeDB/db/primary_authority_scope_v6.go",
+    "TreeDB/freelist/allocator_preparation_work_v6.go",
+    "TreeDB/freelist/allocator_publication_work_v6.go",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/pager/write_work.go"
+  ],
+  "command": "env GOROOT=/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3 GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOMAXPROCS=2 TMPDIR=/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/tmp GOCACHE=/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache /mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go test -p 1 ./TreeDB/db ./TreeDB/mvcc -run 'TestNativeStablePagerPartialTokenCancellationV6|TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6|TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6' -count=1 -v -timeout=3m",
+  "exitCode": 0,
+  "files": 10308,
+  "head": "2bb79593fd5b5a6a1dc919bae32cd6158345daac",
+  "sourceBeforeAfterEqual": true,
+  "sourceManifestSHA256": "16c532a90a41b494fe346b83060d86edec1cb9b936db6923acefd5a467d280c4",
+  "testLogSHA256": "35392bc921d912e05146dc750cb203bff2e293b3a012fa76ce643f56f233247b"
+}

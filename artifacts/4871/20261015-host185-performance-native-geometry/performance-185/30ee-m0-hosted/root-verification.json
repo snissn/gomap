@@ -1,0 +1,56 @@
+{
+  "head": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "artifact": 12000534609,
+  "run": 38793560840,
+  "all_raw_samples_exactly_equal": true,
+  "sample_order": "exact checker lexicographic raw filenames",
+  "aggregate_relative_tolerance": 1e-14,
+  "aggregate_rounding_differences": [
+    {
+      "kind": "legacy",
+      "metric": "max-writer-pause-ns",
+      "statistic": "cv",
+      "recomputed": 0.042174421132096435,
+      "hosted": 0.04217442113209643
+    }
+  ],
+  "python": "3.10.12 (main, Aug 31 2026, 10:18:17) [GCC 11.4.0]",
+  "gates": {
+    "legacy_cv_at_most_10_percent": true,
+    "legacy_completed_without_abort": true,
+    "public_status_explicit": true
+  },
+  "public_status": "production-index-vacuum-available",
+  "checker_sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+  "files": {
+    "artifact-api.json": "cc3a5b023200e17286774ad299ed63b456ef55e4f297ad47c2c095330e231f18",
+    "checker-30ee.py": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+    "commands.txt": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "fixture.json": "9a0f2e014c549bb03514d50333aad367fabd0bd2dc7d603f51240a97f6b27d28",
+    "legacy-benchstat-input.txt": "5d62c1deebf469f4a4c7893173e93c9f8427f85c39d550708f32add2acc2dbe8",
+    "raw/legacy-1.txt": "522f8903bac1719d42e8edde3f197b3afde9af84e382a710e72ec73f23cb2ca8",
+    "raw/legacy-10.txt": "c064eead03c018035ce537533761ec46833943dddee585c87c13c5c73f08ed7e",
+    "raw/legacy-2.txt": "6cf40cdb946eaac0792e0ceb7d2131a75942a3338c0c08c67066254b1d50a766",
+    "raw/legacy-3.txt": "e980e001f47dcbb5b4b1cadaf465da207fae6a53725767558e5c33d9bb3d842f",
+    "raw/legacy-4.txt": "222a07be2bbb6e2cad36035a63d7296ac2e8fc99c05e051c78b228c91c7401c4",
+    "raw/legacy-5.txt": "2a9788a628180ee19babc04c9287c2f83212420c35397dabec61562495874af6",
+    "raw/legacy-6.txt": "443678cbbf5699db63ad146d5bb856aa8ea6d0af63b4ae0a364f71da8dde34f9",
+    "raw/legacy-7.txt": "206b7fb93add6cb7dbf38507a1446993c87ac1ab1f9472b35c4491048a22cffd",
+    "raw/legacy-8.txt": "35d6f61e152d18a32105306028f7728d4854e8657421fcd4e2633609ab464ecf",
+    "raw/legacy-9.txt": "964e9228734094fbe286807d1edd6397d3658a56896e7829ff99e48d028c96e3",
+    "raw/public-1.txt": "3ccb8c361ba076b199bc7e7ab0d5741044637fd6f634c2848328f607d657356b",
+    "raw/public-10.txt": "c678bc3b92cb8b8cb70bcbf1b43043e418ebd0eb38de18019e19048035f998cc",
+    "raw/public-2.txt": "051a804e3267dea15e730073b06df544289355aaedf8b3cdeb8d0fc7ea518b8f",
+    "raw/public-3.txt": "90eda8b64650c840d3c0af55717726cbc2ffc2c7a1bb7318f3c7f089e75a47d9",
+    "raw/public-4.txt": "b39abcf4883bf1996a28adfefcaadcddce7faeb0e54dbd7da22d9f0de74029f3",
+    "raw/public-5.txt": "8f346423c7dc58e64aca0140d26f0a86a87858d5eaa40867a4437dc3c4e25abc",
+    "raw/public-6.txt": "9bc58aa0c7831e1acf080ced0a2c3f93397842af6c5d0c214dc84d5dbc91c5aa",
+    "raw/public-7.txt": "a551104dbf9cd7cb0ade0b80054e1f37b23bfa06be2c34641120f1c65de8ad92",
+    "raw/public-8.txt": "52f3cd315973ca8f6acfed91a624047302f1b262b4fe3f9d7dd76588b1d61b08",
+    "raw/public-9.txt": "9fb09972cd6be9bafc36a46bde3f1bda208a8c1fd483cb1a6a16d0cce23273fb",
+    "recompute.py": "ce2585868e98cc9563140d1677f987a496ab741530eb8a8fe0df8e21176c995f",
+    "results.json": "165d4f3135cc2fc0749793673eb1b5d36fd7ef3b8e5d71d70d3642069de7c540",
+    "summary.md": "4d3d6b0611394ebe8fa5b987e760039c875e13b6dd066e14eb42341174d40339"
+  },
+  "scope": "Exact current-head hosted M0 stability; no same-head rerun or final native qualification"
+}

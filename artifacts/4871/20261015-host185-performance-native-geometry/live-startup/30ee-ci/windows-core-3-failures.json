@@ -1,0 +1,204 @@
+{
+  "job": "windows-core-3",
+  "job_id": "116624028553",
+  "failures": [
+    "TestPrimaryJointNamespaceRebindKeepsOriginalParents/physical-parent-refusal",
+    "TestPrimaryJointNamespaceRebindKeepsOriginalParents"
+  ],
+  "race_reports": 0,
+  "interesting": [
+    {
+      "line": 4115,
+      "text": "2026-10-15T19:30:45.5130805Z {\"Time\":\"2026-10-15T19:30:45.5058725Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestCoordinatorEnqueueRetainedClosureAllocation\",\"Output\":\"    coordinator_resource_count_test.go:117: pending=1 entries=128 RIDs/entry=512 enqueue bytes=156160 mallocs=47\\n\"}"
+    },
+    {
+      "line": 4116,
+      "text": "2026-10-15T19:30:45.5437728Z {\"Time\":\"2026-10-15T19:30:45.5320127Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestCoordinatorEnqueueRetainedClosureAllocation\",\"Output\":\"    coordinator_resource_count_test.go:117: pending=2 entries=128 RIDs/entry=512 enqueue bytes=158080 mallocs=57\\n\"}"
+    },
+    {
+      "line": 4733,
+      "text": "2026-10-15T19:30:53.0512667Z {\"Time\":\"2026-10-15T19:30:53.0371294Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestIdentityPinRegistryRebindsOnlyExactKnownStableNamespaceLink\",\"Output\":\"    pin_registry_test.go:160: known-link replacement requires durable namespace removal\\n\"}"
+    },
+    {
+      "line": 4762,
+      "text": "2026-10-15T19:30:53.0747170Z {\"Time\":\"2026-10-15T19:30:53.0629073Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestPrimaryRootV5ExactReplacementBundleUsesRealCodecAndCustody\",\"Output\":\"    primary_bank_metadata_v5_test.go:292: isolated actual Dir+V5 record bundle: 17R/229440B; cache/meta/fences/Accepted/Finish/releases excluded and whole-F UNQUALIFIED\\n\"}"
+    },
+    {
+      "line": 5215,
+      "text": "2026-10-15T19:30:54.1153365Z {\"Time\":\"2026-10-15T19:30:54.1088406Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries\",\"Output\":\"    resource_contract_test.go:172: cached manifest assembly: entries=4096 payload=846781 bytes/build=33000 limit=1890170\\n\"}"
+    },
+    {
+      "line": 5624,
+      "text": "2026-10-15T19:30:55.1851708Z {\"Time\":\"2026-10-15T19:30:55.1611908Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership\",\"Output\":\"    resource_contract_test.go:3599: 128 retained entries: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 5627,
+      "text": "2026-10-15T19:30:55.1866667Z {\"Time\":\"2026-10-15T19:30:55.1786616Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/equal\",\"Output\":\"    resource_contract_test.go:3660: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 5632,
+      "text": "2026-10-15T19:30:55.2015438Z {\"Time\":\"2026-10-15T19:30:55.1885192Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/subset\",\"Output\":\"    resource_contract_test.go:3660: 128 entries with 256/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 5637,
+      "text": "2026-10-15T19:30:55.2034532Z {\"Time\":\"2026-10-15T19:30:55.1971075Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableResourcePublicationDebtRetainsIndexedOwnership/different\",\"Output\":\"    resource_contract_test.go:3660: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call\\n\"}"
+    },
+    {
+      "line": 5684,
+      "text": "2026-10-15T19:30:55.2647165Z {\"Time\":\"2026-10-15T19:30:55.2549604Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease\",\"Output\":\"    resource_generic_diagnostics_test.go:52: actual struct sizes: token=840 namespace=456 generic diagnostic=80 descriptor=104 counters=16; generic namespace capture additionally clones each nonempty text operand; selected backing=nil\\n\"}"
+    },
+    {
+      "line": 6077,
+      "text": "2026-10-15T19:30:56.7677008Z {\"Time\":\"2026-10-15T19:30:56.7522287Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/rootpublication\",\"Test\":\"TestStableNamespaceBatchActualFinalCloseRefusal\",\"Output\":\"    resource_namespace_batch_close_test.go:23: parent namespace persistence unsupported\\n\"}"
+    },
+    {
+      "line": 6369,
+      "text": "2026-10-15T19:31:06.4742339Z {\"Time\":\"2026-10-15T19:31:06.4594297Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/vectorpartition\",\"Test\":\"TestHomePackingBoundResponseAndRetainedReuseV1\",\"Output\":\"    home_packing_test.go:78: shell process fixture\\n\"}"
+    },
+    {
+      "line": 6374,
+      "text": "2026-10-15T19:31:06.4758291Z {\"Time\":\"2026-10-15T19:31:06.4594297Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/internal/vectorpartition\",\"Test\":\"TestHomePackingPinnedKaHIPV1\",\"Output\":\"    home_packing_test.go:213: set TREEDB_KAHIP_TEST_PYTHON to the pinned KaHIP Python\\n\"}"
+    },
+    {
+      "line": 7338,
+      "text": "2026-10-15T19:31:46.7553671Z {\"Time\":\"2026-10-15T19:31:46.7433736Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestBackgroundIndexVacuumCollectionRootDebtTriggersVacuum\",\"Output\":\"    background_vacuum_test.go:1457: online vacuum not supported on windows\\n\"}"
+    },
+    {
+      "line": 7541,
+      "text": "2026-10-15T19:34:33.5186110Z {\"Time\":\"2026-10-15T19:34:33.5112454Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:170: initial actual registered Snapshot Set files0 physicalParents0\\n\"}"
+    },
+    {
+      "line": 7542,
+      "text": "2026-10-15T19:34:33.5646297Z {\"Time\":\"2026-10-15T19:34:33.5524525Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:168: initial-materialization commit2 file4286578689 actualParent={Platform:windows VolumeID:17594508763472084922 ObjectID:[255 148 0 0 0 0 2 0 0 0 0 0 0 0 0 0] Generation:0} path=C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\TestPrimaryNoWALFastActualParentsAfterMaterializationV6483751745\\\\001\\\\maindb\\\\leaf_vlog\\n\"}"
+    },
+    {
+      "line": 7543,
+      "text": "2026-10-15T19:34:33.5652012Z {\"Time\":\"2026-10-15T19:34:33.5524525Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:168: initial-materialization commit2 file2147483649 actualParent={Platform:windows VolumeID:17594508763472084922 ObjectID:[254 148 0 0 0 0 2 0 0 0 0 0 0 0 0 0] Generation:0} path=C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\TestPrimaryNoWALFastActualParentsAfterMaterializationV6483751745\\\\001\\\\maindb\\\\value_vlog\\n\"}"
+    },
+    {
+      "line": 7544,
+      "text": "2026-10-15T19:34:33.5656062Z {\"Time\":\"2026-10-15T19:34:33.5524525Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:170: initial-materialization actual registered Snapshot Set files2 physicalParents2\\n\"}"
+    },
+    {
+      "line": 7545,
+      "text": "2026-10-15T19:34:33.5797594Z {\"Time\":\"2026-10-15T19:34:33.5748259Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:168: between-turn-materialization-and-write commit4 file2147483649 actualParent={Platform:windows VolumeID:17594508763472084922 ObjectID:[254 148 0 0 0 0 2 0 0 0 0 0 0 0 0 0] Generation:0} path=C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\TestPrimaryNoWALFastActualParentsAfterMaterializationV6483751745\\\\001\\\\maindb\\\\value_vlog\\n\"}"
+    },
+    {
+      "line": 7546,
+      "text": "2026-10-15T19:34:33.5802841Z {\"Time\":\"2026-10-15T19:34:33.575516Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:168: between-turn-materialization-and-write commit4 file4286578689 actualParent={Platform:windows VolumeID:17594508763472084922 ObjectID:[255 148 0 0 0 0 2 0 0 0 0 0 0 0 0 0] Generation:0} path=C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\TestPrimaryNoWALFastActualParentsAfterMaterializationV6483751745\\\\001\\\\maindb\\\\leaf_vlog\\n\"}"
+    },
+    {
+      "line": 7547,
+      "text": "2026-10-15T19:34:33.5807287Z {\"Time\":\"2026-10-15T19:34:33.575516Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPrimaryNoWALFastActualParentsAfterMaterializationV6\",\"Output\":\"    primary_profile_v5_test.go:170: between-turn-materialization-and-write actual registered Snapshot Set files2 physicalParents2\\n\"}"
+    },
+    {
+      "line": 7644,
+      "text": "2026-10-15T19:35:07.4674977Z {\"Time\":\"2026-10-15T19:35:07.4586731Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites\",\"Output\":\"    maintenance_leaf_vlog_test.go:173: online vacuum not supported on windows\\n\"}"
+    },
+    {
+      "line": 7653,
+      "text": "2026-10-15T19:35:07.4830791Z {\"Time\":\"2026-10-15T19:35:07.4707826Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPowerLossCertificationCleanClosePublicReopen\",\"Output\":\"    power_loss_certification_api_test.go:308: exact certification replay selector is required\\n\"}"
+    },
+    {
+      "line": 7658,
+      "text": "2026-10-15T19:35:07.4842247Z {\"Time\":\"2026-10-15T19:35:07.4713385Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB\",\"Test\":\"TestPowerLossCertificationFreshCompositeAfterOuterParentSync\",\"Output\":\"    power_loss_certification_layout_test.go:60: modeled generic parent-directory barriers are unavailable on Windows\\n\"}"
+    },
+    {
+      "line": 7838,
+      "text": "2026-10-15T19:37:34.1662593Z {\"Time\":\"2026-10-15T19:37:34.156092Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCloseHookOnlineVacuumObservesClosedAdmission\",\"Output\":\"    close_hooks_test.go:236: online vacuum unsupported on windows\\n\"}"
+    },
+    {
+      "line": 7891,
+      "text": "2026-10-15T19:37:35.3173414Z {\"Time\":\"2026-10-15T19:37:35.308776Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCommandWALPublicationRebindsBuilderAfterRuntimeSwap\",\"Output\":\"    command_wal_publish_test.go:434: online vacuum unsupported on windows\\n\"}"
+    },
+    {
+      "line": 8160,
+      "text": "2026-10-15T19:37:42.1555108Z {\"Time\":\"2026-10-15T19:37:42.1465556Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCompactStorageLeafPackCarryRescansWhenProtectedRootsChange\",\"Output\":\"    compact_storage_test.go:3217: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8213,
+      "text": "2026-10-15T19:37:45.6224637Z {\"Time\":\"2026-10-15T19:37:45.6089187Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan\",\"Output\":\"    durable_root_projection_test.go:120: stable manifest namespace replacement is intentionally unsupported on Windows\\n\"}"
+    },
+    {
+      "line": 8418,
+      "text": "2026-10-15T19:38:10.7060260Z {\"Time\":\"2026-10-15T19:38:10.7018603Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationMaintenanceLimitsAdmittedPackAndGC\",\"Output\":\"    leaf_generation_maintenance_limits_test.go:218: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8439,
+      "text": "2026-10-15T19:38:11.1271365Z {\"Time\":\"2026-10-15T19:38:11.1219782Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_ChangedOverlappingRootDiscardsCopyAndRetries\",\"Output\":\"    leaf_generation_pack_concurrency_test.go:151: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8444,
+      "text": "2026-10-15T19:38:11.1289092Z {\"Time\":\"2026-10-15T19:38:11.1253987Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_PromotionBlocksRefreshUntilRollbackCompletes\",\"Output\":\"    leaf_generation_pack_publication_test.go:274: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8449,
+      "text": "2026-10-15T19:38:11.1305363Z {\"Time\":\"2026-10-15T19:38:11.1270197Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta\",\"Output\":\"    leaf_generation_pack_publication_test.go:654: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8456,
+      "text": "2026-10-15T19:38:11.1319396Z {\"Time\":\"2026-10-15T19:38:11.1277436Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPackRelocationFollowsAcceptance/success\",\"Output\":\"    leaf_generation_pack_relocation_test.go:19: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8461,
+      "text": "2026-10-15T19:38:11.1328188Z {\"Time\":\"2026-10-15T19:38:11.1277436Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPackRelocationFollowsAcceptance/before_acceptance\",\"Output\":\"    leaf_generation_pack_relocation_test.go:19: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8466,
+      "text": "2026-10-15T19:38:11.1339650Z {\"Time\":\"2026-10-15T19:38:11.1277436Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPackRelocationFollowsAcceptance/accepted_error\",\"Output\":\"    leaf_generation_pack_relocation_test.go:19: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8490,
+      "text": "2026-10-15T19:38:16.3990839Z {\"Time\":\"2026-10-15T19:38:16.3847101Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPackStablePrepareLateCleanupErrorReturnsNoAuthority\",\"Output\":\"    leaf_generation_pack_stable_prepare_test.go:406: stable packed promotion requires exact relative cross-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8499,
+      "text": "2026-10-15T19:38:16.4010961Z {\"Time\":\"2026-10-15T19:38:16.3847101Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestLeafGenerationPack_MovesSparseSealedGeneration\",\"Output\":\"    leaf_generation_pack_test.go:390: leaf generation pack promotion requires exact retained-parent namespace support\\n\"}"
+    },
+    {
+      "line": 8528,
+      "text": "2026-10-15T19:38:16.9285134Z {\"Time\":\"2026-10-15T19:38:16.9237082Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestOriginalPreparedManifestAbandonAdmissionRefusesBeforeRestore\",\"Output\":\"    leaf_generation_prepared_cleanup_test.go:234: exact manifest namespace unsupported\\n\"}"
+    },
+    {
+      "line": 8703,
+      "text": "2026-10-15T19:38:22.9779063Z {\"Time\":\"2026-10-15T19:38:22.9672634Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=5 parentCommit=26 oldest=26 classifiedUnused=false free=false\\n\"}"
+    },
+    {
+      "line": 8704,
+      "text": "2026-10-15T19:38:22.9782706Z {\"Time\":\"2026-10-15T19:38:22.9672634Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/manifest\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\\n\"}"
+    },
+    {
+      "line": 8709,
+      "text": "2026-10-15T19:38:24.5869568Z {\"Time\":\"2026-10-15T19:38:24.5848561Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=0 commit=27 parentPage=25 parentCommit=26 oldest=26 classifiedUnused=false free=false\\n\"}"
+    },
+    {
+      "line": 8710,
+      "text": "2026-10-15T19:38:24.5872812Z {\"Time\":\"2026-10-15T19:38:24.5848561Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose/directory\",\"Output\":\"    physical_snapshot_cut_v1_test.go:86: slot=1 commit=26 parentPage=24 parentCommit=25 oldest=26 classifiedUnused=false free=false\\n\"}"
+    },
+    {
+      "line": 8729,
+      "text": "2026-10-15T19:38:25.9192530Z {\"Time\":\"2026-10-15T19:38:25.9058334Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryDirectoryOrdinarySnapshotCoalesceReopen\",\"Output\":\"    primary_directory_test.go:104: initial directory count 4\\n\"}"
+    },
+    {
+      "line": 8906,
+      "text": "2026-10-15T19:38:36.5461123Z {\"Time\":\"2026-10-15T19:38:36.5306492Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestCaptureStableIndexFileResourceSyncThroughSurvivesDBClose\",\"Output\":\"    stable_resource_test.go:281: stable index namespace capture unsupported on Windows\\n\"}"
+    },
+    {
+      "line": 8983,
+      "text": "2026-10-15T19:38:38.9383232Z {\"Time\":\"2026-10-15T19:38:38.9270571Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestVacuumIndexOnlineCollectionRecloneAllowsMutation\",\"Output\":\"    vacuum_collection_snapshot_test.go:543: online vacuum unsupported on windows\\n\"}"
+    },
+    {
+      "line": 9004,
+      "text": "2026-10-15T19:38:40.2324622Z {\"Time\":\"2026-10-15T19:38:40.221963Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestVacuumIndexOnlineCancellationAfterOldRenameConverges\",\"Output\":\"    vacuum_online_legacy_test.go:452: online vacuum unsupported on windows\\n\"}"
+    },
+    {
+      "line": 9009,
+      "text": "2026-10-15T19:38:40.2334281Z {\"Time\":\"2026-10-15T19:38:40.221963Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestVacuumIndexOnline_AllowsSnapshotAcrossSwap\",\"Output\":\"    vacuum_online_swap_test.go:555: online vacuum not supported on windows\\n\"}"
+    },
+    {
+      "line": 9020,
+      "text": "2026-10-15T19:38:42.1883793Z {\"Time\":\"2026-10-15T19:38:42.1789222Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/db\",\"Test\":\"TestPrimaryJointNamespaceRebindKeepsOriginalParents/physical-parent-refusal\",\"Output\":\"    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\TestPrimaryJointNamespaceRebindKeepsOriginalParentsphysical-par2576367834\\\\001: The process cannot access the file because it is being used by another process.\\n\"}"
+    }
+  ],
+  "log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-3.log"
+}

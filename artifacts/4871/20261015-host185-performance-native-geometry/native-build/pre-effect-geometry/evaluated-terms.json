@@ -1,0 +1,222 @@
+{
+  "ACK": 0,
+  "Q32": "RED",
+  "allowanceChosen": false,
+  "bound": "incomplete",
+  "head": "2bb79593fd5b5a6a1dc919bae32cd6158345daac",
+  "knownBytes": 102280,
+  "knownRecords": 124,
+  "missing": [
+    {
+      "bytes": null,
+      "geometry": "exact proof/current parent/slot/base/sequence operands remain mandatory",
+      "records": null,
+      "sourceSymbol": "Request.Validate / BeginCut / ObservePrune / Commit / Abort",
+      "status": "unimplemented",
+      "term": "Final basis / SAME Cut"
+    },
+    {
+      "bytes": null,
+      "geometry": "pending len/cap0/0, builder0, pin maps0/0; headers64 bytes, receipt48, pendingEntry16; actual backing/map/lineage work not fully priced",
+      "records": null,
+      "sourceSymbol": "AcquireBuilder / EnqueueBuiltWithWorkV6 / enqueueLockedWithWorkV6",
+      "status": "unimplemented",
+      "term": "Builder / enqueue / handoff receipt"
+    },
+    {
+      "bytes": null,
+      "geometry": "seal len/cap0/0; append needs its real admitted backing; no slot/visibility effect performed",
+      "records": null,
+      "sourceSymbol": "rootPublicationRuntimeV1 / original activeSeal and seals",
+      "status": "unimplemented",
+      "term": "Seal installation"
+    },
+    {
+      "bytes": null,
+      "geometry": "entries/kinds/directories0; no token callback loop, header/access/empty path work remains",
+      "records": null,
+      "sourceSymbol": "syncStableResourceDependenciesV1 / StableResourceSet.FlushThrough,SyncThrough",
+      "status": "unimplemented",
+      "term": "Empty dependency flush/sync"
+    },
+    {
+      "bytes": null,
+      "geometry": "original namespace stable/native/linked; imported false, exact RID lengths0; original saved operations refs1 each",
+      "records": null,
+      "sourceSymbol": "StableResourceToken.syncThrough / StableNamespaceToken.Stabilize / stablePagerOwnedOperations.SyncThrough",
+      "status": "unimplemented",
+      "term": "Both token wrappers / stable namespaces"
+    },
+    {
+      "bytes": null,
+      "geometry": "DATA logical13 to16; mapped chunk/verified/prefetch/dirty capacity already covers; three page visits plus validation/count-install still real work",
+      "records": null,
+      "sourceSymbol": "materializePrimarySealV5 / GrowToWithWork / ValidateCOWPhysicalTailV1",
+      "status": "unimplemented",
+      "term": "Physical materialization / tail / GrowTo"
+    },
+    {
+      "bytes": null,
+      "geometry": "original channel close/create/select operations must be counted; no runtime layout mirror introduced",
+      "records": null,
+      "sourceSymbol": "Coordinator.notifyLocked / runtime.makechan",
+      "status": "opaque",
+      "term": "Notify backing"
+    },
+    {
+      "bytes": null,
+      "geometry": "real clock, no timer at snapshot; future enqueue delay branch not frozen; all actual clocks/timer/stop operations remain",
+      "records": null,
+      "sourceSymbol": "Coordinator.installTimerLocked / realClock.NewTimer / time.NewTimer",
+      "status": "opaque",
+      "term": "Timer backing / timing branch"
+    },
+    {
+      "bytes": null,
+      "geometry": "initial waiter0 and receipt0; SAME receipt and pending member will exist later; no assumption of zero post-enqueue work",
+      "records": null,
+      "sourceSymbol": "removeCompletedPendingPrefixV6 / completePublicationLockedV6 / satisfyWaiters / recomputePublishRequestLocked / notifyLocked",
+      "status": "unimplemented",
+      "term": "Release turn additional operations"
+    },
+    {
+      "bytes": null,
+      "geometry": "existing Bind reservation1/416 plus notify; SAME physical owner/resource/frame lifetime and terminal receipt traversal remain outside F",
+      "records": null,
+      "sourceSymbol": "BindNativePublicationV6 / original transaction Finish / CompleteNativePublicationV6",
+      "status": "unimplemented-separate-phases",
+      "term": "Bind / physical Finish / terminal completion"
+    }
+  ],
+  "rawScalarObservations": [
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=db.nativeAuthorityAdmissionV6 geometry={CandidatePhase:8 SealPhase:13 SameIndex:true SameExpectedSequence:true SameParent:true SameRecord:true HeadersReady:true LeafGenerations:false ConditionalActive:false Prefix:1 Debt:0 DebtCapacity:4 Seals:0 SealCapacity:0 Visible:0 VisibleCapacity:4 RuntimeScopeRecords:22 RuntimeScopeBytes:14976 ActivationDispatchBytes:916 ActivationMemberBytes:1008 ActivationInstallBytes:272 PublisherRecords:3 PublisherBytes:1752 ConsumeRecords:4 ConsumeBytes:1908 TurnReleaseBytes:304 CapsuleRecords:7 CapsuleBytes:29696} probeWork=6/141456",
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=freelist.claimDataAdmissionLockedV6+activationAdmissionV6+cowPublicationBaseAdmissionV6 geometry={SourceMatches:true PreVisible:true TailWritten:true Append:true Owners:0 Candidates:1 IDs:0 Data:1 NewIDs:1 Burned:0 Coverage:0 TailStart:13 TailCount:3 LiveHighWater:13 RequiredHighWater:16 Activated:0 ActivatedCapacity:0 MetadataPages:3 MetadataFirst:13 MetadataLast:15 ClaimRecords:13 ClaimBytes:3480 ActivationRecords:4 ActivationBytes:2952 PublicationRecords:15 PublicationBytes:776 PageSizesValid:true} probeWork=11/111600",
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=rootpublication.enqueueLockedWithWorkV6+notifyLocked+installTimerLocked geometry={Pending:0 PendingCapacity:0 Builders:0 Dispatch:0 NativeDispatch:0 Receipts:0 Waiters:0 PinKinds:0 HighWaterKinds:0 Publishing:false Preparing:false Timer:false RealClock:true BuilderBytes:64 ReceiptBytes:48 PendingEntryBytes:16 ChannelBackingOpaque:true TimerBackingOpaque:true} probeWork=3/69728",
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=rootpublication.consumeSharedWithVisibleV6 geometry={Entries:0 Kinds:0 Directories:0 MetadataRefs:1 BackingRefs:3 EmptyRefs:0 VisibleEntries:0 VisibleKinds:0 VisibleDirectories:0 Selected:true SameBacking:true SameEmpty:true Empty:false MetadataOwnerMatches:true ConsumeRecords:6 ConsumeBytes:1848 ConsumeBoundComplete:true} probeWork=4/69328",
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=pager.syncDirtyChunksWithFileWork+materializePrimarySealV5.DATA geometry={Token:{Released:false Owned:true Imported:false NativeNamespace:true StableNamespace:true Linked:true PathBytes:150 RequiredRIDs:0 StableRIDs:0} Pager:{Pages:13 Target:16 Chunks:1 ChunkSize:4194304 VerifiedChunks:1 PrefetchWords:1 DirtyWords:1 Dirty:1 Span:1 SyncConcurrency:4 PathBytes:139 PolicyTarget:0 ForecastDirty:1 ForecastSpan:1 SyncRecords:15 SyncBytes:8664 CapacityCovered:true ForecastExact:true FileBacked:true Closing:false MappedFlush:false Populate:false} SameSnapshot:true SameNativeCallback:true OperationRefs:1} probeWork=7/75360",
+    "native_prune_backend_route_v6_test.go:173: native-geometry sourceSymbol=pager.syncDirtyChunksWithFileWork+StableNamespaceToken.Stabilize.PRIMARY geometry={Token:{Released:false Owned:true Imported:false NativeNamespace:true StableNamespace:true Linked:true PathBytes:158 RequiredRIDs:0 StableRIDs:0} Pager:{Pages:11 Target:0 Chunks:1 ChunkSize:1048576 VerifiedChunks:1 PrefetchWords:1 DirtyWords:1 Dirty:1 Span:1 SyncConcurrency:1 PathBytes:147 PolicyTarget:0 ForecastDirty:1 ForecastSpan:1 SyncRecords:15 SyncBytes:8728 CapacityCovered:true ForecastExact:true FileBacked:true Closing:false MappedFlush:false Populate:false} SameSnapshot:true SameNativeCallback:true OperationRefs:1} probeWork=7/75360"
+  ],
+  "sourceManifestSHA256": "16c532a90a41b494fe346b83060d86edec1cb9b936db6923acefd5a467d280c4",
+  "terms": [
+    {
+      "bytes": 916,
+      "geometry": "original typed callback dispatch",
+      "records": 1,
+      "sourceSymbol": "DurableRootTransaction.activateFromCoordinatorStepWithWorkV6 / reserveDurableRootCallbackDispatchV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Activation dispatch"
+    },
+    {
+      "bytes": 1008,
+      "geometry": "one SAME member; headers ready; leaf generations nil",
+      "records": 2,
+      "sourceSymbol": "rootPublicationRuntimeV1.activateNativeVisibleMemberV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Activation member"
+    },
+    {
+      "bytes": 272,
+      "geometry": "actual preborn headers; no leaf-generation pin work",
+      "records": 4,
+      "sourceSymbol": "rootPublicationVisibleInstallV1.activateWithWorkV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Activation install"
+    },
+    {
+      "bytes": 3480,
+      "geometry": "O=0,C=1,I=0,n=1,B=0; activation4/2952 and MarkVisible1/48 INCLUDED",
+      "records": 13,
+      "sourceSymbol": "COWPreparationWorkV6.claimDataAdmissionLockedV6 / AdoptAndActivateV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Late DATA claim including allocator activation"
+    },
+    {
+      "bytes": 304,
+      "geometry": "excludes actual clock and notify",
+      "records": 1,
+      "sourceSymbol": "Coordinator.BeginNativePublicationTurnV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Begin turn existing reservation"
+    },
+    {
+      "bytes": 1752,
+      "geometry": "postactivation V=1; excludes path/closure extras",
+      "records": 3,
+      "sourceSymbol": "rootPublicationRuntimeV1.publishWithWorkV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Publisher lookup"
+    },
+    {
+      "bytes": 27648,
+      "geometry": "three 4096-byte images, 5/9216 each; zero retries requires the no-concurrent-verifier diagnostic schedule",
+      "records": 15,
+      "sourceSymbol": "Pager.WriteViewWithWork",
+      "status": "existing-reservation-forecast-only",
+      "term": "Metadata page writes existing reservations"
+    },
+    {
+      "bytes": 8664,
+      "geometry": "span1,dirty1,workers1,path139; exact dirty union forecast",
+      "records": 15,
+      "sourceSymbol": "Pager.syncDirtyChunksWithFileWork",
+      "status": "existing-reservation-forecast-only",
+      "term": "DATA dirty sync"
+    },
+    {
+      "bytes": 8728,
+      "geometry": "span1,dirty1,workers1,path147; exact dirty union forecast",
+      "records": 15,
+      "sourceSymbol": "Pager.syncDirtyChunksWithFileWork",
+      "status": "existing-reservation-forecast-only",
+      "term": "PRIMARY dirty sync"
+    },
+    {
+      "bytes": 14976,
+      "geometry": "projected P=D=S=V=1",
+      "records": 22,
+      "sourceSymbol": "nativeAuthorityAdmissionV6 / nativeAuthorityScopeV6.begin",
+      "status": "existing-reservation-forecast-only",
+      "term": "Runtime authority scope"
+    },
+    {
+      "bytes": 776,
+      "geometry": "P=A=N=1,B=K=0; first2 plus second13 records",
+      "records": 15,
+      "sourceSymbol": "Allocator.BeginCOWPublicationScopeV6 / cowPublicationBaseAdmissionV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Allocator authority scope total"
+    },
+    {
+      "bytes": 29696,
+      "geometry": "Linux file-backed three-page branch; zero retries under no-concurrent-verifier schedule",
+      "records": 7,
+      "sourceSymbol": "Pager.writeOwnedSpanWithEffectWorkV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Original capsule write"
+    },
+    {
+      "bytes": 1848,
+      "geometry": "h=d=e=0,v=1; both empty directories NIL; same kind backing refs3",
+      "records": 6,
+      "sourceSymbol": "StableResourceSetReleaseWorkV6.consumeSharedWithVisibleV6 / Coordinator.ConsumeNativePublicationResourcesV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Shared Set consume"
+    },
+    {
+      "bytes": 1908,
+      "geometry": "dispatch1 plus original member3",
+      "records": 4,
+      "sourceSymbol": "DurableRootTransaction.consumeFromCoordinatorStepWithWorkV6 / consumeNativeVisibleMemberV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Transaction consume"
+    },
+    {
+      "bytes": 304,
+      "geometry": "excludes waiter/timer/clock/notify/signal",
+      "records": 1,
+      "sourceSymbol": "Coordinator.ReleaseNativePublicationTurnV6",
+      "status": "existing-reservation-forecast-only",
+      "term": "Release turn existing reservation"
+    }
+  ]
+}

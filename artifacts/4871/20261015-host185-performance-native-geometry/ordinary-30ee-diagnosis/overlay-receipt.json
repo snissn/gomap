@@ -1,0 +1,9 @@
+{
+  "base": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "original": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/db/primary_arena_release_work_test.go",
+  "original_sha256": "ad213b076773917e71a196062b421929055160ccf0783d52962a35e0d3d159a3",
+  "overlay": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/primary_arena_release_work_test.go",
+  "overlay_sha256": "a1fb7488aa4e385a7124ccf45af835bdcaaa1c3e24d48ecc346ca80f58e6be84",
+  "changes": "only imports plus failure-only state/size/stacks diagnostics; original4096turn bound,32records/1MiB grant and all assertions unchanged",
+  "nonclaim": "instrumented diagnostic only, not exact-source qualification"
+}

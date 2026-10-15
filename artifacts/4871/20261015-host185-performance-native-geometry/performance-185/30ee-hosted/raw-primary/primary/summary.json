@@ -1,0 +1,38 @@
+{
+  "accepted": true,
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "gates": {
+    "allocations": true,
+    "bytes": true,
+    "candidate_primary_activation": true,
+    "timing": true
+  },
+  "measurement_pass": true,
+  "median_paired_delta_percent": -50.08831485042834,
+  "medians": {
+    "baseline": {
+      "B/op": 280181.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 15034213.0
+    },
+    "candidate": {
+      "B/op": 228298.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 7489441.5
+    }
+  },
+  "paired_deltas_percent": [
+    -51.49247187675448,
+    -50.08493008313366,
+    -50.40779601265679,
+    -50.19114549637707,
+    -50.091699617723016,
+    70.75352722709272,
+    -38.74873103835387,
+    -48.17819482144677
+  ],
+  "quiet": true
+}
