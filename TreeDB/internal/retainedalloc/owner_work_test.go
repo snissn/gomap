@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"testing"
+	"unsafe"
 )
 
 func TestRemovalWorkManyOriginalBindingsAndFutureGrowth(t *testing.T) {
@@ -233,4 +234,50 @@ func TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl(t *testing.T) {
 	if allocs != 0 {
 		t.Fatal("ordinary enrollment close allocated cleanup control", allocs)
 	}
+}
+
+// The fixture's native lease is the SAME concrete test lease, with admission
+// before its actual Resize/Close. Ordinary testBudget semantics remain intact.
+func (l *testLease) ResizeWork(n uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	if !l.AdmitRetentionResize(w) {
+		return false, nil
+	}
+	err := l.Resize(n)
+	return err == nil, err
+}
+func (l *testLease) AdmitRetentionClose(w *iterator.OrdinalScanWork) bool {
+	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(testBudget{})))
+}
+
+func TestNativeRemovalCompletionRetainsExactDeltaOnRefusal(t *testing.T) {
+	var o Owner
+	o.Initialize(128)
+	if err := o.AddPending(256); err != nil {
+		t.Fatal(err)
+	}
+	owner, amount := &o, uint64(256)
+	var removal RemovalWork
+	w := iterator.OrdinalScanWork{}
+	if ready, err := removal.CompletePendingWork(&owner, &amount, &w); ready || err != nil || owner != &o || amount != 256 || o.Bytes() != 384 {
+		t.Fatal("zero-work completion changed custody")
+	}
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if ready, err := removal.CompletePendingWork(&owner, &amount, &w); !ready || err != nil || owner != nil || amount != 0 || o.Bytes() != 128 {
+		t.Fatal("original completion did not detach", ready, err)
+	}
+	if removal.bound || removal.started || removal.done {
+		t.Fatal("receipt not explicitly reset")
+	}
+	if err := o.AddPending(64); err != nil {
+		t.Fatal(err)
+	}
+	owner, amount = &o, 64
+	w = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	if ready, err := removal.CompletePendingWork(&owner, &amount, &w); !ready || err != nil || o.Bytes() != 128 {
+		t.Fatal("surviving parent could not reuse terminal receipt", ready, err)
+	}
+}
+
+func (l *testLease) AdmitRetentionResize(w *iterator.OrdinalScanWork) bool {
+	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(testBudget{})))
 }

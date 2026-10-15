@@ -62,11 +62,17 @@ func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.Ordi
 		return nil, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DurableRootTransaction{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTerminalCompletionV6{})))
-	if err := a.MetadataOwner().AddPending(charge); err != nil {
+	if err := retainedalloc.AddPendingWithOrdinalWork(a.MetadataOwner(), charge, w); err != nil {
 		return nil, false, err
 	}
 	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, nativeWorkOwned: native, terminalCompletion: &primaryTerminalCompletionV6{owner: a.MetadataOwner(), charge: charge}}}
 	a.InitializeReleaseQueue(&t.constructionV6.cleanupQueue)
+	if native {
+		ready, err := t.PrepareNativeMVCCConstructionRootV6(w)
+		// Even partial construction has exactly this original disposing
+		// parent. Its caller retains t before inspecting ready/error.
+		return t, ready, err
+	}
 	root, ready, err := a.PrepareConstructedReadRootV6(t, w)
 	if !ready || err != nil {
 		a.MetadataOwner().RemovePending(charge)
@@ -75,6 +81,33 @@ func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.Ordi
 	t.constructionV6.root = root
 	return t, true, nil
 }
+
+// PrepareNativeMVCCConstructionRootV6 resumes only the SAME private original
+// constructor. Root/node refusal leaves its containing admission and queue on
+// that transaction, which can resume or use its original finite abort.
+func (t *DurableRootTransaction) PrepareNativeMVCCConstructionRootV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if t == nil || w == nil {
+		return false, retainedalloc.ErrWorkRequired
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*t))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
+		return false, nil
+	}
+	c := t.constructionV6
+	if c == nil || !c.nativeWorkOwned || t.phase != durableRootConstructingV6 || c.cleanupPhase != 0 {
+		return false, ErrDurableRootOwnership
+	}
+	if c.root != (primaryarena.Ref{}) {
+		return true, nil
+	}
+	root, ready, err := c.arena.PrepareConstructedReadRootV6(t, w)
+	if ready && err == nil {
+		c.root = root
+	}
+	return ready, err
+}
+
 func (t *DurableRootTransaction) PrimaryConstructionReferenceV6() primaryarena.Ref {
 	if t == nil {
 		return primaryarena.Ref{}
@@ -259,7 +292,7 @@ func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.O
 		return nil, 0, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))
-	if err := owner.AddPending(charge); err != nil {
+	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 		return nil, 0, false, err
 	}
 	return &PrimaryPromotionV6{Image: make([]byte, PrimaryCapsuleSizeV6)}, charge, true, nil
@@ -299,6 +332,12 @@ func (t *DurableRootTransaction) preparePrimaryPromotionV6(record DurableRootRec
 	}
 	target := uint64(1) - parent.Slot()
 	promotion := c.promotion
+	// Native private preparation must retain its SAME preborn storage before
+	// any fallible codec/custody step. The legacy immediate-allocation defer is
+	// ordinary-only, never a hidden native refund parent.
+	if private && promotion == nil {
+		return nil, false, ErrNativeMVCCRootWorkRequiredV6
+	}
 	charge := uint64(0)
 	if promotion == nil {
 		var ready bool

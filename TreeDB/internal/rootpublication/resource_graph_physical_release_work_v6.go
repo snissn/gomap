@@ -201,7 +201,7 @@ func (root *resourceReleaseFrameV6) tokenNamespace(f *resourceReleaseFrameV6, t 
 		return false, err
 	}
 	t.namespace = nil
-	completion.Complete()
+	f.refundOwner, f.refundCharge = completion.owner, completion.charge
 	return true, nil
 }
 

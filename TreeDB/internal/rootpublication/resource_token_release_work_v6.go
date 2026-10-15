@@ -36,6 +36,13 @@ type StableResourceTokenReleaseCompletionV6 struct {
 	charge uint64
 }
 
+// CompleteWithWorkV6 runs only after the original callback returned and its
+// surviving parent detached the disposed token/Set alias. The parent retains
+// both this value and the SAME RemovalWork across refusal.
+func (c *StableResourceTokenReleaseCompletionV6) CompleteWithWorkV6(s *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, error) {
+	return s.CompletePendingWork(&c.owner, &c.charge, w)
+}
+
 func (c *StableResourceTokenReleaseCompletionV6) Complete() {
 	if c == nil {
 		return
@@ -83,8 +90,8 @@ func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (St
 		}
 		if ResourceOwnerState(t.owner.Load()) != ResourceOwnerToken || t.released.Load() || t.metadata == nil || t.metadata.refs.Load() != 1 ||
 			t.importedSource != nil || t.importedFields != nil || t.directory != nil || t.onRelease != nil ||
-			t.observationCleanup != nil || t.releaseObservation != nil || t.physicalBacking == nil ||
-			t.physicalBacking.sourceRoot != nil || t.physicalBacking.owner != t.metadata.owner {
+			t.observationCleanup != nil || t.releaseObservation != nil ||
+			t.physicalBacking != nil && (t.physicalBacking.sourceRoot != nil || t.physicalBacking.owner != t.metadata.owner) {
 			return empty, false, retainedalloc.ErrWorkRequired
 		}
 		if err := t.metadata.cleanupResult(); err != nil {
@@ -120,26 +127,28 @@ func (t *StableResourceToken) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (St
 			return empty, false, nil
 		}
 		backing := t.physicalBacking
-		if backing.failure != nil {
-			return fail(backing.failure)
-		}
-		n := backing.refs.Add(-1)
-		if n < 0 {
-			panic("unbalanced native token backing")
-		}
-		if n == 0 {
-			if backing.file != nil {
-				if err := backing.file.Close(); err != nil {
-					backing.failure = err
-					backing.owner.CleanupFailed()
-					if backing.registry != nil {
-						backing.registry.retainFailedPinnedBacking(backing)
-					}
-					return fail(err)
-				}
+		if backing != nil {
+			if backing.failure != nil {
+				return fail(backing.failure)
 			}
-			s.refundCharge += backing.charge
-			backing.file, backing.owner, backing.registry, backing.charge = nil, nil, nil, 0
+			n := backing.refs.Add(-1)
+			if n < 0 {
+				panic("unbalanced native token backing")
+			}
+			if n == 0 {
+				if backing.file != nil {
+					if err := backing.file.Close(); err != nil {
+						backing.failure = err
+						backing.owner.CleanupFailed()
+						if backing.registry != nil {
+							backing.registry.retainFailedPinnedBacking(backing)
+						}
+						return fail(err)
+					}
+				}
+				s.refundCharge += backing.charge
+				backing.file, backing.owner, backing.registry, backing.charge = nil, nil, nil, 0
+			}
 		}
 		t.pinned, t.pinnedRefs, t.physicalBacking = nil, nil, nil
 		s.phase = 2

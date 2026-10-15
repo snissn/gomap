@@ -114,6 +114,9 @@ func (s *DependencyDirectoryReleaseWork) bind(directory *DependencyDirectoryV2, 
 			s.bound = true
 			break
 		}
+		if !directoryReleaseReserve(w, 1, 16) {
+			return false, nil
+		}
 	}
 	if !s.bound {
 		return false, retainedalloc.ErrWorkRequired
@@ -270,4 +273,25 @@ func (s *DependencyDirectoryReleaseWork) continueWork(w *iterator.OrdinalScanWor
 	s.phase = 4
 	s.consumed = true
 	return true, true, s.err
+}
+
+// resetCompletedWork reuses the SAME serial scratch after its previous physical
+// and accounting stages completed. No initialized mutex is copied or reset.
+func (s *DependencyDirectoryReleaseWork) resetCompletedWork(w *iterator.OrdinalScanWork) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.phase != 4 || !s.consumed || s.err != nil || s.directory != nil || s.completion.Metadata != nil || s.directoryOwner != nil {
+		return false, ErrResourceOwnership
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {
+		return false, nil
+	}
+	if ready, err := s.producerRefund.ResetUnusedOrCompletedWork(w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := s.directoryRefund.ResetUnusedOrCompletedWork(w); !ready || err != nil {
+		return false, err
+	}
+	s.phase, s.bound, s.consumed, s.readerDetached = 0, false, false, false
+	return true, nil
 }

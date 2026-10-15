@@ -2028,6 +2028,7 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
+	native           *nativeAuthorityScopeV6   // SAME admitted concrete native environment; nil ordinary
 	work             *iterator.OrdinalScanWork // nil on every ordinary storage transaction
 	installAuthority func() (bool, error)      // Selected complete capsule authority replaces DATA META.
 	resources        *rootpublication.StableResourceSet
@@ -2065,11 +2066,11 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		// The finite selected capsule path has real typed materialize/index and
 		// authority operations. Observer-enabled dependency enumeration and the
 		// alternate legacy META path need their own finite engines.
-		if durabilitycut.Enabled() || tx.installAuthority == nil {
+		if durabilitycut.Enabled() || tx.native == nil {
 			return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
 		}
 	}
-	if tx.syncIndex == nil || (tx.installAuthority == nil && (tx.sink == nil || tx.target > 1 || tx.syncMeta == nil)) {
+	if tx.native == nil && (tx.syncIndex == nil || (tx.installAuthority == nil && (tx.sink == nil || tx.target > 1 || tx.syncMeta == nil))) {
 		return false, errors.New("invalid durable-root storage transaction")
 	}
 	if tx.resources != nil {
@@ -2084,6 +2085,9 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 			flushErr = tx.resources.FlushThrough()
 		}
 		if err := flushErr; err != nil {
+			if tx.work != nil {
+				return false, err
+			}
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
 		var phase stableResourceDependencySyncPhaseV1
@@ -2103,6 +2107,9 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 			phase, err = syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
 		}
 		if err != nil {
+			if tx.work != nil {
+				return false, err
+			}
 			switch phase {
 			case stableResourceDependencyObserveV1:
 				return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
@@ -2112,6 +2119,15 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 				return false, err
 			}
 		}
+	}
+	if tx.native != nil {
+		if err := tx.native.materializeV6(); err != nil {
+			return false, err
+		}
+		if err := tx.native.syncIndexV6(); err != nil {
+			return false, err
+		}
+		return tx.native.installAuthorityV6()
 	}
 	if tx.materialize != nil {
 		if err := tx.materialize(); err != nil {

@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -128,6 +129,8 @@ func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeIndexGeometryForTestV6(inde
 // A copied immutable parent is evidence, never a current-root/slot authority.
 // The original transaction owns any accepted promotion and its abort queue.
 type nativeMVCCSealPreparationV6 struct {
+	claimRefundOwner          *retainedalloc.Owner
+	claimRefundCharge         uint64
 	resources, proofResources *rootpublication.StableResourceSet
 	manifest                  *rootpublication.DependencyManifestV1
 	banks                     *primaryBankConstructionV5
@@ -146,6 +149,9 @@ type nativeMVCCSealPreparationV6 struct {
 	seal                      *rootPublicationSealV1
 	phase                     uint8
 	promoted                  bool
+	refund                    retainedalloc.RemovalWork
+	completion                rootpublication.StableResourceTokenReleaseCompletionV6
+	childCompletion           primaryRuntimeDisposalCompletionV6
 }
 
 func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeSealScalarsForTest() (phase uint8, promoted bool) {
@@ -180,6 +186,9 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 		return false, ErrNativeMVCCSnapshotWork
 	}
 	s, db, member := &c.sealPreparation, c.db, c.candidatePreparation.member
+	if ready, err := s.refund.CompleteRemovalWork(&s.claimRefundOwner, &s.claimRefundCharge, w); !ready || err != nil {
+		return false, err
+	}
 	runtime := db.rootPublication
 	for {
 		switch s.phase {
@@ -240,17 +249,20 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 			if !w.Reserve(3, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+128) {
 				return false, nil
 			}
-			banks, err := newPrimaryBankConstructionV5(runtime.idx)
-			if err != nil {
+			if s.banks == nil {
+				banks, ready, err := newNativePrimaryBankConstructionV6(runtime.idx, w)
+				if !ready || err != nil {
+					return false, err
+				}
+				s.banks = banks
+			}
+			if ready, err := s.banks.ensureNativeCapacityV6(1, w); !ready || err != nil {
 				return false, err
 			}
-			s.banks, s.phase = banks, 4
-			if err := banks.ensureCapacity(1); err != nil {
-				return false, err
-			}
+			s.phase = 4
 		case 4:
 			if s.claim == nil {
-				claim, ready, err := runtime.idx.primary.PrepareClaim(primaryarena.Manifest, w)
+				claim, ready, err := runtime.idx.primary.PrepareNativeClaimV6(primaryarena.Manifest, w)
 				if !ready || err != nil {
 					return false, err
 				}
@@ -260,9 +272,10 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 			if !ready || err != nil {
 				return false, err
 			}
-			s.claim = nil
-			s.banks.refs = s.banks.refs[:1]
-			s.banks.refs[0] = ref
+			_ = ref // The original claim identity is consumed by the helper.
+			if ready, err := s.finishClaimV6(false, w); !ready || err != nil {
+				return false, err
+			}
 			s.phase = 5
 		case 5:
 			if !w.Reserve(3, 6*page.PageSize+2*uint64(unsafe.Sizeof(primaryManifestImagesV5{}))) {
@@ -350,7 +363,53 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.
 	}
 }
 
+// A late wrapper-detach refusal can follow an installed bank. Preserve that
+// original edge in the SAME bank construction before disposing the wrapper;
+// cancellation drops the bank through its existing queue, never Claim.Cancel.
+func (s *nativeMVCCSealPreparationV6) finishClaimV6(cancel bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if s.claim == nil {
+		return true, nil
+	}
+	ref, installed, ready, err := s.claim.NativeInstalledWithWorkV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	if installed {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(ref))) {
+			return false, nil
+		}
+		if s.banks == nil || cap(s.banks.refs) < 1 || (len(s.banks.refs) > 0 && s.banks.refs[0] != ref) {
+			return false, rootpublication.ErrDurableRootOwnership
+		}
+		s.banks.refs = s.banks.refs[:1]
+		s.banks.refs[0] = ref
+	} else if cancel {
+		ready, err = s.claim.Cancel(w)
+		if !ready || err != nil {
+			return false, err
+		}
+	} else {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	owner, charge, ready, err := s.claim.DetachNativeAccountingV6(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	s.claim = nil
+	s.claimRefundOwner, s.claimRefundCharge = owner, charge
+	return s.refund.CompleteRemovalWork(&s.claimRefundOwner, &s.claimRefundCharge, w)
+}
+
 func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {
+	if ready, err := s.refund.CompleteRemovalWork(&s.claimRefundOwner, &s.claimRefundCharge, w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := s.childCompletion.completeWithWork(&s.refund, w); !ready || err != nil {
+		return false, err
+	}
 	if s.phase == 0 && s.claim == nil {
 		// A declined proof clone may have copied only evidence bytes. Clear
 		// those bytes before the containing producer charge is withdrawn.
@@ -366,19 +425,18 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 			return false, err
 		}
 		s.seal = nil
-		completion.complete()
+		s.childCompletion = completion
+		if ready, err := s.childCompletion.completeWithWork(&s.refund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	for i := range s.indexCaptures {
 		if ready, err := s.indexCaptures[i].closeStep(w); !ready || err != nil {
 			return false, err
 		}
 	}
-	if s.claim != nil {
-		ready, err := s.claim.Cancel(w)
-		if !ready || err != nil {
-			return false, err
-		}
-		s.claim = nil
+	if ready, err := s.finishClaimV6(true, w); !ready || err != nil {
+		return false, err
 	}
 	if s.banks != nil {
 		completion, ready, err := continuePrimaryBankConstructionReleaseV6(s.banks, w)
@@ -386,7 +444,10 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 			return false, err
 		}
 		s.banks = nil
-		completion.complete()
+		s.childCompletion = completion
+		if ready, err := s.childCompletion.completeWithWork(&s.refund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if s.manifest != nil {
 		completion, ready, err := s.manifest.ReleaseOwnedMetadataWithWorkV6(w)
@@ -394,7 +455,10 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 			return false, err
 		}
 		s.manifest = nil
-		completion.Complete()
+		s.completion = completion
+		if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	for _, set := range [2]**rootpublication.StableResourceSet{&s.resources, &s.proofResources} {
 		if *set != nil {
@@ -403,7 +467,10 @@ func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bo
 				return false, err
 			}
 			*set = nil
-			completion.Complete()
+			s.completion = completion
+			if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+				return false, err
+			}
 		}
 	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {
@@ -461,7 +528,7 @@ func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iter
 	}
 	charge := primarySealMetadataV6(count)
 	owner := runtime.idx.primary.MetadataOwner()
-	if err := owner.AddPending(charge); err != nil {
+	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 		return false, err
 	}
 	prefix := make([]*freelist.PreparedCOWCandidateV1, count)

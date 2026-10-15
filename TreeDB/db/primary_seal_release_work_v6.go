@@ -3,6 +3,7 @@ package db
 import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"unsafe"
 )
@@ -14,6 +15,9 @@ import (
 func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {
 	if s == nil {
 		return true, nil
+	}
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(s.disposalFailure))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {
+		return false, nil
 	}
 	s.disposalMu.Lock()
 	defer s.disposalMu.Unlock()
@@ -31,7 +35,11 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 	fail := func(err error) (bool, error) {
 		s.disposalAttempted = true
 		s.disposalFailure.payload = s
-		s.disposalFailure.retainCause(0, err)
+		if w != nil {
+			s.disposalFailure.retainNativeCauseAdmittedV6(0, err)
+		} else {
+			s.disposalFailure.retainCause(0, err)
+		}
 		s.disposalErr = &s.disposalFailure
 		a.MetadataOwner().CleanupFailed()
 		return false, s.disposalErr
@@ -48,6 +56,14 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 	}
 	if s.disposalNative != (w != nil) {
 		return false, rootpublication.ErrResourceOwnership
+	}
+	if s.disposalNative {
+		if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+			return false, err
+		}
+		if ready, err := s.disposalChildCompletion.completeWithWork(&s.disposalRefund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	drop := func(ref *primaryarena.Ref) (bool, error) {
 		if !admit(1, 2*uint64(unsafe.Sizeof(*ref))) {
@@ -118,8 +134,11 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 			return false, nil
 		}
 		s.manifestBanks = nil
-		completion.complete()
+		s.disposalChildCompletion = completion
 		s.disposalPhase = 6
+		if ready, err := s.disposalChildCompletion.completeWithWork(&s.disposalRefund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if s.disposalPhase == 6 {
 		if s.proofResources != nil {
@@ -142,7 +161,14 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 				return false, nil
 			}
 			s.proofResources = nil
-			completion.Complete()
+			if w == nil {
+				completion.Complete()
+			} else {
+				s.disposalCompletion = completion
+				if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+					return false, err
+				}
+			}
 		}
 		s.disposalPhase = 7
 	}
@@ -167,7 +193,14 @@ func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *ite
 				return false, nil
 			}
 			s.token = nil
-			completion.Complete()
+			if w == nil {
+				completion.Complete()
+			} else {
+				s.disposalCompletion = completion
+				if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+					return false, err
+				}
+			}
 		}
 		s.disposalPhase = 8
 	}
@@ -191,6 +224,9 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 	if s == nil {
 		return empty, true, nil
 	}
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(s.disposalFailure))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {
+		return empty, false, nil
+	}
 	s.disposalMu.Lock()
 	defer s.disposalMu.Unlock()
 	if s.released {
@@ -203,7 +239,11 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 	fail := func(err error) (primaryRuntimeDisposalCompletionV6, bool, error) {
 		s.released = true
 		s.disposalFailure.payload = s
-		s.disposalFailure.retainCause(0, err)
+		if w != nil {
+			s.disposalFailure.retainNativeCauseAdmittedV6(0, err)
+		} else {
+			s.disposalFailure.retainCause(0, err)
+		}
 		s.disposalErr = &s.disposalFailure
 		if s.metadata != nil {
 			s.metadata.CleanupFailed()
@@ -219,6 +259,11 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 	}
 	if s.disposalNative != (w != nil) {
 		return empty, false, rootpublication.ErrResourceOwnership
+	}
+	if s.disposalNative {
+		if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+			return empty, false, err
+		}
 	}
 	if s.disposalPhase == 1 {
 		ready, err := abandonPrimarySealCommitStorageV6(s, w)
@@ -259,7 +304,14 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 				return empty, false, nil
 			}
 			s.resources = nil
-			completion.Complete()
+			if w == nil {
+				completion.Complete()
+			} else {
+				s.disposalCompletion = completion
+				if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+					return empty, false, err
+				}
+			}
 		}
 		s.disposalPhase = 3
 	}
@@ -284,7 +336,14 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 				return empty, false, nil
 			}
 			s.token = nil
-			completion.Complete()
+			if w == nil {
+				completion.Complete()
+			} else {
+				s.disposalCompletion = completion
+				if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+					return empty, false, err
+				}
+			}
 		}
 		s.disposalPhase = 4
 	}
@@ -301,7 +360,14 @@ func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.
 				return empty, false, nil
 			}
 			s.manifest = nil
-			completion.Complete()
+			if w == nil {
+				completion.Complete()
+			} else {
+				s.disposalCompletion = completion
+				if ready, err := s.disposalCompletion.CompleteWithWorkV6(&s.disposalRefund, w); !ready || err != nil {
+					return empty, false, err
+				}
+			}
 		}
 		s.disposalPhase = 5
 	}

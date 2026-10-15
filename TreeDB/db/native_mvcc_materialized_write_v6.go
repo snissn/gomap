@@ -79,6 +79,9 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCMaterializedInputV6(basis *Sna
 	return entries, ready, nil
 }
 func (c *NativeMVCCCurrentDeleteV6) closeMaterializedInputWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if ready, err := c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w); !ready || err != nil {
+		return false, err
+	}
 	if c.inputWork == nil {
 		return true, nil
 	}
@@ -87,8 +90,8 @@ func (c *NativeMVCCCurrentDeleteV6) closeMaterializedInputWorkV6(w *iterator.Ord
 		return false, e
 	}
 	c.inputWork = nil
-	owner.RemovePending(charge)
-	return true, nil
+	c.cleanupOwner, c.cleanupCharge = owner, charge
+	return c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w)
 }
 
 // StepNativeMVCCMaterializedOutputV6 advances only private materialized DATA.

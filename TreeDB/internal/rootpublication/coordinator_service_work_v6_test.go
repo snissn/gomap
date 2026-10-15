@@ -6,7 +6,30 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
+
+func TestNativeFiniteResourceContainingSizesV6(t *testing.T) {
+	for _, row := range []struct {
+		name string
+		size uintptr
+	}{
+		{"DurableRootTransaction", unsafe.Sizeof(DurableRootTransaction{})},
+		{"primaryTransactionConstructionV6", unsafe.Sizeof(primaryTransactionConstructionV6{})},
+		{"primaryTerminalCompletionV6", unsafe.Sizeof(primaryTerminalCompletionV6{})},
+		{"PrimaryPromotionV6", unsafe.Sizeof(PrimaryPromotionV6{})},
+		{"StableResourceSet", unsafe.Sizeof(StableResourceSet{})},
+		{"StableResourceToken", unsafe.Sizeof(StableResourceToken{})},
+		{"resourceAllocation", unsafe.Sizeof(resourceAllocation{})},
+		{"resourcePinnedBacking", unsafe.Sizeof(resourcePinnedBacking{})},
+		{"resourceKindBacking", unsafe.Sizeof(resourceKindBacking{})},
+		{"resourceReleaseFrameV6", unsafe.Sizeof(resourceReleaseFrameV6{})},
+		{"StableIndexTokenConstructionWorkV6", unsafe.Sizeof(StableIndexTokenConstructionWorkV6{})},
+		{"PrimaryConstructionReleaseWork", unsafe.Sizeof(PrimaryConstructionReleaseWork{})},
+	} {
+		t.Logf("layout sourceSymbol=%s size=%d allocationCharge=%d", row.name, row.size, retainedalloc.AllocationCharge(uint64(row.size)))
+	}
+}
 
 // Pricing/refusal only: no coordinator goroutine, timer/channel creation,
 // activation, enqueue, publication, authority write or physical Finish runs.

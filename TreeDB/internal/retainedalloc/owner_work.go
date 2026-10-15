@@ -72,6 +72,11 @@ func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bo
 	if w != nil && (w.RecordLimit == 0 || w.ByteLimit == 0) {
 		return false, nil
 	}
+	// An active enrollment can appear between retained calls. Price its
+	// original header before inspecting pending admission or a lease operand.
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(Owner{}))+2*uint64(unsafe.Sizeof(EnrollmentWork{}))) {
+		return false, nil
+	}
 	if active := o.enrollment; active != nil && active.pending != nil && active.pendingAdmitted != o.bytes {
 		var ready bool
 		var err error
@@ -79,7 +84,11 @@ func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bo
 			err = active.pending.Resize(o.bytes)
 			ready = err == nil
 		} else {
-			ready, err = active.pending.(WorkLease).ResizeWork(o.bytes, w)
+			lease, ok := active.pending.(WorkLease)
+			if !ok {
+				return false, ErrWorkRequired
+			}
+			ready, err = lease.ResizeWork(o.bytes, w)
 		}
 		if err != nil {
 			s.failure = err
@@ -121,10 +130,25 @@ func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bo
 			}
 			// Original growth may have changed the target since a prior return. A
 			// cleanup step never reinstates a stale, smaller producer admission.
-			if err := b.lease.Resize(o.bytes); err != nil {
+			var ready bool
+			var err error
+			if w == nil {
+				err = b.lease.Resize(o.bytes)
+				ready = err == nil
+			} else {
+				lease, ok := b.lease.(WorkLease)
+				if !ok {
+					return false, ErrWorkRequired
+				}
+				ready, err = lease.ResizeWork(o.bytes, w)
+			}
+			if err != nil {
 				s.failure = err
 				o.cleanupFailed = true
 				return false, err
+			}
+			if !ready {
+				return false, nil
 			}
 			b.admitted = o.bytes
 			if o.closed {
@@ -134,6 +158,19 @@ func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bo
 		}
 		if !reserveCleanup(w, 3, 6*uint64(unsafe.Sizeof(binding{}))+128) {
 			return false, nil
+		}
+		// Price the concrete last-binding Close before detaching its original
+		// intrusive links. A binding enrolled by an ordinary caller after a
+		// yield must prove capability again at its actual consumption.
+		willDispose := b.cleanupRefs == 1 && b.refs == 0 && !b.producer && (!o.closed && !o.retired && !o.cleanupFailed || o.closed && o.pending == 0 && o.enrolling == 0 && (o.enrollment == nil || o.enrollment.pending != nil))
+		if w != nil && willDispose {
+			lease, ok := b.lease.(WorkLease)
+			if !ok {
+				return false, ErrWorkRequired
+			}
+			if !lease.AdmitRetentionClose(w) {
+				return false, nil
+			}
 		}
 		next := b.next
 		if next != nil {
@@ -270,22 +307,22 @@ func (s *RemovalWork) BindPendingWork(o *Owner, amount uint64, w *iterator.Ordin
 	if w == nil {
 		return false, ErrWorkRequired
 	}
-	return s.bindPending(o, amount, true, w)
+	return s.bindRemoval(o, amount, true, true, w)
 }
 
 // BindPendingOriginal uses the same external receipt with ordinary synchronous
 // policy. It preserves the producer/charge check without allocating work scratch.
 func (s *RemovalWork) BindPendingOriginal(o *Owner, amount uint64) (bool, error) {
-	return s.bindPending(o, amount, false, nil)
+	return s.bindRemoval(o, amount, true, false, nil)
 }
-func (s *RemovalWork) bindPending(o *Owner, amount uint64, native bool, w *iterator.OrdinalScanWork) (bool, error) {
+func (s *RemovalWork) bindRemoval(o *Owner, amount uint64, pending, native bool, w *iterator.OrdinalScanWork) (bool, error) {
 	if s == nil || o == nil {
 		return false, ErrCapacity
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bound {
-		if s.owner != o || s.amount != amount || !s.pending || s.native != native {
+		if s.owner != o || s.amount != amount || s.pending != pending || s.native != native {
 			return false, ErrCapacity
 		}
 		return true, nil
@@ -298,7 +335,7 @@ func (s *RemovalWork) bindPending(o *Owner, amount uint64, native bool, w *itera
 	}
 	s.owner = o
 	s.amount = amount
-	s.pending = true
+	s.pending = pending
 	s.native = native
 	s.bound = true
 	return true, nil
@@ -316,6 +353,78 @@ func (s *RemovalWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
 // cannot consume a paused bounded receipt owned by another caller.
 func (s *RemovalWork) ContinueOriginal() (bool, error) {
 	return s.continueRemoval(false, nil)
+}
+
+// ResetCompletedWork reuses a surviving parent's receipt only after its exact
+// previous delta completed. It never copies or resets the initialized mutex.
+// The parent must already have ended every alias to the disposed child.
+func (s *RemovalWork) ResetCompletedWork(w *iterator.OrdinalScanWork) (bool, error) {
+	return s.resetWork(w, false)
+}
+
+// ResetUnusedOrCompletedWork is for a terminal original parent whose optional
+// delta may never have bound. A live or refused traversal still cannot reset.
+func (s *RemovalWork) ResetUnusedOrCompletedWork(w *iterator.OrdinalScanWork) (bool, error) {
+	return s.resetWork(w, true)
+}
+func (s *RemovalWork) resetWork(w *iterator.OrdinalScanWork, unused bool) (bool, error) {
+	if s == nil || w == nil {
+		return false, ErrWorkRequired
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.done && !(unused && !s.bound && !s.started) {
+		return false, ErrCapacity
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {
+		return false, nil
+	}
+	s.owner, s.amount = nil, 0
+	s.pending, s.native, s.bound, s.started, s.done = false, false, false, false, false
+	s.shrink = shrinkWork{}
+	return true, nil
+}
+
+// CompletePendingWork consumes an accounting-only callback result held in a
+// surviving parent. Callers detach the disposed child's aliases first and keep
+// owner/amount unchanged on refusal. The receipt is explicitly reset only after
+// the previous exact intrusive traversal has terminated.
+func (s *RemovalWork) CompletePendingWork(owner **Owner, amount *uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	return s.completeWork(owner, amount, true, w)
+}
+
+// CompleteRemovalWork is the same receipt for original nonpending arena and
+// pager allocation deltas. It does not convert them into pending charges.
+func (s *RemovalWork) CompleteRemovalWork(owner **Owner, amount *uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	return s.completeWork(owner, amount, false, w)
+}
+
+func (s *RemovalWork) completeWork(owner **Owner, amount *uint64, pending bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if owner == nil || amount == nil || w == nil {
+		return false, ErrWorkRequired
+	}
+	if *owner == nil {
+		return true, nil
+	}
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if !done {
+		ready, err := s.bindRemoval(*owner, *amount, pending, true, w)
+		if !ready || err != nil {
+			return false, err
+		}
+		ready, err = s.ContinueWork(w)
+		if !ready || err != nil {
+			return false, err
+		}
+	}
+	ready, err := s.ResetCompletedWork(w)
+	if !ready || err != nil {
+		return false, err
+	}
+	*owner, *amount = nil, 0
+	return true, nil
 }
 func (s *RemovalWork) continueRemoval(native bool, w *iterator.OrdinalScanWork) (bool, error) {
 	if s == nil {

@@ -95,24 +95,27 @@ type Counters struct {
 	GroupsCreated, GroupsFreed                                                              uint64
 }
 type Arena struct {
-	mu                   sync.Mutex
-	closeWork            physicalCloseState
-	pager                *pager.Pager
-	uuid                 [16]byte
-	chunks               [maxChunks]*bankChunk
-	next, free, epoch    uint64
-	ordinaryRelease      ReleaseQueue
-	recovered            bool
-	counters             Counters
-	metadataDecoder      MetadataDecoder
-	ownedMetadataDecoder OwnedMetadataDecoder
-	firstBank            uint64
-	capsuleFormat        bool
-	readSerial           uint64
-	metadata             retainedalloc.Owner
-	freePair             uint64
-	repackCursor         uint64
-	repackEpoch          uint64
+	readRootConstructorV6   readRootOwnerConstructorV6
+	mu                      sync.Mutex
+	closeWork               physicalCloseState
+	pager                   *pager.Pager
+	uuid                    [16]byte
+	chunks                  [maxChunks]*bankChunk
+	next, free, epoch       uint64
+	ordinaryRelease         ReleaseQueue
+	recovered               bool
+	counters                Counters
+	metadataDecoder         MetadataDecoder
+	ownedMetadataDecoder    OwnedMetadataDecoder
+	borrowedMetadataDecoder BorrowedMetadataDecoder
+	metadataDecodeScratch   [2]MetadataEdge
+	firstBank               uint64
+	capsuleFormat           bool
+	readSerial              uint64
+	metadata                retainedalloc.Owner
+	freePair                uint64
+	repackCursor            uint64
+	repackEpoch             uint64
 }
 
 func IsPage(id uint64) bool                                 { return id&Namespace != 0 && id < Namespace*2 }
@@ -249,6 +252,7 @@ func (a *Arena) Close() error        { return a.closeOrdinaryPhysical() }
 // two prepared claims from publishing the same bank. A caller may cancel before
 // installation; an installed claim must drop its own independent owner.
 type Claim struct {
+	native, prepared bool
 	arena            *Arena
 	epoch, local     uint64
 	class            Class
@@ -261,6 +265,19 @@ type Claim struct {
 }
 
 func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {
+	return a.prepareClaimV6(class, w, false)
+}
+
+// PrepareNativeClaimV6 returns original custody before any fallible private
+// chunk/Growth preparation. The caller retains it through Step or Cancel and
+// then consumes its accounting only after detaching the Claim alias.
+func (a *Arena) PrepareNativeClaimV6(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {
+	if w == nil {
+		return nil, false, retainedalloc.ErrWorkRequired
+	}
+	return a.prepareClaimV6(class, w, true)
+}
+func (a *Arena) prepareClaimV6(class Class, w *iterator.OrdinalScanWork, native bool) (*Claim, bool, error) {
 	if class != Component && class != Directory && class != Dependency && class != Manifest && class != Record {
 		return nil, false, ErrFormat
 	}
@@ -301,10 +318,13 @@ func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, 
 		return nil, false, ErrFull
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Claim{})))
-	if err := a.metadata.Add(charge); err != nil {
+	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
 		return nil, false, err
 	}
-	c := &Claim{metadataCharge: charge, arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}
+	c := &Claim{native: native, metadataCharge: charge, arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}
+	if native {
+		return c, true, nil
+	}
 	keepChunk := false
 	defer func() {
 		if !keepChunk {
@@ -337,6 +357,9 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	if c == nil || c.cancelled {
 		return Ref{}, false, ErrStale
 	}
+	if c.native && (w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c)))) {
+		return Ref{}, false, nil
+	}
 	if c.ready {
 		return c.ref, true, nil
 	}
@@ -345,6 +368,28 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	defer a.mu.Unlock()
 	if a.epoch != c.epoch {
 		return Ref{}, false, ErrStale
+	}
+	if c.native && !c.prepared {
+		if w == nil {
+			return Ref{}, false, retainedalloc.ErrWorkRequired
+		}
+		if a.chunks[c.local/chunkBanks] == nil && c.chunk == nil {
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(bankChunk{}))+128) {
+				return Ref{}, false, nil
+			}
+			if err := retainedalloc.AddWithOrdinalWork(&a.metadata, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{}))), w); err != nil {
+				return Ref{}, false, err
+			}
+			c.chunk = new(bankChunk)
+		}
+		if c.local == a.next && c.growth == nil {
+			g, ready, err := pager.NewGrowthForPager(a.pager, c.local+1, w)
+			if !ready || err != nil {
+				return Ref{}, false, err
+			}
+			c.growth = g
+		}
+		c.prepared = true
 	}
 	install := func() {
 		if c.chunk != nil {
@@ -404,6 +449,12 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 // Installed bank/pager capacity remains charged to the same physical owner.
 func (c *Claim) finish() {
 	a, charge := c.arena, c.metadataCharge
+	if c.native {
+		// Original installed bank/chunk outputs keep arena custody. The
+		// disposing parent still owns this wrapper until callback return.
+		c.growth, c.chunk = nil, nil
+		return
+	}
 	c.arena, c.growth, c.chunk = nil, nil, nil
 	c.metadataCharge = 0
 	a.metadata.Remove(charge)
@@ -422,10 +473,52 @@ func (c *Claim) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 			return ok, e
 		}
 	}
-	c.arena.discardChunk(&c.chunk)
+	if c.native {
+		if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
+			return false, nil
+		}
+		if c.chunk != nil {
+			c.chunk = nil
+			c.metadataCharge += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bankChunk{})))
+		}
+	} else {
+		c.arena.discardChunk(&c.chunk)
+	}
 	c.cancelled = true
 	c.finish()
 	return true, nil
+}
+
+// NativeInstalledWithWorkV6 exposes only this claim's already installed Ref.
+// The SAME producer must retain that edge before detaching wrapper accounting.
+func (c *Claim) NativeInstalledWithWorkV6(w *iterator.OrdinalScanWork) (Ref, bool, bool, error) {
+	if c == nil || !c.native || w == nil {
+		return Ref{}, false, false, retainedalloc.ErrWorkRequired
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
+		return Ref{}, false, false, nil
+	}
+	return c.ref, c.ready, true, nil
+}
+
+// DetachNativeAccountingV6 returns accounting only after the original Claim
+// operation finished. Its surviving caller clears the Claim alias before
+// driving SAME RemovalWork; this method never refunds its own receiver.
+func (c *Claim) DetachNativeAccountingV6(w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error) {
+	if c == nil || !c.native || w == nil {
+		return nil, 0, false, retainedalloc.ErrWorkRequired
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {
+		return nil, 0, false, nil
+	}
+	if (!c.ready && !c.cancelled) || c.arena == nil {
+		return nil, 0, false, ErrStale
+	}
+	owner, charge := &c.arena.metadata, c.metadataCharge
+	c.arena, c.growth, c.chunk = nil, nil, nil
+	c.ref = Ref{}
+	c.metadataCharge = 0
+	return owner, charge, true, nil
 }
 
 func (a *Arena) SealComponent(r Ref, image []byte, w *iterator.OrdinalScanWork) (bool, error) {
@@ -622,7 +715,10 @@ func (a *Arena) installSealedDirectoryLockedV6(b *bank, r Ref, d node.PrimaryDir
 	b.sealed = true
 	if owner != nil {
 		b.privatePublication = false
-		b.readCertificate = &ReadRootCertificateV6{arena: a, ref: r, directory: b.directory, image: b.image, digest: b.digest}
+		if b.readCertificate == nil {
+			b.readCertificate = &ReadRootCertificateV6{}
+		}
+		*b.readCertificate = ReadRootCertificateV6{arena: a, ref: r, directory: b.directory, image: b.image, digest: b.digest}
 	}
 	return b.readCertificate
 }
@@ -722,6 +818,10 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 	if queue == nil || queue.owner != a {
 		return false, false, ErrStale
 	}
+	if w != nil && queue.refundOwner != nil {
+		ready, err := queue.refund.CompleteRemovalWork(&queue.refundOwner, &queue.refundCharge, w)
+		return ready, ready, err
+	}
 	if queue.bankHead == 0 && queue.groupHead == nil {
 		a.counters.Bytes += queueBytes
 		return true, false, nil
@@ -774,7 +874,12 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 		queue.groupHead = g.releaseNext
 		g.releaseNext = nil
 		g.base = nil
-		a.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Group{}))))
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Group{})))
+		if w == nil {
+			a.metadata.Remove(charge)
+		} else {
+			queue.refundOwner, queue.refundCharge = &a.metadata, charge
+		}
 		a.counters.GroupsFreed++
 		a.counters.Bytes += bytes
 		return true, true, nil
@@ -831,7 +936,15 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 		return true, true, nil
 	}
 	if local >= pager.PrimaryReadRootLocalBaseV6 {
-		ok, e := a.pager.RemovePrimaryReadRootV6(local, w)
+		var nodeOwner *retainedalloc.Owner
+		var nodeCharge uint64
+		var ok bool
+		var e error
+		if w == nil {
+			ok, e = a.pager.RemovePrimaryReadRootV6(local, nil)
+		} else {
+			nodeOwner, nodeCharge, ok, e = a.pager.RemovePrimaryReadRootAccountingV6(local, w)
+		}
 		if !ok || e != nil {
 			a.enqueueOn(queue, local, b)
 			return ok, false, e
@@ -842,7 +955,14 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 		b.directory = node.PrimaryDirectoryView{}
 		b.readCertificate = nil
 		b.metadataCharge = 0
-		a.metadata.Remove(charge)
+		if w == nil {
+			a.metadata.Remove(charge)
+		} else {
+			if nodeOwner != nil && nodeOwner != &a.metadata {
+				panic("primary node changed metadata owner")
+			}
+			queue.refundOwner, queue.refundCharge = &a.metadata, charge+nodeCharge
+		}
 		a.epoch++
 		a.counters.BanksFreed++
 		a.counters.Bytes += bytes
@@ -855,7 +975,11 @@ func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWor
 	b.image = nil
 	b.edges = nil
 	b.readCertificate = nil
-	a.metadata.Remove(b.metadataCharge)
+	if w == nil {
+		a.metadata.Remove(b.metadataCharge)
+	} else {
+		queue.refundOwner, queue.refundCharge = &a.metadata, b.metadataCharge
+	}
 	b.metadataCharge = 0
 	b.releaseEdge = 0
 	b.reusable = true
@@ -1128,6 +1252,9 @@ func (a *Arena) sealExactReplacement(destination, current Ref, entry node.Primar
 // neighbor or caller-supplied digest can authorize the current absence append.
 
 func (a *Arena) sealExactAbsence(destination, current Ref, entry node.PrimaryDirectoryEntry, expectedRevision page.EntryRevision, scratch []byte, record *bundleRecord, w *iterator.OrdinalScanWork) (bool, error) {
+	if w != nil {
+		return false, retainedalloc.ErrWorkRequired
+	} // general group constructor/rollback has no finite parent yet
 	const fixedRecords = 7
 	bytesCost := uint64(24*page.PageSize) + 4*uint64(unsafe.Sizeof(bank{})) + 3*uint64(unsafe.Sizeof(Group{})) + uint64(groupSize)*2*uint64(unsafe.Sizeof(bank{})) + uint64(groupCount)*2*uint64(unsafe.Sizeof(Group{}))
 	// Page reads/writes reserve in the ordinary pager, independently below.

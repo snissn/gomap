@@ -200,7 +200,7 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 	if result.Outcome != PublishSucceeded {
 		// First-error receipt, optional joinError + two-error backing, empty
 		// waiter disposal, and poison/request fields are fixed original work.
-		if !w.Reserve(4, 2*uint64(unsafe.Sizeof(result.Err))+uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(c.poison))+uint64(unsafe.Sizeof(c.publishNow))+uint64(unsafe.Sizeof(c.wakeReason))) {
+		if !w.Reserve(6, 2*uint64(unsafe.Sizeof(result.Err))+uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(c.poison))+uint64(unsafe.Sizeof(c.publishNow))+uint64(unsafe.Sizeof(c.wakeReason))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+16) {
 			return false, nil
 		}
 		cause := result.Err
@@ -213,11 +213,19 @@ func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, res
 		// No success transition on retry/ambiguity. The SAME original receipt stays
 		// reachable; its caller applies the existing physical failure disposition.
 		if result.Outcome == PublishAmbiguous {
-			c.poison = errors.Join(ErrRecoveryRequired, cause)
+			if c.poison == nil {
+				c.poison = errors.Join(ErrRecoveryRequired, cause)
+			}
 			c.failWaitersLocked(c.poison)
 			c.clearPublishRequestLockedWithNativeV6(&stop)
 		}
+		// Exactly as ordinary finishPublishLocked, a failed invocation ends its
+		// publication turn. The original pending entry/candidate and native join
+		// remain retained error/recovery custody; no containing refund is allowed.
+		c.activeAttempt, r.attempt = PublishAttempt{}, PublishAttempt{}
+		c.publishing, r.turn = false, false
 		notify.commit(c)
+		wake.commit(c)
 		return false, cause
 	}
 	candidate := r.candidate

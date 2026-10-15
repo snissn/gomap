@@ -132,7 +132,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.Ordina
 			owner := c.snapshot.idx.primary.MetadataOwner()
 			charge := retainedalloc.AllocationCharge(uint64(s.count) * 8)
 			if s.count != 0 {
-				if err := owner.AddPending(charge); err != nil {
+				if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 					return false, err
 				}
 				s.retired = make([]uint64, s.count)
@@ -213,11 +213,15 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.Ordina
 			root.next.FreelistHeadID = 0
 			s.phase = 6
 		case 6:
+			ready, err := s.preparation.BindInstalledPageProducerV6(c.output, w)
+			if !ready || err != nil {
+				return false, err
+			}
 			prepared := s.preparation.PreparedForConstructionV6()
 			if prepared == nil {
 				return false, rootpublication.ErrDurableRootOwnership
 			}
-			ready, err := a.PrepareCOWActivationWithWorkV1(prepared.Candidate(), &s.activation, w)
+			ready, err = a.PrepareCOWActivationWithWorkV1(prepared.Candidate(), &s.activation, w)
 			if !ready || err != nil {
 				return false, err
 			}
@@ -247,7 +251,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.Ordina
 	}
 }
 
-func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {
+func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error) {
 	ready, err := s.preparation.Cancel(w)
 	if !ready || err != nil {
 		return false, err
@@ -258,8 +262,21 @@ func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork
 	owner, charge := s.owner, s.charge
 	clear(s.retired)
 	*s = nativeMVCCAllocatorPreparationV6{}
-	if owner != nil {
-		owner.RemovePending(charge)
+	*refundOwner, *refundCharge = owner, charge
+	return true, nil
+}
+
+func (s *nativeMVCCAllocatorPreparationV6) closePublishedStepV6(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error) {
+	ready, err := s.preparation.ClosePublishedWithWorkV6(w)
+	if !ready || err != nil {
+		return false, err
 	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+uint64(len(s.retired))*8) {
+		return false, nil
+	}
+	owner, charge := s.owner, s.charge
+	clear(s.retired)
+	*s = nativeMVCCAllocatorPreparationV6{}
+	*refundOwner, *refundCharge = owner, charge
 	return true, nil
 }

@@ -25,9 +25,13 @@ type resourceReleaseFrameV6 struct {
 	// existing release actor while external providers run without that mutex.
 	running         bool
 	directory       *DependencyDirectoryReleaseWork
-	directoryTarget *DependencyDirectoryV2
+	directoryActive bool
 	scratchOwner    *retainedalloc.Owner
 	scratchCharge   uint64
+	refund          retainedalloc.RemovalWork
+	refundOwner     *retainedalloc.Owner
+	refundCharge    uint64
+	failureCursor   *resourceReleaseFrameV6
 }
 
 type resourceGraphReleaseCompletionV6 struct {
@@ -54,11 +58,11 @@ func startResourceGraphReleaseV6(a *resourceAllocation, value any, w *iterator.O
 	if a == nil {
 		return nil, true, nil
 	}
-	if err := a.cleanupResult(); err != nil {
-		return nil, false, err
-	}
 	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*a))) {
 		return nil, false, nil
+	}
+	if err := a.cleanupResult(); err != nil {
+		return nil, false, err
 	}
 	if !a.drop() {
 		return nil, true, nil
@@ -89,39 +93,45 @@ func (root *resourceReleaseFrameV6) child(a *resourceAllocation, value any, w *i
 
 func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {
 	var empty resourceGraphReleaseCompletionV6
+	if !resourceGraphReserveV6(w, 1, uint64(unsafe.Sizeof(*root))) {
+		return empty, false, nil
+	}
 	fail := func(err error) (resourceGraphReleaseCompletionV6, bool, error) {
-		root.err = err
-		for f := root.current; f != nil; f = f.parent {
-			if f.allocation != nil {
-				f.allocation.cleanupFailed(f.value, err)
-			}
-			if f.owner != nil {
-				f.owner.CleanupFailed()
-			}
-			switch n := f.value.(type) {
-			case *StableResourceSet:
-				n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
-				n.cleanupDone.Store(true)
-			case *stableResourceEntryNode:
-				n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
-				n.cleanupDone.Store(true)
-			case *StableResourceToken:
-				n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
-				n.cleanupDone.Store(true)
-			case *resourcePinnedBacking:
-				n.failure = err
-				if n.registry != nil {
-					n.registry.retainFailedPinnedBacking(n)
-				}
-			}
+		if root.err == nil {
+			root.err, root.failureCursor = err, root.current
 		}
-		return empty, false, err
+		return root.propagateFailure(w)
 	}
 	if root.err != nil {
-		return empty, false, root.err
+		return root.propagateFailure(w)
 	}
 	for root.current != nil {
+		if w != nil && root.directoryActive {
+			consumed, ready, err := root.directory.continueWork(w)
+			if err != nil {
+				return fail(err)
+			}
+			if !ready {
+				return empty, false, nil
+			}
+			if !consumed {
+				return fail(ErrResourceOwnership)
+			}
+			ready, err = root.directory.resetCompletedWork(w)
+			if err != nil {
+				return fail(err)
+			}
+			if !ready {
+				return empty, false, nil
+			}
+			root.directoryActive = false
+		}
 		f := root.current
+		if w != nil {
+			if ready, err := f.refund.CompletePendingWork(&f.refundOwner, &f.refundCharge, w); !ready || err != nil {
+				return empty, false, err
+			}
+		}
 		if f.allocation != nil {
 			if err := f.allocation.cleanupResult(); err != nil {
 				return fail(err)
@@ -150,6 +160,17 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 		owner, charge := f.owner, f.charge
 		if a != nil {
 			owner, charge = a.owner, a.charge
+		}
+		// Validate the exact receiving owner before detaching any source.
+		if parent == nil && root.scratchOwner != nil && root.scratchOwner != owner {
+			return fail(ErrResourceOwnership)
+		}
+		if parent != nil && f.deferToParent && owner != nil && parent.owner != owner {
+			return fail(ErrResourceOwnership)
+		}
+		deferToParent := f.deferToParent
+		if a != nil {
+			owner, charge = a.owner, a.charge
 			a.owner, a.charge = nil, 0
 		}
 		f.owner, f.charge = nil, 0
@@ -158,26 +179,73 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 		if parent == nil {
 			if root.scratchOwner != nil {
 				scratchOwner, scratchCharge := root.scratchOwner, root.scratchCharge
-				root.directory, root.directoryTarget = nil, nil
+				root.directory, root.directoryActive = nil, false
 				root.scratchOwner, root.scratchCharge = nil, 0
-				scratchOwner.RemovePending(scratchCharge)
+				if scratchOwner != owner {
+					return fail(ErrResourceOwnership)
+				}
+				charge += scratchCharge
 			}
 			return resourceGraphReleaseCompletionV6{owner, charge}, true, nil
 		}
 		// The parent alias was detached when this child was entered. Only the
 		// original intrusive frame retained it, and that alias has now ended too.
 		if owner != nil {
-			if f.deferToParent {
+			if deferToParent {
 				if parent.owner != owner {
 					return fail(ErrResourceOwnership)
 				}
 				parent.charge += charge
 			} else {
-				owner.RemovePending(charge)
+				if w == nil {
+					owner.RemovePending(charge)
+				} else {
+					parent.refundOwner, parent.refundCharge = owner, charge
+					f, a = nil, nil
+					if ready, err := parent.refund.CompletePendingWork(&parent.refundOwner, &parent.refundCharge, w); !ready || err != nil {
+						return empty, false, err
+					}
+				}
 			}
 		}
 	}
 	return empty, true, nil
+}
+
+// A failure retains the original ancestor links. Each actual ancestor and
+// first-error write is admitted before inspection; no unbounded error walk is
+// hidden in a return from the physical provider.
+func (root *resourceReleaseFrameV6) propagateFailure(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {
+	for root.failureCursor != nil {
+		if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(resourceReleaseFrameV6{}))+2*uint64(unsafe.Sizeof(resourceAllocation{}))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))+2*uint64(unsafe.Sizeof(StableResourceSet{}))+2*uint64(unsafe.Sizeof(StableResourceToken{}))+2*uint64(unsafe.Sizeof(resourcePinnedBacking{}))+2*uint64(unsafe.Sizeof(IdentityPinRegistry{}))) {
+			return resourceGraphReleaseCompletionV6{}, false, nil
+		}
+		f, err := root.failureCursor, root.err
+		if f.allocation != nil {
+			f.allocation.cleanupFailed(f.value, err)
+		}
+		if f.owner != nil {
+			f.owner.CleanupFailed()
+		}
+		switch n := f.value.(type) {
+		case *StableResourceSet:
+			n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
+			n.cleanupDone.Store(true)
+		case *stableResourceEntryNode:
+			n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
+			n.cleanupDone.Store(true)
+		case *StableResourceToken:
+			n.cleanupFailure.original, n.cleanupFailure.causes[0] = n, err
+			n.cleanupDone.Store(true)
+		case *resourcePinnedBacking:
+			n.failure = err
+			if n.registry != nil {
+				n.registry.retainFailedPinnedBacking(n)
+			}
+		}
+		root.failureCursor = f.parent
+	}
+	return resourceGraphReleaseCompletionV6{}, false, root.err
 }
 
 func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {
@@ -462,7 +530,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 					}
 					t.ownedOperations = nil
 					if owner != nil {
-						owner.RemovePending(charge)
+						f.refundOwner, f.refundCharge = owner, charge
 					}
 				}
 			}
@@ -550,7 +618,12 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 				a := n.frontier
 				n.frontier = nil
 				n.frontierValue = DurableFrontier{}
-				a.refund()
+				if w == nil {
+					a.refund()
+				} else {
+					f.refundOwner, f.refundCharge = a.owner, a.charge
+					a.owner, a.charge = nil, 0
+				}
 			}
 			f.claimed = false
 			f.offset = 0
@@ -784,31 +857,22 @@ func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2, w
 		if !w.Reserve(1, charge) {
 			return false, nil
 		}
-		if err := owner.AddPending(charge); err != nil {
+		if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 			return false, err
 		}
 		root.directory = &DependencyDirectoryReleaseWork{}
 		root.scratchOwner, root.scratchCharge = owner, charge
 	}
-	if root.directoryTarget == nil {
-		ready, err := root.directory.bind(d, w)
-		if !ready || err != nil {
-			return false, err
-		}
-		root.directoryTarget = d
-	}
-	if root.directoryTarget != d {
+	if root.directoryActive {
 		return false, ErrResourceOwnership
 	}
-	consumed, ready, err := root.directory.continueWork(w)
+	ready, err := root.directory.bind(d, w)
 	if !ready || err != nil {
 		return false, err
 	}
-	if !consumed {
-		return false, ErrResourceOwnership
-	}
-	root.directoryTarget = nil
-	*root.directory = DependencyDirectoryReleaseWork{}
+	// The caller now clears the original outgoing directory alias. Drive its
+	// original receipt only after that caller returned to the graph loop.
+	root.directoryActive = true
 	return true, nil
 }
 

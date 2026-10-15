@@ -52,6 +52,8 @@ type primaryDurableRuntimeV5 struct {
 	disposalIndex           int
 	disposalNative          bool
 	disposalQueue           primaryarena.ReleaseQueue
+	disposalRefund          retainedalloc.RemovalWork
+	disposalCompletion      rootpublication.StableResourceTokenReleaseCompletionV6
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
@@ -61,22 +63,25 @@ type primaryDurableRuntimeV5 struct {
 	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
-	disposalPhase     uint8
-	disposalIndex     int
-	disposalNative    bool
-	disposalQueue     primaryarena.ReleaseQueue
-	disposalMu        sync.Mutex
-	disposalAttempted bool
-	disposalErr       error
-	disposalFailure   originalDBCleanupFailure
-	prepared          *rootpublication.PreparedPrimaryRootV5
-	projection        rootpublication.PrimaryProjectionV5
-	manifestBanks     *primaryBankConstructionV5
-	token             *rootpublication.StableResourceToken
-	proof             primaryarena.Ref
-	recordTransferred bool
-	proofResources    *rootpublication.StableResourceSet
-	promotion         *rootpublication.PrimaryPromotionV6
+	disposalPhase           uint8
+	disposalIndex           int
+	disposalNative          bool
+	disposalQueue           primaryarena.ReleaseQueue
+	disposalRefund          retainedalloc.RemovalWork
+	disposalCompletion      rootpublication.StableResourceTokenReleaseCompletionV6
+	disposalChildCompletion primaryRuntimeDisposalCompletionV6
+	disposalMu              sync.Mutex
+	disposalAttempted       bool
+	disposalErr             error
+	disposalFailure         originalDBCleanupFailure
+	prepared                *rootpublication.PreparedPrimaryRootV5
+	projection              rootpublication.PrimaryProjectionV5
+	manifestBanks           *primaryBankConstructionV5
+	token                   *rootpublication.StableResourceToken
+	proof                   primaryarena.Ref
+	recordTransferred       bool
+	proofResources          *rootpublication.StableResourceSet
+	promotion               *rootpublication.PrimaryPromotionV6
 }
 
 func (db *DB) primaryCurrentRootV5() *primaryStateRootV5 {
@@ -111,7 +116,7 @@ func (db *DB) attachPrimaryArenaV5(idx *indexGen, opts Options) error {
 	if e != nil {
 		return e
 	}
-	if e = a.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5); e != nil {
+	if e = a.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5, rootpublication.PrimaryBankMetadataEdgesIntoV6); e != nil {
 		a.Close()
 		return e
 	}
@@ -769,8 +774,17 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealScopedV6(seal *rootPub
 			clear(primary.proofResources[:])
 			clear(primary.capsuleImages[:])
 			clear(primary.capsuleViews[:])
-			primary.current, primary.metadata, primary.metadataCharge = nil, nil, 0
-			a.MetadataOwner().RemovePending(runtimeCharge)
+			primary.current = nil
+			if native {
+				// This SAME preborn blank descriptor remains original seal debt.
+				// No refund can run from this authority/commit error defer.
+				*primary = primaryDurableRuntimeV5{}
+				bindReservedPrimaryRuntimeV5(primary, a)
+				seal.commitRuntime = primary
+			} else {
+				primary.metadata, primary.metadataCharge = nil, 0
+				a.MetadataOwner().RemovePending(runtimeCharge)
+			}
 		}
 	}()
 	primary.proofResources[seal.target] = seal.primary.proofResources
@@ -836,8 +850,13 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealScopedV6(seal *rootPub
 			return
 		}
 		clear(retired)
-		retired = nil
-		a.MetadataOwner().RemovePending(retiredCharge)
+		if native {
+			seal.commitRetired, seal.commitRetiredCharge, seal.commitStorageReady = retired[:0], retiredCharge, true
+			retired = nil
+		} else {
+			retired = nil
+			a.MetadataOwner().RemovePending(retiredCharge)
+		}
 	}()
 	if len(seal.prefix) != 0 {
 		if scope != nil {

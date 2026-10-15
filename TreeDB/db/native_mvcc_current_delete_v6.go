@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -206,6 +207,9 @@ type NativeMVCCCurrentDeleteV6 struct {
 	publication            rootpublication.NativePublicationV6
 	publicationCoordinator *rootpublication.Coordinator
 	publicationBound       bool
+	cleanupRefund          retainedalloc.RemovalWork
+	cleanupOwner           *retainedalloc.Owner
+	cleanupCharge          uint64
 	phase                  uint8
 }
 
@@ -311,18 +315,25 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.Or
 	if !arena.Pager().SupportsBoundedPhysicalClose() {
 		return false, ErrNativeMVCCSnapshotWork
 	}
-	original, ready, err := rootpublication.NewNativeMVCCPrimaryConstructionTransactionV6(arena, w)
-	if original != nil {
-		var ok bool
-		c.transaction, ok = original.(*rootpublication.DurableRootTransaction)
-		if !ok {
-			return false, rootpublication.ErrDurableRootOwnership
+	var ready bool
+	var err error
+	if c.transaction == nil {
+		var original primaryarena.ReadRootConstructionV6
+		original, ready, err = rootpublication.NewNativeMVCCPrimaryConstructionTransactionV6(arena, w)
+		if original != nil {
+			var ok bool
+			c.transaction, ok = original.(*rootpublication.DurableRootTransaction)
+			if !ok {
+				return false, rootpublication.ErrDurableRootOwnership
+			}
 		}
-		c.phase = 3
+	} else {
+		ready, err = c.transaction.PrepareNativeMVCCConstructionRootV6(w)
 	}
 	if !ready || err != nil {
 		return ready, err
 	}
+	c.phase = 3
 	return c.transaction.PreparePrimaryPromotionStorageV6(w)
 }
 
@@ -391,17 +402,34 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 	if c == nil || w == nil {
 		return false, ErrNativeMVCCSnapshotWork
 	}
+	if ready, err := c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w); !ready || err != nil {
+		return false, err
+	}
+	if c.phase >= 7 && c.phase <= 11 {
+		return c.closePublishedNativeStepV6(w)
+	}
 	if c.phase == 6 {
 		c.outputReader = nil
 		return c.completeNativePublicationBindingV6(w)
 	}
+	if c.candidatePreparation.member != nil && c.candidatePreparation.member.install != nil && c.candidatePreparation.member.install.activated {
+		// An activated/unfenced failure retains its original error closure.
+		// Private Abort/Cancel must never dispose adopted DATA custody.
+		return false, ErrNativeMVCCSnapshotWork
+	}
 	if ready, err := c.sealPreparation.closeStep(w); !ready || err != nil {
 		return false, err
 	}
-	if ready, err := c.candidatePreparation.closeStep(w); !ready || err != nil {
+	if ready, err := c.candidatePreparation.closeStep(w, &c.cleanupOwner, &c.cleanupCharge); !ready || err != nil {
 		return false, err
 	}
-	if ready, err := c.allocatorPreparation.closeStep(w); !ready || err != nil {
+	if ready, err := c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := c.allocatorPreparation.closeStep(w, &c.cleanupOwner, &c.cleanupCharge); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w); !ready || err != nil {
 		return false, err
 	}
 	if ready, err := c.rootPreparation.closeStep(w); !ready || err != nil {
@@ -430,7 +458,10 @@ func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterat
 			return false, completeErr
 		}
 		c.output = nil
-		owner.RemovePending(charge)
+		c.cleanupOwner, c.cleanupCharge = owner, charge
+		if ready, err := c.cleanupRefund.CompletePendingWork(&c.cleanupOwner, &c.cleanupCharge, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if ready, err := c.closeMaterializedInputWorkV6(w); !ready || err != nil {
 		return false, err

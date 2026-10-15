@@ -1,6 +1,7 @@
 package primaryarena
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -267,6 +268,31 @@ func (a *Arena) writeBundleLocked(directory Ref, image []byte, record *bundleRec
 		if Local(directory.PageID) >= pager.PrimaryReadRootLocalBaseV6 {
 			if !reserve(w, 1, 2*page.PageSize) {
 				return nil, false, nil
+			}
+			if w != nil {
+				b, observed := a.validWithWorkV6(directory, w)
+				if !observed {
+					return nil, false, nil
+				}
+				if b == nil || b.sealed {
+					return nil, false, ErrStale
+				}
+				if b.image == nil {
+					charge := retainedalloc.AllocationCharge(uint64(len(image)))
+					if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+						return nil, false, err
+					}
+					b.image = make([]byte, len(image))
+					copy(b.image, image)
+					b.metadataCharge += charge
+				} else if !bytes.Equal(b.image, image) {
+					return nil, false, ErrStale
+				}
+				ready, err := a.pager.RegisterPrimaryReadRootV6(Local(directory.PageID), b.image, w)
+				if !ready || err != nil {
+					return nil, ready, err
+				}
+				return b.image, true, nil
 			}
 			charge := retainedalloc.AllocationCharge(uint64(len(image)))
 			if err := a.metadata.Add(charge); err != nil {

@@ -1,6 +1,7 @@
 package primaryarena
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"unsafe"
 )
@@ -34,13 +35,22 @@ func (a *Arena) edgeCharge(n int) uint64 {
 // Its conservative per-root envelope includes shared immutable descriptors
 // borrowed by this root; the actual last bank/reader/slot edge refunds it.
 func (a *Arena) AdmitRootMetadata(r Ref, bytes uint64) error {
+	return a.AdmitRootMetadataWithWorkV6(r, bytes, nil)
+}
+func (a *Arena) AdmitRootMetadataWithWorkV6(r Ref, bytes uint64, w *iterator.OrdinalScanWork) error {
+	if !reserve(w, 1, 2*uint64(unsafe.Sizeof(bank{}))) {
+		return retainedalloc.ErrWorkRequired
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b := a.valid(r)
+	b, ready := a.validWithWorkV6(r, w)
+	if !ready {
+		return retainedalloc.ErrWorkRequired
+	}
 	if b == nil {
 		return ErrStale
 	}
-	if err := a.metadata.Add(bytes); err != nil {
+	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, bytes, w); err != nil {
 		return err
 	}
 	b.metadataCharge += bytes

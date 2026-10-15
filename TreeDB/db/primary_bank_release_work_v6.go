@@ -5,6 +5,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -17,6 +18,9 @@ func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5,
 	var empty primaryRuntimeDisposalCompletionV6
 	if claims == nil {
 		return empty, true, nil
+	}
+	if w != nil && !w.Reserve(4, 2*uint64(unsafe.Sizeof(*claims))+2*uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {
+		return empty, false, nil
 	}
 	claims.releaseMu.Lock()
 	defer claims.releaseMu.Unlock()

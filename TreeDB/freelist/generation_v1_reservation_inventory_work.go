@@ -207,7 +207,7 @@ func (s *reservationNormalizeWorkV1) advance(input []ReservationExtentV1, w *ite
 			// original producer's pending PRIMARY storage until scrubbed.
 			if s.metadata != nil {
 				charge := retainedalloc.AllocationCharge(uint64(len(s.entries)) * size)
-				if err := s.metadata.AddPending(charge); err != nil {
+				if err := retainedalloc.AddPendingWithOrdinalWork(s.metadata, charge, w); err != nil {
 					return false, err
 				}
 				s.scratchCharge = charge

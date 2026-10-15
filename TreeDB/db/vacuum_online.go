@@ -737,7 +737,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				cleanupNewPager()
 				return errors.Join(err, closeErr)
 			}
-			if err = a.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5); err != nil {
+			if err = a.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5, rootpublication.PrimaryBankMetadataEdgesIntoV6); err != nil {
 				cleanupNewPager()
 				return err
 			}

@@ -184,7 +184,7 @@ func (db *DB) newOfflinePrimaryPairV6(idx *indexGen, chunkSize int64) (_ *indexG
 	if err != nil {
 		return idx, err
 	}
-	if err = idx.primary.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5); err != nil {
+	if err = idx.primary.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5, rootpublication.PrimaryBankMetadataEdgesIntoV6); err != nil {
 		return idx, err
 	}
 	if err = jointSwapHookV6("before-offline-data-create"); err != nil {

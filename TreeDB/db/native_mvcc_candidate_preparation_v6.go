@@ -13,14 +13,16 @@ import (
 // separately allocated member/install/callback is the existing publication
 // descriptor, admitted before allocation and transferred into the SAME txn.
 type nativeMVCCCandidatePreparationV6 struct {
-	member    *rootPublicationVisibleMemberV1
-	resources *rootpublication.StableResourceSet
-	candidate *rootpublication.PreparedRootCandidate
-	spec      rootpublication.DurableRootTransactionSpec
-	metadata  *retainedalloc.Owner
-	charge    uint64
-	bound     bool
-	phase     uint8
+	member     *rootPublicationVisibleMemberV1
+	resources  *rootpublication.StableResourceSet
+	candidate  *rootpublication.PreparedRootCandidate
+	spec       rootpublication.DurableRootTransactionSpec
+	metadata   *retainedalloc.Owner
+	charge     uint64
+	bound      bool
+	phase      uint8
+	refund     retainedalloc.RemovalWork
+	completion rootpublication.StableResourceTokenReleaseCompletionV6
 }
 
 func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeCandidateScalarsForTest() (phase uint8, bound, candidate bool) {
@@ -104,7 +106,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.Ordina
 				return false, nil
 			}
 			owner := runtime.idx.primary.MetadataOwner()
-			if err := owner.AddPending(charge); err != nil {
+			if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 				return false, err
 			}
 			s.metadata, s.charge = owner, charge
@@ -155,7 +157,7 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.Ordina
 				return false, nil
 			}
 			cert := allocator.primary.ReadCertificateV6()
-			if err := runtime.idx.primary.AdmitRootMetadata(cert.Reference(), retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))); err != nil {
+			if err := runtime.idx.primary.AdmitRootMetadataWithWorkV6(cert.Reference(), retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{}))), w); err != nil {
 				return false, err
 			}
 			s.member.install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: cert.Reference(), dataCommit: s.member.prepared.Candidate().Generation().CommitSeq(), certificate: cert}
@@ -206,7 +208,10 @@ func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.Ordina
 	}
 }
 
-func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {
+func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error) {
+	if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+		return false, err
+	}
 	if s.phase == 0 {
 		return true, nil
 	}
@@ -229,7 +234,10 @@ func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork
 				return false, err
 			}
 			m.resources = nil
-			completion.Complete()
+			s.completion = completion
+			if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+				return false, err
+			}
 		}
 		if m.install.valueLogSet != nil {
 			ready, err := m.install.db.valueLogManager.ReleaseNativeMVCCSetStep(m.install.valueLogSet, w)
@@ -245,12 +253,13 @@ func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork
 			return false, err
 		}
 		s.resources = nil
-		completion.Complete()
+		s.completion = completion
+		if ready, err := s.completion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	owner, charge := s.metadata, s.charge
 	*s = nativeMVCCCandidatePreparationV6{}
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
+	*refundOwner, *refundCharge = owner, charge
 	return true, nil
 }

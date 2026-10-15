@@ -52,6 +52,7 @@ type rootPublicationRuntimeV1 struct {
 	seals              []*rootPublicationSealV1
 	activeSeal         *rootPublicationSealV1
 	poison             error
+	nativePoison       primaryCleanupFailureV5
 	// Borrowed immutable proof; runtime.idx and live generation own its physical lifetime.
 	primaryDataCertificateV6 *rootpublication.PrimaryDataCertificateV6
 }
@@ -86,10 +87,14 @@ type rootPublicationVisibleMemberV1 struct {
 	retiredRecordQueue            primaryarena.ReleaseQueue
 	retiredRecordQueueInitialized bool
 	// Original finalizeCommitPost.oldState edges, moved without Acquire.
-	retiredPostRoot        primaryarena.Ref
-	retiredPostSet         *valuelog.Set
-	retiredPostManager     *valuelog.Manager
-	retiredPostTransferred bool
+	retiredPostRoot            primaryarena.Ref
+	retiredPostSet             *valuelog.Set
+	retiredPostManager         *valuelog.Manager
+	retiredPostTransferred     bool
+	retirementRefund           retainedalloc.RemovalWork
+	retirementCompletion       rootpublication.StableResourceTokenReleaseCompletionV6
+	retirementChildCompletion  primaryRuntimeDisposalCompletionV6
+	retirementVectorCompletion primaryRuntimeDisposalCompletionV6
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -143,34 +148,38 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalPhase       uint8
-	disposalNative      bool
-	disposalIndex       int
-	disposalMu          sync.Mutex
-	disposalErr         error
-	disposalFailure     originalDBCleanupFailure
-	metadata            *retainedalloc.Owner
-	metadataCharge      uint64
-	commitRuntime       *primaryDurableRuntimeV5
-	commitRetired       []*rootPublicationSealV1
-	commitRetiredCharge uint64
-	commitStorageReady  bool
-	primary             *primaryPublicationSealV5
-	latestSequence      uint64
-	groupLength         int
-	idx                 *indexGen
-	base                rootPublicationSealBaseV1
-	next                page.MetaPageBody
-	resources           *rootpublication.StableResourceSet
-	manifest            *rootpublication.DependencyManifestV1
-	prepared            *freelist.PreparedCOWCandidateV1
-	prefix              []*freelist.PreparedCOWCandidateV1
-	token               *rootpublication.StableResourceToken
-	record              rootpublication.DurableRootRecordV1
-	meta                page.DurableMetaV1
-	target              uint64
-	materialized        bool
-	released            bool
+	disposalPhase         uint8
+	disposalNative        bool
+	disposalIndex         int
+	disposalMu            sync.Mutex
+	disposalRefund        retainedalloc.RemovalWork
+	disposalCompletion    rootpublication.StableResourceTokenReleaseCompletionV6
+	disposalErr           error
+	disposalFailure       originalDBCleanupFailure
+	metadata              *retainedalloc.Owner
+	metadataCharge        uint64
+	commitRuntime         *primaryDurableRuntimeV5
+	commitRetired         []*rootPublicationSealV1
+	commitRetiredCharge   uint64
+	commitStorageReady    bool
+	abandonedCommitOwner  *retainedalloc.Owner
+	abandonedCommitCharge uint64
+	primary               *primaryPublicationSealV5
+	latestSequence        uint64
+	groupLength           int
+	idx                   *indexGen
+	base                  rootPublicationSealBaseV1
+	next                  page.MetaPageBody
+	resources             *rootpublication.StableResourceSet
+	manifest              *rootpublication.DependencyManifestV1
+	prepared              *freelist.PreparedCOWCandidateV1
+	prefix                []*freelist.PreparedCOWCandidateV1
+	token                 *rootpublication.StableResourceToken
+	record                rootpublication.DurableRootRecordV1
+	meta                  page.DurableMetaV1
+	target                uint64
+	materialized          bool
+	released              bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -1665,7 +1674,13 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 }
 
 func (runtime *rootPublicationRuntimeV1) preparedSealFor(candidate *rootpublication.PreparedRootCandidate) (*rootPublicationSealV1, error) {
+	return runtime.preparedSealForWithWorkV6(candidate, nil)
+}
+func (runtime *rootPublicationRuntimeV1) preparedSealForWithWorkV6(candidate *rootpublication.PreparedRootCandidate, w *iterator.OrdinalScanWork) (*rootPublicationSealV1, error) {
 	if runtime == nil || candidate == nil {
+		if w != nil {
+			return nil, rootpublication.ErrDurableRootOwnership
+		}
 		return nil, errors.New("missing root-publication candidate")
 	}
 	runtime.mu.Lock()
@@ -1675,6 +1690,9 @@ func (runtime *rootPublicationRuntimeV1) preparedSealFor(candidate *rootpublicat
 	}
 	seal := runtime.activeSeal
 	if seal == nil || seal.latestSequence != candidate.Frontier().CommitSeq() || seal.groupLength != candidate.DurableRootGroup().Len() {
+		if w != nil {
+			return nil, rootpublication.ErrDurableRootOwnership
+		}
 		return nil, errors.New("root-publication attempt has no exact prepared seal")
 	}
 	return seal, nil
@@ -1711,18 +1729,24 @@ func (runtime *rootPublicationRuntimeV1) publishNativeAuthorityWithWorkV6(ctx co
 	if w == nil || nativeScope == nil || nativeScope.active {
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: rootpublication.ErrNativeMVCCRootWorkRequiredV6}
 	}
-	defer nativeScope.Close()
+	defer nativeScope.clearPublicationEnvironmentV6()
 	return runtime.publishWithWorkV6(ctx, candidate, w, nativeScope)
 }
 
 func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, candidate *rootpublication.PreparedRootCandidate, w *iterator.OrdinalScanWork, nativeScope *nativeAuthorityScopeV6) rootpublication.PublishResult {
-	if err := ctx.Err(); err != nil {
+	if w != nil {
+		if !w.Reserve(2, 2*uint64(unsafe.Sizeof(rootpublication.PublishResult{}))+2*uint64(unsafe.Sizeof(ctx))+uint64(unsafe.Sizeof(rootPublicationSealV1{}))+64) {
+			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: rootpublication.ErrNativeMVCCRootWorkRequiredV6}
+		}
+		// The scoped finite diagnostic uses a standard immutable context. An
+		// arbitrary Context.Err implementation has no finite callback contract.
+		if ctx != context.Background() && ctx != context.TODO() {
+			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: rootpublication.ErrNativeMVCCRootWorkRequiredV6}
+		}
+	} else if err := ctx.Err(); err != nil {
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
 	}
-	if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(rootPublicationSealV1{}))+64) {
-		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: rootpublication.ErrNativeMVCCRootWorkRequiredV6}
-	}
-	seal, err := runtime.preparedSealFor(candidate)
+	seal, err := runtime.preparedSealForWithWorkV6(candidate, w)
 	if err != nil {
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
 	}
@@ -1740,137 +1764,20 @@ func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, 
 	if native && (!storageReady || w == nil) {
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: rootpublication.ErrNativeMVCCRootWorkRequiredV6}
 	}
-	db := runtime.db
-	metaPath := filepath.Join(db.dir, indexFileName)
-	var installAuthority func() (bool, error)
-	if seal.primary != nil && seal.primary.promotion != nil {
-		installAuthority = func() (bool, error) {
-			if native {
-				ready, err := nativeScope.begin(runtime, seal, w)
-				if !ready || err != nil {
-					if err == nil {
-						err = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-					}
-					return false, err
-				}
-			}
-			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaWrite); e != nil {
-				return false, e
-			}
-			if db.testFailWriteMeta.Load() {
-				return false, errTestWriteMetaFailpoint
-			}
-			if e := ctx.Err(); e != nil {
-				return false, e
-			}
-			beforeFence := func() error {
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaWrite); e != nil {
-					return e
-				}
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaSync); e != nil {
-					return e
-				}
-				if db.testFailSyncMeta.Load() {
-					return errTestSyncMetaFailpoint
-				}
-				return ctx.Err()
-			}
-			mutated := true // Preserve the ordinary authority error boundary.
-			var e error
-			if native {
-				var ready bool
-				_, ready, mutated, e = seal.idx.primary.Pager().WritePrimaryCapsuleWithFenceStatusV6(2+seal.target*3, seal.primary.promotion.Image, beforeFence, w)
-				if !ready && e == nil {
-					e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-				}
-			} else {
-				_, _, e = seal.idx.primary.Pager().WritePrimaryCapsuleWithFenceV6(2+seal.target*3, seal.primary.promotion.Image, beforeFence, nil)
-			}
-			if e != nil {
-				return mutated, e
-			}
-			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaSync); e != nil {
-				return true, e
-			}
-			return true, nil
-		}
+	var mutated bool
+	if native {
+		mutated, err = runtime.executeNativePreparedSealStorageV6(seal, nativeScope, w)
+	} else {
+		mutated, err = runtime.executeOrdinaryPreparedSealStorageV1(ctx, seal)
 	}
-	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		work:             w,
-		installAuthority: installAuthority,
-		resources:        seal.resources,
-		materialize: func() error {
-			if w != nil {
-				ready, err := runtime.materializePrimarySealWithWorkV6(seal, w)
-				if !ready && err == nil {
-					err = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-				}
-				return err
-			}
-			return runtime.materializeSeal(seal)
-		},
-		syncIndex: func() error {
-			if w != nil {
-				if !w.Reserve(1, uint64(unsafe.Sizeof(*seal))+uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) {
-					return rootpublication.ErrNativeMVCCRootWorkRequiredV6
-				}
-				if seal.primary == nil {
-					return rootpublication.ErrNativeMVCCRootWorkRequiredV6
-				}
-				if ready, e := seal.primary.token.SyncThroughWithWorkV6(w); !ready || e != nil {
-					if e == nil {
-						e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-					}
-					return e
-				}
-				if ready, e := seal.primary.token.StabilizeNamespaceWithWorkV6(w); !ready || e != nil {
-					if e == nil {
-						e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-					}
-					return e
-				}
-				ready, e := seal.token.SyncThroughWithWorkV6(w)
-				if !ready && e == nil {
-					e = rootpublication.ErrNativeMVCCRootWorkRequiredV6
-				}
-				return e
-			}
-			if seal.primary != nil {
-				if e := seal.primary.token.SyncThrough(); e != nil {
-					return e
-				}
-				if e := seal.primary.token.Namespace().Stabilize(); e != nil {
-					return e
-				}
-			}
-			return seal.token.SyncThrough()
-		},
-		sink:   durablePagerSinkV1{pager: seal.idx.pager},
-		target: seal.target,
-		meta:   seal.meta,
-		syncMeta: func() error {
-			return seal.token.WithPinnedFile(func(file *os.File) error {
-				return seal.idx.pager.SyncPagesWithStableFile(file, []uint64{seal.target})
-			})
-		},
-		dir: db.dir, indexPath: metaPath,
-		beforeMetaWrite: func() error {
-			if db.testFailWriteMeta.Load() {
-				return errTestWriteMetaFailpoint
-			}
-			return ctx.Err()
-		},
-		beforeMetaSync: func() error {
-			if db.testFailSyncMeta.Load() {
-				return errTestSyncMetaFailpoint
-			}
-			return ctx.Err()
-		},
-	})
 	if err != nil {
 		nativeScope.Close() // Disposition may acquire these original locks.
 		if mutated {
-			runtime.failAmbiguousSeal(seal, err)
+			if native {
+				nativeScope.failAmbiguousAdmittedV6(runtime, seal, err)
+			} else {
+				runtime.failAmbiguousSeal(seal, err)
+			}
 			return rootpublication.PublishResult{Outcome: rootpublication.PublishAmbiguous, Err: err}
 		}
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
@@ -1882,7 +1789,11 @@ func (runtime *rootPublicationRuntimeV1) publishWithWorkV6(ctx context.Context, 
 		oldest, err = runtime.commitPublishedSeal(seal)
 	}
 	if err != nil {
-		runtime.failAmbiguousSeal(seal, err)
+		if native {
+			nativeScope.failAmbiguousAdmittedV6(runtime, seal, err)
+		} else {
+			runtime.failAmbiguousSeal(seal, err)
+		}
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishAmbiguous, Err: err}
 	}
 	return rootpublication.PublishResult{

@@ -3738,6 +3738,21 @@ func (f *originalDBCleanupFailure) retainCause(index int, cause error) {
 	}
 	f.mu.Unlock()
 }
+
+// Native disposal parents admit this fixed first-cause link before entering a
+// fallible child. Their original ownership graph directs links child->parent;
+// they never ask an arbitrary error to traverse itself during bounded cleanup.
+// Reentry returns this SAME parent receipt and is ignored without relinking.
+func (f *originalDBCleanupFailure) retainNativeCauseAdmittedV6(index int, cause error) {
+	if cause == nil || cause == f {
+		return
+	}
+	f.mu.Lock()
+	if f.causes[index] == nil {
+		f.causes[index] = cause
+	}
+	f.mu.Unlock()
+}
 func (f *originalDBCleanupFailure) LinkPriorCleanupError(prior error) {
 	if prior == nil || prior == f || errors.Is(prior, f) {
 		return

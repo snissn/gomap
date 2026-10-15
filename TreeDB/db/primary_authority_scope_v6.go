@@ -14,10 +14,12 @@ import (
 // materialization and index sync run before this scope. Only the fixed actual
 // authority write and original post-fence install run under these locks.
 type nativeAuthorityScopeV6 struct {
-	runtime   *rootPublicationRuntimeV1
-	seal      *rootPublicationSealV1
-	allocator freelist.COWPublicationScopeV6
-	active    bool
+	runtime         *rootPublicationRuntimeV1
+	seal            *rootPublicationSealV1
+	allocator       freelist.COWPublicationScopeV6
+	active          bool
+	work            *iterator.OrdinalScanWork
+	failureAdmitted bool
 }
 
 func (s *nativeAuthorityScopeV6) begin(runtime *rootPublicationRuntimeV1, seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {
@@ -74,8 +76,38 @@ func (s *nativeAuthorityScopeV6) begin(runtime *rootPublicationRuntimeV1, seal *
 			return false, err
 		}
 	}
+	// Fixed original error disposition is fully admitted before the authority
+	// write can become ambiguous. Later unlocking cannot change its geometry:
+	// exact allocator-state membership uses the candidate's original backlink.
+	if !w.Reserve(3, 2*uint64(unsafe.Sizeof(runtime.nativePoison))+2*uint64(unsafe.Sizeof(runtime.poison))+2*uint64(unsafe.Sizeof(db.publicationPoisoned))) {
+		return false, nil
+	}
+	if admitted, err := freelist.AdmitCOWFailureV6(w); !admitted || err != nil {
+		return false, err
+	}
+	s.failureAdmitted = true
 	ready = true
 	return true, nil
+}
+
+// Scope locks are already unwound here. Admission precedes the actual write;
+// these original fixed state operations cannot later refuse for lack of work.
+func (s *nativeAuthorityScopeV6) failAmbiguousAdmittedV6(runtime *rootPublicationRuntimeV1, seal *rootPublicationSealV1, cause error) {
+	if !s.failureAdmitted || s.active {
+		panic("native ambiguous disposition without original admission/unlock")
+	}
+	s.failureAdmitted = false
+	runtime.mu.Lock()
+	if runtime.poison == nil {
+		runtime.nativePoison.causes[0], runtime.nativePoison.causes[1] = cause, ErrRecoveryRequired
+		runtime.poison = &runtime.nativePoison
+	}
+	poison := runtime.poison
+	runtime.mu.Unlock()
+	runtime.db.publicationPoisoned.Store(true)
+	if seal.prepared != nil {
+		_ = seal.idx.allocator.FailCOWCandidateAdmittedV6(seal.prepared, poison)
+	}
 }
 
 func nativeAuthorityAdmissionV6(prefix, debt, seals, visible uint64) (uint64, uint64) {

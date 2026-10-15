@@ -3,7 +3,6 @@ package primaryarena
 import (
 	"crypto/sha256"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -45,7 +44,14 @@ func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry 
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	dst, src := a.valid(destination), a.valid(current)
+	dst, observed := a.validWithWorkV6(destination, w)
+	if !observed {
+		return nil, false, nil
+	}
+	src, observed := a.validWithWorkV6(current, w)
+	if !observed {
+		return nil, false, nil
+	}
 	if !a.capsuleFormat || dst == nil || src == nil || dst.class != Directory || dst.sealed || dst.construction != owner || Local(destination.PageID) < pager.PrimaryReadRootLocalBaseV6 || src.class != Directory || !src.sealed || len(scratch) != page.PageSize || !entry.InlineAbsence() || entry.Revision == 0 {
 		return nil, false, ErrStale
 	}
@@ -93,13 +99,11 @@ func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry 
 	if !ready || err != nil {
 		return nil, ready, err
 	}
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ReadRootCertificateV6{})))
-	if err = a.metadata.Add(charge); err != nil {
+	if ready, err := a.prepareReadRootCertificateLockedV6(dst, w); !ready || err != nil {
 		return nil, false, err
 	}
 	physical, ready, err := a.writeBundleLocked(destination, scratch, nil, w)
 	if !ready || err != nil {
-		a.metadata.Remove(charge)
 		return nil, ready, err
 	}
 	// All remaining effects are infallible and were admitted before output.
@@ -114,8 +118,7 @@ func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry 
 	dst.directory = view.WithPhysicalImage(physical)
 	dst.digest = sha256.Sum256(physical)
 	dst.sealed, dst.privatePublication = true, false
-	dst.metadataCharge += charge
-	dst.readCertificate = &ReadRootCertificateV6{arena: a, ref: destination, directory: dst.directory, image: physical, digest: dst.digest}
+	*dst.readCertificate = ReadRootCertificateV6{arena: a, ref: destination, directory: dst.directory, image: physical, digest: dst.digest}
 	a.counters.Bytes += bytes
 	return dst.readCertificate, true, nil
 }

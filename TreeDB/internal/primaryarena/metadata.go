@@ -23,13 +23,21 @@ type MetadataEdgeScratch interface {
 }
 type OwnedMetadataDecoder func(Class, []byte, *retainedalloc.Owner) (MetadataEdgeScratch, error)
 
-func (a *Arena) SetOwnedMetadataDecoder(legacy MetadataDecoder, owned OwnedMetadataDecoder) error {
+// BorrowedMetadataDecoder validates fixed record/manifest geometry into the
+// SAME arena's admitted scratch. It must neither allocate nor retain dst/image.
+// General dependency decoding keeps its original owned ordinary result.
+type BorrowedMetadataDecoder func(Class, []byte, []MetadataEdge) ([]MetadataEdge, error)
+
+func (a *Arena) SetOwnedMetadataDecoder(legacy MetadataDecoder, owned OwnedMetadataDecoder, borrowed ...BorrowedMetadataDecoder) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if legacy == nil || owned == nil || a.metadataDecoder != nil {
+	if legacy == nil || owned == nil || a.metadataDecoder != nil || len(borrowed) > 1 {
 		return ErrFormat
 	}
 	a.metadataDecoder, a.ownedMetadataDecoder = legacy, owned
+	if len(borrowed) == 1 {
+		a.borrowedMetadataDecoder = borrowed[0]
+	}
 	return nil
 }
 
@@ -77,6 +85,9 @@ func (a *Arena) SetMetadataDecoder(decoder MetadataDecoder) error {
 // list. Every referenced bank is already sealed; this gives the physical DAG
 // a construction order and excludes cycles, self edges and unowned references.
 func (a *Arena) SealMetadata(r Ref, image []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	if w != nil {
+		return a.sealMetadataWithWorkV6(r, image, w)
+	}
 	bytes := uint64(16*page.PageSize) + 2*uint64(unsafe.Sizeof(bank{}))
 	if !reserve(w, 1, bytes) {
 		return false, nil

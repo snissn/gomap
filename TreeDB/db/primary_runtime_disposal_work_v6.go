@@ -17,6 +17,14 @@ type primaryRuntimeDisposalCompletionV6 struct {
 	charge uint64
 }
 
+func (c *primaryRuntimeDisposalCompletionV6) completeWithWork(s *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil {
+		c.complete()
+		return true, nil
+	}
+	return s.CompletePendingWork(&c.owner, &c.charge, w)
+}
+
 func (c *primaryRuntimeDisposalCompletionV6) complete() {
 	owner, charge := c.owner, c.charge
 	c.owner, c.charge = nil, 0
@@ -49,6 +57,9 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 	if r == nil {
 		return empty, true, nil
 	}
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(*r))+2*uint64(unsafe.Sizeof(r.disposalFailure))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {
+		return empty, false, nil
+	}
 	r.disposalMu.Lock()
 	defer r.disposalMu.Unlock()
 	if r.disposalAttempted {
@@ -63,7 +74,11 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 	admit := func(records, bytes uint64) bool { return w == nil || w.Reserve(records, bytes) }
 	fail := func(err error) (primaryRuntimeDisposalCompletionV6, bool, error) {
 		r.disposalAttempted = true
-		r.disposalFailure.retainCause(0, err)
+		if w != nil {
+			r.disposalFailure.retainNativeCauseAdmittedV6(0, err)
+		} else {
+			r.disposalFailure.retainCause(0, err)
+		}
 		r.disposalErr = &r.disposalFailure
 		if r.metadata != nil {
 			r.metadata.CleanupFailed()
@@ -82,6 +97,11 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 	} else if r.disposalNative != (w != nil) {
 		// An ordinary owner may not silently take over a cursor-owned physical queue.
 		return empty, false, rootpublication.ErrResourceOwnership
+	}
+	if r.disposalNative {
+		if ready, err := r.disposalCompletion.CompleteWithWorkV6(&r.disposalRefund, w); !ready || err != nil {
+			return empty, false, err
+		}
 	}
 	closed := r.metadata != nil && r.metadata.PhysicalClosed()
 	drop := func(ref *primaryarena.Ref) (bool, error) {
@@ -234,6 +254,10 @@ func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRu
 		*slot = nil
 		// The physical callback has returned and this original runtime's Set
 		// alias has ended. Only now may its accounting-only receipt refund.
+		if r.disposalNative {
+			r.disposalCompletion = completion
+			return r.disposalCompletion.CompleteWithWorkV6(&r.disposalRefund, w)
+		}
 		completion.Complete()
 		return true, nil
 	}

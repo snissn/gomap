@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"sync"
 	"unsafe"
 
@@ -146,9 +145,9 @@ func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error
 	s.maintenanceMu.Lock()
 	defer s.maintenanceMu.Unlock()
 	err = c.step(&stats, &w)
-	if err != nil {
-		err = fmt.Errorf("native prune phase %d: %w", c.phase, err)
-	}
+	// Return the original cause without formatting an unadmitted wrapper or
+	// invoking an arbitrary provider's Error method. Phase remains on this
+	// SAME cursor and in the existing scalar test observation.
 	stats.Complete = c.complete
 	return stats, err
 }
@@ -707,81 +706,130 @@ func (c *PruneCursor) CloseNativePublicationV6() (retainedalloc.Lease, error) {
 
 var _ rootpublication.NativePublicationOwnerV6 = (*PruneCursor)(nil)
 
-func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
-	if c.closed {
-		return nil, nil
+// CloseNativePublicationStepV6 is the original cursor's stateful bounded
+// terminal. It never replenishes work internally and never returns a lease
+// while an embedded callback/receipt or coordinator join still aliases it.
+func (c *PruneCursor) CloseNativePublicationStepV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error) {
+	if c == nil {
+		return nil, true, nil
 	}
+	if w == nil {
+		return nil, false, retainedalloc.ErrWorkRequired
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.currentWork = w
+	defer func() { c.currentWork = nil }()
+	return c.closeStepLockedV6(w)
+}
+
+// Explicit ordinary Close/Stop retain their original synchronous join policy;
+// the finite publication/Finish path calls closeStepLockedV6 instead.
+func (c *PruneCursor) closeLockedV6() (retainedalloc.Lease, error) {
 	w := iterator.OrdinalScanWork{RecordLimit: c.recordLimit, ByteLimit: c.byteLimit}
 	c.currentWork = &w
 	for {
 		w.Records, w.Bytes = 0, 0
-		switch c.closePhase {
-		case 0:
-			if c.preparation != nil {
-				ready, err := c.preparation.CloseNativeMVCCCurrentDeleteStepV6(&w)
-				if err != nil {
-					return nil, err
-				}
-				if !ready {
-					continue
-				}
-				c.preparation = nil
-				c.prepared = backenddb.NativeMVCCCurrentDeleteV6{}
-			}
-			c.closePhase = 1
-		case 1:
-			if c.projection != nil {
-				ready, err := c.projection.CloseStep(&w)
-				if err != nil {
-					return nil, err
-				}
-				if !ready {
-					continue
-				}
-				c.projection = nil
-			}
-			c.closePhase = 2
-		case 2:
-			ready, err := c.value.CancelWithCodec(&w)
-			if err != nil {
-				return nil, err
-			}
-			if !ready {
-				continue
-			}
-			c.record = node.LeafEntry{}
-			c.reader = backenddb.NativeMVCCFrameReaderV6{}
-			ready, err = c.outputReader.CancelProjectionFrame(&w)
-			if err != nil {
-				return nil, err
-			}
-			if !ready {
-				continue
-			}
-			c.outputReader = backenddb.NativeMVCCFrameReaderV6{}
-			c.outputLeaf = valuelog.COWLeafProjectionReader{}
-			c.closePhase = 3
-		case 3:
-			if c.captureBegun {
-				ready, err := c.capture.CloseNativeMVCCOwnedCaptureV6(&w)
-				if err != nil {
-					return nil, err
-				}
-				if !ready {
-					continue
-				}
-			}
-			c.closePhase = 4
-		case 4:
-			clear(c.batchEntries)
-			c.batchEntries = nil
-			c.store, c.db = nil, nil
-			c.request = mvccadmission.Request{}
-			c.codec = valuelog.COWZSTDContinuation{}
-			c.closed = true
-			lease := c.retention
-			c.retention = nil
-			return lease, nil
+		lease, ready, err := c.closeStepLockedV6(&w)
+		if ready || err != nil {
+			return lease, err
 		}
 	}
+}
+
+func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error) {
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.closePhase))+2*uint64(unsafe.Sizeof(c.closed))+2*uint64(unsafe.Sizeof(c.preparation))) {
+		return nil, false, nil
+	}
+	if c.closed {
+		return nil, true, nil
+	}
+
+	switch c.closePhase {
+	case 0:
+		if c.preparation != nil {
+			ready, err := c.preparation.CloseNativeMVCCCurrentDeleteStepV6(w)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ready {
+				return nil, false, nil
+			}
+			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))) {
+				return nil, false, nil
+			}
+			c.preparation = nil
+			c.prepared = backenddb.NativeMVCCCurrentDeleteV6{}
+		}
+		c.closePhase = 1
+	case 1:
+		if c.projection != nil {
+			ready, err := c.projection.CloseStep(w)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ready {
+				return nil, false, nil
+			}
+			c.projection = nil
+		}
+		c.closePhase = 2
+	case 2:
+		ready, err := c.value.CancelWithCodec(w)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ready {
+			return nil, false, nil
+		}
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.record))+2*uint64(unsafe.Sizeof(c.reader))) {
+			return nil, false, nil
+		}
+		c.record = node.LeafEntry{}
+		c.reader = backenddb.NativeMVCCFrameReaderV6{}
+		ready, err = c.outputReader.CancelProjectionFrame(w)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ready {
+			return nil, false, nil
+		}
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.outputReader))+2*uint64(unsafe.Sizeof(c.outputLeaf))) {
+			return nil, false, nil
+		}
+		c.outputReader = backenddb.NativeMVCCFrameReaderV6{}
+		c.outputLeaf = valuelog.COWLeafProjectionReader{}
+		c.closePhase = 3
+	case 3:
+		if c.captureBegun {
+			ready, err := c.capture.CloseNativeMVCCOwnedCaptureV6(w)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ready {
+				return nil, false, nil
+			}
+		}
+		c.closePhase = 4
+	case 4:
+		for c.batchClear < len(c.batchEntries) {
+			if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {
+				return nil, false, nil
+			}
+			c.batchEntries[c.batchClear] = node.LeafEntry{}
+			c.batchClear++
+		}
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.batchEntries))+2*uint64(unsafe.Sizeof(c.store))+2*uint64(unsafe.Sizeof(c.db))+2*uint64(unsafe.Sizeof(c.request))+2*uint64(unsafe.Sizeof(c.codec))+2*uint64(unsafe.Sizeof(c.retention))) {
+			return nil, false, nil
+		}
+		c.batchEntries = nil
+		c.store, c.db = nil, nil
+		c.request = mvccadmission.Request{}
+		c.codec = valuelog.COWZSTDContinuation{}
+		c.closed = true
+		lease := c.retention
+		c.retention = nil
+		return lease, true, nil
+	}
+	return nil, false, nil
 }

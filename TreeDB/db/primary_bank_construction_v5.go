@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -46,6 +47,59 @@ func newPrimaryBankConstructionV5(idx *indexGen) (*primaryBankConstructionV5, er
 		return nil, errors.Join(err, rootpublication.ErrResourceOwnership)
 	}
 	return &primaryBankConstructionV5{idx: idx, owner: idx.primaryOwner, metadata: metadata, charge: charge}, nil
+}
+
+// The finite original constructor holds the SAME concrete arena-owner
+// exclusion through quota admission and its nonfallible retain/allocation.
+// No partially retained owner or private wrapper needs synchronous rollback.
+func newNativePrimaryBankConstructionV6(idx *indexGen, w *iterator.OrdinalScanWork) (*primaryBankConstructionV5, bool, error) {
+	if w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))) {
+		return nil, false, nil
+	}
+	if idx == nil || idx.primaryOwner == nil || idx.primary == nil {
+		return nil, false, rootpublication.ErrResourceOwnership
+	}
+	owner := idx.primaryOwner
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.arena != idx.primary || owner.refs == 0 || owner.refs == ^uint64(0) {
+		return nil, false, rootpublication.ErrResourceOwnership
+	}
+	metadata := idx.primary.MetadataOwner()
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankConstructionV5{})))
+	if err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); err != nil {
+		return nil, false, err
+	}
+	_, _ = owner.retainLockedV6() // protected eligibility above makes this infallible
+	return &primaryBankConstructionV5{idx: idx, owner: owner, metadata: metadata, charge: charge}, true, nil
+}
+
+// Native construction currently needs the original first one-bank backing.
+// A later nonempty replacement needs its own retained old-backing refund and
+// refuses here before Add/make/copy instead of hiding that ordinary operation.
+func (claims *primaryBankConstructionV5) ensureNativeCapacityV6(count int, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*claims))) {
+		return false, nil
+	}
+	if claims.closed || claims.releasePhase != 0 || count < len(claims.refs) {
+		return false, rootpublication.ErrResourceOwnership
+	}
+	if count <= cap(claims.refs) {
+		return true, nil
+	}
+	if cap(claims.refs) != 0 || count != 1 {
+		return false, rootpublication.ErrNativeMVCCRootWorkRequiredV6
+	}
+	added := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryarena.Ref{})))
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))) {
+		return false, nil
+	}
+	if err := retainedalloc.AddPendingWithOrdinalWork(claims.metadata, added, w); err != nil {
+		return false, err
+	}
+	claims.refs = make([]primaryarena.Ref, 0, 1)
+	claims.charge += added
+	return true, nil
 }
 
 func (claims *primaryBankConstructionV5) ensureCapacity(count int) error {

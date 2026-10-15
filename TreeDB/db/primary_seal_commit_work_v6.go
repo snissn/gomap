@@ -35,7 +35,7 @@ func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena 
 			return false, nil
 		}
 		charge := primaryRuntimeDescriptorChargeV5()
-		if err := seal.metadata.AddPending(charge); err != nil {
+		if err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); err != nil {
 			return false, err
 		}
 		seal.commitRuntime = &primaryDurableRuntimeV5{}
@@ -47,7 +47,7 @@ func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena 
 			return false, nil
 		}
 		charge := retainedalloc.AllocationCharge(uint64(count) * uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil))))
-		if err := seal.metadata.AddPending(charge); err != nil {
+		if err := retainedalloc.AddPendingWithOrdinalWork(seal.metadata, charge, w); err != nil {
 			return false, err
 		}
 		seal.commitRetired = make([]*rootPublicationSealV1, 0, count)
@@ -65,6 +65,14 @@ func preparePrimarySealCommitStorageLockedV6(seal *rootPublicationSealV1, arena 
 // abandonPrimarySealCommitStorageV6 detaches blank precommit storage only.
 // Commit always removes these aliases before they own any physical operand.
 func abandonPrimarySealCommitStorageV6(seal *rootPublicationSealV1, w *iterator.OrdinalScanWork) (bool, error) {
+	if w != nil {
+		if ready, err := seal.disposalCompletion.CompleteWithWorkV6(&seal.disposalRefund, w); !ready || err != nil {
+			return false, err
+		}
+		if ready, err := seal.disposalRefund.CompletePendingWork(&seal.abandonedCommitOwner, &seal.abandonedCommitCharge, w); !ready || err != nil {
+			return false, err
+		}
+	}
 	if seal.commitRuntime == nil && seal.commitRetired == nil {
 		return true, nil
 	}
@@ -83,6 +91,10 @@ func abandonPrimarySealCommitStorageV6(seal *rootPublicationSealV1, w *iterator.
 	}
 	clear(seal.commitRetired)
 	seal.commitRetired, seal.commitRetiredCharge, seal.commitStorageReady = nil, 0, false
-	seal.metadata.RemovePending(charge)
-	return true, nil
+	if w == nil {
+		seal.metadata.RemovePending(charge)
+		return true, nil
+	}
+	seal.abandonedCommitOwner, seal.abandonedCommitCharge = seal.metadata, charge
+	return seal.disposalRefund.CompletePendingWork(&seal.abandonedCommitOwner, &seal.abandonedCommitCharge, w)
 }

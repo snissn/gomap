@@ -2,6 +2,7 @@ package primaryarena
 
 import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"unsafe"
 )
 
@@ -9,9 +10,12 @@ import (
 // no publication ancestry or lookup authority. All descendants inherit the
 // originating queue when the last actual incoming edge is dropped.
 type ReleaseQueue struct {
-	owner     *Arena
-	bankHead  uint64
-	groupHead *Group
+	owner        *Arena
+	bankHead     uint64
+	groupHead    *Group
+	refund       retainedalloc.RemovalWork
+	refundOwner  *retainedalloc.Owner
+	refundCharge uint64
 }
 
 func (a *Arena) NewReleaseQueue(w *iterator.OrdinalScanWork) (*ReleaseQueue, bool, error) {

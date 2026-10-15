@@ -65,6 +65,9 @@ func (runtime *rootPublicationRuntimeV1) completeNativeVisibleMemberAbortV6(m *r
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*m))+2*uint64(unsafe.Sizeof(*m.install))) {
 		return false, nil
 	}
+	if ready, err := m.retirementCompletion.CompleteWithWorkV6(&m.retirementRefund, w); !ready || err != nil {
+		return false, err
+	}
 	if m.abortPhase == 3 {
 		if input.PreparedPrimary != m.primary {
 			return false, rootpublication.ErrDurableRootOwnership
@@ -89,7 +92,10 @@ func (runtime *rootPublicationRuntimeV1) completeNativeVisibleMemberAbortV6(m *r
 				return false, err
 			}
 			m.resources = nil
-			completion.Complete()
+			m.retirementCompletion = completion
+			if ready, err := m.retirementCompletion.CompleteWithWorkV6(&m.retirementRefund, w); !ready || err != nil {
+				return false, err
+			}
 		}
 		m.abortPhase = 6
 	}

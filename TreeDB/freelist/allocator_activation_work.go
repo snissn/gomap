@@ -123,6 +123,7 @@ func (a *Allocator) installActivatedCandidateV6(prepared *PreparedCOWCandidateV1
 	a.cow.txn = s.successor
 	a.cow.prepared = nil
 	a.cow.activated = append(a.cow.activated, prepared)
+	prepared.activationOwner = a.cow
 	prepared.rollbackTxn = nil
 	prepared.activated = true
 	a.stats.FreeIDs = generation.FreeCount()

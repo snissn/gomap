@@ -22,7 +22,7 @@ func (l *COWExternalLease) ResizeWork(bytes uint64, w *iterator.OrdinalScanWork)
 	if w == nil {
 		return false, retainedalloc.ErrWorkRequired
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{}))) {
+	if !l.AdmitRetentionResize(w) {
 		return false, nil
 	}
 	err := l.Resize(bytes)
@@ -63,4 +63,11 @@ func (l *cowViewReleaseLease) Close() {
 	b.stats.TotalBytes -= charge
 	b.releaseControlLocked()
 	b.mu.Unlock()
+}
+
+// AdmitRetentionResize prices the SAME concrete Resize operation without
+// changing its lease/budget. Original Owner atomic growth also reserves this
+// operation for rollback before the first forward resize.
+func (l *COWExternalLease) AdmitRetentionResize(w *iterator.OrdinalScanWork) bool {
+	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{})))
 }

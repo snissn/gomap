@@ -128,6 +128,17 @@ type dependencyManifestEncodedEntryV1 struct {
 // metadata remains immutable. retainEncoded is true only for shared cache values;
 // otherwise the caller may discard its exclusively owned encodings after assembly.
 func newDependencyManifestV1FromEncoded(encoded []*dependencyManifestEncodedEntryV1, retainEncoded bool) (*DependencyManifestV1, error) {
+	if len(encoded) == 0 {
+		// Same canonical cursor/header and digest, with no sort reflection,
+		// growable hash state or error branch for the fixed empty stream.
+		cursor := dependencyManifestCursorV1{entries: encoded}
+		header := cursor.next()
+		manifest := &DependencyManifestV1{entries: encoded, byteLength: 16, digest: sha256.Sum256(header)}
+		if !retainEncoded {
+			manifest.payload = append([]byte(nil), header...)
+		}
+		return manifest, nil
+	}
 	sort.Slice(encoded, func(i, j int) bool {
 		return bytes.Compare(encoded[i].encoded, encoded[j].encoded) < 0
 	})

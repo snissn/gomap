@@ -237,7 +237,7 @@ func rebindDurablePrimarySnapshotFilesV5(ctx context.Context, dir, sideRoot, dat
 		return errors.Join(err, dataPager.Close())
 	}
 	closeWith := func(err error) error { return errors.Join(err, dataPager.Close(), arena.Close()) }
-	if err = arena.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5); err != nil {
+	if err = arena.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5, rootpublication.PrimaryBankMetadataEdgesIntoV6); err != nil {
 		return closeWith(err)
 	}
 	if err = dataPager.AttachPrimaryBankPager(arena.Pager()); err != nil {

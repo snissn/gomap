@@ -123,6 +123,8 @@ func (a *Arena) closePhysicalWork(native bool, w *iterator.OrdinalScanWork) (boo
 			a.ordinaryRelease = ReleaseQueue{}
 			a.metadataDecoder = nil
 			a.ownedMetadataDecoder = nil
+			a.borrowedMetadataDecoder = nil
+			clear(a.metadataDecodeScratch[:])
 			a.mu.Unlock()
 			var done bool
 			var e error

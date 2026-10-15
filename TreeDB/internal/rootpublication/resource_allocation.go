@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 	"sync"
@@ -27,6 +28,10 @@ type resourceAllocation struct {
 // exact reference header before either allocation. The caller constructs the
 // containing immutable node/backing only after this constructor succeeds.
 func newResourceAllocation(owner *retainedalloc.Owner, containingBytes uint64) (*resourceAllocation, error) {
+	return newResourceAllocationWithWorkV6(owner, containingBytes, nil)
+}
+
+func newResourceAllocationWithWorkV6(owner *retainedalloc.Owner, containingBytes uint64, w *iterator.OrdinalScanWork) (*resourceAllocation, error) {
 	if owner == nil {
 		return nil, nil
 	}
@@ -35,12 +40,35 @@ func newResourceAllocation(owner *retainedalloc.Owner, containingBytes uint64) (
 		return nil, retainedalloc.ErrCapacity
 	}
 	charge := containingBytes + header
-	if err := owner.AddPending(charge); err != nil {
+	if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 		return nil, err
 	}
+	return resourceAllocationAdmittedV6(owner, charge), nil
+}
+
+// Called only after the exact header+containing charge was accepted on this
+// SAME original owner. It creates no reservation or second lifetime authority.
+func resourceAllocationAdmittedV6(owner *retainedalloc.Owner, charge uint64) *resourceAllocation {
 	allocation := &resourceAllocation{owner: owner, charge: charge}
 	allocation.refs.Store(1)
-	return allocation, nil
+	return allocation
+}
+func (allocation *resourceAllocation) retainWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if allocation == nil || w == nil {
+		return false, ErrResourceOwnership
+	}
+	for {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(allocation.refs))) {
+			return false, nil
+		}
+		n := allocation.refs.Load()
+		if n <= 0 || n == math.MaxInt64 {
+			return false, ErrResourceOwnership
+		}
+		if allocation.refs.CompareAndSwap(n, n+1) {
+			return true, nil
+		}
+	}
 }
 
 func (allocation *resourceAllocation) retain() bool {

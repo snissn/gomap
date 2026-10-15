@@ -57,6 +57,13 @@ func (owner *primaryArenaOwnerV5) retain(work *iterator.OrdinalScanWork) (bool, 
 	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	return owner.retainLockedV6()
+}
+
+// retainLockedV6 is the original nonfallible increment after its protected
+// eligibility check. Native construction prevalidates this same geometry before
+// quota effects and invokes this primitive while retaining owner.mu.
+func (owner *primaryArenaOwnerV5) retainLockedV6() (bool, error) {
 	if owner.refs == 0 || owner.refs == ^uint64(0) {
 		return false, rootpublication.ErrResourceOwnership
 	}

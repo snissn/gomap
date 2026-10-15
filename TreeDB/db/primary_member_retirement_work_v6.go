@@ -17,6 +17,15 @@ func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Ar
 	if !w.Reserve(1, uint64(unsafe.Sizeof(*m))) {
 		return false, nil
 	}
+	if ready, err := m.retirementCompletion.CompleteWithWorkV6(&m.retirementRefund, w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := m.retirementChildCompletion.completeWithWork(&m.retirementRefund, w); !ready || err != nil {
+		return false, err
+	}
+	if ready, err := m.retirementVectorCompletion.completeWithWork(&m.retirementRefund, w); !ready || err != nil {
+		return false, err
+	}
 	if m.retiredPrimary == nil && len(m.retiredSeals) == 0 && m.retiredSealsOwner == nil && m.retiredVisibleResources == nil && m.retiredRecord == (primaryarena.Ref{}) && !m.retiredRecordQueueInitialized && m.retiredPostRoot == (primaryarena.Ref{}) && m.retiredPostSet == nil && (m.install == nil || m.install.post.oldState == nil) {
 		return true, nil
 	}
@@ -140,7 +149,10 @@ func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Ar
 			return false, err
 		}
 		m.retiredVisibleResources = nil
-		completion.Complete()
+		m.retirementCompletion = completion
+		if ready, err := m.retirementCompletion.CompleteWithWorkV6(&m.retirementRefund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if m.retiredPrimary != nil {
 		completion, ready, err := continuePrimaryRuntimeDisposalV6(a, m.retiredPrimary, w, m.retirementReleaseSet)
@@ -148,7 +160,10 @@ func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Ar
 			return false, err
 		}
 		m.retiredPrimary = nil
-		completion.complete()
+		m.retirementChildCompletion = completion
+		if ready, err := m.retirementChildCompletion.completeWithWork(&m.retirementRefund, w); !ready || err != nil {
+			return false, err
+		}
 	}
 	for m.retiredSealIndex < len(m.retiredSeals) {
 		if !w.Reserve(1, 2*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {
@@ -159,7 +174,10 @@ func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Ar
 			return false, err
 		}
 		m.retiredSeals[m.retiredSealIndex] = nil
-		completion.complete()
+		m.retirementChildCompletion = completion
+		if ready, err := m.retirementChildCompletion.completeWithWork(&m.retirementRefund, w); !ready || err != nil {
+			return false, err
+		}
 		m.retiredSealIndex++
 	}
 	if !w.Reserve(1, 2*uint64(cap(m.retiredSeals))*uint64(unsafe.Sizeof((*rootPublicationSealV1)(nil)))) {
@@ -169,8 +187,6 @@ func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Ar
 	m.retiredSeals = nil
 	owner, charge := m.retiredSealsOwner, m.retiredSealsCharge
 	m.retiredSealsOwner, m.retiredSealsCharge = nil, 0
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
-	return true, nil
+	m.retirementVectorCompletion = primaryRuntimeDisposalCompletionV6{owner, charge}
+	return m.retirementVectorCompletion.completeWithWork(&m.retirementRefund, w)
 }

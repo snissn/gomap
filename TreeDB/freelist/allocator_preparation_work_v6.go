@@ -49,6 +49,82 @@ type COWPreparationWorkV6 struct {
 	phase                                                       uint8
 	adopted, cancelled                                          bool
 	firstErr                                                    error
+	installedPages                                              COWInstalledPageProducerV6
+}
+
+// COWInstalledPageProducerV6 is the original DATA producer's disposing edge.
+// The first method only validates and admits; the second is its nonfallible
+// transfer inside the SAME allocator activation, before rollbackTxn detaches.
+// Neither method may acquire allocator/ledger locks or invoke user callbacks.
+type COWInstalledPageProducerV6 interface {
+	ValidateCOWInstalledPagesV6(*COWPreparationWorkV6, *iterator.OrdinalScanWork) (bool, error)
+	AdoptCOWInstalledPagesV6(*COWPreparationWorkV6)
+}
+
+func (s *COWPreparationWorkV6) BindInstalledPageProducerV6(producer COWInstalledPageProducerV6, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || s == nil || producer == nil {
+		return false, ErrGenerationFormat
+	}
+	if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(s.installedPages))); !ok || err != nil {
+		return false, err
+	}
+	if s.adopted || s.cancelled || s.installedPages != nil && s.installedPages != producer {
+		return false, ErrCandidateConsumed
+	}
+	s.installedPages = producer
+	return true, nil
+}
+
+// ValidateInstalledPageV6 is called only by that producer during the protected
+// validation pass. Admit every canonical allocation/retirement visit before
+// reading it. No disposing alias or original ledger ownership changes here.
+func (s *COWPreparationWorkV6) ValidateInstalledPageV6(appendWork *AppendWork, id, oldID uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || s == nil {
+		return false, ErrGenerationFormat
+	}
+	if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(AppendWork{}))+64); !ok || err != nil {
+		return false, err
+	}
+	if appendWork == nil || s.allocator == nil || appendWork.allocator != s.allocator || appendWork.phase != 2 || appendWork.id != id || appendWork.growth != nil || s.private == nil || s.allocator.cow == nil || s.allocator.cow.txn == nil {
+		return false, ErrGenerationParent
+	}
+	for _, txn := range [2]*FreelistTxn{s.allocator.cow.txn, s.private} {
+		found := false
+		for i := range txn.allocated {
+			if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(allocatedPage{}))); !ok || err != nil {
+				return false, err
+			}
+			p := txn.allocated[i]
+			if p.id == id && p.kind == ReservationAppendedData {
+				found = true
+			}
+		}
+		if !found {
+			return false, ErrGenerationParent
+		}
+	}
+	if oldID == 0 {
+		return true, nil
+	}
+	found := false
+	for i := range s.retirements {
+		if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(COWRetirementV1{}))); !ok || err != nil {
+			return false, err
+		}
+		r := &s.retirements[i]
+		for j := range r.PageIDs {
+			if ok, err := appendReserve(w, 1, 16); !ok || err != nil {
+				return false, err
+			}
+			if r.PageIDs[j] == oldID && r.LastReachableCommitSeq == s.commitSeq-1 {
+				found = true
+			}
+		}
+	}
+	if !found {
+		return false, ErrGenerationParent
+	}
+	return true, nil
 }
 
 // BindRetainedOwnerV6 binds finite-only scratch to the same producer that owns
@@ -366,6 +442,12 @@ func (s *COWPreparationWorkV6) AdoptAndActivateV6(activation *COWActivationWorkV
 	if claim == nil || claim.state != CandidatePreVisible {
 		return nil, false, ErrCandidateConsumed
 	}
+	if s.installedPages != nil {
+		ready, err := s.installedPages.ValidateCOWInstalledPagesV6(s, w)
+		if !ready || err != nil {
+			return nil, false, err
+		}
+	}
 	records, bytes := a.activationAdmissionV6()
 	if ready, err := s.claimDataLockedV6(records+1, bytes+6*8, w); !ready || err != nil {
 		return nil, false, err
@@ -374,6 +456,13 @@ func (s *COWPreparationWorkV6) AdoptAndActivateV6(activation *COWActivationWorkV
 		return nil, false, err
 	}
 	prepared := s.adoptLockedV6(a)
+	if s.installedPages != nil {
+		// Validation admitted every visited frame and its disposing-edge clear.
+		// No fallible operation follows the ledger transition. The exact private
+		// descriptor now owns these pages and its original rollbackTxn is live.
+		s.installedPages.AdoptCOWInstalledPagesV6(s)
+		s.installedPages = nil
+	}
 	a.installActivatedCandidateV6(prepared, activation)
 	return prepared, true, nil
 }
@@ -444,6 +533,42 @@ func (s *COWPreparationWorkV6) Cancel(w *iterator.OrdinalScanWork) (bool, error)
 	}
 	if s.prepared != nil {
 		s.prepared.privatePrepared = false
+	}
+	*s = COWPreparationWorkV6{cancelled: true}
+	return true, nil
+}
+
+// ClosePublishedWithWorkV6 retires only this constructor's finite-only scratch
+// and borrowed controls after the SAME candidate has published. Ledger/data
+// custody already belongs to the canonical generation; Cancel is invalid here.
+func (s *COWPreparationWorkV6) ClosePublishedWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || w == nil {
+		return false, ErrGenerationFormat
+	}
+	if s.phase == 0 && s.cancelled {
+		return true, nil
+	}
+	if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))); !ok || err != nil {
+		return false, err
+	}
+	a := s.allocator
+	if a == nil {
+		return false, ErrCandidateConsumed
+	}
+	a.mu.Lock()
+	valid := s.adopted && s.prepared != nil && s.prepared.published && s.prepared.activated && s.installedPages == nil
+	a.mu.Unlock()
+	if !valid {
+		return false, ErrCandidateConsumed
+	}
+	for _, normalize := range [2]*reservationNormalizeWorkV1{&s.materialize.inventory.normalized, &s.materialize.reuse.inventory.normalized} {
+		ready, err := normalize.releaseScratch(w)
+		if !ready || err != nil {
+			return false, err
+		}
+	}
+	if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || err != nil {
+		return false, err
 	}
 	*s = COWPreparationWorkV6{cancelled: true}
 	return true, nil

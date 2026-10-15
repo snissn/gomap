@@ -17,6 +17,7 @@ type WorkBudget interface {
 type WorkLease interface {
 	Lease
 	ResizeWork(uint64, *iterator.OrdinalScanWork) (bool, error)
+	AdmitRetentionResize(*iterator.OrdinalScanWork) bool
 	AdmitRetentionClose(*iterator.OrdinalScanWork) bool
 }
 

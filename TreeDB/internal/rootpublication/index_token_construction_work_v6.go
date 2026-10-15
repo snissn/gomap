@@ -84,27 +84,33 @@ func (s *StableIndexTokenConstructionWorkV6) Step(spec StableResourceSpec, w *it
 			if !w.Reserve(12, bytes) {
 				return nil, false, nil
 			}
-			a, err := newResourceAllocation(s.spec.MetadataOwner, charge)
-			if err != nil {
-				return nil, false, err
-			}
-			obligations, err := newResourceObligationBacking(s.spec.MetadataOwner, nil, s.spec.Reachability)
-			if err != nil {
-				if a.drop() {
-					a.refund()
+			// The SAME constructor immediately owns each successful allocation.
+			// Later refusal/failure retains that partial token for its original
+			// work-bearing disposer; no synchronous error refund is hidden here.
+			if s.token == nil {
+				a, err := newResourceAllocationWithWorkV6(s.spec.MetadataOwner, charge, w)
+				if err != nil {
+					return nil, false, err
 				}
-				return nil, false, err
+				s.token = &StableResourceToken{metadata: a}
+				s.token.owner.Store(uint32(ResourceOwnerToken))
 			}
-			physical, err := newResourcePinnedBacking(s.spec.MetadataOwner, s.spec.PinRegistry, s.spec.File, false)
-			if err != nil {
-				obligations.release()
-				if a.drop() {
-					a.refund()
+			if s.token.obligationBacking == nil {
+				// This native constructor already rejected every nonempty
+				// logical obligation. Use the original empty backing shape.
+				a, err := newResourceAllocationWithWorkV6(s.spec.MetadataOwner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceObligationBacking{}))), w)
+				if err != nil {
+					return nil, false, err
 				}
-				return nil, false, err
+				s.token.obligationBacking = &resourceObligationBacking{allocation: a}
 			}
-			s.token = &StableResourceToken{metadata: a, obligationBacking: obligations, physicalBacking: physical}
-			s.token.owner.Store(uint32(ResourceOwnerToken))
+			if s.token.physicalBacking == nil {
+				physical, err := newResourcePinnedBackingWithWorkV6(s.spec.MetadataOwner, s.spec.PinRegistry, s.spec.File, false, w)
+				if err != nil {
+					return nil, false, err
+				}
+				s.token.physicalBacking = physical
+			}
 			s.phase = 2
 		case 2:
 			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s.token))) {

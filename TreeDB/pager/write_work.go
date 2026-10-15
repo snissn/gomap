@@ -147,13 +147,13 @@ func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, 
 	}
 	p.dirtyChunks.set(chunkIdx)
 	destination := p.chunks[chunkIdx][offset : offset+page.PageSize]
-	if publication {
+	if publication && durabilitycut.Enabled() {
 		if err := durabilitycut.EmitStableRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, filepath.Dir(p.path), p.path, p.file, byteOffset, page.PageSize); err != nil {
 			return nil, false, err
 		}
 	}
 	copy(destination, data)
-	if publication {
+	if publication && durabilitycut.Enabled() {
 		if err := durabilitycut.EmitStableRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, filepath.Dir(p.path), p.path, p.file, byteOffset, page.PageSize); err != nil {
 			return nil, false, err
 		}
@@ -206,10 +206,10 @@ func (p *Pager) WritePrimaryCapsuleViewWithWork(first uint64, image []byte, work
 }
 
 func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	return p.writeOwnedSpanWithEffectWorkV6(first, images, durable, publication, sealOffset, sealLength, beforeFence, work, nil)
+	return p.writeOwnedSpanWithEffectWorkV6(first, images, durable, publication, sealOffset, sealLength, beforeFence, work, nil, nil)
 }
 
-func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool) ([]byte, bool, error) {
+func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork, mutation *bool, fence PrimaryCapsuleFenceV6) ([]byte, bool, error) {
 	if isPrimaryBankID(first) {
 		if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {
 			return nil, false, e
@@ -218,7 +218,7 @@ func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, du
 		if companion == nil {
 			return nil, false, ErrPageOutOfBounds
 		}
-		return companion.writeOwnedSpanWithEffectWorkV6(first-page.PrimaryBankNamespace, images, durable, publication, sealOffset, sealLength, beforeFence, work, mutation)
+		return companion.writeOwnedSpanWithEffectWorkV6(first-page.PrimaryBankNamespace, images, durable, publication, sealOffset, sealLength, beforeFence, work, mutation, fence)
 	}
 	if p.readOnly {
 		return nil, false, ErrReadOnly
@@ -292,7 +292,7 @@ func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, du
 	}
 	p.dirtyChunks.set(chunk)
 	destination := p.chunks[chunk][within : within+spanBytes]
-	if publication {
+	if publication && durabilitycut.Enabled() {
 		if err := durabilitycut.EmitStableRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, filepath.Dir(p.path), p.path, p.file, offset+sealOffset, sealLength); err != nil {
 			return nil, false, err
 		}
@@ -303,14 +303,21 @@ func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, du
 	for i, image := range images {
 		copy(destination[i*page.PageSize:(i+1)*page.PageSize], image)
 	}
-	if publication {
+	if publication && durabilitycut.Enabled() {
 		if err := durabilitycut.EmitStableRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, filepath.Dir(p.path), p.path, p.file, offset+sealOffset, sealLength); err != nil {
 			return nil, false, err
 		}
 	}
 	if durable && !p.memoryOnly {
-		if err := durabilitycut.EmitStablePath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path, p.file); err != nil {
-			return nil, false, err
+		if durabilitycut.Enabled() {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path, p.file); err != nil {
+				return nil, false, err
+			}
+		}
+		if fence != nil {
+			if err := fence.BeforePrimaryCapsuleFenceV6(); err != nil {
+				return nil, false, err
+			}
 		}
 		if beforeFence != nil {
 			if err := beforeFence(); err != nil {
@@ -335,8 +342,10 @@ func (p *Pager) writeOwnedSpanWithEffectWorkV6(first uint64, images [][]byte, du
 		// Keep membership unchanged. Prior mutable borrows can write after this
 		// lock, and the file fence may cover unrelated pages. Only the immutable
 		// span owner can consume this exact completed fence as authority.
-		if err := durabilitycut.EmitStablePath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path, p.file); err != nil {
-			return nil, false, err
+		if durabilitycut.Enabled() {
+			if err := durabilitycut.EmitStablePath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path, p.file); err != nil {
+				return nil, false, err
+			}
 		}
 	}
 	return destination, true, nil
@@ -359,6 +368,28 @@ func (p *Pager) WritePrimaryCapsuleWithFenceStatusV6(first uint64, image []byte,
 		return nil, false, false, ErrPageOutOfBounds
 	}
 	mutated := false
-	view, ready, err := p.writeOwnedSpanWithEffectWorkV6(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, beforeFence, w, &mutated)
+	view, ready, err := p.writeOwnedSpanWithEffectWorkV6(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, beforeFence, w, &mutated, nil)
+	return view, ready, mutated, err
+}
+
+// PrimaryCapsuleFenceV6 is the original publisher's concrete admitted guard.
+// Unlike a captured func value it borrows an already retained containing frame.
+type PrimaryCapsuleFenceV6 interface{ BeforePrimaryCapsuleFenceV6() error }
+
+func (p *Pager) WritePrimaryCapsuleWithTypedFenceStatusV6(first uint64, image []byte, fence PrimaryCapsuleFenceV6, w *iterator.OrdinalScanWork) ([]byte, bool, bool, error) {
+	if w == nil || fence == nil {
+		return nil, false, false, ErrPageOutOfBounds
+	}
+	if len(image) != 3*page.PageSize || (first != 2 && first != 5) {
+		return nil, false, false, ErrPageOutOfBounds
+	}
+	// This original fixed slice header backing and interface dispatch are actual
+	// per-call traffic; no header or borrowed image escapes the synchronous core.
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof([3][]byte{}))+2*uint64(unsafe.Sizeof(fence))) {
+		return nil, false, false, nil
+	}
+	images := [3][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}
+	mutated := false
+	view, ready, err := p.writeOwnedSpanWithEffectWorkV6(first, images[:], true, true, 0, 3*page.PageSize, nil, w, &mutated, fence)
 	return view, ready, mutated, err
 }

@@ -4,7 +4,6 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -67,7 +66,10 @@ func (s *DirectorySealWorkV6) step(a *Arena, r Ref, image []byte, groups [1]*Gro
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b := a.valid(r)
+	b, observed := a.validWithWorkV6(r, w)
+	if !observed {
+		return nil, false, nil
+	}
 	if b == nil || b.class != Directory || b.construction != owner || !a.capsuleFormat {
 		return nil, false, ErrStale
 	}
@@ -130,17 +132,15 @@ func (s *DirectorySealWorkV6) step(a *Arena, r Ref, image []byte, groups [1]*Gro
 			return nil, false, ErrStale
 		}
 	}
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ReadRootCertificateV6{})))
-	if err := a.metadata.Add(charge); err != nil {
+	if ready, err := a.prepareReadRootCertificateLockedV6(b, w); !ready || err != nil {
 		return nil, false, err
 	}
 	physical, ready, err := a.writeBundleLocked(r, s.image[:], nil, w)
 	if !ready || err != nil {
-		a.metadata.Remove(charge)
 		return nil, false, err
 	}
 	// SAME nonfallible bank/certificate/edge installation as ordinary sealing.
-	certificate := a.installSealedDirectoryLockedV6(b, r, s.directory, groups, physical, owner, charge)
+	certificate := a.installSealedDirectoryLockedV6(b, r, s.directory, groups, physical, owner, 0)
 	for _, g := range groups {
 		if g != nil {
 			a.counters.EdgeWrites++

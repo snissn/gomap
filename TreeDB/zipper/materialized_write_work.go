@@ -91,9 +91,30 @@ type materializedWriteFrame struct {
 
 func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*MaterializedWriteWork, bool, error) {
 	if z == nil || owner == nil || !ref.IsPage() {
+		if w != nil {
+			return nil, false, ErrMaterializedWriteContinuation
+		}
 		return nil, false, fmt.Errorf("%w: root ref=%+v", ErrMaterializedWriteContinuation, ref)
 	}
 	n := uint64(unsafe.Sizeof(MaterializedWriteWork{}))
+	if w != nil {
+		if ref.Page < 2 {
+			return nil, false, ErrMaterializedWriteContinuation
+		}
+		frameBytes := uint64(unsafe.Sizeof(materializedWriteFrame{}))
+		if ok, err := mergeReserve(w, 2, 2*n+2*frameBytes); !ok || err != nil {
+			return nil, false, err
+		}
+		charge := retainedalloc.AllocationCharge(n) + retainedalloc.AllocationCharge(frameBytes)
+		if err := retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
+			return nil, false, err
+		}
+		// Both original containing objects are admitted together. No fallible
+		// operation or hidden temporary-owner refund follows the aggregate Add.
+		f := &materializedWriteFrame{oldID: ref.Page, oldRef: ref, ops: ops}
+		s := &MaterializedWriteWork{z: z, owner: owner, charge: charge, head: f, root: f, current: f}
+		return s, true, nil
+	}
 	if ok, e := mergeReserve(w, 1, 2*n); !ok || e != nil {
 		return nil, false, e
 	}
@@ -133,6 +154,9 @@ func (s *MaterializedWriteWork) appendWorkspaceForTarget(target *materializedWri
 }
 func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*materializedWriteFrame, bool, error) {
 	if (!ref.IsPage() || ref.Page < 2) && !ref.IsLeafLog() {
+		if w != nil {
+			return nil, false, ErrMaterializedWriteContinuation
+		}
 		return nil, false, fmt.Errorf("%w: child ref=%+v", ErrMaterializedWriteContinuation, ref)
 	}
 	n := uint64(unsafe.Sizeof(materializedWriteFrame{}))
@@ -140,7 +164,7 @@ func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref pag
 		return nil, false, e
 	}
 	charge := retainedalloc.AllocationCharge(n)
-	if e := s.owner.AddPending(charge); e != nil {
+	if e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); e != nil {
 		return nil, false, e
 	}
 	f := &materializedWriteFrame{parent: parent, next: s.head, oldID: ref.Page, oldRef: ref, ops: ops}
@@ -557,7 +581,7 @@ func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalS
 				return false, e
 			}
 			charge := retainedalloc.AllocationCharge(n)
-			if e := s.owner.AddPending(charge); e != nil {
+			if e := retainedalloc.AddPendingWithOrdinalWork(s.owner, charge, w); e != nil {
 				return false, e
 			}
 			next := &materializedWriteFrame{parent: f.parent, next: s.head, splitSegment: true}
@@ -666,6 +690,45 @@ func (s *MaterializedWriteWork) AdoptPagesWithWorkV6(visit func(uint64, uint64, 
 		s.adoptNext = f.next
 	}
 	return true, nil
+}
+
+// ValidateCOWInstalledPagesV6 is the read-only half of the original allocator
+// handoff. A refusal leaves EVERY AppendWork disposing edge intact. The same
+// call's allocator/ledger cut protects the operands until the admitted transfer.
+func (s *MaterializedWriteWork) ValidateCOWInstalledPagesV6(preparation *freelist.COWPreparationWorkV6, w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || preparation == nil || w == nil {
+		return false, ErrMaterializedWriteContinuation
+	}
+	if ok, err := mergeReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || err != nil {
+		return false, err
+	}
+	if s.phase != 1 || s.adoptionBegun || s.appendTarget != nil || s.unboundedLeafPersistenceDiagnostic {
+		return false, ErrMaterializedWriteContinuation
+	}
+	for f := s.head; f != nil; f = f.next {
+		// Includes the final nonfallible frame traversal and AppendWork clear.
+		if ok, err := mergeReserve(w, 2, 4*uint64(unsafe.Sizeof(f.append))+2*uint64(unsafe.Sizeof(f.result))+32); !ok || err != nil {
+			return false, err
+		}
+		if !f.written || !f.result.IsPage() {
+			return false, ErrMaterializedWriteContinuation
+		}
+		ready, err := preparation.ValidateInstalledPageV6(&f.append, f.result.Page, f.oldID, w)
+		if !ready || err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// AdoptCOWInstalledPagesV6 runs only after the preceding validation completed
+// under the original allocator/ledger locks and exact candidate adoption. It
+// drops rollback aliases before installActivatedCandidateV6 clears rollbackTxn.
+func (s *MaterializedWriteWork) AdoptCOWInstalledPagesV6(_ *freelist.COWPreparationWorkV6) {
+	for f := s.head; f != nil; f = f.next {
+		f.append = freelist.AppendWork{}
+	}
+	s.adoptionBegun, s.adoptNext = true, nil
 }
 
 // CompleteWithWorkV6 detaches finite frame metadata only after every installed

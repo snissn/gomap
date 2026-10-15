@@ -101,6 +101,17 @@ func PrimaryBankMetadataEdgesOwnedV5(class primaryarena.Class, image []byte, own
 	s.count = len(edges)
 	return s, nil
 }
+
+// PrimaryBankMetadataEdgesIntoV6 shares the canonical codec and borrows only
+// the caller's fixed two-edge scratch. Dependency pages need the ordinary owned
+// decoder and are refused before their variable traversal/allocation here.
+func PrimaryBankMetadataEdgesIntoV6(class primaryarena.Class, image []byte, dst []primaryarena.MetadataEdge) ([]primaryarena.MetadataEdge, error) {
+	if (class != primaryarena.Record && class != primaryarena.Manifest) || len(dst) != 0 || cap(dst) < 2 {
+		return nil, retainedalloc.ErrWorkRequired
+	}
+	return primaryBankMetadataEdgesV5(class, image, dst, nil)
+}
+
 func primaryBankMetadataEdgesV5(class primaryarena.Class, image []byte, dst []primaryarena.MetadataEdge, scratch *dependencyBorrowScratch) ([]primaryarena.MetadataEdge, error) {
 	if len(image) != page.PageSize || !page.VerifyChecksumNonMutating(image) {
 		return nil, ErrDurableRootRecordChecksum

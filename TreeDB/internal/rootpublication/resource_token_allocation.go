@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"runtime"
@@ -28,6 +29,10 @@ type resourcePinnedBacking struct {
 }
 
 func newResourcePinnedBacking(owner *retainedalloc.Owner, registry *IdentityPinRegistry, source *os.File, defaultSync bool) (*resourcePinnedBacking, error) {
+	return newResourcePinnedBackingWithWorkV6(owner, registry, source, defaultSync, nil)
+}
+
+func newResourcePinnedBackingWithWorkV6(owner *retainedalloc.Owner, registry *IdentityPinRegistry, source *os.File, defaultSync bool, w *iterator.OrdinalScanWork) (*resourcePinnedBacking, error) {
 	if owner == nil || registry == nil || source == nil {
 		return nil, ErrResourceOwnership
 	}
@@ -44,7 +49,7 @@ func newResourcePinnedBacking(owner *retainedalloc.Owner, registry *IdentityPinR
 		return nil, retainedalloc.ErrCapacity
 	}
 	charge += fileCharge
-	if err = owner.AddPending(charge); err != nil {
+	if err = retainedalloc.AddPendingWithOrdinalWork(owner, charge, w); err != nil {
 		return nil, err
 	}
 	backing := &resourcePinnedBacking{owner: owner, charge: charge, registry: registry}

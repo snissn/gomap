@@ -190,6 +190,9 @@ type PreparedCOWCandidateV1 struct {
 	rollbackStats Stats
 	activated     bool
 	published     bool
+	// Bound only by the original activated-vector insertion. Successful prefix
+	// removal clears it after marking published, under the SAME allocator lock.
+	activationOwner *allocatorCOWStateV1
 	// Granted only by the original private preparer; not an installed slot.
 	privatePrepared bool
 }
@@ -558,6 +561,7 @@ func (a *Allocator) publishActivatedCOWPrefixPolicyLockedV1(prefix []*PreparedCO
 	}
 	for _, candidate := range prefix {
 		candidate.published = true
+		candidate.activationOwner = nil
 	}
 	copy(a.cow.activated, a.cow.activated[len(prefix):])
 	clear(a.cow.activated[len(a.cow.activated)-len(prefix):])
@@ -689,6 +693,7 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	prepared.rollbackTxn = nil
 	prepared.activated = true
 	prepared.published = true
+	prepared.activationOwner = nil
 	a.cow.waitErr = nil
 	a.stats.FreeIDs = a.cow.generation.FreeCount()
 	a.cow.ready.Broadcast()

@@ -80,6 +80,19 @@ func (a *Arena) CapsuleFormatV6() bool { return a != nil && a.capsuleFormat }
 func (a *Arena) PrepareReadRootV6(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	return a.PrepareConstructedReadRootV6(nil, w)
 }
+
+// Existing arena storage carries the concrete, temporary construction operands.
+// a.mu protects the whole nonyielding call; they are scrubbed before return.
+// The constructed bank owns its own copied constructor edge, not this operand.
+type readRootOwnerConstructorV6 struct {
+	owner  ReadRootConstructionV6
+	charge uint64
+}
+
+func (c *readRootOwnerConstructorV6) ConstructPrimaryReadRootOwnerV6() any {
+	return &bank{incarnation: 1, refs: 1, class: Directory, privatePublication: c.owner == nil, construction: c.owner, metadataCharge: c.charge}
+}
+
 func (a *Arena) PrepareConstructedReadRootV6(owner ReadRootConstructionV6, w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	bytes := 2*uint64(unsafe.Sizeof(bank{})) + 128
 	if !reserve(w, 1, bytes) {
@@ -95,18 +108,52 @@ func (a *Arena) PrepareConstructedReadRootV6(owner ReadRootConstructionV6, w *it
 	}
 	local := pager.PrimaryReadRootLocalBaseV6 + a.readSerial + 1
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(bank{})))
-	if err := a.metadata.Add(charge); err != nil {
-		return Ref{}, false, err
-	}
-	b := &bank{incarnation: 1, refs: 1, class: Directory, privatePublication: owner == nil, construction: owner, metadataCharge: charge}
-	if err := a.pager.PreparePrimaryReadRootOwnerV6(local, b); err != nil {
-		a.metadata.Remove(charge)
-		return Ref{}, false, err
+	if w != nil {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(a.readRootConstructorV6))+2*uint64(unsafe.Sizeof(bank{}))) {
+			return Ref{}, false, nil
+		}
+		a.readRootConstructorV6 = readRootOwnerConstructorV6{owner: owner, charge: charge}
+		ready, err := a.pager.PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local, &a.metadata, charge, &a.readRootConstructorV6, w)
+		a.readRootConstructorV6 = readRootOwnerConstructorV6{}
+		if !ready || err != nil {
+			return Ref{}, false, err
+		}
+	} else {
+		if err := a.metadata.Add(charge); err != nil {
+			return Ref{}, false, err
+		}
+		b := &bank{incarnation: 1, refs: 1, class: Directory, privatePublication: owner == nil, construction: owner, metadataCharge: charge}
+		if err := a.pager.PreparePrimaryReadRootOwnerV6(local, b); err != nil {
+			a.metadata.Remove(charge)
+			return Ref{}, false, err
+		}
 	}
 	a.readSerial++
 	a.counters.Claims++
 	a.counters.Bytes += bytes
 	return Ref{Namespace + local, 1}, true, nil
+}
+
+// Private certificate storage is attached to the original unsealed bank
+// before a later write/registration can refuse. It conveys no certificate
+// authority until the unchanged nonfallible seal installation fills it.
+func (a *Arena) prepareReadRootCertificateLockedV6(b *bank, w *iterator.OrdinalScanWork) (bool, error) {
+	if !reserve(w, 1, 2*uint64(unsafe.Sizeof(ReadRootCertificateV6{}))+2*uint64(unsafe.Sizeof(bank{}))) {
+		return false, nil
+	}
+	if b == nil || b.sealed {
+		return false, ErrStale
+	}
+	if b.readCertificate != nil {
+		return true, nil
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ReadRootCertificateV6{})))
+	if err := retainedalloc.AddWithOrdinalWork(&a.metadata, charge, w); err != nil {
+		return false, err
+	}
+	b.readCertificate = &ReadRootCertificateV6{}
+	b.metadataCharge += charge
+	return true, nil
 }
 
 // ValidateOwnedReadRootV6 checks the actual sealed immutable owner, not a fixed

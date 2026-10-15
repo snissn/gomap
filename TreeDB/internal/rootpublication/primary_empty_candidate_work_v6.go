@@ -12,14 +12,31 @@ import (
 // constructor only after proving its actual fixed empty representation. The
 // constructor's allocation remains under the SAME selected resource owner.
 func EmptyDependencyManifestWithWorkV6(set *StableResourceSet, w *iterator.OrdinalScanWork) (*DependencyManifestV1, bool, error) {
-	if !set.HasEmptyAdmittedDependencyClosureV6() || w == nil {
+	if w == nil {
 		return nil, false, ErrNativeMVCCRootWorkRequiredV6
 	}
-	if !w.Reserve(4, 2*uint64(unsafe.Sizeof(DependencyManifestV1{}))+4*uint64(unsafe.Sizeof(resourceAllocation{}))+128) {
+	if !w.Reserve(4, 2*uint64(unsafe.Sizeof(DependencyManifestV1{}))+4*uint64(unsafe.Sizeof(resourceAllocation{}))+2*uint64(unsafe.Sizeof(dependencyManifestCursorV1{}))+128) {
 		return nil, false, nil
 	}
-	manifest, _, err := set.DependencyManifestV1()
-	return manifest, err == nil, err
+	if set == nil {
+		return nil, false, ErrNativeMVCCRootWorkRequiredV6
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if !set.hasEmptyAdmittedDependencyClosureLockedV6() || set.emptyDependencyDirectoryLocked() != nil || len(set.physicalDependencyDirectoriesLocked()) != 0 || set.kindViews == nil || set.kindViews.allocation == nil {
+		return nil, false, ErrNativeMVCCRootWorkRequiredV6
+	}
+	owner := set.metadata.owner
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyManifestV1{})))
+	allocation, err := newResourceAllocationWithWorkV6(owner, charge, w)
+	if err != nil {
+		return nil, false, err
+	}
+	// Zero encoded entries share the canonical nonfallible empty codec. No
+	// borrowed kind edge, encoded pointer backing or hidden failure refund.
+	manifest, _ := newDependencyManifestV1FromEncoded(nil, true)
+	manifest.allocation, manifest.selected = allocation, true
+	return manifest, true, nil
 }
 
 // HasEmptyAdmittedDependencyClosureV6 checks the actual immutable representation,
@@ -31,6 +48,9 @@ func (set *StableResourceSet) HasEmptyAdmittedDependencyClosureV6() bool {
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
+	return set.hasEmptyAdmittedDependencyClosureLockedV6()
+}
+func (set *StableResourceSet) hasEmptyAdmittedDependencyClosureLockedV6() bool {
 	owner := set.Owner()
 	if !set.selected || set.metadata == nil || set.physicalOnly || owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred || len(set.entries) != 0 || len(set.pinHighWater) != 0 || set.kindViews != nil && len(set.kindViews.cells) != 0 {
 		return false
@@ -53,9 +73,12 @@ func PrepareEmptyStableResourceSetWithOrdinalWorkV6(owner *retainedalloc.Owner, 
 	if w == nil || owner == nil {
 		return nil, false, ErrNativeMVCCRootWorkRequiredV6
 	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(StableResourceSet{}))) {
+		return nil, false, nil
+	}
 	if source != nil {
 		if !source.HasEmptyAdmittedDependencyClosureV6() {
-			return nil, false, source.EmptyClosureRefusalV6()
+			return nil, false, ErrNativeMVCCRootWorkRequiredV6
 		}
 		return CloneAdmittedStableResourceSetWithOrdinalWorkV6(source, w)
 	}
@@ -63,8 +86,20 @@ func PrepareEmptyStableResourceSetWithOrdinalWorkV6(owner *retainedalloc.Owner, 
 	if !w.Reserve(6, bytes) {
 		return nil, false, nil
 	}
-	set, err := ImportStableResourceSetMetadata(owner, nil)
-	return set, err == nil, err
+	// The original empty import's exact immutable output consists of these
+	// two containing allocations and their two original reference headers.
+	// Aggregate Add precedes all four allocations; no later fallible step or
+	// temporary builder/abandonment callback is needed for zero input edges.
+	header := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceAllocation{})))
+	kindCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceKindBacking{}))) + header
+	setCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableResourceSet{}))) + header
+	if err := retainedalloc.AddPendingWithOrdinalWork(owner, kindCharge+setCharge, w); err != nil {
+		return nil, false, err
+	}
+	views := &resourceKindBacking{allocation: resourceAllocationAdmittedV6(owner, kindCharge)}
+	set := &StableResourceSet{metadata: resourceAllocationAdmittedV6(owner, setCharge), selected: true, kindViews: views}
+	set.owner.Store(uint32(ResourceOwnerBuilder))
+	return set, true, nil
 }
 
 func (set *StableResourceSet) EmptyClosureRefusalV6() error {
@@ -89,11 +124,14 @@ func (set *StableResourceSet) EmptyClosureRefusalV6() error {
 // validation is reachable for this actual empty closure. Nonempty resource and
 // explicit-obligation shapes need their retained validator before this seam.
 func NewPreparedPrimaryEmptyCandidateWithWorkV6(spec CandidateSpec, w *iterator.OrdinalScanWork) (*PreparedRootCandidate, bool, error) {
-	if w == nil || spec.DurableRoot == nil || !spec.DurableRoot.RequiresNativeCallbackWorkV6() || len(spec.Obligations) != 0 || !spec.ResourceSet.HasEmptyAdmittedDependencyClosureV6() {
+	if w == nil {
 		return nil, false, ErrNativeMVCCRootWorkRequiredV6
 	}
 	if !w.Reserve(3, 2*uint64(unsafe.Sizeof(spec))+2*uint64(unsafe.Sizeof(PreparedRootCandidate{}))+2*uint64(unsafe.Sizeof(DurableRootTransaction{}))) {
 		return nil, false, nil
+	}
+	if spec.DurableRoot == nil || !spec.DurableRoot.RequiresNativeCallbackWorkV6() || len(spec.Obligations) != 0 || !spec.ResourceSet.HasEmptyAdmittedDependencyClosureV6() {
+		return nil, false, ErrNativeMVCCRootWorkRequiredV6
 	}
 	candidate, err := NewPreparedRootCandidate(spec)
 	return candidate, err == nil, err

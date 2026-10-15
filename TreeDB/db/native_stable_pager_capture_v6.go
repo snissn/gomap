@@ -36,8 +36,19 @@ type nativeStablePagerCaptureV6 struct {
 	metadata                                                                    *retainedalloc.Owner
 	wrapperCharge                                                               uint64
 	ownerRelease                                                                primaryArenaReleaseWork
+	refund                                                                      retainedalloc.RemovalWork
+	refundOwner                                                                 *retainedalloc.Owner
+	refundCharge                                                                uint64
+	refundCompletion                                                            rootpublication.StableResourceTokenReleaseCompletionV6
 	phase, releasePhase, namespacePhase                                         uint8
 	observed, ownerReleaseBound, builderOperationsConsumed, constructorDetached bool
+}
+
+func (s *nativeStablePagerCaptureV6) continueRefund(w *iterator.OrdinalScanWork) (bool, error) {
+	if ready, err := s.refundCompletion.CompleteWithWorkV6(&s.refund, w); !ready || err != nil {
+		return false, err
+	}
+	return s.refund.CompletePendingWork(&s.refundOwner, &s.refundCharge, w)
 }
 
 func (operations *stablePagerOwnedOperations) SupportsReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
@@ -87,6 +98,9 @@ func (operations *stablePagerOwnedOperations) ReleaseWithWorkV6(consumed *bool, 
 	s := operations.native
 	if s == nil {
 		return nil, 0, false, retainedalloc.ErrWorkRequired
+	}
+	if ready, err := s.continueRefund(w); !ready || err != nil {
+		return nil, 0, false, err
 	}
 	if !*consumed {
 		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*operations))+2*uint64(unsafe.Sizeof(*s))) {
@@ -166,8 +180,11 @@ func (operations *stablePagerOwnedOperations) ReleaseWithWorkV6(consumed *bool, 
 			return nil, 0, false, err
 		}
 		operations.originalCustody = nil
-		completion.Complete()
+		s.refundCompletion = completion
 		s.releasePhase = 4
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return nil, 0, false, err
+		}
 	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*operations))+uint64(len(operations.syncPath))) {
 		return nil, 0, false, nil
@@ -189,6 +206,9 @@ func (operations *stablePagerOwnedOperations) ReleaseWithWorkV6(consumed *bool, 
 // repeated on every turn before accepting a new capture effect; no lock lives
 // across a return. DATA and PRIMARY remain the ordinary producer's two operands.
 func (s *nativeStablePagerCaptureV6) step(c *NativeMVCCCurrentDeleteV6, primary bool, w *iterator.OrdinalScanWork) (bool, error) {
+	if ready, err := s.continueRefund(w); !ready || err != nil {
+		return false, err
+	}
 	db := c.db
 	idx := db.rootPublication.idx
 	for {
@@ -231,7 +251,7 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 			return false, ErrNativeMVCCSnapshotWork
 		}
 		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Snapshot{})))
-		if err := metadata.AddPending(charge); err != nil {
+		if err := retainedalloc.AddPendingWithOrdinalWork(metadata, charge, w); err != nil {
 			idx.wrapperMu.Unlock()
 			db.idxMu.Unlock()
 			return false, err
@@ -265,13 +285,13 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 					mutex.Unlock()
 					return false, nil
 				}
-				if err := metadata.AddPending(fileBytes); err != nil {
+				if err := retainedalloc.AddPendingWithOrdinalWork(metadata, fileBytes, w); err != nil {
 					mutex.Unlock()
 					return false, err
 				}
 				f, err := os.Open(strings.Clone(db.dir))
 				if err != nil {
-					metadata.RemovePending(fileBytes)
+					s.refundOwner, s.refundCharge = metadata, fileBytes
 					mutex.Unlock()
 					return false, err
 				}
@@ -388,7 +408,10 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 				return false, err
 			}
 			s.namespace = nil
-			completion.Complete()
+			s.refundCompletion = completion
+			if ready, err := s.continueRefund(w); !ready || err != nil {
+				return false, err
+			}
 		}
 		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(s.spec))) {
 			return false, nil
@@ -409,6 +432,9 @@ func (s *nativeStablePagerCaptureV6) stepLocked(c *NativeMVCCCurrentDeleteV6, pr
 }
 
 func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {
+	if ready, err := s.continueRefund(w); !ready || err != nil {
+		return false, err
+	}
 	if !s.constructorDetached {
 		token, ready, err := s.construction.DetachV6(w)
 		if !ready || err != nil {
@@ -435,8 +461,9 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 			return false, err
 		}
 		s.operations = nil
-		if owner != nil {
-			owner.RemovePending(charge)
+		s.refundOwner, s.refundCharge = owner, charge
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
 		}
 	}
 	if s.token != nil {
@@ -445,7 +472,10 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 			return false, err
 		}
 		s.token = nil
-		completion.Complete()
+		s.refundCompletion = completion
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if s.operations != nil {
 		owner, charge, ready, err := s.operations.ReleaseWithWorkV6(&s.builderOperationsConsumed, w)
@@ -453,8 +483,9 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 			return false, err
 		}
 		s.operations = nil
-		if owner != nil {
-			owner.RemovePending(charge)
+		s.refundOwner, s.refundCharge = owner, charge
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
 		}
 	}
 	if s.snapshot != nil {
@@ -465,8 +496,9 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 		s.snapshot = nil
 		owner, charge := s.metadata, s.wrapperCharge
 		s.metadata, s.wrapperCharge = nil, 0
-		if owner != nil {
-			owner.RemovePending(charge)
+		s.refundOwner, s.refundCharge = owner, charge
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
 		}
 	}
 	if s.namespace != nil {
@@ -475,7 +507,10 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 			return false, err
 		}
 		s.namespace = nil
-		completion.Complete()
+		s.refundCompletion = completion
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
+		}
 	}
 	if s.pendingProof != nil && !s.proofReleaseBound {
 		ready, err := s.proofRelease.Bind(s.pendingProof, w)
@@ -501,8 +536,9 @@ func (s *nativeStablePagerCaptureV6) closeStep(w *iterator.OrdinalScanWork) (boo
 		s.namespaceParent = nil
 		owner, charge := s.namespaceParentMetadata, s.namespaceParentCharge
 		s.namespaceParentCharge, s.namespaceParentMetadata = 0, nil
-		if owner != nil {
-			owner.RemovePending(charge)
+		s.refundOwner, s.refundCharge = owner, charge
+		if ready, err := s.continueRefund(w); !ready || err != nil {
+			return false, err
 		}
 	}
 	if s.observed {

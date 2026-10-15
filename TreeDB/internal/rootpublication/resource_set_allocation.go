@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"unsafe"
 )
@@ -9,10 +10,13 @@ import (
 // actual immutable kind backing, but each public owner has its own disposal
 // boundary. Construction consumes views only after full wrapper admission.
 func newStableResourceSetFromKindViews(views *resourceKindBacking) (*StableResourceSet, error) {
+	return newStableResourceSetFromKindViewsWithWorkV6(views, nil)
+}
+func newStableResourceSetFromKindViewsWithWorkV6(views *resourceKindBacking, w *iterator.OrdinalScanWork) (*StableResourceSet, error) {
 	var allocation *resourceAllocation
 	if views != nil && views.allocation != nil {
 		var err error
-		allocation, err = newResourceAllocation(views.allocation.owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableResourceSet{}))))
+		allocation, err = newResourceAllocationWithWorkV6(views.allocation.owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableResourceSet{}))), w)
 		if err != nil {
 			return nil, err
 		}
