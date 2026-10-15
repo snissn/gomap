@@ -1,0 +1,151 @@
+{
+  "head": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "created_utc": "2026-10-15T19:58:43.989069+00:00",
+  "source_frozen": true,
+  "runtime_released": true,
+  "checks": {
+    "coherent-normal-01": {
+      "exit": 0,
+      "elapsed": 69.73229242861271,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "./TreeDB/db",
+          "./TreeDB/internal/primaryarena",
+          "./TreeDB/caching",
+          "-run",
+          "TestPrimaryOwner|TestArenaPhysicalCloseWorkOriginalCaptureRemains|TestPrimaryDependencyFailedLeaseRemainsOnActualOwner|TestPrimaryRuntimeDisposal|TestOwnedPagerOperation|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestCOWCut|TestCOWReadPressure|TestCOWSnapshotIteratorWrapper|TestCOWCursorDeniedWrapper|TestCOWBatchCanonical|TestCOWBatchFinalizer|TestCOWLogicalSize|TestCOWUnsupportedSurfaces|TestCOWRollover|TestCOWDictionaryCleanup",
+          "-count=5",
+          "-timeout=120s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "package_results": [
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t2.626s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/internal/primaryarena\t0.008s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/caching\t12.528s"
+      ],
+      "top_level_pass_events": 135,
+      "top_level_skip_events": 0,
+      "subtest_pass_events": 75,
+      "data_race_reports": 0,
+      "raw_sha256": "0ce3ca672ae07dac8e39c319ffe00d34c5d799e138d62f3ec34f7f50bdb47225"
+    },
+    "coherent-race-01": {
+      "exit": 0,
+      "elapsed": 96.87862689420581,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-race",
+          "-p=1",
+          "./TreeDB/db",
+          "./TreeDB/internal/primaryarena",
+          "./TreeDB/caching",
+          "-run",
+          "TestPrimaryOwner|TestArenaPhysicalCloseWorkOriginalCaptureRemains|TestPrimaryDependencyFailedLeaseRemainsOnActualOwner|TestPrimaryRuntimeDisposal|TestOwnedPagerOperation|TestPrimaryJointNamespaceRebindKeepsOriginalParents|TestCOWCut|TestCOWReadPressure|TestCOWSnapshotIteratorWrapper|TestCOWCursorDeniedWrapper|TestCOWBatchCanonical|TestCOWBatchFinalizer|TestCOWLogicalSize|TestCOWUnsupportedSurfaces|TestCOWRollover|TestCOWDictionaryCleanup",
+          "-count=3",
+          "-timeout=120s",
+          "-v"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "1"
+        }
+      },
+      "package_results": [
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t10.549s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/internal/primaryarena\t1.033s",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/caching\t8.816s"
+      ],
+      "top_level_pass_events": 81,
+      "top_level_skip_events": 0,
+      "subtest_pass_events": 45,
+      "data_race_reports": 0,
+      "raw_sha256": "be78284bcadc884155596ea6233648bb4b1d6138727e08b11bbac1023dd18542"
+    },
+    "coherent-windows-build-01": {
+      "exit": 0,
+      "elapsed": 56.661724063102156,
+      "source_before_after_equal": true,
+      "matches_freeze": true,
+      "command": {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-c",
+          "-p=1",
+          "-o",
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-build/",
+          "./TreeDB/db",
+          "./TreeDB/internal/primaryarena",
+          "./TreeDB/caching"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair",
+        "env": {
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-lifetime-work/tmp",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/cache",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "https://proxy.golang.org,direct",
+          "GOSUMDB": "sum.golang.org",
+          "CGO_ENABLED": "0",
+          "GOOS": "windows",
+          "GOARCH": "amd64"
+        }
+      },
+      "package_results": [],
+      "top_level_pass_events": 0,
+      "top_level_skip_events": 0,
+      "subtest_pass_events": 0,
+      "data_race_reports": 0,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "gofmt_clean": true,
+  "diff_check_clean": true,
+  "windows_binaries": {
+    "windows-build/caching.test.exe": "00f9c50731e9a6ecff31212bbd5f21f1293201b0bcc8a15137c0fcd29002d2ba",
+    "windows-build/db.test.exe": "150aa439a4b72eb9a98dff5a3c30d5b681d779f4b24823d9639383c846707be2",
+    "windows-build/primaryarena.test.exe": "ae85d27acdd1085e85ff61153cfaceab834980b63c17028045b0b1cfb09d596e"
+  },
+  "limits": [
+    "focused local validation only",
+    "Windows compilation only; successor hosted execution required",
+    "hosted grower failing phase remains unattributed",
+    "SAME dictionary control demonstrates baseline mutation, not exact hosted delta reproduction",
+    "no performance runtime or successor qualification claim"
+  ]
+}

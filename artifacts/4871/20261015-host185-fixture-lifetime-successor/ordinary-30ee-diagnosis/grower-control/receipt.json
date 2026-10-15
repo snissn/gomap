@@ -1,0 +1,17 @@
+{
+  "base": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "replacements": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/pager/grow.go": {
+      "original_sha256": "e3ae43cab70b6592f56bc5cb2074765c74d620b4e07cf6ab90c4c6df7d980c6f",
+      "overlay": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/grow.go",
+      "overlay_sha256": "1f24bf06dbb51cf8b9487f2abec54ce07f4b07e9ca9eaf44dac532210f6a340f"
+    },
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/db/primary_arena_release_work_test.go": {
+      "original_sha256": "ad213b076773917e71a196062b421929055160ccf0783d52962a35e0d3d159a3",
+      "overlay": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/primary_arena_release_work_test.go",
+      "overlay_sha256": "0377d9ae50729b7157fc354cdf5dde948b261f714a671cde3b88e741c9d73ca3"
+    }
+  },
+  "scope": "artifact-only gate on SAME original growLoop before execution; original32records/1MiB+4096bound unchanged; negative4097poll calls then release SAMEgate and positiveyield; no source mutation",
+  "nonclaim": "does not establish hosted failing phase"
+}

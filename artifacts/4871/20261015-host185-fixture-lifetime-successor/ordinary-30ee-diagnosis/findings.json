@@ -1,0 +1,27 @@
+{
+  "head": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "source_count": 10246,
+  "frozen_source_unchanged": true,
+  "worktree_clean": true,
+  "runtime_batch": {
+    "exit": 0,
+    "elapsed": 38.632443816866726
+  },
+  "pass_count": 20,
+  "reproduction": "not reproduced20passes",
+  "diagnostic_overlay_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/overlay-receipt.json",
+  "original_30ee_sources_sha256": {
+    "TreeDB/db/primary_arena_release_work_test.go": "ad213b076773917e71a196062b421929055160ccf0783d52962a35e0d3d159a3",
+    "TreeDB/db/primary_arena_release_work.go": "d3a617c32599768e604e818599d130c0d6ed1abb96b31a56f6a73b7eb87ee302",
+    "TreeDB/db/primary_arena_owner_v5.go": "5af224fd8a56a5479d36c2e22b2aa78912e22577d52c693bb8c54b567cd46758",
+    "TreeDB/internal/primaryarena/physical_close_work.go": "00a372f228fbef73f0e263cf611af50679c08205f0c7eeac2514db6dc940eed6",
+    "TreeDB/pager/physical_close_work.go": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+    "TreeDB/internal/rootpublication/namespace_proof_close_work.go": "df6f00386a2c3d5523c5a5e99135990b13dc98eaf6e396de54ebc1db5188b1f7",
+    "TreeDB/internal/retainedalloc/owner_work.go": "c39a32692fdc2fc44797e7f5f562f47c8901957f191a5f0e0fd452b91aaf0ebc"
+  },
+  "616_to_30ee_relevant_source_diff": "",
+  "confirmed_exclusion": "new8byte pointers are in StableResourceToken and StableNamespaceToken; neither is instantiated in this fixture; proof/header/receipt grant sizes unchanged",
+  "candidate_cause": "unscheduled original pager grower completion during tight4096poll loop; unconfirmed for hosted failure",
+  "next_discriminating_control": "deterministically pause/release original grower and record original pager/Arena/receipt phase plus reserved work on refusal; preserve4096turn and32record/1MiB quotas",
+  "proposed_repair_if_confirmed": "fixture-only runtime.Gosched after paused debt turn, preserving actual worker and all original grants/ownership/refund assertions; no production change"
+}

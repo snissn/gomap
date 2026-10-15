@@ -1,0 +1,4 @@
+{
+  "TestCOWDictionaryCleanupPrepareRefusalTransfersOwner": "=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner\n--- FAIL: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner (0.15s)\n",
+  "TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=3": "=== RUN   TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=3\n    cow_dictionary_cleanup_test.go:130: partial owner did not refund exactly: before={TotalBytes:47360 HistoryBytes:25792 ReservedBytes:21312 RetiredBytes:0 PeakBytes:47360 ControlBytes:256 DeferredBytes:0 ExternalBytes:21312 Views:0 Generations:2 Sources:0 ExternalLeases:6} after={TotalBytes:49456 HistoryBytes:25792 ReservedBytes:23408 RetiredBytes:0 PeakBytes:79344 ControlBytes:256 DeferredBytes:0 ExternalBytes:23408 Views:0 Generations:2 Sources:0 ExternalLeases:6}\n--- FAIL: TestCOWDictionaryCleanupPrepareRefusalTransfersOwner/pointer=true/stage=3 (0.03s)\n"
+}

@@ -1,0 +1,3 @@
+{
+  "TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt": "=== RUN   TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt\n    primary_arena_release_work_test.go:100: physical finish permanently refused\n--- FAIL: TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt (0.00s)\n"
+}

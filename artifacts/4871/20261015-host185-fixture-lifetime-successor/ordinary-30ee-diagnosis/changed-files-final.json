@@ -1,0 +1,27 @@
+{
+  "head": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "test_only": true,
+  "production_and_harness_bytes_equal_head": true,
+  "files": {
+    "TreeDB/caching/cow_cut_test.go": {
+      "sha256": "c5241d5fdb15fe6705a0623fdda23490dbcd7296dff1b86a780590c6e09d6079",
+      "head_sha256": "c4552432bae0bcfe19373e51eadb957640310b11b735c7d1cbc1ed68b571701f"
+    },
+    "TreeDB/db/primary_arena_release_work_test.go": {
+      "sha256": "0625809f86b1788a77b1c69e590342e0d614852dc2c9db6cc73cd23ff2881c95",
+      "head_sha256": "ad213b076773917e71a196062b421929055160ccf0783d52962a35e0d3d159a3"
+    },
+    "TreeDB/db/stable_pager_owned_operations_test.go": {
+      "sha256": "37bba690790ed9ec5cc48c75bb302ab53dd6f9bbf7508ce8337d62a74e8342c4",
+      "head_sha256": "794c6f8a605cbed36afebaf0b81a42502ac73c304cf90a0033d492088b1ce7d8"
+    },
+    "TreeDB/db/vacuum_original_completion_test.go": {
+      "sha256": "ead999e43155641dd6b47a1888633cfacaa54d8626dff42134c42c5246447d1e",
+      "head_sha256": "e76657650dc351a21d9bef9415086f94fc7a6927f1978a3b19e7228d40aa9fbf"
+    },
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": {
+      "sha256": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b",
+      "head_sha256": "fcc3c06dfa42cb8a8823e8f4bb62399fac57b927baedded0e2711b63ff4ad2f1"
+    }
+  }
+}

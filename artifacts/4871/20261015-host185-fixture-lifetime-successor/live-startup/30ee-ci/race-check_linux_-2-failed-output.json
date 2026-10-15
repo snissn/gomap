@@ -1,0 +1,4 @@
+{
+  "TestCOWDictionaryCleanupPrivateCutOwnership": "=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership\n--- FAIL: TestCOWDictionaryCleanupPrivateCutOwnership (0.10s)\n",
+  "TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=false": "=== RUN   TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=false\n    cow_dictionary_cleanup_test.go:200: cancelled dictionary leaked: before={TotalBytes:45280 HistoryBytes:25792 ReservedBytes:19232 RetiredBytes:0 PeakBytes:45568 ControlBytes:256 DeferredBytes:0 ExternalBytes:19232 Views:0 Generations:2 Sources:0 ExternalLeases:6} after={TotalBytes:47360 HistoryBytes:25792 ReservedBytes:21312 RetiredBytes:0 PeakBytes:83408 ControlBytes:256 DeferredBytes:0 ExternalBytes:21312 Views:0 Generations:2 Sources:0 ExternalLeases:6}\n--- FAIL: TestCOWDictionaryCleanupPrivateCutOwnership/pointer=true/publish=false (0.02s)\n"
+}

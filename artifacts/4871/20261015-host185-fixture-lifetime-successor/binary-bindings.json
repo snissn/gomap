@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-build/caching.test.exe",
+    "bytes": 37023232,
+    "sha256": "00f9c50731e9a6ecff31212bbd5f21f1293201b0bcc8a15137c0fcd29002d2ba",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-build/db.test.exe",
+    "bytes": 61083136,
+    "sha256": "150aa439a4b72eb9a98dff5a3c30d5b681d779f4b24823d9639383c846707be2",
+    "reason": "binary retained locally; hash and provenance published"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-build/primaryarena.test.exe",
+    "bytes": 5685760,
+    "sha256": "ae85d27acdd1085e85ff61153cfaceab834980b63c17028045b0b1cfb09d596e",
+    "reason": "binary retained locally; hash and provenance published"
+  }
+]

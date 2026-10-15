@@ -1,0 +1,18 @@
+{
+  "checks_verified": [
+    "coherent-normal-01",
+    "coherent-race-01",
+    "coherent-windows-build-01"
+  ],
+  "source_files_verified": 10246,
+  "freeze_sha256": "28141a136142312bff6bacf97536bcfae4ff252a16570aa68e19cad6c37b172d",
+  "windows_binary_hashes_verified": 3,
+  "changes": [
+    "TreeDB/caching/cow_cut_test.go",
+    "TreeDB/db/primary_arena_release_work_test.go",
+    "TreeDB/db/stable_pager_owned_operations_test.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go"
+  ],
+  "production_and_benchmark_sources_changed": false
+}

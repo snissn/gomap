@@ -1,0 +1,18 @@
+{
+  "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/internal/retainedalloc/owner.go": {
+    "original": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "overlay": "26308b8a3883f611ae350ae2ef0b76f4e7f89590f857162e566b92c549521fa1"
+  },
+  "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/internal/rootpublication/pin_registry.go": {
+    "original": "f0e4bb5a89239cb9f842a57f52e9c63b0fb66fef2639fe4cb90ceece66438a42",
+    "overlay": "702116a26e88cd85f4528dacf1e570072462d95d5fe87ebf02ae55dac28e1b22"
+  },
+  "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/caching/cow_cut_test.go": {
+    "original": "c4552432bae0bcfe19373e51eadb957640310b11b735c7d1cbc1ed68b571701f",
+    "overlay": "3a0c5b54da2bcc3ee4efc07823fe273b56b45e671a7248bf3386d70e7a83ffa9"
+  },
+  "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-repair/TreeDB/caching/cow_dictionary_cleanup_test.go": {
+    "original": "2367d2076b9788d5ef2283d06af2ea47ddcb9df976644c5e91e8e9c92127db83",
+    "overlay": "f6d107c846613c9c73230a8ee99a553efcd06f4fa35f70f2dfe5fb5e882c33a7"
+  }
+}

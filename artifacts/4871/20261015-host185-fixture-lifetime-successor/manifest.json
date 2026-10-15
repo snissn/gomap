@@ -1,0 +1,1568 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/TreeDB_required_gate-failed-output.json",
+    "path": "live-startup/30ee-ci/TreeDB_required_gate-failed-output.json",
+    "source_bytes": 3,
+    "source_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "stored_bytes": 3,
+    "stored_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/TreeDB_required_gate-failures.json",
+    "path": "live-startup/30ee-ci/TreeDB_required_gate-failures.json",
+    "source_bytes": 220,
+    "source_sha256": "eed6af137b131c205ebf11f212b2d47807a6c6c7550ca1f2d00b5c88a691d452",
+    "stored_bytes": 220,
+    "stored_sha256": "eed6af137b131c205ebf11f212b2d47807a6c6c7550ca1f2d00b5c88a691d452",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/TreeDB_required_gate.log",
+    "path": "live-startup/30ee-ci/TreeDB_required_gate.log.gz",
+    "source_bytes": 3621,
+    "source_sha256": "e1c6d45d8ac57df9266298558988d9415930920bc238a58a6d53a218a8d2c43a",
+    "stored_bytes": 1200,
+    "stored_sha256": "84f327a58cb2b443c963d7fbed65a1ba38cd27ec8cfaf2587c1f3f2552e0da3e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/collect.py",
+    "path": "live-startup/30ee-ci/collect.py",
+    "source_bytes": 1834,
+    "source_sha256": "22b52af7d5f26af9c3d109c5e721cb808c232bb21aa5de3b103698af85f2d0f4",
+    "stored_bytes": 1834,
+    "stored_sha256": "22b52af7d5f26af9c3d109c5e721cb808c232bb21aa5de3b103698af85f2d0f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/failure-inventory-06.json",
+    "path": "live-startup/30ee-ci/failure-inventory-06.json",
+    "source_bytes": 111242,
+    "source_sha256": "fda4f6eec88da5f878943de891e45c12553ad13f080fd7d106240385a63750a1",
+    "stored_bytes": 111242,
+    "stored_sha256": "fda4f6eec88da5f878943de891e45c12553ad13f080fd7d106240385a63750a1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/failure-inventory-10.json",
+    "path": "live-startup/30ee-ci/failure-inventory-10.json",
+    "source_bytes": 165445,
+    "source_sha256": "dba2fa3a84091d87870903e8ec67dc0a55f21a24f5fc7cf525b33f8bea557da0",
+    "stored_bytes": 165445,
+    "stored_sha256": "dba2fa3a84091d87870903e8ec67dc0a55f21a24f5fc7cf525b33f8bea557da0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/failure-inventory-11.json",
+    "path": "live-startup/30ee-ci/failure-inventory-11.json.gz",
+    "source_bytes": 367594,
+    "source_sha256": "b6dc732527d3fd8d23c315578eefc6b9de3a0cf35286a8dac0828d1709aee5b8",
+    "stored_bytes": 39590,
+    "stored_sha256": "c8eb2db5ed037df3bead76f9cb203439765a77d0efde24da6114b2fbcf8a8216",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/failure-inventory-20.json",
+    "path": "live-startup/30ee-ci/failure-inventory-20.json.gz",
+    "source_bytes": 367831,
+    "source_sha256": "ae3e3e6296f62b5e9ed2979f6c83e6cb694ad6270960f67538ec79caaf92cc9a",
+    "stored_bytes": 38683,
+    "stored_sha256": "ba75887f200068f2f3760e91c1e0bf2b60759e4e65458c45005a35f24d754e56",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-1-failed-output.json",
+    "path": "live-startup/30ee-ci/race-check_linux_-1-failed-output.json",
+    "source_bytes": 936,
+    "source_sha256": "16eacb2fba462d4ddebcb774ee31133e0ff85402b14a7341ffa46bbbdf3ab711",
+    "stored_bytes": 936,
+    "stored_sha256": "16eacb2fba462d4ddebcb774ee31133e0ff85402b14a7341ffa46bbbdf3ab711",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-1-failures.json",
+    "path": "live-startup/30ee-ci/race-check_linux_-1-failures.json",
+    "source_bytes": 93012,
+    "source_sha256": "1cca817027fcbc8b46d36861acfc4203f4bd38ab47104da396d48f05497745b2",
+    "stored_bytes": 93012,
+    "stored_sha256": "1cca817027fcbc8b46d36861acfc4203f4bd38ab47104da396d48f05497745b2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-1.log",
+    "path": "live-startup/30ee-ci/race-check_linux_-1.log.gz",
+    "source_bytes": 4527706,
+    "source_sha256": "f7fce34bad0c913a0c61909253fea989023af90197f33cbc43c4f0930cee0cca",
+    "stored_bytes": 357367,
+    "stored_sha256": "7da36b4dd24d77ce9aebbfc853ec0c6c60c401f5e00c79b840585593312ee994",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-2-failed-output.json",
+    "path": "live-startup/30ee-ci/race-check_linux_-2-failed-output.json",
+    "source_bytes": 891,
+    "source_sha256": "8bd6c6286a5019e25d356ea5a39cfbbf594998f7b258a6c52c82cf439b1534e6",
+    "stored_bytes": 891,
+    "stored_sha256": "8bd6c6286a5019e25d356ea5a39cfbbf594998f7b258a6c52c82cf439b1534e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-2-failures.json",
+    "path": "live-startup/30ee-ci/race-check_linux_-2-failures.json",
+    "source_bytes": 105487,
+    "source_sha256": "a2a48a27a07f356585d8e9ae63dd3fbd3433c8e625643ca46040f8c53b6fbd60",
+    "stored_bytes": 105487,
+    "stored_sha256": "a2a48a27a07f356585d8e9ae63dd3fbd3433c8e625643ca46040f8c53b6fbd60",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/race-check_linux_-2.log",
+    "path": "live-startup/30ee-ci/race-check_linux_-2.log.gz",
+    "source_bytes": 3351122,
+    "source_sha256": "06e7ecd750f5e15d03021344a692c1ec252ac89ef5a74c30a84591870486aba5",
+    "stored_bytes": 298449,
+    "stored_sha256": "8e4e7e4583e3d071f24cb03581c0a3ca9928bbaed166a565b7f488f0d9aea102",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/ubuntu-latest-3-failed-output.json",
+    "path": "live-startup/30ee-ci/ubuntu-latest-3-failed-output.json",
+    "source_bytes": 330,
+    "source_sha256": "b3f6a95945bcf096a2748a58addcb4bb7a7cc559e41ea9fb00a96970e21fa1f8",
+    "stored_bytes": 330,
+    "stored_sha256": "b3f6a95945bcf096a2748a58addcb4bb7a7cc559e41ea9fb00a96970e21fa1f8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/ubuntu-latest-3-failures.json",
+    "path": "live-startup/30ee-ci/ubuntu-latest-3-failures.json",
+    "source_bytes": 109432,
+    "source_sha256": "a8aedc7effccedda837eb59f478ba08dc714c854ac6044040a08d1d6935553ed",
+    "stored_bytes": 109432,
+    "stored_sha256": "a8aedc7effccedda837eb59f478ba08dc714c854ac6044040a08d1d6935553ed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/ubuntu-latest-3.log",
+    "path": "live-startup/30ee-ci/ubuntu-latest-3.log.gz",
+    "source_bytes": 5635430,
+    "source_sha256": "0a00f92354bc9d8000fd2d2b835058fc80f223774ef1b226a700883ea2ea00b2",
+    "stored_bytes": 486683,
+    "stored_sha256": "e5387aef7b09880ea2f5b17bd347a4f2c85aaf67f9f08704452200032956f5b6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-1-concurrency-results.json",
+    "path": "live-startup/30ee-ci/windows-core-1-concurrency-results.json",
+    "source_bytes": 11179,
+    "source_sha256": "28b222d5ed5b0dd0e3e6652c633c473a4d0a0067729c01b4cdc58b2654df2519",
+    "stored_bytes": 11179,
+    "stored_sha256": "28b222d5ed5b0dd0e3e6652c633c473a4d0a0067729c01b4cdc58b2654df2519",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-1-success.log",
+    "path": "live-startup/30ee-ci/windows-core-1-success.log.gz",
+    "source_bytes": 2428450,
+    "source_sha256": "1bdddc8f33cadea06a2e65a32cacbcead61daab57aead490e6437c46b5b70b05",
+    "stored_bytes": 188247,
+    "stored_sha256": "db0398057aaefacdb8f21953a78b1208b20053a222354d545bcc604f84d96cd8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-3-failed-output.json",
+    "path": "live-startup/30ee-ci/windows-core-3-failed-output.json",
+    "source_bytes": 726,
+    "source_sha256": "1ba5e2df90f611db34d42e7fbe0c1349e148725dee0e06b6010ba0b3a5fbf782",
+    "stored_bytes": 726,
+    "stored_sha256": "1ba5e2df90f611db34d42e7fbe0c1349e148725dee0e06b6010ba0b3a5fbf782",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-3-failures.json",
+    "path": "live-startup/30ee-ci/windows-core-3-failures.json",
+    "source_bytes": 20727,
+    "source_sha256": "6d6b607954c3470fb6098c336dc1be523aeeeb9280bf2b8c360b3226b766f04f",
+    "stored_bytes": 20727,
+    "stored_sha256": "6d6b607954c3470fb6098c336dc1be523aeeeb9280bf2b8c360b3226b766f04f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-3.log",
+    "path": "live-startup/30ee-ci/windows-core-3.log.gz",
+    "source_bytes": 2352279,
+    "source_sha256": "861282245cadfc5838a7192e52431fc10b7f0680b6f72754b8ea6c394d261bd0",
+    "stored_bytes": 168592,
+    "stored_sha256": "0771f1b6186c2440b470b815085549f43525bde673d3e2da327905ef7ff78193",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-7-failed-output.json",
+    "path": "live-startup/30ee-ci/windows-core-7-failed-output.json",
+    "source_bytes": 499,
+    "source_sha256": "7a2e2cb578851aa82a8aca62ae2269abddab6fc5309578fb8c79018a49df51ba",
+    "stored_bytes": 499,
+    "stored_sha256": "7a2e2cb578851aa82a8aca62ae2269abddab6fc5309578fb8c79018a49df51ba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-7-failures.json",
+    "path": "live-startup/30ee-ci/windows-core-7-failures.json",
+    "source_bytes": 32412,
+    "source_sha256": "cc303a76300007df9d38cccfe16a3dcdb6066f094ce1d8534afbb052612206fe",
+    "stored_bytes": 32412,
+    "stored_sha256": "cc303a76300007df9d38cccfe16a3dcdb6066f094ce1d8534afbb052612206fe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/30ee-ci/windows-core-7.log",
+    "path": "live-startup/30ee-ci/windows-core-7.log.gz",
+    "source_bytes": 1576501,
+    "source_sha256": "84889826c4a9eb17b596ef81634118852d4a5e0b610fcfbfa323992daf31ab89",
+    "stored_bytes": 112564,
+    "stored_sha256": "0c18bf17093d86a7519e3c98aa56a168664f6a06ada58e3442ad1fa43d07d9d6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-01.json",
+    "path": "live-startup/pr5127-30ee-checks-01.json",
+    "source_bytes": 15208,
+    "source_sha256": "ea19cd1d3491b2a8ef9930eee467d03123d34ec284a695a2d56fa60e7a7d169f",
+    "stored_bytes": 15208,
+    "stored_sha256": "ea19cd1d3491b2a8ef9930eee467d03123d34ec284a695a2d56fa60e7a7d169f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-02.json",
+    "path": "live-startup/pr5127-30ee-checks-02.json",
+    "source_bytes": 12047,
+    "source_sha256": "eae1727af85397d7d17db280b61111fc6878b0f4566fd61cf88cfeda909c44a4",
+    "stored_bytes": 12047,
+    "stored_sha256": "eae1727af85397d7d17db280b61111fc6878b0f4566fd61cf88cfeda909c44a4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-03.json",
+    "path": "live-startup/pr5127-30ee-checks-03.json",
+    "source_bytes": 12031,
+    "source_sha256": "b54a421f58d424012de1e799b0574cee2d39f79a6fc88b412616c7f77b7832ef",
+    "stored_bytes": 12031,
+    "stored_sha256": "b54a421f58d424012de1e799b0574cee2d39f79a6fc88b412616c7f77b7832ef",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-04.json",
+    "path": "live-startup/pr5127-30ee-checks-04.json",
+    "source_bytes": 12017,
+    "source_sha256": "9d6e1608caaf399514236ed917d591610293dae60e6a06f9a9dd04fdf1a7a635",
+    "stored_bytes": 12017,
+    "stored_sha256": "9d6e1608caaf399514236ed917d591610293dae60e6a06f9a9dd04fdf1a7a635",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-05.json",
+    "path": "live-startup/pr5127-30ee-checks-05.json",
+    "source_bytes": 12010,
+    "source_sha256": "8da109f95949940e3b2daa6c1d402ba3613283f9b55136f5b30534442bbac76c",
+    "stored_bytes": 12010,
+    "stored_sha256": "8da109f95949940e3b2daa6c1d402ba3613283f9b55136f5b30534442bbac76c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-06.json",
+    "path": "live-startup/pr5127-30ee-checks-06.json",
+    "source_bytes": 11959,
+    "source_sha256": "dec0230b84d3815a624fe5e2d2006c676ecc2b21036cce0bc7fe12a48b85f02c",
+    "stored_bytes": 11959,
+    "stored_sha256": "dec0230b84d3815a624fe5e2d2006c676ecc2b21036cce0bc7fe12a48b85f02c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-07.json",
+    "path": "live-startup/pr5127-30ee-checks-07.json",
+    "source_bytes": 11938,
+    "source_sha256": "068ece3858fe66ed2373487f26501b93819279d751711ecef063237fe3b50edc",
+    "stored_bytes": 11938,
+    "stored_sha256": "068ece3858fe66ed2373487f26501b93819279d751711ecef063237fe3b50edc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-08.json",
+    "path": "live-startup/pr5127-30ee-checks-08.json",
+    "source_bytes": 11910,
+    "source_sha256": "d2ec8bef821cf4412327b75d258c146a007e70846c37b6af08ac90a77747106b",
+    "stored_bytes": 11910,
+    "stored_sha256": "d2ec8bef821cf4412327b75d258c146a007e70846c37b6af08ac90a77747106b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-09.json",
+    "path": "live-startup/pr5127-30ee-checks-09.json",
+    "source_bytes": 11903,
+    "source_sha256": "484a758904d28243a5f417e7b5a0f2744b05f75327c64cfc8dafa21d1c089440",
+    "stored_bytes": 11903,
+    "stored_sha256": "484a758904d28243a5f417e7b5a0f2744b05f75327c64cfc8dafa21d1c089440",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-10.json",
+    "path": "live-startup/pr5127-30ee-checks-10.json",
+    "source_bytes": 11875,
+    "source_sha256": "b5c02da5673bb40e71a028f9d1e64fc86b3313a4bc61ca1b1e263f8d72eba500",
+    "stored_bytes": 11875,
+    "stored_sha256": "b5c02da5673bb40e71a028f9d1e64fc86b3313a4bc61ca1b1e263f8d72eba500",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-11.json",
+    "path": "live-startup/pr5127-30ee-checks-11.json",
+    "source_bytes": 11826,
+    "source_sha256": "958f9c9ee7bd93ab659b7900597295ea77f3540599610e2a9dbf222f871b6e22",
+    "stored_bytes": 11826,
+    "stored_sha256": "958f9c9ee7bd93ab659b7900597295ea77f3540599610e2a9dbf222f871b6e22",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-12.json",
+    "path": "live-startup/pr5127-30ee-checks-12.json",
+    "source_bytes": 11819,
+    "source_sha256": "7da0ea454170ce42240166638ea80ddf0b782f847482cb41e8491d5abc77744f",
+    "stored_bytes": 11819,
+    "stored_sha256": "7da0ea454170ce42240166638ea80ddf0b782f847482cb41e8491d5abc77744f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-13.json",
+    "path": "live-startup/pr5127-30ee-checks-13.json",
+    "source_bytes": 11819,
+    "source_sha256": "7da0ea454170ce42240166638ea80ddf0b782f847482cb41e8491d5abc77744f",
+    "stored_bytes": 11819,
+    "stored_sha256": "7da0ea454170ce42240166638ea80ddf0b782f847482cb41e8491d5abc77744f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-14.json",
+    "path": "live-startup/pr5127-30ee-checks-14.json",
+    "source_bytes": 11812,
+    "source_sha256": "3891dc5f99e854b2f141203be57d752b43a011a8e69b7ad0d29920cb5debe365",
+    "stored_bytes": 11812,
+    "stored_sha256": "3891dc5f99e854b2f141203be57d752b43a011a8e69b7ad0d29920cb5debe365",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-15.json",
+    "path": "live-startup/pr5127-30ee-checks-15.json",
+    "source_bytes": 11812,
+    "source_sha256": "3891dc5f99e854b2f141203be57d752b43a011a8e69b7ad0d29920cb5debe365",
+    "stored_bytes": 11812,
+    "stored_sha256": "3891dc5f99e854b2f141203be57d752b43a011a8e69b7ad0d29920cb5debe365",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-16.json",
+    "path": "live-startup/pr5127-30ee-checks-16.json",
+    "source_bytes": 11805,
+    "source_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "stored_bytes": 11805,
+    "stored_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-17.json",
+    "path": "live-startup/pr5127-30ee-checks-17.json",
+    "source_bytes": 11805,
+    "source_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "stored_bytes": 11805,
+    "stored_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-18.json",
+    "path": "live-startup/pr5127-30ee-checks-18.json",
+    "source_bytes": 11805,
+    "source_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "stored_bytes": 11805,
+    "stored_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-19.json",
+    "path": "live-startup/pr5127-30ee-checks-19.json",
+    "source_bytes": 11805,
+    "source_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "stored_bytes": 11805,
+    "stored_sha256": "2138124a130a8a4ef35aac0db1cb7da4232ed555002dbfffaf407645e88fc030",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/pr5127-30ee-checks-20.json",
+    "path": "live-startup/pr5127-30ee-checks-20.json",
+    "source_bytes": 12013,
+    "source_sha256": "e7a88a22166fa88890fe00a2549d0d7eb6ae73a42a6b9786d898dc5c4bf1939e",
+    "stored_bytes": 12013,
+    "stored_sha256": "e7a88a22166fa88890fe00a2549d0d7eb6ae73a42a6b9786d898dc5c4bf1939e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/FINDINGS.md",
+    "path": "ordinary-30ee-diagnosis/FINDINGS.md",
+    "source_bytes": 3683,
+    "source_sha256": "d166d12c52f465c561bd5464442044ed209e81cf05f3c59434969711b62ebb52",
+    "stored_bytes": 3683,
+    "stored_sha256": "d166d12c52f465c561bd5464442044ed209e81cf05f3c59434969711b62ebb52",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/HANDOFF.md",
+    "path": "ordinary-30ee-diagnosis/HANDOFF.md",
+    "source_bytes": 7554,
+    "source_sha256": "c675f8ff42530c3c5471fbacc5f89071a6f27ca44c43bb86353e329a36427fee",
+    "stored_bytes": 7554,
+    "stored_sha256": "c675f8ff42530c3c5471fbacc5f89071a6f27ca44c43bb86353e329a36427fee",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/changed-files-final.json",
+    "path": "ordinary-30ee-diagnosis/changed-files-final.json",
+    "source_bytes": 1311,
+    "source_sha256": "4be1956789a7f148837752ddb53a58bdb8fb419993ba84ac22232bf5a6fbb026",
+    "stored_bytes": 1311,
+    "stored_sha256": "4be1956789a7f148837752ddb53a58bdb8fb419993ba84ac22232bf5a6fbb026",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/cow-cut-fixture-callers.md",
+    "path": "ordinary-30ee-diagnosis/cow-cut-fixture-callers.md",
+    "source_bytes": 2332,
+    "source_sha256": "80e2460a3c6a812a970a9d2734427cf19d825e4379d8385af62159bb9bb46739",
+    "stored_bytes": 2332,
+    "stored_sha256": "80e2460a3c6a812a970a9d2734427cf19d825e4379d8385af62159bb9bb46739",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-owner-control/cow_dictionary_cleanup_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-owner-control/cow_dictionary_cleanup_test.go.gz",
+    "source_bytes": 11608,
+    "source_sha256": "a556a123047a7d3327579068fa30ddc2efe77814764ec2c3ce4d5f19d4d70eb3",
+    "stored_bytes": 3346,
+    "stored_sha256": "007b8081ebf87fc4f7b27a3d8a1ac2c506c319e908e710933903a0e804975a8c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-owner-control/overlay.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-owner-control/overlay.json",
+    "source_bytes": 237,
+    "source_sha256": "5358e49015b91aa09c04cc207bfcf2b01edfa22e6e1b7e07332f93d724a53817",
+    "stored_bytes": 237,
+    "stored_sha256": "5358e49015b91aa09c04cc207bfcf2b01edfa22e6e1b7e07332f93d724a53817",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/cow_cut_positive_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/cow_cut_positive_test.go.gz",
+    "source_bytes": 9668,
+    "source_sha256": "3a0c5b54da2bcc3ee4efc07823fe273b56b45e671a7248bf3386d70e7a83ffa9",
+    "stored_bytes": 2950,
+    "stored_sha256": "529c63d2feef751f935a2eb6eda42587903fc1652d2dc6b92ea684fed158e82a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/cow_cut_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/cow_cut_test.go.gz",
+    "source_bytes": 9147,
+    "source_sha256": "0a5ff2ac433fe3f3abd4075dc7a5d10ad8024732e004573a4fe795b786c6f84e",
+    "stored_bytes": 2797,
+    "stored_sha256": "32233a18d7443cffef29f1c8408299147ff1e57c06b41d1c473d0102b80e4cd3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/cow_dictionary_cleanup_positive_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/cow_dictionary_cleanup_positive_test.go.gz",
+    "source_bytes": 11882,
+    "source_sha256": "cfa3dc92e6873a1064b1b654c883ddfa10a55ee7f266ace7d283b26303535c1a",
+    "stored_bytes": 3402,
+    "stored_sha256": "6605446e7028462b8e43ca7a438e2b2b3fcbf65078ed39cba34105fd975161b0",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/cow_dictionary_cleanup_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/cow_dictionary_cleanup_test.go.gz",
+    "source_bytes": 12386,
+    "source_sha256": "177220e75cd488569bf6c856d6dc4bded7da44396401f07c53b704d46872d392",
+    "stored_bytes": 3553,
+    "stored_sha256": "e24f9a139cd48be9c2e639a2d05788bd26a0a0d18660ea9441842776d8410408",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/overlay-negative.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/overlay-negative.json",
+    "source_bytes": 861,
+    "source_sha256": "3424aa5b3ac1989fc58355cf0c66e978ff762be7385442fadc10cf597b48d08f",
+    "stored_bytes": 861,
+    "stored_sha256": "3424aa5b3ac1989fc58355cf0c66e978ff762be7385442fadc10cf597b48d08f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/overlay-positive.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/overlay-positive.json",
+    "source_bytes": 879,
+    "source_sha256": "82f754d16041a9ce12fac4962c9ff6ecc17346f571359c2b08ba41ec33d1d9d9",
+    "stored_bytes": 879,
+    "stored_sha256": "82f754d16041a9ce12fac4962c9ff6ecc17346f571359c2b08ba41ec33d1d9d9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/owner.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/owner.go.gz",
+    "source_bytes": 11936,
+    "source_sha256": "26308b8a3883f611ae350ae2ef0b76f4e7f89590f857162e566b92c549521fa1",
+    "stored_bytes": 3753,
+    "stored_sha256": "a600ef671278164a8ddd6ad92ecff2bd88f7a3d9253c9d05384438fc9240db07",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/pin_registry.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/pin_registry.go.gz",
+    "source_bytes": 30945,
+    "source_sha256": "702116a26e88cd85f4528dacf1e570072462d95d5fe87ebf02ae55dac28e1b22",
+    "stored_bytes": 6820,
+    "stored_sha256": "1ce0ca16e201706b0c86af761a52b5c7e16b404f198a044883009bfa38a0954d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/receipt-negative.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/receipt-negative.json",
+    "source_bytes": 1094,
+    "source_sha256": "686b1b49f83abae0c8618a704e42a824362254dfdd98ec01e54e406296b4eb2d",
+    "stored_bytes": 1094,
+    "stored_sha256": "686b1b49f83abae0c8618a704e42a824362254dfdd98ec01e54e406296b4eb2d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/receipt-positive-02.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/receipt-positive-02.json",
+    "source_bytes": 1094,
+    "source_sha256": "759dbe3cc6bdabe0e7079852868325f898c830c0b7ce61e45c3e47c78978d2c1",
+    "stored_bytes": 1094,
+    "stored_sha256": "759dbe3cc6bdabe0e7079852868325f898c830c0b7ce61e45c3e47c78978d2c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-publication-control/receipt-positive.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-publication-control/receipt-positive.json",
+    "source_bytes": 1094,
+    "source_sha256": "d25859e51e3a3cf83ef8d09a3695228c00a5688dad840b1ff54e58365fd0cb52",
+    "stored_bytes": 1094,
+    "stored_sha256": "d25859e51e3a3cf83ef8d09a3695228c00a5688dad840b1ff54e58365fd0cb52",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-resize-control/cow_cut_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-resize-control/cow_cut_test.go.gz",
+    "source_bytes": 9147,
+    "source_sha256": "07f65d717c004ac316a4f46a29c439afd07e4346aec50b80ff204a5548ec8504",
+    "stored_bytes": 2793,
+    "stored_sha256": "88afa370ad3932fdbb5875bf36956b32d64645817f9d6a1932e1f17ed4f21555",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-resize-control/cow_dictionary_cleanup_test.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-resize-control/cow_dictionary_cleanup_test.go.gz",
+    "source_bytes": 11880,
+    "source_sha256": "06653340332a2cc0f3e672a81783f89b1994a33bb90ee516c1091bb1406aab06",
+    "stored_bytes": 3399,
+    "stored_sha256": "97374fcef2619a9188db488a1c0dd644439d4a219cfe98bb4c94276de7b9aa6a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-resize-control/overlay.json",
+    "path": "ordinary-30ee-diagnosis/dictionary-resize-control/overlay.json",
+    "source_bytes": 629,
+    "source_sha256": "a14bb87afb253ccde460e6082bf3759153289b5b9823302a5a310d3de0c1c5f5",
+    "stored_bytes": 629,
+    "stored_sha256": "a14bb87afb253ccde460e6082bf3759153289b5b9823302a5a310d3de0c1c5f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/dictionary-resize-control/owner.go",
+    "path": "ordinary-30ee-diagnosis/dictionary-resize-control/owner.go.gz",
+    "source_bytes": 11936,
+    "source_sha256": "26308b8a3883f611ae350ae2ef0b76f4e7f89590f857162e566b92c549521fa1",
+    "stored_bytes": 3753,
+    "stored_sha256": "a600ef671278164a8ddd6ad92ecff2bd88f7a3d9253c9d05384438fc9240db07",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/final.patch",
+    "path": "ordinary-30ee-diagnosis/final.patch.gz",
+    "source_bytes": 8388,
+    "source_sha256": "27a4fffcb4ba1d1c64eb1caad024cae9d7a0f57ba9e3146611b3daa27abb1068",
+    "stored_bytes": 2940,
+    "stored_sha256": "3ae5d9abf6556f8999c866ff4dccb6fe08e31b68c11bc1a2db3ccf2efaf2b5ed",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/finalize.py",
+    "path": "ordinary-30ee-diagnosis/finalize.py",
+    "source_bytes": 3212,
+    "source_sha256": "7912bc7c8e37167face945dc396411d05c29bc2664117d8a1220ccde8a527884",
+    "stored_bytes": 3212,
+    "stored_sha256": "7912bc7c8e37167face945dc396411d05c29bc2664117d8a1220ccde8a527884",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/findings.json",
+    "path": "ordinary-30ee-diagnosis/findings.json",
+    "source_bytes": 2023,
+    "source_sha256": "2bb0a8dc9727a4a4e69635f80f14f7f9be82bbaa8a8826a8dc767dd9f33a2f62",
+    "stored_bytes": 2023,
+    "stored_sha256": "2bb0a8dc9727a4a4e69635f80f14f7f9be82bbaa8a8826a8dc767dd9f33a2f62",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/freeze-final.json",
+    "path": "ordinary-30ee-diagnosis/freeze-final.json.gz",
+    "source_bytes": 1593428,
+    "source_sha256": "28141a136142312bff6bacf97536bcfae4ff252a16570aa68e19cad6c37b172d",
+    "stored_bytes": 457743,
+    "stored_sha256": "d9632de1de03373fc90a518a18270216e8a5e10c7784e023c49047071ad5f214",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/frozen-source/TreeDB/caching/cow_cut_test.go",
+    "path": "ordinary-30ee-diagnosis/frozen-source/TreeDB/caching/cow_cut_test.go.gz",
+    "source_bytes": 9196,
+    "source_sha256": "c5241d5fdb15fe6705a0623fdda23490dbcd7296dff1b86a780590c6e09d6079",
+    "stored_bytes": 2815,
+    "stored_sha256": "afd3e5e1845b9f014424c9d942d3040f46b31313b4ce500a56bb4aae5be2c9ce",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/frozen-source/TreeDB/db/primary_arena_release_work_test.go",
+    "path": "ordinary-30ee-diagnosis/frozen-source/TreeDB/db/primary_arena_release_work_test.go.gz",
+    "source_bytes": 6163,
+    "source_sha256": "0625809f86b1788a77b1c69e590342e0d614852dc2c9db6cc73cd23ff2881c95",
+    "stored_bytes": 2016,
+    "stored_sha256": "da8127b28966ccd4d2a33a11138d47842416fa9f767f2b941b19ba1e7ac550cd",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/frozen-source/TreeDB/db/stable_pager_owned_operations_test.go",
+    "path": "ordinary-30ee-diagnosis/frozen-source/TreeDB/db/stable_pager_owned_operations_test.go.gz",
+    "source_bytes": 19601,
+    "source_sha256": "37bba690790ed9ec5cc48c75bb302ab53dd6f9bbf7508ce8337d62a74e8342c4",
+    "stored_bytes": 4195,
+    "stored_sha256": "cc25cb8757eb3e7e6eac7f0ccf0b43a221ab0c99051b4b71481b5df7699fc7e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/frozen-source/TreeDB/db/vacuum_original_completion_test.go",
+    "path": "ordinary-30ee-diagnosis/frozen-source/TreeDB/db/vacuum_original_completion_test.go.gz",
+    "source_bytes": 30783,
+    "source_sha256": "ead999e43155641dd6b47a1888633cfacaa54d8626dff42134c42c5246447d1e",
+    "stored_bytes": 6808,
+    "stored_sha256": "8adf4b7075f8724ada0867a21fb8d7a31b623ba19485d23646e142ae9332a18f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/frozen-source/TreeDB/internal/primaryarena/physical_close_work_test.go",
+    "path": "ordinary-30ee-diagnosis/frozen-source/TreeDB/internal/primaryarena/physical_close_work_test.go.gz",
+    "source_bytes": 2979,
+    "source_sha256": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b",
+    "stored_bytes": 1248,
+    "stored_sha256": "99a451e78efeb583ae7b8e2278433fdf04ea410b138381cf996ea59d08632a38",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/grow.go",
+    "path": "ordinary-30ee-diagnosis/grower-control/grow.go.gz",
+    "source_bytes": 3164,
+    "source_sha256": "1f24bf06dbb51cf8b9487f2abec54ce07f4b07e9ca9eaf44dac532210f6a340f",
+    "stored_bytes": 1264,
+    "stored_sha256": "15332d468443358e7dfbaa1cf31f1f4a91e90079a390f685e110ec77160dc665",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/overlay.json",
+    "path": "ordinary-30ee-diagnosis/grower-control/overlay.json",
+    "source_bytes": 413,
+    "source_sha256": "c7ea38635545a641387ab1d1e4de098ec97590d6582b49ad7c4e79f175ec7c56",
+    "stored_bytes": 413,
+    "stored_sha256": "c7ea38635545a641387ab1d1e4de098ec97590d6582b49ad7c4e79f175ec7c56",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/primary_arena_release_work_test.go",
+    "path": "ordinary-30ee-diagnosis/grower-control/primary_arena_release_work_test.go.gz",
+    "source_bytes": 8314,
+    "source_sha256": "0377d9ae50729b7157fc354cdf5dde948b261f714a671cde3b88e741c9d73ca3",
+    "stored_bytes": 2620,
+    "stored_sha256": "b64ed265469ed4a9e1dcf1044e82512442d00a45eb256c85532ddecab8c86250",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/grower-control/receipt.json",
+    "path": "ordinary-30ee-diagnosis/grower-control/receipt.json",
+    "source_bytes": 1153,
+    "source_sha256": "6b38934327e1703be1926938244c1c86f6b237e5b1412d5a43c7e6fb16ce4373",
+    "stored_bytes": 1153,
+    "stored_sha256": "6b38934327e1703be1926938244c1c86f6b237e5b1412d5a43c7e6fb16ce4373",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "32a292cf5e0e9501c63fa8ae40e92a34beddcaf88badfd8e0fd8b276324ccec2",
+    "stored_bytes": 456970,
+    "stored_sha256": "cc2328a191a72736d1c183999480a0deae6950e262c4be40e722663c22f89324",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "32a292cf5e0e9501c63fa8ae40e92a34beddcaf88badfd8e0fd8b276324ccec2",
+    "stored_bytes": 456970,
+    "stored_sha256": "cc2328a191a72736d1c183999480a0deae6950e262c4be40e722663c22f89324",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/command.json",
+    "source_bytes": 843,
+    "source_sha256": "2aeadf70c92393f487f47ba9adb9752c93d5ebf232e35d3021bb1e5061da297b",
+    "stored_bytes": 843,
+    "stored_sha256": "2aeadf70c92393f487f47ba9adb9752c93d5ebf232e35d3021bb1e5061da297b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/raw.txt.gz",
+    "source_bytes": 3371,
+    "source_sha256": "335136939ac09e32ca90ce4f1b0e89a65ccb9512cbe7ed9d2d0e9c2157451e98",
+    "stored_bytes": 181,
+    "stored_sha256": "917b92b1070e7ab80913ff8fbe80fb5f4bd77311970ec82230efd72167695c38",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/arena-finish-diagnostic-01/result.json",
+    "source_bytes": 42,
+    "source_sha256": "33c9577314ef18b8bceef05c650cb132deabb428b0110abb8a77cbfe33c27159",
+    "stored_bytes": 42,
+    "stored_sha256": "33c9577314ef18b8bceef05c650cb132deabb428b0110abb8a77cbfe33c27159",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-normal-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-normal-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-normal-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-normal-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-normal-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-normal-01/command.json",
+    "source_bytes": 1178,
+    "source_sha256": "43192f3f8350786bf3a0dc222ab76326dd97866cc7b9b6f3801f22af807f1930",
+    "stored_bytes": 1178,
+    "stored_sha256": "43192f3f8350786bf3a0dc222ab76326dd97866cc7b9b6f3801f22af807f1930",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-normal-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-normal-01/raw.txt.gz",
+    "source_bytes": 32253,
+    "source_sha256": "0ce3ca672ae07dac8e39c319ffe00d34c5d799e138d62f3ec34f7f50bdb47225",
+    "stored_bytes": 1667,
+    "stored_sha256": "716188af34b63b59c544bce37939c0bcab7ac91cf4b182d39c71b3c183fd1926",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-normal-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-normal-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "6b931ed34129305ac30ab3507c6c7047fb302052ab52a580a919e7e2832b6b7c",
+    "stored_bytes": 41,
+    "stored_sha256": "6b931ed34129305ac30ab3507c6c7047fb302052ab52a580a919e7e2832b6b7c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-race-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-race-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-race-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-race-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-race-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-race-01/command.json",
+    "source_bytes": 1187,
+    "source_sha256": "dc67cb65c0355d1b87c52815d004202cb31cb582b16869fa04d9103e2efb02c9",
+    "stored_bytes": 1187,
+    "stored_sha256": "dc67cb65c0355d1b87c52815d004202cb31cb582b16869fa04d9103e2efb02c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-race-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-race-01/raw.txt.gz",
+    "source_bytes": 19423,
+    "source_sha256": "be78284bcadc884155596ea6233648bb4b1d6138727e08b11bbac1023dd18542",
+    "stored_bytes": 1500,
+    "stored_sha256": "a5668340fb64977cbedaa1607039860fc5cce5bd222ea5455c31f8331c7b2f84",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-race-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-race-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "29aa132328647f62747b1452c148f14bddbcdcbbd30a11f7246e6409aa7eb007",
+    "stored_bytes": 41,
+    "stored_sha256": "29aa132328647f62747b1452c148f14bddbcdcbbd30a11f7246e6409aa7eb007",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-windows-build-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-windows-build-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-windows-build-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-windows-build-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "50e043faf79a64e901ce033248e19f5c0cfcb064dd841890909ade58d1c98975",
+    "stored_bytes": 456961,
+    "stored_sha256": "04aba431c8871be22a6e7c0cb18544e8e199c2d2589e38c898f2236b4e163a4c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-windows-build-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-windows-build-01/command.json",
+    "source_bytes": 820,
+    "source_sha256": "23899148281d68e44a403fb61ec9f9bc2fddf6051e8eafa81dbc2901f690bad2",
+    "stored_bytes": 820,
+    "stored_sha256": "23899148281d68e44a403fb61ec9f9bc2fddf6051e8eafa81dbc2901f690bad2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-windows-build-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-windows-build-01/raw.txt.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 20,
+    "stored_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/coherent-windows-build-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/coherent-windows-build-01/result.json",
+    "source_bytes": 42,
+    "source_sha256": "5326a62eb312997cc69dc5e7feca03379b0d61b6ce4c46810c55b194b0ea42e6",
+    "stored_bytes": 42,
+    "stored_sha256": "5326a62eb312997cc69dc5e7feca03379b0d61b6ce4c46810c55b194b0ea42e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/command.json",
+    "source_bytes": 905,
+    "source_sha256": "b7bf64aeb358bb5bd40a940120460ab2a673ef8be1b05295894ef0a6050832fa",
+    "stored_bytes": 905,
+    "stored_sha256": "b7bf64aeb358bb5bd40a940120460ab2a673ef8be1b05295894ef0a6050832fa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/raw.txt.gz",
+    "source_bytes": 40697,
+    "source_sha256": "7ce47464635b93f37a32536d67183f138c869372289a7663d6cf6ccf54c409da",
+    "stored_bytes": 874,
+    "stored_sha256": "7c3a6761d47e09010e1b794966cfc60601d3fd9483c2b1e378b360695920e0d3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-owner-negative-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "a6e65307f109ad78508500aa2a33f2ab46da11b1b433955430c518a7ed5f441f",
+    "stored_bytes": 41,
+    "stored_sha256": "a6e65307f109ad78508500aa2a33f2ab46da11b1b433955430c518a7ed5f441f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/command.json",
+    "source_bytes": 902,
+    "source_sha256": "b4a8d5fb933989e5367e335a149d5091ee61780633cc6ffc1d746b0518138c95",
+    "stored_bytes": 902,
+    "stored_sha256": "b4a8d5fb933989e5367e335a149d5091ee61780633cc6ffc1d746b0518138c95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/raw.txt.gz",
+    "source_bytes": 31046,
+    "source_sha256": "17699af4bcffb36086de95f62c1d9360a82c82a26f532d206183cbf7f6bd813f",
+    "stored_bytes": 2825,
+    "stored_sha256": "9335d6f1c23f3cecda3beb8702c36acfcb40eda6fb45bf734386859808c4eb8e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-negative-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "a5698a2f4d352309b5ee50d82c36ee436e00687ac0df28c12f0a7c2dacc7663c",
+    "stored_bytes": 41,
+    "stored_sha256": "a5698a2f4d352309b5ee50d82c36ee436e00687ac0df28c12f0a7c2dacc7663c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/command.json",
+    "source_bytes": 902,
+    "source_sha256": "8ded2f7fcc1145ee8bbf7f083a688132156f391cb3bb6fe93aa32674271bb262",
+    "stored_bytes": 902,
+    "stored_sha256": "8ded2f7fcc1145ee8bbf7f083a688132156f391cb3bb6fe93aa32674271bb262",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/raw.txt.gz",
+    "source_bytes": 335,
+    "source_sha256": "d597c5877542ba2b78cf077435bef1f23deeb7332d0da9140343d49f0f4ed162",
+    "stored_bytes": 199,
+    "stored_sha256": "c1cab0f0eebd51ce74a60f2498eb06f724277c19d39910750fe8f421620c9c9a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-01/result.json",
+    "source_bytes": 42,
+    "source_sha256": "7f67a72818abcbbe12ecd707379c7ca14768447a72a37b68d4c1a641c4d58604",
+    "stored_bytes": 42,
+    "stored_sha256": "7f67a72818abcbbe12ecd707379c7ca14768447a72a37b68d4c1a641c4d58604",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/command.json",
+    "source_bytes": 902,
+    "source_sha256": "8ded2f7fcc1145ee8bbf7f083a688132156f391cb3bb6fe93aa32674271bb262",
+    "stored_bytes": 902,
+    "stored_sha256": "8ded2f7fcc1145ee8bbf7f083a688132156f391cb3bb6fe93aa32674271bb262",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/raw.txt.gz",
+    "source_bytes": 29525,
+    "source_sha256": "2dca01b277cb7e5e0208a18c8532ee525055186c314709154529df74f8f43fff",
+    "stored_bytes": 2644,
+    "stored_sha256": "3b636112de6ba90317f482f6328a9654ee7591c00af2f634bdaf026f764d19aa",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-publication-positive-02/result.json",
+    "source_bytes": 42,
+    "source_sha256": "b58f11a6c27981dcc4a39365e497b261f1b432d8abb80561c0034d735a3836fc",
+    "stored_bytes": 42,
+    "stored_sha256": "b58f11a6c27981dcc4a39365e497b261f1b432d8abb80561c0034d735a3836fc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/command.json",
+    "source_bytes": 953,
+    "source_sha256": "9863ae453bb80bd1d1f6b291c1cc626120738cb51539696a4a794fdaab16e011",
+    "stored_bytes": 953,
+    "stored_sha256": "9863ae453bb80bd1d1f6b291c1cc626120738cb51539696a4a794fdaab16e011",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/raw.txt.gz",
+    "source_bytes": 421,
+    "source_sha256": "91ca826026eab8807a4b38acb0f13304981116a93c3692dc50bfafa9d7fc02d5",
+    "stored_bytes": 223,
+    "stored_sha256": "8b0d55eb1f82827508fc999b0a45f5dfe1e658953a6526531785e3e6976f55af",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-01/result.json",
+    "source_bytes": 43,
+    "source_sha256": "0530d929ff6c50753071fc3f89b5ebe21e0714fb4aac3bdff1335a27e4d4a863",
+    "stored_bytes": 43,
+    "stored_sha256": "0530d929ff6c50753071fc3f89b5ebe21e0714fb4aac3bdff1335a27e4d4a863",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "39ed4245c707ed111ba798657409c19eb050aa2efbe76de7f513dcb683b79254",
+    "stored_bytes": 456963,
+    "stored_sha256": "3c7bbfe63dedbaeec9599054088817939387645e642bb0ba836e857abca27cc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/command.json",
+    "source_bytes": 953,
+    "source_sha256": "9863ae453bb80bd1d1f6b291c1cc626120738cb51539696a4a794fdaab16e011",
+    "stored_bytes": 953,
+    "stored_sha256": "9863ae453bb80bd1d1f6b291c1cc626120738cb51539696a4a794fdaab16e011",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/raw.txt.gz",
+    "source_bytes": 107036,
+    "source_sha256": "45c119ae59f2877b2e6e5291d3fa544262fcc6473f465cc11b4292d055dc135d",
+    "stored_bytes": 4279,
+    "stored_sha256": "1dbc7925b5f16fff6e44652e42e7b359b49c6110e8ee131e7c9dbb322c1e2d95",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/dictionary-resize-diagnostic-02/result.json",
+    "source_bytes": 41,
+    "source_sha256": "e994db6c5b649b58be206fa5c63f05c7411eb70114540cd6c6755bb9db5b54cd",
+    "stored_bytes": 41,
+    "stored_sha256": "e994db6c5b649b58be206fa5c63f05c7411eb70114540cd6c6755bb9db5b54cd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-control-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-control-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "32a292cf5e0e9501c63fa8ae40e92a34beddcaf88badfd8e0fd8b276324ccec2",
+    "stored_bytes": 456970,
+    "stored_sha256": "cc2328a191a72736d1c183999480a0deae6950e262c4be40e722663c22f89324",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-control-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-control-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "32a292cf5e0e9501c63fa8ae40e92a34beddcaf88badfd8e0fd8b276324ccec2",
+    "stored_bytes": 456970,
+    "stored_sha256": "cc2328a191a72736d1c183999480a0deae6950e262c4be40e722663c22f89324",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-control-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-control-01/command.json",
+    "source_bytes": 857,
+    "source_sha256": "e384b080eee9ce2ec416ba3e3e69c5b2017ed5145383fdbc5803adb71cc572c1",
+    "stored_bytes": 857,
+    "stored_sha256": "e384b080eee9ce2ec416ba3e3e69c5b2017ed5145383fdbc5803adb71cc572c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-control-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/grower-control-01/raw.txt.gz",
+    "source_bytes": 668,
+    "source_sha256": "9a77881297f9c6a9ff7c4f05cc7ab648367612b637f1947129d613a538eea409",
+    "stored_bytes": 402,
+    "stored_sha256": "288397b6a6ff80105fe942ac7a904dc31fd5ef15396b392a42dce8eef306b3c1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-control-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-control-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "da0d3377db3d7f217e74edde67f94642e9bff9d856a16ed297bda9d277078e87",
+    "stored_bytes": 41,
+    "stored_sha256": "da0d3377db3d7f217e74edde67f94642e9bff9d856a16ed297bda9d277078e87",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-normal-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-normal-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-normal-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-normal-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-normal-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-normal-01/command.json",
+    "source_bytes": 862,
+    "source_sha256": "47ac768ece56a33d15295171f35aa456fafce83c9f7e6b44e7971276c42977bd",
+    "stored_bytes": 862,
+    "stored_sha256": "47ac768ece56a33d15295171f35aa456fafce83c9f7e6b44e7971276c42977bd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-normal-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-normal-01/raw.txt.gz",
+    "source_bytes": 20801,
+    "source_sha256": "fe909881e2e20bec3e426d9b7158e77521e51b32b8b8e4aab126e89065f855a1",
+    "stored_bytes": 535,
+    "stored_sha256": "295bba04fb7dc73f636c770230a016bd3cb4450d60b689607b566470b39d2c88",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-normal-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-normal-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "8b48eb42fc205cd5626e7d8820c3e202955696ac582747f6ab21afdaa6a3585d",
+    "stored_bytes": 41,
+    "stored_sha256": "8b48eb42fc205cd5626e7d8820c3e202955696ac582747f6ab21afdaa6a3585d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-race-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-race-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-race-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-race-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-race-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-race-01/command.json",
+    "source_bytes": 870,
+    "source_sha256": "eb407777db8d90f85e23862e81b2ba2d58877e1a52573dd2e7dd9f0b587844c9",
+    "stored_bytes": 870,
+    "stored_sha256": "eb407777db8d90f85e23862e81b2ba2d58877e1a52573dd2e7dd9f0b587844c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-race-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-race-01/raw.txt.gz",
+    "source_bytes": 3223,
+    "source_sha256": "3eb66fef473d1af4dc4973a44f4d0e6b96d8f427fd8d7b99e4afc6f9e794ad9d",
+    "stored_bytes": 406,
+    "stored_sha256": "7d1d9760e845fa4b0f3cdef4bb405774507530cbab72bc027216cf065195d04c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/grower-repair-race-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/grower-repair-race-01/result.json",
+    "source_bytes": 42,
+    "source_sha256": "cff0e145185ff4fc6bbca1717393b2d808698957925f9355a9992f1c6ac12e5e",
+    "stored_bytes": 42,
+    "stored_sha256": "cff0e145185ff4fc6bbca1717393b2d808698957925f9355a9992f1c6ac12e5e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/after.json",
+    "path": "ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/after.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/before.json",
+    "path": "ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/before.json.gz",
+    "source_bytes": 1552434,
+    "source_sha256": "3bc471f980ef486ed0f3a6dbc6972bff584239282797ec660c396f586d31f175",
+    "stored_bytes": 456970,
+    "stored_sha256": "310be2af29288e901bf907f14758e8541bc412db0a214566c824a9e0ed8f5bae",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/command.json",
+    "path": "ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/command.json",
+    "source_bytes": 908,
+    "source_sha256": "f01ac3af110a8edfa7f279e0564bb1f76a93f81f154c3e8cc293a02a3cb7715b",
+    "stored_bytes": 908,
+    "stored_sha256": "f01ac3af110a8edfa7f279e0564bb1f76a93f81f154c3e8cc293a02a3cb7715b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/raw.txt",
+    "path": "ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/raw.txt.gz",
+    "source_bytes": 2142,
+    "source_sha256": "8689e4ccb6b595e90bb53c0e79fe9b2722863c8968f21230a3a6a2d4ddd97db1",
+    "stored_bytes": 456,
+    "stored_sha256": "3bbf225d327bba4056858b49784f0ed94a71356d2e54cbe7679d89c30c46a9db",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/result.json",
+    "path": "ordinary-30ee-diagnosis/logs/windows-holder-diagnostic-01/result.json",
+    "source_bytes": 41,
+    "source_sha256": "dde183237ecf2e535436a1b4564a6f5fa221ef16af83a1f28e3dd8b03c9bf98c",
+    "stored_bytes": 41,
+    "stored_sha256": "dde183237ecf2e535436a1b4564a6f5fa221ef16af83a1f28e3dd8b03c9bf98c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/overlay-receipt.json",
+    "path": "ordinary-30ee-diagnosis/overlay-receipt.json",
+    "source_bytes": 692,
+    "source_sha256": "c732c08d9c354d20e4a49c7fcb796404c8d1d86e511bf5fb271c16e87766d1f1",
+    "stored_bytes": 692,
+    "stored_sha256": "c732c08d9c354d20e4a49c7fcb796404c8d1d86e511bf5fb271c16e87766d1f1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/overlay.json",
+    "path": "ordinary-30ee-diagnosis/overlay.json",
+    "source_bytes": 228,
+    "source_sha256": "8f67aa84bd29a76cf9198cffbfcac71be5d7d6a63432d4f7d45a888f4e4e5e6d",
+    "stored_bytes": 228,
+    "stored_sha256": "8f67aa84bd29a76cf9198cffbfcac71be5d7d6a63432d4f7d45a888f4e4e5e6d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/primary_arena_release_work_test.go",
+    "path": "ordinary-30ee-diagnosis/primary_arena_release_work_test.go.gz",
+    "source_bytes": 6377,
+    "source_sha256": "a1fb7488aa4e385a7124ccf45af835bdcaaa1c3e24d48ecc346ca80f58e6be84",
+    "stored_bytes": 2013,
+    "stored_sha256": "5b9a64880b1b25a434eea60a51277dcd020b44f0715f0da16f0271c0374030bc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-candidate.json",
+    "path": "ordinary-30ee-diagnosis/root-candidate.json.gz",
+    "source_bytes": 1552751,
+    "source_sha256": "27ea825accb6b4e03ef2c097252b9c8df00d8dc94fed8d40ccb887156b139f62",
+    "stored_bytes": 457146,
+    "stored_sha256": "8f3cb3ccc72ffb70f8a6cd560e61f629db99a4e3efed24acc39d26642ccfb11f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-freeze.py",
+    "path": "ordinary-30ee-diagnosis/root-freeze.py",
+    "source_bytes": 3739,
+    "source_sha256": "7272e0a0356969fb40e56c938b6915a434d45e30bcf0cbc074340ff20cd1789e",
+    "stored_bytes": 3739,
+    "stored_sha256": "7272e0a0356969fb40e56c938b6915a434d45e30bcf0cbc074340ff20cd1789e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/00.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/00.log.gz",
+    "source_bytes": 79,
+    "source_sha256": "1f028cd2be7f018e3d8a3b1963b91a5cc87ba45c82de6f812a6e0a2dc3419056",
+    "stored_bytes": 93,
+    "stored_sha256": "766562b59971a93855fac591338f3936152c378c70b3b82f58a3cd092db32240",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/01.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/01.log.gz",
+    "source_bytes": 83,
+    "source_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "stored_bytes": 92,
+    "stored_sha256": "6648e4a584e6bce3719b6c180ee968438ec85a7d3655d78e1eddda8683139241",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/02.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/02.log.gz",
+    "source_bytes": 115,
+    "source_sha256": "f370f1578fba35fdbb57b03f1215ae08732fda861490d9163c136d5f47575c42",
+    "stored_bytes": 55,
+    "stored_sha256": "a35268996418186b17fc8f2901b1631e87d38460f3702321c665257abc53b05e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/03.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/03.log.gz",
+    "source_bytes": 120,
+    "source_sha256": "b3793d2abe9a33ddad3fa772db8a2a7b5de92861151643369b6f22a27703f52a",
+    "stored_bytes": 55,
+    "stored_sha256": "e0ea5c969e5776174c91232eb5419aad62c5e4b039cb8701679a520e02912282",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/04.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/04.log.gz",
+    "source_bytes": 104,
+    "source_sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+    "stored_bytes": 54,
+    "stored_sha256": "90e727e928243a1723e744429b9245fdde0ede43f374964fa0e2184485fbb2c7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/05.log",
+    "path": "ordinary-30ee-diagnosis/root-metadata/05.log.gz",
+    "source_bytes": 115,
+    "source_sha256": "a62cc67d73eb7cf83d2b158dc9c3aa57e943a42dd8c6fc72cf2df6742073782c",
+    "stored_bytes": 55,
+    "stored_sha256": "694f7d5e8007edfbdc4823e0167ea335edb02a352f7a5118267b2630be931230",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/ci-inventory.patch",
+    "path": "ordinary-30ee-diagnosis/root-metadata/ci-inventory.patch.gz",
+    "source_bytes": 864,
+    "source_sha256": "d87c088acea652330b232b68ba9a784653b4925cbc0372ad7e08b971507c64c7",
+    "stored_bytes": 544,
+    "stored_sha256": "bb23e05490ea392bf77dbb9d01e08ed6846762c185cb5f1fba738d418dbd3d96",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/results.json",
+    "path": "ordinary-30ee-diagnosis/root-metadata/results.json",
+    "source_bytes": 930,
+    "source_sha256": "938f25cfb2d54bfa72345f87f83ac9b26f1825894ce76940496f81aaa7994ba5",
+    "stored_bytes": 930,
+    "stored_sha256": "938f25cfb2d54bfa72345f87f83ac9b26f1825894ce76940496f81aaa7994ba5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-metadata/staged-product.patch",
+    "path": "ordinary-30ee-diagnosis/root-metadata/staged-product.patch.gz",
+    "source_bytes": 8388,
+    "source_sha256": "27a4fffcb4ba1d1c64eb1caad024cae9d7a0f57ba9e3146611b3daa27abb1068",
+    "stored_bytes": 2940,
+    "stored_sha256": "3ae5d9abf6556f8999c866ff4dccb6fe08e31b68c11bc1a2db3ccf2efaf2b5ed",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/root-validation.json",
+    "path": "ordinary-30ee-diagnosis/root-validation.json",
+    "source_bytes": 606,
+    "source_sha256": "29d89aa814eec359df9cccf4a82c2d2d66f6eda9135df53d344c5b9daa0dddc4",
+    "stored_bytes": 606,
+    "stored_sha256": "29d89aa814eec359df9cccf4a82c2d2d66f6eda9135df53d344c5b9daa0dddc4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/run-windows.py",
+    "path": "ordinary-30ee-diagnosis/run-windows.py",
+    "source_bytes": 1929,
+    "source_sha256": "2a473a731f25f9190094292d7d22f07836c2ccf7d6d1863eca69e4a2ade08a81",
+    "stored_bytes": 1929,
+    "stored_sha256": "2a473a731f25f9190094292d7d22f07836c2ccf7d6d1863eca69e4a2ade08a81",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/run.py",
+    "path": "ordinary-30ee-diagnosis/run.py",
+    "source_bytes": 1883,
+    "source_sha256": "057e81d4798a2ee03304bed5416d9ace2db04fa89ed543015ef9fde5dc9f3c2f",
+    "stored_bytes": 1883,
+    "stored_sha256": "057e81d4798a2ee03304bed5416d9ace2db04fa89ed543015ef9fde5dc9f3c2f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/source-equivalence.json",
+    "path": "ordinary-30ee-diagnosis/source-equivalence.json",
+    "source_bytes": 871,
+    "source_sha256": "0b369e5297689871ce6fb73bf51e2764e35e64aedfa5348b2806652bc58a6752",
+    "stored_bytes": 871,
+    "stored_sha256": "0b369e5297689871ce6fb73bf51e2764e35e64aedfa5348b2806652bc58a6752",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/staged-candidate.json",
+    "path": "ordinary-30ee-diagnosis/staged-candidate.json",
+    "source_bytes": 2647,
+    "source_sha256": "177091baa34d95b124475665479b9685a257870489742b900270ff7b18ff477f",
+    "stored_bytes": 2647,
+    "stored_sha256": "177091baa34d95b124475665479b9685a257870489742b900270ff7b18ff477f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/validation-final.json",
+    "path": "ordinary-30ee-diagnosis/validation-final.json",
+    "source_bytes": 6599,
+    "source_sha256": "e3706fb0ef69f23448f77fe4b2400edf2a5b13e6ba2318ef76d9dd6867676422",
+    "stored_bytes": 6599,
+    "stored_sha256": "e3706fb0ef69f23448f77fe4b2400edf2a5b13e6ba2318ef76d9dd6867676422",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-holder-control/overlay.json",
+    "path": "ordinary-30ee-diagnosis/windows-holder-control/overlay.json",
+    "source_bytes": 469,
+    "source_sha256": "a2d56d4a5a26bcf47583e78cb4ab465cc7c8929bf0e4b5a4ef3aa0bbb45816b6",
+    "stored_bytes": 469,
+    "stored_sha256": "a2d56d4a5a26bcf47583e78cb4ab465cc7c8929bf0e4b5a4ef3aa0bbb45816b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-holder-control/stable_pager_owned_operations_test.go",
+    "path": "ordinary-30ee-diagnosis/windows-holder-control/stable_pager_owned_operations_test.go.gz",
+    "source_bytes": 18224,
+    "source_sha256": "1ecbc06f8d639b1bcc72fa13d9d8a37601e4e225a110440e30f983b00ecca8a6",
+    "stored_bytes": 3602,
+    "stored_sha256": "73234287bc878f9fdc376e7c04cc5b3e5837eca4d1170dc905bfb92e0a4f2900",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-30ee-diagnosis/windows-holder-control/vacuum_original_completion_test.go",
+    "path": "ordinary-30ee-diagnosis/windows-holder-control/vacuum_original_completion_test.go.gz",
+    "source_bytes": 30670,
+    "source_sha256": "0da40d03abd3084770bf8cf75471961464303fd3214b7013cdc1b335e2c8e079",
+    "stored_bytes": 6765,
+    "stored_sha256": "4f03ff8b6df5a2222d663e8c7c5d9f6bd677344173457eb5c5f44168098c4668",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/review-5699f8e79.json",
+    "path": "ordinary-review/review-5699f8e79.json",
+    "source_bytes": 3077,
+    "source_sha256": "4d29a494a4f2a64e9c21b0638280d640afb57139ffa84e565508a387d18af869",
+    "stored_bytes": 3077,
+    "stored_sha256": "4d29a494a4f2a64e9c21b0638280d640afb57139ffa84e565508a387d18af869",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-review/review-5699f8e79.md",
+    "path": "ordinary-review/review-5699f8e79.md",
+    "source_bytes": 8816,
+    "source_sha256": "f9dbb3605b31611f995bf294a8917b01897a7c45f2376ade73674de3180055d5",
+    "stored_bytes": 8816,
+    "stored_sha256": "f9dbb3605b31611f995bf294a8917b01897a7c45f2376ade73674de3180055d5",
+    "encoding": "identity"
+  }
+]

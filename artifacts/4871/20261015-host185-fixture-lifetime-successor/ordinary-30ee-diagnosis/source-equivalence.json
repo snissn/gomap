@@ -1,0 +1,18 @@
+{
+  "candidate": "5699f8e791c753f204cc297416e0b742d415afe3",
+  "parent": "30ee954b974077b8968cdfb836e03058d9934ed1",
+  "changed_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/caching/cow_cut_test.go",
+    "TreeDB/db/primary_arena_release_work_test.go",
+    "TreeDB/db/stable_pager_owned_operations_test.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go"
+  ],
+  "production_source_changed": false,
+  "benchmark_or_gate_source_changed": false,
+  "workflow_source_changed": false,
+  "new_init_TestMain_Benchmark": false,
+  "ci_inventory_change": "discovery_source_sha256 only, root reviewed diff and six contract checks pass",
+  "claim_boundary": "Production/benchmark source equivalence only. No identical successor ELF or successor timing claim. Fresh hosted successor gates remain required."
+}

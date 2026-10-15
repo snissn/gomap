@@ -1,0 +1,335 @@
+{
+  "job": "116624028887",
+  "status": "SUCCESS",
+  "events": [
+    {
+      "Time": "2026-10-15T19:30:35.3034588Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/memtable",
+      "Test": "TestCOWConcurrentTraversalAndClose",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:35.376249Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/memtable",
+      "Test": "TestCOWChargedTraversalConcurrentImmutableReaders",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:39.7145676Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestCOWDecoderConcurrentReadsDrainBeforeClose",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:40.2465238Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestGroupedFrameCache_StatsConcurrentAdmissions",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:40.2469254Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestGroupedFrameCache_ConcurrentReadsAndEvictions",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:40.8384614Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestManagerRetirementIdentityRegisteredIdentityConcurrent",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:30:41.8409848Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestManagerSharedRetirementParentConcurrentLastRelease/nil",
+      "Elapsed": 0.23
+    },
+    {
+      "Time": "2026-10-15T19:30:42.052053Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestManagerSharedRetirementParentConcurrentLastRelease/registry",
+      "Elapsed": 0.21
+    },
+    {
+      "Time": "2026-10-15T19:30:42.052053Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestManagerSharedRetirementParentConcurrentLastRelease",
+      "Elapsed": 0.44
+    },
+    {
+      "Time": "2026-10-15T19:30:42.3174644Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "Test": "TestManagerConcurrentRetryAdmissionAndClose5066",
+      "Elapsed": 0.06
+    },
+    {
+      "Time": "2026-10-15T19:32:40.4256982Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/point",
+      "Elapsed": 0.22
+    },
+    {
+      "Time": "2026-10-15T19:32:40.6573053Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/versions",
+      "Elapsed": 0.23
+    },
+    {
+      "Time": "2026-10-15T19:32:41.1279925Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/point/pointer",
+      "Elapsed": 0.47
+    },
+    {
+      "Time": "2026-10-15T19:32:41.4225802Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission/versions/pointer",
+      "Elapsed": 0.3
+    },
+    {
+      "Time": "2026-10-15T19:32:41.4225802Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3CapturedCutMaterializesOutsideFloorAdmission",
+      "Elapsed": 1.21
+    },
+    {
+      "Time": "2026-10-15T19:32:41.5036303Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutFailureAndClose/capture",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:41.599899Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutFailureAndClose/point_close",
+      "Elapsed": 0.1
+    },
+    {
+      "Time": "2026-10-15T19:32:41.681916Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutFailureAndClose/iterator_build",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:41.7600973Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutFailureAndClose/iterator_close",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:41.7600973Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutFailureAndClose",
+      "Elapsed": 0.34
+    },
+    {
+      "Time": "2026-10-15T19:32:41.8421605Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWPruneRefusesBeforeFloorWALEffects/command_wal_durable",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:41.9266601Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWPruneRefusesBeforeFloorWALEffects/command_wal_relaxed",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:41.9945035Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWPruneRefusesBeforeFloorWALEffects/no_wal_fast",
+      "Elapsed": 0.07
+    },
+    {
+      "Time": "2026-10-15T19:32:41.9945035Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWPruneRefusesBeforeFloorWALEffects",
+      "Elapsed": 0.23
+    },
+    {
+      "Time": "2026-10-15T19:32:42.0656414Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3GroupAdmissionCapabilityAndACK/legacy_fence",
+      "Elapsed": 0.07
+    },
+    {
+      "Time": "2026-10-15T19:32:42.1491995Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3GroupAdmissionCapabilityAndACK/atomic_cut",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:42.1491995Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3GroupAdmissionCapabilityAndACK",
+      "Elapsed": 0.15
+    },
+    {
+      "Time": "2026-10-15T19:32:42.2024571Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3ReadCutCapacityRefusalHasNoFallback",
+      "Elapsed": 0.05
+    },
+    {
+      "Time": "2026-10-15T19:32:42.2861949Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/inline",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:42.3778164Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_durable/forced_pointer",
+      "Elapsed": 0.09
+    },
+    {
+      "Time": "2026-10-15T19:32:42.4573224Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/inline",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:42.5411005Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/command_wal_relaxed/forced_pointer",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:42.6071082Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/inline",
+      "Elapsed": 0.07
+    },
+    {
+      "Time": "2026-10-15T19:32:42.6840719Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup/no_wal_fast/forced_pointer",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:32:42.6840719Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestC3COWStoreReadersProgressDuringPreparedGroup",
+      "Elapsed": 0.48
+    },
+    {
+      "Time": "2026-10-15T19:34:29.0046255Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestGetAtConcurrentReaders",
+      "Elapsed": 0.36
+    },
+    {
+      "Time": "2026-10-15T19:34:46.9191661Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "Test": "TestPruneConcurrentSnapshotReaders",
+      "Elapsed": 0.44
+    },
+    {
+      "Time": "2026-10-15T19:36:01.2118179Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestPublicConditionalTxnCachedHandleConflictsOnConcurrentWrite",
+      "Elapsed": 1.55
+    },
+    {
+      "Time": "2026-10-15T19:37:31.0017798Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestConcurrentRunCloseHooksWaitsForPendingCloseDrain",
+      "Elapsed": 0.05
+    },
+    {
+      "Time": "2026-10-15T19:37:31.7734705Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestSyncCommandWALAppliedPrefixOrdersConcurrentMutations",
+      "Elapsed": 0.2
+    },
+    {
+      "Time": "2026-10-15T19:37:44.3722186Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestSnapshotForegroundReadConcurrentCloseEndsOnce",
+      "Elapsed": 0.05
+    },
+    {
+      "Time": "2026-10-15T19:37:46.2387798Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:37:53.5119041Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/collections",
+      "Test": "TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentPrimaryRootChange",
+      "Elapsed": 0.06
+    },
+    {
+      "Time": "2026-10-15T19:37:54.268656Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/collections",
+      "Test": "TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation",
+      "Elapsed": 0.08
+    },
+    {
+      "Time": "2026-10-15T19:37:56.8042091Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/collections",
+      "Test": "TestColumnGraphInsertPlanningRejectsConcurrentDuplicateAfterManifestProgress",
+      "Elapsed": 0.12
+    },
+    {
+      "Time": "2026-10-15T19:38:37.136691Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/collections",
+      "Test": "TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-15T19:38:37.8394083Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB/collections",
+      "Test": "TestSearchVectorIndexWithBufferPreparedCacheConcurrentSharedState2363",
+      "Elapsed": 0.15
+    }
+  ]
+}
