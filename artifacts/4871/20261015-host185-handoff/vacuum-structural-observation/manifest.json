@@ -1,0 +1,54 @@
+{
+  "after.json": {
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  "before.json": {
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  "command.json": {
+    "bytes": 731,
+    "sha256": "dabe36d325a9c19baa0a011875a277d3160ef4e3009c1b2563b314a00b27100d"
+  },
+  "durable_primary_rebuild_v5.go": {
+    "bytes": 23400,
+    "sha256": "cf30963fa68086d7ab6c664f339c46c059969884aeefce60f15d944c0a017e3e"
+  },
+  "normal.raw": {
+    "bytes": 20962,
+    "sha256": "a9ce4925155b38a5a1576d59ffeb4c44361b5249aa98b24514a110e7d1ea09f3"
+  },
+  "observations.json": {
+    "bytes": 35393,
+    "sha256": "48bf7d9fac211a7efd8cce681570e37b7e91b996945bf480c3cf22a21ed8142f"
+  },
+  "overlay-source-identities.json": {
+    "bytes": 904,
+    "sha256": "f8c45e3e72bef62d4cc0e898776f25cca560712887db684c1d7dd8be824177b8"
+  },
+  "overlay.json": {
+    "bytes": 651,
+    "sha256": "2a4f72bdd4fa942263e319ecfb85e16cea9187ddcda983e04a8821b821b690d5"
+  },
+  "preflight.txt": {
+    "bytes": 19555,
+    "sha256": "b79220c7c981eda1dba16d257e25e35e199d3d4b76cd56fc6ef298ee808331ab"
+  },
+  "receipt.json": {
+    "bytes": 111,
+    "sha256": "dfef57f59d123ca4b1c35e46b286e35b9685d94086e49ab52e13a3f77b27f5fa"
+  },
+  "summary.json": {
+    "bytes": 3030,
+    "sha256": "7195b9e3654ef2309d2974ebaa4b26d526aab941016412e03bc90450c7de1437"
+  },
+  "summary.md": {
+    "bytes": 1815,
+    "sha256": "a11f2e240065b420b8f3cdd72d05353e08b8da3c8d82e896b569d67afa2f0132"
+  },
+  "vacuum_online.go": {
+    "bytes": 90343,
+    "sha256": "311713d9300e6e3f8c06af0e3cb68b056ca2634cdeb180da25edad56e4f2077a"
+  }
+}

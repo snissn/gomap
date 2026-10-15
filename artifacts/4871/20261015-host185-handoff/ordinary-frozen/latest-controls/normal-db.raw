@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/vacuum_shared_base.go:39:28: cannot use alloc (variable of interface type vacuumCollectionAllocator) as vacuumRetiredPageFreer value in argument to freeVacuumRetired: vacuumCollectionAllocator does not implement vacuumRetiredPageFreer (missing method FreeMany)
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

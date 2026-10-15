@@ -1,0 +1,14 @@
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL
+# github.com/snissn/gomap/TreeDB/zipper
+TreeDB/zipper/materialized_write_work.go:36:46: undefined: valuelog.LeafAppendWork
+TreeDB/zipper/materialized_write_work.go:77:38: undefined: leafMergeCursor
+TreeDB/zipper/materialized_write_work.go:78:38: undefined: leafMergeEvent
+TreeDB/zipper/materialized_write_work.go:95:14: undefined: mergeReserve
+TreeDB/zipper/materialized_write_work.go:119:130: undefined: valuelog.LeafAppendWork
+TreeDB/zipper/materialized_write_work.go:126:14: undefined: mergeReserve
+TreeDB/zipper/materialized_write_work.go:137:14: undefined: mergeReserve
+TreeDB/zipper/materialized_write_work.go:175:16: undefined: mergeReserve
+TreeDB/zipper/materialized_write_work.go:190:16: undefined: mergeReserve
+TreeDB/zipper/materialized_write_work.go:202:27: f.encoder.ResetWithOptionsWithWork undefined (type node.Builder has no field or method ResetWithOptionsWithWork)
+TreeDB/zipper/materialized_write_work.go:202:27: too many errors

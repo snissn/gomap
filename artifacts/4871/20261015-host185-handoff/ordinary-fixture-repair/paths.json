@@ -1,0 +1,21 @@
+[
+  "TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+  "TreeDB/pager/owned_file_test.go",
+  "TreeDB/pager/readonly_owned_metadata_test.go",
+  "TreeDB/pager/adjacent_write_work_test.go",
+  "TreeDB/internal/primaryarena/owned_file_test.go",
+  "TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+  "TreeDB/internal/valuelog/native_mvcc_set_release_test.go",
+  "TreeDB/primary_joint_vacuum_v6_test.go",
+  "TreeDB/db/original_rootset_authority_completion_test.go",
+  "TreeDB/cow_public_review_regression_test.go",
+  "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+  "TreeDB/profile_entrypoint_inventory_test.go",
+  "TreeDB/db/vacuum_collection_publication_guard_test.go",
+  "TreeDB/db/primary_offline_pair_v6.go",
+  "TreeDB/db/primary_offline_pair_v6_test.go",
+  "TreeDB/offline_maintenance_format_config_test.go",
+  "TreeDB/compact_storage_test.go",
+  "TreeDB/compact_storage_cached_internal_test.go",
+  "TreeDB/maintenance_leaf_vlog_test.go"
+]

@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-overlay=/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/vacuum-original-structural-observation/overlay.json",
+    "-p=1",
+    "./TreeDB",
+    "-run",
+    "^TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen$",
+    "-count=1",
+    "-timeout=90s",
+    "-v"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "CGO_ENABLED": "1",
+    "GOMAXPROCS": "4"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "created_utc": "2026-10-15T15:34:29.447428+00:00",
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-final-main-20261015",
+  "head": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "index_sha256": "6c107c7b18c0fec50145fff023772d63243cda2d7dd078a1f78c1ae5cd664539",
+  "source_frozen": true,
+  "owned_changed_paths": 68,
+  "untracked_owned_paths": 12,
+  "go_module_inputs": 3749,
+  "manifest_sha256": "3a2a85ba0519067d8738e2723839da05da4c6de4cf00eb9e1b34520a5c2997f6",
+  "census_sha256": "1292c8d1e54de196ff5ef4e420d067994436ceb4519b50cc91a62384475a1779",
+  "status_sha256": "5361a5acc8c4f600e943f5b098b69288beabed19c9a7cc3e5d689d1528862f74",
+  "git_mutations": false,
+  "owned_running_children": [],
+  "test_runtime_released": true,
+  "scope": "ordinary only; native and other roots unchanged; no compiler/profile/fixture repair during handoff",
+  "supplemental_nested_module_inputs": 3765,
+  "supplemental_census_sha256": "c3ac0926fe45a7ce071cd34f7f971d8cd1bfd7cb84d9e9395b6964bb2047c6a1"
+}

@@ -1,0 +1,3189 @@
+diff --git a/TreeDB/cmd/treemap/vlog_audit_test.go b/TreeDB/cmd/treemap/vlog_audit_test.go
+index 6c5021554..3ea973180 100644
+--- a/TreeDB/cmd/treemap/vlog_audit_test.go
++++ b/TreeDB/cmd/treemap/vlog_audit_test.go
+@@ -35,6 +35,9 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
+ 	if report.GCDryRun.SegmentsTotal == 0 {
+ 		t.Fatalf("expected GC dry-run to observe value-log segments: %+v", report.GCDryRun)
+ 	}
++	if report.GCDryRun.SegmentsReferenced == 0 || report.GCDryRun.BytesReferenced == 0 {
++		t.Fatalf("readonly owned scan dropped live value-log counts: %+v", report.GCDryRun)
++	}
+ 	if report.RIDScan.Records == 0 || report.RIDScan.MaxRID == 0 {
+ 		t.Fatalf("expected RID scan to observe value-log records: %+v", report.RIDScan)
+ 	}
+diff --git a/TreeDB/compact_storage_cached_internal_test.go b/TreeDB/compact_storage_cached_internal_test.go
+index 6eb445aa8..63739b24e 100644
+--- a/TreeDB/compact_storage_cached_internal_test.go
++++ b/TreeDB/compact_storage_cached_internal_test.go
+@@ -547,7 +547,8 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
+ 	// The rewrite publishes replacement pointers, but the immediately previous
+ 	// durable slot may still retain the source segments. Reopen before publishing
+ 	// an inline-only successor so the cached writer also starts from the rewritten
+-	// leaf-log generation. Both durable slots have then crossed the rewrite before
++	// leaf-log generation. The subsequent compact operation must rebuild the
++	// complete recoverable closure, including both embedded parent proofs, before
+ 	// CompactStorage is required to report zero physical GC debt.
+ 	if err := db.Close(); err != nil {
+ 		t.Fatalf("close after rewrite: %v", err)
+@@ -578,8 +579,13 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
+ 	if err != nil {
+ 		t.Fatalf("CompactStorage: %v", err)
+ 	}
+-	if compact.FullyCompacted || compact.PolicyFullyCompacted || compact.ByteMinimized || compact.RemainingDebt.LeafGCGenerations == 0 {
+-		t.Fatalf("retained leaf generation overstated completion: %+v", compact)
++	if !compact.RemainingDebt.Empty() || !compact.FullyCompacted || !compact.PolicyFullyCompacted || compact.ByteMinimized {
++		t.Fatalf("full policy compaction did not drain debt, or asserted exhaustive byte minimization: %+v", compact)
++	}
++	for _, segment := range source {
++		if _, err := os.Stat(segment.path); !os.IsNotExist(err) {
++			t.Fatalf("rewritten original source survived completed compaction: %s %v", segment.path, err)
++		}
+ 	}
+ 	if err := compactor.Close(); err != nil {
+ 		t.Fatalf("close compactor: %v", err)
+diff --git a/TreeDB/compact_storage_test.go b/TreeDB/compact_storage_test.go
+index c4d9aa2dd..154d381f3 100644
+--- a/TreeDB/compact_storage_test.go
++++ b/TreeDB/compact_storage_test.go
+@@ -4,6 +4,7 @@ import (
+ 	"bytes"
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -11,6 +12,7 @@ import (
+ 
+ 	treedb "github.com/snissn/gomap/TreeDB"
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ )
+ 
+ func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrapper(t *testing.T) {
+@@ -117,17 +119,44 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
+ 		t.Fatalf("expected leaf-pack debt before compaction, debt=%+v", before.RemainingDebt)
+ 	}
+ 
++	// Record the real selected source files before maintenance can unlink them.
++	sources := make(map[uint32]string)
++	for _, candidate := range before.LeafGenerationPlan.Candidates {
++		for _, id := range candidate.FileIDs {
++			lane, seq := valuelog.DecodeFileID(id)
++			path := filepath.Join(backenddb.LeafLogDirPath(dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
++			if _, err := os.Stat(path); err != nil {
++				t.Fatalf("selected source %s: %v", path, err)
++			}
++			sources[id] = path
++		}
++	}
+ 	stats, err := backend.CompactStorage(context.Background(), compactOpts)
+ 	if err != nil {
+ 		t.Fatalf("CompactStorage: %v", err)
+ 	}
+-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized || stats.RemainingDebt.LeafGCGenerations == 0 {
+-		t.Fatalf("retained leaf generation overstated completion: %+v", stats)
++	if !stats.RemainingDebt.Empty() || !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
++		t.Fatalf("full policy compaction did not drain debt, or asserted exhaustive byte minimization: %+v", stats)
+ 	}
+ 	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
+ 		t.Fatalf("expected at least one leaf-generation pack run, packs=%+v", stats.LeafGenerationPacks)
+ 	}
+ 
++	deleted := 0
++	for _, pack := range stats.LeafGenerationPacks {
++		for _, id := range pack.Pack.SourceFileIDs {
++			if path, ok := sources[id]; ok {
++				if _, err := os.Stat(path); !os.IsNotExist(err) {
++					t.Fatalf("packed source survived completed GC: %s %v", path, err)
++				}
++				deleted++
++			}
++		}
++	}
++	if deleted == 0 || stats.LeafGenerationGC.FilesDeleted == 0 {
++		t.Fatalf("no original packed source physically reclaimed: sources=%v gc=%+v", sources, stats.LeafGenerationGC)
++	}
++
+ 	again, err := backend.CompactStoragePlan(context.Background(), compactOpts)
+ 	if err != nil {
+ 		t.Fatalf("CompactStoragePlan after: %v", err)
+diff --git a/TreeDB/cow_public_review_regression_test.go b/TreeDB/cow_public_review_regression_test.go
+index 549575ddd..e14f91df1 100644
+--- a/TreeDB/cow_public_review_regression_test.go
++++ b/TreeDB/cow_public_review_regression_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"strconv"
++	"strings"
+ 	"sync"
+ 	"testing"
+ 	"time"
+@@ -222,13 +223,23 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
+ 				t.Fatalf("rewrite changed logical revision: got=%d want=%d error=%v", revision, entry.Revision, err)
+ 			}
+ 			current.Close()
+-			_, err = database.CompactStorage(context.Background(), CompactStorageOptions{})
+-			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+-				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+-					t.Fatalf("unsupported leaf-pack promotion: %v", err)
++			report, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
++			packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
++			if err != nil {
++				if packSupported || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || len(report.Phases) == 0 || !strings.HasPrefix(report.Phases[len(report.Phases)-1].Name, "leaf-generation-pack-") {
++					t.Fatalf("ordinary compaction after selected rewrite: %v (phases=%+v)", err, report.Phases)
++				}
++			} else if !packSupported {
++				// The public planner may have no eligible pack work. Unsupported
++				// promotion is required only when a real pack is selected.
++				if len(report.LeafGenerationPacks) == 0 {
++					t.Fatal("compaction omitted leaf-pack planning")
++				}
++				for _, pack := range report.LeafGenerationPacks {
++					if pack.Ran || pack.SkipReason == "" || len(pack.Selection.GenerationIDs) != 0 {
++						t.Fatalf("unsupported promotion reported applied/selected pack: %+v", pack)
++					}
+ 				}
+-			} else if err != nil {
+-				t.Fatalf("ordinary compaction after selected rewrite: %v", err)
+ 			}
+ 			if err := database.Set([]byte("a"), []byte("late")); err != nil {
+ 				t.Fatal(err)
+diff --git a/TreeDB/db/api.go b/TreeDB/db/api.go
+index 07778b075..e8491ddd9 100644
+--- a/TreeDB/db/api.go
++++ b/TreeDB/db/api.go
+@@ -172,10 +172,15 @@ func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
+ }
+ 
+ func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
+-	if db == nil || db.valueLogManager == nil {
++	if db == nil || !errors.Is(err, valuelog.ErrFileNotFound) {
+ 		return false
+ 	}
+-	return errors.Is(err, valuelog.ErrFileNotFound)
++	// Close detaches the Manager under mu. Successful reads need no retry
++	// eligibility lookup; the exceptional retry joins that same ownership lock.
++	db.mu.RLock()
++	available := db.valueLogManager != nil
++	db.mu.RUnlock()
++	return available
+ }
+ 
+ func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
+diff --git a/TreeDB/db/batch.go b/TreeDB/db/batch.go
+index a75ab92e0..24a3c0907 100644
+--- a/TreeDB/db/batch.go
++++ b/TreeDB/db/batch.go
+@@ -452,7 +452,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
+ 	conditionalMutation := conditionalCommitMutation{
+ 		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
+ 	}
+-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
++	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
+ 	if err != nil {
+ 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+ 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
+@@ -762,7 +762,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
+ 	conditionalMutation := conditionalCommitMutation{
+ 		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
+ 	}
+-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
++	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
+ 	if err != nil {
+ 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+ 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 90309aba9..f123dcfc5 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -1753,6 +1753,12 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
+ // Ordinary snapshots keep the established fast capture path. Bounded COW
+ // captures below use their separate admission and fixed-registry policy.
+ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
++	return db.captureSnapshotForReadWithValueLogPublicationLockHeld(snap, false)
++}
++
++// Private one-shot reads cannot mint a later stable resource capture. Only
++// their immutable empty Sets can omit the original containing Manager borrow.
++func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapshot, oneShot bool) bool {
+ 	db.rootReuseMu.RLock()
+ 	defer db.rootReuseMu.RUnlock()
+ 	if db.closing.Load() || db.publicationPoisoned.Load() {
+@@ -1781,6 +1787,11 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
+ 	idx := view.idx
+ 	state := view.state
+ 	vm := view.vlogManager
++	vlogSet := state.ValueLogSet
++	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
++	if oneShot && !vlogNeedsPin {
++		vm = nil
++	}
+ 	managerBorrowAdopted := false
+ 	if vm != nil {
+ 		if !vm.RetainSnapshotWrapper() {
+@@ -1792,8 +1803,6 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
+ 			}
+ 		}()
+ 	}
+-	vlogSet := state.ValueLogSet
+-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+ 	if vlogNeedsPin {
+ 		if vm == nil {
+ 			return false
+@@ -1885,10 +1894,16 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
+ 		}
+ 	}
+ 	snap.tree.SetNegativeFilter(view.negativeFilter)
+-	snap.iteratorMu.Lock()
++	// The private synchronous reader cannot publish an iterator or Snapshot
++	// alias. Exported captures still serialize initialization with Close.
++	if !oneShot {
++		snap.iteratorMu.Lock()
++	}
+ 	snap.closed.Store(false)
+ 	snap.readState.Store(0)
+-	snap.iteratorMu.Unlock()
++	if !oneShot {
++		snap.iteratorMu.Unlock()
++	}
+ 	return true
+ }
+ 
+@@ -2192,30 +2207,50 @@ func (s *Snapshot) DetachForegroundRead() {
+ 
+ // Close releases the snapshot.
+ func (s *Snapshot) Close() error {
++	return s.closeRead(false)
++}
++
++// The private branch is used only by oneShotRead, which exposes no Snapshot,
++// iterator or completion callback. Both branches drain the same finalizer.
++func (s *Snapshot) closeRead(oneShot bool) error {
+ 	if s == nil {
+ 		return nil
+ 	}
+ 	if s.nativeMVCC.workOwned {
+ 		return ErrNativeMVCCSnapshotWork
+ 	}
+-	s.iteratorMu.Lock()
++	if !oneShot {
++		s.iteratorMu.Lock()
++	}
+ 	if !s.closed.CompareAndSwap(false, true) {
+-		s.iteratorMu.Unlock()
++		if !oneShot {
++			s.iteratorMu.Unlock()
++		}
+ 		return nil
+ 	}
+ 	s.readState.Or(snapshotReadClosedBit)
+-	s.invalidateBoundIteratorsLocked()
+-	s.iteratorMu.Unlock()
+-	return s.finalizeCloseIfUnreferenced()
++	if !oneShot {
++		s.invalidateBoundIteratorsLocked()
++		s.iteratorMu.Unlock()
++	}
++	return s.finalizeCloseRead(oneShot)
+ }
+ 
+ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
++	return s.finalizeCloseRead(false)
++}
++
++func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
+ 	if s.nativeMVCC.workOwned {
+ 		return nil
+ 	}
+-	s.iteratorMu.Lock()
++	if !oneShot {
++		s.iteratorMu.Lock()
++	}
+ 	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+-		s.iteratorMu.Unlock()
++		if !oneShot {
++			s.iteratorMu.Unlock()
++		}
+ 		return nil
+ 	}
+ 	originalIndex, originalDB := s.idx, s.db
+@@ -2227,7 +2262,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+ 	endForegroundRead := s.foregroundReadEnd
+ 	s.foregroundReadEnd = nil
+ 	s.foregroundReadMarked = false
+-	s.iteratorMu.Unlock()
++	if !oneShot {
++		s.iteratorMu.Unlock()
++	}
+ 	var err error
+ 	primaryCleanupErr := s.primaryRebindErr
+ 	if s.primaryRoot != nil && primaryCleanupErr == nil {
+@@ -2315,7 +2352,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+ 	// Success includes actual exported-handle scrub, not just claiming the
+ 	// finalizer. Failed cleanup retains the exact wrapper with its debt owner.
+ 	if err == nil && s.db != nil {
+-		s.db.snapPool.Put(s)
++		s.db.snapPool.putRead(s, oneShot)
+ 	}
+ 	if pagerCompletion != nil {
+ 		err = pagerCompletion.snapshotFinalized(err)
+@@ -2340,11 +2377,15 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+ 	// Publish actual completion after alias scrub and every original callback's
+ 	// available final action. Private postcapture refusal can adopt while this
+ 	// same finalizer is running, or consume its retained exact outcome afterward.
+-	s.iteratorMu.Lock()
++	if !oneShot {
++		s.iteratorMu.Lock()
++	}
+ 	s.cleanupFinished, s.cleanupErr = true, err
+ 	completion := s.cleanupCompletion
+ 	s.cleanupCompletion = nil
+-	s.iteratorMu.Unlock()
++	if !oneShot {
++		s.iteratorMu.Unlock()
++	}
+ 	if completion != nil {
+ 		completion.SnapshotCleanupCompleted(err)
+ 	}
+diff --git a/TreeDB/db/durable_primary_rebuild_v5.go b/TreeDB/db/durable_primary_rebuild_v5.go
+index 074a69e43..4afcb52ae 100644
+--- a/TreeDB/db/durable_primary_rebuild_v5.go
++++ b/TreeDB/db/durable_primary_rebuild_v5.go
+@@ -64,17 +64,21 @@ func (s *primaryRebuildScratchV5) put(seq uint64, input rebuiltPrimaryRootV5) er
+ // genuine DATA generation owns every rebuilt slot/proof tree. Its sequence is
+ // the earliest retained record's commit; later bank-only records retain that
+ // exact generation. No old DATA generation or bank image is relabelled.
+-func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+-	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil, leafManifest)
++func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, leafManifest **leafGenerationManifest, sharedBases ...*vacuumSharedBase) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
++	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil, leafManifest, sharedBases...)
+ }
+ 
+ // produce is synchronous construction work. It is never stored in a root or
+ // runtime: offline value-log rewrite must rewrite proof pointers with the same
+ // producer as the two slots, rather than copying old value-log dependencies.
+-func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
++func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error), leafManifest **leafGenerationManifest, sharedBases ...*vacuumSharedBase) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+ 	if idx == nil || idx.primaryOwner == nil || roots == nil {
+ 		return selected, nil, rootpublication.ErrResourceOwnership
+ 	}
++	var sharedBase *vacuumSharedBase
++	if len(sharedBases) != 0 {
++		sharedBase = sharedBases[0]
++	}
+ 	a, p := idx.primary, idx.pager
+ 	source := roots.durable
+ 	scratchCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryRebuildScratchV5{})))
+@@ -119,7 +123,7 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
+ 		if produce != nil {
+ 			rebuilt, e = produce(root)
+ 		} else {
+-			rebuilt, _, e = db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true)
++			rebuilt, _, e = db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true, sharedBase)
+ 		}
+ 		if e != nil {
+ 			return selected, nil, e
+@@ -152,9 +156,17 @@ func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *i
+ 	if len(sequences) < 2 || len(sequences) > 4 || sequences[0] == 0 {
+ 		return selected, nil, rootpublication.ErrResourceOwnership
+ 	}
++	var finalMetas [4]page.MetaPageBody
++	for i := 0; i < scratch.count; i++ {
++		finalMetas[i] = scratch.inputs[i].root.meta
++	}
++	constructionFree, e := sharedBase.finish(ctx, db, finalMetas[:scratch.count])
++	if e != nil {
++		return selected, nil, e
++	}
+ 	// All effective trees have been materialized before this real allocator cut.
+ 	allocator := freelist.New(p, 0)
+-	base, e := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
++	base, e := freelist.NewFreelistGenerationV1(1, p.PageCount(), constructionFree, nil)
+ 	if e != nil {
+ 		return selected, nil, e
+ 	}
+diff --git a/TreeDB/db/durable_root_runtime.go b/TreeDB/db/durable_root_runtime.go
+index 61f5d00f4..a8c3c428c 100644
+--- a/TreeDB/db/durable_root_runtime.go
++++ b/TreeDB/db/durable_root_runtime.go
+@@ -565,7 +565,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
+ 			idx:               idx,
+ 			state:             &candidateState,
+ 			vlogManager:       db.valueLogManager,
+-			vlogPinned:        true,
++			vlogPinned:        set != nil,
+ 			reader:            newValueReader(set),
+ 			registryShardHint: snapshotShardHintUnset,
+ 		}
+@@ -592,7 +592,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
+ 	if err != nil {
+ 		return nil, errors.Join(err, snapshot.Close())
+ 	}
+-	if len(freshSet.Files) == 0 {
++	if freshSet != nil && len(freshSet.Files) == 0 {
+ 		if releaseErr := db.valueLogManager.Release(freshSet); releaseErr != nil {
+ 			return nil, errors.Join(releaseErr, snapshot.Close())
+ 		}
+@@ -748,7 +748,7 @@ func (db *DB) rebindCandidateValueLogSetWithLimitsV1(snapshot *Snapshot, limits
+ 	state := *snapshot.state
+ 	state.ValueLogSet = fresh
+ 	snapshot.state = &state
+-	snapshot.vlogPinned = true
++	snapshot.vlogPinned = fresh != nil
+ 	snapshot.reader = newValueReader(fresh)
+ 	if oldPinned && old != nil {
+ 		if err := db.valueLogManager.Release(old); err != nil {
+@@ -875,7 +875,6 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
+ 		if captureErr != nil {
+ 			return nil, false, captureErr
+ 		}
+-		defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
+ 		for _, descriptor := range diagnostics.Physical() {
+ 			switch descriptor.Kind {
+ 			case rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog:
+@@ -890,6 +889,11 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
+ 				}
+ 			}
+ 		}
++		// Descriptor generations have been copied into the original numeric
++		// maps. End this exact borrow now, before any later producer operation.
++		if err := diagnostics.CloseWithError(); err != nil {
++			return nil, false, err
++		}
+ 	}
+ 	predecessorDependencyEmpty := len(known) == 0
+ 	// Producer-reported positive identities include newly created/current raw
+@@ -1047,9 +1051,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen,
+ 		}(additional)
+ 	}
+ 	var builder *rootpublication.StableResourceSetBuilder
+-	if metadata == nil {
+-		builder = rootpublication.NewStableResourceSetBuilder()
+-	} else {
++	if metadata != nil {
+ 		var buildErr error
+ 		builder, buildErr = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+ 		if buildErr != nil {
+@@ -1076,6 +1078,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen,
+ 			}
+ 			resources = admitted
+ 		}
++		if builder == nil {
++			builder = rootpublication.NewStableResourceSetBuilder()
++		}
+ 		if err := builder.Merge(resources); err != nil {
+ 			return errors.Join(err, db.releaseCapturedRootResources(resources))
+ 		}
+@@ -1247,6 +1252,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen,
+ 	appendOnlyCertified := appendOnlyMutation && len(mutation.Added) == 0 && additional == nil
+ 	closureStart := time.Now()
+ 	if appendOnlyMutation && additional != nil {
++		if builder == nil {
++			builder = rootpublication.NewStableResourceSetBuilder()
++		}
+ 		appendWork, appendErr := builder.MergeAppendOnlyLogicalObligations(additional, mutation)
+ 		if timing != nil {
+ 			timing.FinalizeCandidateResourceWork.Add(appendWork)
+@@ -1263,12 +1271,15 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen,
+ 	} else if err := merge(additional); err != nil {
+ 		return nil, fmt.Errorf("merge producer durable-root resources: %w", err)
+ 	}
+-	resources, err := builder.Freeze()
+-	if err != nil {
+-		return nil, err
+-	}
+-	if timing != nil {
+-		timing.FinalizeCandidateResourceWork.Add(builder.ClosureWorkSnapshot())
++	var resources *rootpublication.StableResourceSet
++	if builder != nil {
++		resources, err = builder.Freeze()
++		if err != nil {
++			return nil, err
++		}
++		if timing != nil {
++			timing.FinalizeCandidateResourceWork.Add(builder.ClosureWorkSnapshot())
++		}
+ 	}
+ 	if !appendOnlyCertified {
+ 		validationWork, validationErr := rootpublication.ValidateStableResourceSetLogicalObligationsWithWork(resources, requirements)
+diff --git a/TreeDB/db/index_gen.go b/TreeDB/db/index_gen.go
+index d1e6bf589..b211d1719 100644
+--- a/TreeDB/db/index_gen.go
++++ b/TreeDB/db/index_gen.go
+@@ -43,7 +43,7 @@ type indexGen struct {
+ 	// Original containing-wrapper borrowers are separate from physical
+ 	// generation/retirement refs and survive terminal physical close.
+ 	wrapperMu         sync.Mutex
+-	wrapperBorrows    uint64
++	wrapperBorrows    atomic.Uint64
+ 	physicalCompleted bool
+ 	closeCompleted    bool
+ 	failedSnapshots   *Snapshot
+@@ -127,12 +127,13 @@ func (g *indexGen) close() error {
+ 	g.closeOnce.Do(func() {
+ 		defer func() {
+ 			g.wrapperMu.Lock()
+-			g.closeCompleted = true
+ 			if g.closeErr != nil {
+ 				g.closeErr = g.originalCloseFailure(g.closeErr)
+ 				if g.metadata != nil {
+ 					g.metadata.CleanupFailed()
+ 				}
++				g.closeCompleted = true
++				g.wrapperBorrows.Or(indexWrapperTerminalV6)
+ 				g.wrapperMu.Unlock()
+ 				return
+ 			}
+@@ -140,6 +141,8 @@ func (g *indexGen) close() error {
+ 			// startup Manager/LOCK cleanup. Keep the original containing
+ 			// payload until the SAME startup completion edge consumes it.
+ 			g.physicalCompleted = true
++			g.closeCompleted = true
++			g.wrapperBorrows.Or(indexWrapperTerminalV6)
+ 			g.wrapperMu.Unlock()
+ 		}()
+ 		g.clearPrimaryRecoveryLeasesV5()
+@@ -217,34 +220,57 @@ func (g *indexGen) close() error {
+ 	return g.closeErr
+ }
+ 
++// The terminal bit and borrow count share one atomic handoff. A release
++// either leaves the original physical close caller to observe its decrement,
++// or observes the fixed close outcome and joins the locked terminal/error path.
++const indexWrapperTerminalV6 = uint64(1) << 63
++const indexWrapperCountMaskV6 = indexWrapperTerminalV6 - 1
++
++func (g *indexGen) wrapperBorrowCountV6() uint64 {
++	return g.wrapperBorrows.Load() & indexWrapperCountMaskV6
++}
++
+ func (g *indexGen) retainWrapperBorrow() {
+-	g.wrapperMu.Lock()
+-	// Each increment has one live original containing Snapshot/Prune object;
+-	// uint64 represents the complete physically addressable object domain.
+-	g.wrapperBorrows++
+-	g.wrapperMu.Unlock()
++	// Capture already owns the generation's original physical/registry edge.
++	// The addressable Snapshot domain is smaller than the 63-bit count.
++	if g.wrapperBorrows.Add(1)&indexWrapperCountMaskV6 == 0 {
++		panic("generation scope borrow overflow")
++	}
++}
++
++func (g *indexGen) dropWrapperBorrowV6() uint64 {
++	state := g.wrapperBorrows.Add(^uint64(0))
++	if state&indexWrapperCountMaskV6 == indexWrapperCountMaskV6 {
++		panic("generation completed scope borrow underflow")
++	}
++	return state
+ }
+ 
+ // The caller consumes this by-value original completion only after clearing
+ // generation aliases. No containing refund runs while wrapperMu is held.
+ func (g *indexGen) releaseWrapperBorrowCompletionV6(snapshot *Snapshot, cleanupErr error) (metadata *retainedalloc.Owner, charge uint64, err error) {
++	consumed := false
++	if cleanupErr == nil {
++		state := g.dropWrapperBorrowV6()
++		if state&indexWrapperTerminalV6 == 0 {
++			// Last access through this scope's alias. Concurrent close owns
++			// its own borrow and observes this atomic decrement.
++			return nil, 0, nil
++		}
++		consumed = true
++	}
+ 	g.wrapperMu.Lock()
+ 	err = cleanupErr
+ 	if err == nil && g.closeCompleted {
+ 		err = g.closeErr
+ 	}
+ 	if err != nil {
+-		if snapshot == nil && cleanupErr == nil {
+-			// This caller successfully disposed its own scope. Reporting an
+-			// already failed physical generation does not leave a phantom
+-			// scope borrow; closeFailure and metadata retain that exact debt.
+-			if g.wrapperBorrows == 0 {
+-				g.wrapperMu.Unlock()
+-				panic("generation completed scope borrow underflow")
+-			}
+-			g.wrapperBorrows--
+-		}
+ 		if snapshot != nil {
++			// A failed Snapshot keeps its exact borrow and payload. Failed
++			// physical close cannot detach/refund terminal metadata.
++			if consumed {
++				g.wrapperBorrows.Add(1)
++			}
+ 			snapshot.generationFailedNext = g.failedSnapshots
+ 			g.failedSnapshots = snapshot
+ 		}
+@@ -257,7 +283,9 @@ func (g *indexGen) releaseWrapperBorrowCompletionV6(snapshot *Snapshot, cleanupE
+ 		}
+ 		return nil, 0, err
+ 	}
+-	g.wrapperBorrows--
++	if !consumed {
++		g.dropWrapperBorrowV6()
++	}
+ 	metadata, charge = g.detachGenerationMetadataLockedV6()
+ 	g.wrapperMu.Unlock()
+ 	return metadata, charge, nil
+@@ -281,11 +309,7 @@ func (g *indexGen) closeWithCompletionV6() (metadata *retainedalloc.Owner, charg
+ 	// This edge covers the physical call scope only. A failed close retains
+ 	// the SAME closeFailure payload and metadata debt, while each failed
+ 	// Snapshot retains its separate original wrapper borrow.
+-	if g.wrapperBorrows == 0 {
+-		g.wrapperMu.Unlock()
+-		panic("generation Close call borrow underflow")
+-	}
+-	g.wrapperBorrows--
++	g.dropWrapperBorrowV6()
+ 	if err == nil {
+ 		metadata, charge = g.detachGenerationMetadataLockedV6()
+ 	}
+@@ -306,7 +330,7 @@ func (g *indexGen) detachGenerationMetadataCompletionV6() (metadata *retainedall
+ }
+ 
+ func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uint64) {
+-	if !g.physicalCompleted || g.wrapperBorrows != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
++	if !g.physicalCompleted || g.wrapperBorrowCountV6() != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
+ 		return nil, 0
+ 	}
+ 	metadata, charge := g.metadata, g.metadataCharge
+diff --git a/TreeDB/db/leaf_manifest_revision_gc_5066_test.go b/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
+index bf6c414e9..cbdd345a8 100644
+--- a/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
++++ b/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
+@@ -266,18 +266,29 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	dir := LeafLogDirPath(database.dir)
+-	var recoveryNames []string
++	var recoveryNames [2]string
++	var recoveryErrors [2]error
+ 	database.durablePublishMu.Lock()
+-	for _, resources := range database.durableRoot.slotResources {
+-		for _, token := range resources.Tokens() {
+-			if token.Kind() == rootpublication.ResourceOuterLeafManifest {
+-				recoveryNames = append(recoveryNames, token.ResourceID())
++	for slot, resources := range database.durableRoot.slotResources {
++		// Selected sets expose tokens only through a scoped borrow. Decode the
++		// exact immutable revision, as recovery does, rather than inspecting
++		// the optional generic-set diagnostic slice.
++		recoveryErrors[slot] = resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
++			manifest, found, err := loadSelectedDurableLeafGenerationManifestTokens(tokens)
++			if err != nil {
++				return err
+ 			}
+-		}
++			if found {
++				recoveryNames[slot] = leafGenerationDurableManifestFileName(manifest.ManifestRevision)
++			}
++			return nil
++		})
+ 	}
+ 	database.durablePublishMu.Unlock()
+-	if len(recoveryNames) < 2 {
+-		t.Fatalf("both recovery slots not represented: %v", recoveryNames)
++	for slot, name := range recoveryNames {
++		if recoveryErrors[slot] != nil || name == "" {
++			t.Fatalf("recovery slot %d manifest=%q error=%v", slot, name, recoveryErrors[slot])
++		}
+ 	}
+ 	for range 5 {
+ 		closure, err := database.PrepareLeafGenerationManifestStableClosure()
+diff --git a/TreeDB/db/native_generation_failure_predicates_test.go b/TreeDB/db/native_generation_failure_predicates_test.go
+index a78a1de23..601013c52 100644
+--- a/TreeDB/db/native_generation_failure_predicates_test.go
++++ b/TreeDB/db/native_generation_failure_predicates_test.go
+@@ -79,8 +79,8 @@ func TestNativeGenerationPublishedFailurePredicates(t *testing.T) {
+ 	close(start)
+ 	wg.Wait()
+ 	var late *valuelog.ManagerCleanupFailure
+-	t.Logf("actual predicates: snapshotManager=%v backgroundManager=%v failedSnapshot=%v borrows=%d", errors.As(snapshotErr, &late), errors.As(d.backgroundError(), &late), g.failedSnapshots == s, g.wrapperBorrows)
+-	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrows != 1 {
++	t.Logf("actual predicates: snapshotManager=%v backgroundManager=%v failedSnapshot=%v borrows=%d", errors.As(snapshotErr, &late), errors.As(d.backgroundError(), &late), g.failedSnapshots == s, g.wrapperBorrowCountV6())
++	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrowCountV6() != 1 {
+ 		t.Fatalf("late physical completion lost from published original receipt: %v", snapshotErr)
+ 	}
+ 	missing := errors.New("unrelated missing cause")
+diff --git a/TreeDB/db/native_mvcc_snapshot_close_v6.go b/TreeDB/db/native_mvcc_snapshot_close_v6.go
+index 0581400d8..b22bae413 100644
+--- a/TreeDB/db/native_mvcc_snapshot_close_v6.go
++++ b/TreeDB/db/native_mvcc_snapshot_close_v6.go
+@@ -150,11 +150,11 @@ func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (b
+ 					s.idx.wrapperMu.Unlock()
+ 					return false, ErrNativeMVCCSnapshotWork
+ 				}
+-				if s.idx.wrapperBorrows == 0 {
++				if s.idx.wrapperBorrowCountV6() == 0 {
+ 					s.idx.wrapperMu.Unlock()
+ 					return false, ErrSnapshotCapacity
+ 				}
+-				s.idx.wrapperBorrows--
++				s.idx.dropWrapperBorrowV6()
+ 				s.idx.wrapperMu.Unlock()
+ 				s.indexWrapperBorrowed = false
+ 			}
+diff --git a/TreeDB/db/original_rootset_authority_completion_test.go b/TreeDB/db/original_rootset_authority_completion_test.go
+index 987b9a172..7294828e6 100644
+--- a/TreeDB/db/original_rootset_authority_completion_test.go
++++ b/TreeDB/db/original_rootset_authority_completion_test.go
+@@ -10,6 +10,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ )
+ 
+ type originalClosureAdmissionBudget struct {
+@@ -91,6 +92,12 @@ func TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge(t *testing
+ 		t.Fatal(err)
+ 	}
+ 	authority, err := newLeafGenerationPackPromotionAuthority(database, stagingRoot, stagingDir, LeafLogDirPath(database.dir))
++	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
++		if authority != nil || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || owner.Bytes() != before || database.backgroundError() != nil {
++			t.Fatalf("unsupported promotion must refuse before original custody: authority=%p err=%v charge=%d", authority, err, owner.Bytes())
++		}
++		return
++	}
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/TreeDB/db/pools.go b/TreeDB/db/pools.go
+index c635f6654..c774f1c9e 100644
+--- a/TreeDB/db/pools.go
++++ b/TreeDB/db/pools.go
+@@ -51,7 +51,7 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
+ 	}
+ 	r := oneShotReadPool.Get().(*oneShotRead)
+ 	db.valueLogPublicationMu.RLock()
+-	ok := db.captureSnapshotWithValueLogPublicationLockHeld(&r.snapshot)
++	ok := db.captureSnapshotForReadWithValueLogPublicationLockHeld(&r.snapshot, true)
+ 	db.valueLogPublicationMu.RUnlock()
+ 	if !ok {
+ 		oneShotReadPool.Put(r)
+@@ -63,7 +63,7 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
+ func (r *oneShotRead) close() error {
+ 	// Close shares all registry, value-log, and leaf-generation release logic.
+ 	// The read has returned, so there are no outstanding readers or iterators.
+-	err := r.snapshot.Close()
++	err := r.snapshot.closeRead(true)
+ 	if err != nil {
+ 		// The exact Snapshot may now be linked to its original cleanup owner.
+ 		// Reusing it would overwrite that owner's surviving physical debt.
+@@ -91,6 +91,10 @@ func (p *SnapshotPool) Get() *Snapshot {
+ }
+ 
+ func (p *SnapshotPool) Put(s *Snapshot) {
++	p.putRead(s, false)
++}
++
++func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
+ 	if s == nil {
+ 		return
+ 	}
+@@ -121,12 +125,16 @@ func (p *SnapshotPool) Put(s *Snapshot) {
+ 	s.leafGenerationPinSet = nil
+ 	s.reader = valueReader{}
+ 	s.registryID = 0
+-	s.iteratorMu.Lock()
++	if !oneShot {
++		s.iteratorMu.Lock()
++	}
+ 	clear(s.iterators)
+ 	s.readState.Store(snapshotReadClosedBit)
+ 	s.closed.Store(true)
+ 	s.finalized.Store(false)
+-	s.iteratorMu.Unlock()
++	if !oneShot {
++		s.iteratorMu.Unlock()
++	}
+ 	// Do not make the exported handle reusable. See SnapshotPool's contract.
+ }
+ 
+diff --git a/TreeDB/db/prepared_root_publication_profile.go b/TreeDB/db/prepared_root_publication_profile.go
+index 80b471663..f08c18e59 100644
+--- a/TreeDB/db/prepared_root_publication_profile.go
++++ b/TreeDB/db/prepared_root_publication_profile.go
+@@ -72,9 +72,9 @@ func (db *DB) currentValueLogSetForPublication(limits *PreparedRootPublicationLi
+ 		return nil, nil
+ 	}
+ 	if limits == nil {
+-		return db.valueLogManager.CurrentSetNoRefresh(), nil
++		return db.valueLogManager.CurrentSetNoRefreshForPublication(nil)
+ 	}
+-	return db.valueLogManager.CurrentSetNoRefreshWithMaxFiles(limits.MaxRegisteredValueLogFiles)
++	return db.valueLogManager.CurrentSetNoRefreshForPublication(&limits.MaxRegisteredValueLogFiles)
+ }
+ 
+ func preparedProfileAdd(a, b uint64) uint64 {
+diff --git a/TreeDB/db/primary_arena_owner_v5.go b/TreeDB/db/primary_arena_owner_v5.go
+index 45c84628b..ffe0a8fae 100644
+--- a/TreeDB/db/primary_arena_owner_v5.go
++++ b/TreeDB/db/primary_arena_owner_v5.go
+@@ -84,6 +84,22 @@ func (owner *primaryArenaOwnerV5) releaseWithOutcome(work *iterator.OrdinalScanW
+ 	if work != nil {
+ 		return false, false, ErrNativeMVCCSnapshotWork
+ 	}
++	if owner == nil {
++		return false, false, ErrSnapshotCapacity
++	}
++	owner.mu.Lock()
++	if owner.refs > 1 {
++		_, prior := consumePrimaryArenaEdgeLocked(owner)
++		owner.mu.Unlock()
++		return true, false, prior
++	}
++	owner.mu.Unlock()
++	return owner.releaseLastOrdinaryWithOutcome()
++}
++
++// Only a possible final edge constructs physical progress. Bind rechecks refs
++// under the same lock, so a concurrent retain cannot turn this into a last drop.
++func (owner *primaryArenaOwnerV5) releaseLastOrdinaryWithOutcome() (consumed, physicalDebt bool, err error) {
+ 	var receipt primaryArenaReleaseState
+ 	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+ 	ready, err := bindPrimaryArenaRelease(&receipt, owner, false, &w)
+diff --git a/TreeDB/db/primary_arena_release_work.go b/TreeDB/db/primary_arena_release_work.go
+index e555b3113..e25db6c5f 100644
+--- a/TreeDB/db/primary_arena_release_work.go
++++ b/TreeDB/db/primary_arena_release_work.go
+@@ -69,9 +69,8 @@ func bindPrimaryArenaRelease(s *primaryArenaReleaseState, owner *primaryArenaOwn
+ 			return false, err
+ 		}
+ 	}
+-	s.bound, s.native, s.prior = true, native, owner.cleanupErr
+-	owner.refs--
+-	s.last = owner.refs == 0
++	s.bound, s.native = true, native
++	s.last, s.prior = consumePrimaryArenaEdgeLocked(owner)
+ 	if !s.last {
+ 		s.phase = 6
+ 		return true, nil
+@@ -81,6 +80,14 @@ func bindPrimaryArenaRelease(s *primaryArenaReleaseState, owner *primaryArenaOwn
+ 	owner.closeWork.started = true
+ 	return true, nil
+ }
++
++// consumePrimaryArenaEdgeLocked consumes exactly one validated original edge.
++// Both scalar ordinary releases and retained physical receipts use this core.
++func consumePrimaryArenaEdgeLocked(owner *primaryArenaOwnerV5) (last bool, prior error) {
++	owner.refs--
++	return owner.refs == 0, owner.cleanupErr
++}
++
+ func (s *primaryArenaReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, bool, error) {
+ 	if w == nil {
+ 		return false, false, ErrNativeMVCCSnapshotWork
+diff --git a/TreeDB/db/primary_arena_release_work_test.go b/TreeDB/db/primary_arena_release_work_test.go
+index 27bd4da3d..646fbdd91 100644
+--- a/TreeDB/db/primary_arena_release_work_test.go
++++ b/TreeDB/db/primary_arena_release_work_test.go
+@@ -143,3 +143,34 @@ func TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation(t *testing.
+ 		t.Fatalf("ordinary owner edge allocated unadmitted receipt: %g", allocations)
+ 	}
+ }
++
++func TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError(t *testing.T) {
++	a, err := primaryarena.Open(filepath.Join(t.TempDir(), "primary"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	owner, err := newPrimaryArenaOwnerV5(a)
++	if err != nil {
++		t.Fatal(err)
++	}
++	sticky := errors.New("earlier sibling failed")
++	owner.cleanupErr = sticky
++	if ready, e := owner.retain(nil); !ready || e != nil {
++		t.Fatal(e)
++	}
++	if consumed, debt, e := owner.releaseWithOutcome(nil); !consumed || debt || !errors.Is(e, sticky) {
++		t.Fatalf("nonlast consumed=%v debt=%v err=%v", consumed, debt, e)
++	}
++	if owner.refs != 1 || owner.arena != a || owner.closeWork.started {
++		t.Fatal("nonlast edge started physical cleanup")
++	}
++	// The original terminal release still reports sticky failure and retains its
++	// debt; the scalar fast path must neither clear nor relocate that authority.
++	consumed, debt, e := owner.releaseWithOutcome(nil)
++	if !consumed || !debt || !errors.Is(e, sticky) {
++		t.Fatalf("last consumed=%v debt=%v err=%v", consumed, debt, e)
++	}
++	if owner.arena != a || owner.metadataCharge == 0 || !owner.closeWork.done {
++		t.Fatal("original sticky cleanup debt was lost")
++	}
++}
+diff --git a/TreeDB/db/primary_offline_pair_v6.go b/TreeDB/db/primary_offline_pair_v6.go
+index fddfee484..cec89b7e0 100644
+--- a/TreeDB/db/primary_offline_pair_v6.go
++++ b/TreeDB/db/primary_offline_pair_v6.go
+@@ -20,6 +20,12 @@ import (
+ // uses the ordinary fixed PRIMARY owner pair; logical commit/ACK frontiers do
+ // not advance merely because the physical files and pointers are replaced.
+ func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
++	// Both replacement and its checked cleanup require exact relative rename
++	// and removal. Callers have already recovered any prior swap before this
++	// fresh request; reject before admitting or constructing a new scope.
++	if !rootpublication.StableRelativeNamespaceSupported() {
++		return nil, rootpublication.ErrNamespacePersistenceUnsupported
++	}
+ 	source := db.idx.Load()
+ 	if source == nil || source.pager == nil || source.primaryOwner == nil {
+ 		return nil, rootpublication.ErrResourceOwnership
+diff --git a/TreeDB/db/primary_offline_pair_v6_test.go b/TreeDB/db/primary_offline_pair_v6_test.go
+index c1c66987d..d197ee12f 100644
+--- a/TreeDB/db/primary_offline_pair_v6_test.go
++++ b/TreeDB/db/primary_offline_pair_v6_test.go
+@@ -332,12 +332,47 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
+ 				t.Fatal(err)
+ 			}
+ 			d = nil
++			beforeFiles := make(map[string][]byte)
++			if !rootpublication.StableRelativeNamespaceSupported() {
++				err = filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, walkErr error) error {
++					if walkErr != nil || entry.IsDir() {
++						return walkErr
++					}
++					image, readErr := os.ReadFile(path)
++					beforeFiles[path] = image
++					return readErr
++				})
++				if err != nil {
++					t.Fatal(err)
++				}
++			}
+ 			if mode == "vacuum" {
+ 				err = VacuumIndexOffline(opts)
+ 			} else {
+ 				_, err = ValueLogRewriteOffline(opts)
+ 			}
+-			if err != nil {
++			unsupported := !rootpublication.StableRelativeNamespaceSupported()
++			if unsupported {
++				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
++					t.Fatalf("fresh unsupported replacement: %v", err)
++				}
++				seen := 0
++				err = filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, walkErr error) error {
++					if walkErr != nil || entry.IsDir() {
++						return walkErr
++					}
++					want, ok := beforeFiles[path]
++					got, readErr := os.ReadFile(path)
++					if !ok || !bytes.Equal(got, want) {
++						t.Errorf("unsupported request changed or created %s", path)
++					}
++					seen++
++					return readErr
++				})
++				if err != nil || seen != len(beforeFiles) {
++					t.Fatalf("unsupported request changed file inventory: %d/%d %v", seen, len(beforeFiles), err)
++				}
++			} else if err != nil {
+ 				t.Fatal(err)
+ 			}
+ 			newData, err := os.Stat(filepath.Join(opts.Dir, indexFileName))
+@@ -348,10 +383,14 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
+ 			if err != nil {
+ 				t.Fatal(err)
+ 			}
+-			if os.SameFile(oldData, newData) || os.SameFile(oldPrimary, newPrimary) {
++			if unsupported {
++				if !os.SameFile(oldData, newData) || !os.SameFile(oldPrimary, newPrimary) {
++					t.Fatal("unsupported request replaced original pair")
++				}
++			} else if os.SameFile(oldData, newData) || os.SameFile(oldPrimary, newPrimary) {
+ 				t.Fatal("physical pair not replaced")
+ 			}
+-			if mode == "vlog" {
++			if mode == "vlog" && !unsupported {
+ 				for _, segment := range oldSegments {
+ 					if _, e := os.Stat(segment.path); !os.IsNotExist(e) {
+ 						t.Fatalf("old segment retained after complete rewrite: %s %v", segment.path, e)
+@@ -375,7 +414,11 @@ func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T)
+ 				if after.durable.primaryProof[slot].Record.CommitSeq != basis.primaryProof[slot].Record.CommitSeq {
+ 					t.Fatalf("slot %d changed exact one-hop proof", slot)
+ 				}
+-				if r.Freelist == original.Freelist {
++				if unsupported {
++					if r.Freelist != original.Freelist {
++						t.Fatal("unsupported request changed original DATA generation")
++					}
++				} else if r.Freelist == original.Freelist {
+ 					t.Fatal("replacement retained old physical DATA generation")
+ 				}
+ 			}
+diff --git a/TreeDB/db/root_publication_activation.go b/TreeDB/db/root_publication_activation.go
+index 1d59c56de..516a50353 100644
+--- a/TreeDB/db/root_publication_activation.go
++++ b/TreeDB/db/root_publication_activation.go
+@@ -1000,6 +1000,42 @@ func (db *DB) rootPublicationDependencyBytesV1(resources *rootpublication.Stable
+ 	return resources.BytesNotCoveredBy(db.durableRoot.slotResources[db.durableRoot.slot])
+ }
+ 
++// queuedPrimaryConstructionV6 holds the original zipper's retained outputs.
++// It is born only for a PRIMARY publication, never for ordinary DATA-only work.
++type queuedPrimaryConstructionV6 struct {
++	root     primaryarena.ReadRootConstructionV6
++	abortErr error
++	legacy   uint64
++}
++
++func (c *queuedPrimaryConstructionV6) release(db *DB, idx *indexGen) error {
++	defer func() {
++		if c.legacy != 0 {
++			bundle, ready, _ := idx.primary.TakePublicationBundle(c.legacy, nil)
++			if ready {
++				_, _ = idx.primary.Drop(bundle.Directory, nil)
++				_, _ = idx.primary.Drop(bundle.Record, nil)
++			}
++		}
++	}()
++	if c.root == nil {
++		return nil
++	}
++	if c.abortErr == nil {
++		c.abortErr = c.root.Abort()
++	}
++	if c.abortErr == nil {
++		return nil
++	}
++	// The first actual abort owns any incomplete physical debt. Never retry it
++	// or discard its exact original transaction on a construction failure.
++	if original, ok := c.root.(*rootpublication.DurableRootTransaction); ok {
++		c.abortErr = idx.primaryOwner.retainFailedTransactionV6(original, c.abortErr)
++	}
++	db.publicationPoisoned.Store(true)
++	return errors.Join(c.abortErr, ErrRecoveryRequired)
++}
++
+ // finalizeQueuedRootPublicationV1 transfers one fully built logical root from
+ // caller serialization into the coordinator. It performs no stable I/O. The
+ // allocator, visible DB state, resource closure, and coordinator frontier cross
+@@ -1031,40 +1067,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 	// Each publication owns an independently complete PRIMARY construction.
+ 	// System-only changes copy the immutable directory; bulk/manual DATA
+ 	// builders enter the same construction boundary as zipper mutations.
+-	var copiedPrimary primaryarena.ReadRootConstructionV6
+-	var copiedAbortErr error
+-	var copiedLegacy uint64
+-	defer func() {
+-		if copiedLegacy != 0 {
+-			bundle, ready, _ := idx.primary.TakePublicationBundle(copiedLegacy, nil)
+-			if ready {
+-				_, _ = idx.primary.Drop(bundle.Directory, nil)
+-				_, _ = idx.primary.Drop(bundle.Record, nil)
+-			}
+-		}
+-	}()
+-	defer func() {
+-		if copiedPrimary == nil {
+-			return
+-		}
+-		if copiedAbortErr == nil {
+-			copiedAbortErr = copiedPrimary.Abort()
+-		}
+-		if copiedAbortErr != nil {
+-			// Dispose was attempted once by its original producer or here. Preserve
+-			// that exact object; do not retry an incomplete action or refund its debt.
+-			if original, ok := copiedPrimary.(*rootpublication.DurableRootTransaction); ok {
+-				copiedAbortErr = idx.primaryOwner.retainFailedTransactionV6(original, copiedAbortErr)
+-			}
+-			db.publicationPoisoned.Store(true)
+-			retErr = errors.Join(retErr, copiedAbortErr, ErrRecoveryRequired)
+-		}
+-	}()
++	var copied *queuedPrimaryConstructionV6
+ 	if idx.primary != nil {
++		// Output pointers are retained by the original zipper only when PRIMARY
++		// construction is active. DATA-only publication needs no heap outputs.
++		copied = &queuedPrimaryConstructionV6{}
++		defer func() { retErr = errors.Join(retErr, copied.release(db, idx)) }()
+ 		var id uint64
+ 		var err error
+ 		z := idx.zipper.CloneWithAllocator(idx.allocator)
+-		z.SetPrimaryConstructionOutputV6(&copiedPrimary, &copiedAbortErr)
++		z.SetPrimaryConstructionOutputV6(&copied.root, &copied.abortErr)
+ 		switch {
+ 		case next.UserRootPageID == db.meta.UserRootPageID:
+ 			id, err = z.CopyPrimaryRoot(next.UserRootPageID)
+@@ -1076,8 +1088,8 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 		}
+ 		if id != 0 {
+ 			next.UserRootPageID, newUserRootID = id, id
+-			if copiedPrimary == nil {
+-				copiedLegacy = id
++			if copied.root == nil {
++				copied.legacy = id
+ 			}
+ 		}
+ 		dataRetired := retired[:0]
+@@ -1191,8 +1203,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
+ 		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
+ 	)
+ 	if transferred {
+-		copiedPrimary = nil
+-		copiedLegacy = 0
++		if copied != nil {
++			copied.root, copied.legacy = nil, 0
++		}
+ 		resourcesOwned = false
+ 		installOwned = false
+ 	}
+@@ -1369,7 +1382,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate
+ 	}
+ 	limits := member.preparedLimits
+ 	if limits != nil {
+-		if member.resources == nil || member.resources.Len() > limits.MaxVisibleResources ||
++		if member.resources.Len() > limits.MaxVisibleResources ||
+ 			len(runtime.debt) >= limits.MaxAllocatorDebt || len(runtime.seals) >= limits.MaxSeals ||
+ 			len(runtime.debt)+1 > limits.MaxSealPrefixEntries {
+ 			return errors.New("prepared root-publication seal exceeds admission limits")
+diff --git a/TreeDB/db/root_publication_build_group.go b/TreeDB/db/root_publication_build_group.go
+index fdcf8574b..bd46cecad 100644
+--- a/TreeDB/db/root_publication_build_group.go
++++ b/TreeDB/db/root_publication_build_group.go
+@@ -315,9 +315,8 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
+ 		}
+ 		c.nextRoot = newRoot
+ 	}
+-	delta, err := db.buildValueLogRefDelta(
+-		group.idx.pager, rootID, group.baseSeq, entries, ranges,
+-		&result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected,
++	delta, err := db.buildValueLogRefDeltaForApply(
++		group.idx, rootID, newRoot, group.baseSeq, entries, ranges, &result,
+ 	)
+ 	if err != nil {
+ 		db.observeRawBatchSpanNativePublishFallback(b.rawSpanNativeBatchPlan(), spanState, FlushSpanRunFallbackOutputOwnershipFailure)
+diff --git a/TreeDB/db/snapshot_manager_cleanup_test.go b/TreeDB/db/snapshot_manager_cleanup_test.go
+index 0db098d04..0dfa0d228 100644
+--- a/TreeDB/db/snapshot_manager_cleanup_test.go
++++ b/TreeDB/db/snapshot_manager_cleanup_test.go
+@@ -63,7 +63,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
+ 			if err = d.Close(); err != nil {
+ 				t.Fatal(err)
+ 			}
+-			if generation.metadataCharge != birthCharge || generation.registry == nil || generation.wrapperBorrows != 1 {
++			if generation.metadataCharge != birthCharge || generation.registry == nil || generation.wrapperBorrowCountV6() != 1 {
+ 				t.Fatal("terminal close refunded/cleared original held generation wrapper")
+ 			}
+ 			if d.valueLogManager != nil {
+@@ -95,7 +95,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
+ 			if !errors.As(retained, &original) || original != receipt || !errors.Is(retained, prior) || !errors.Is(retained, os.ErrClosed) {
+ 				t.Fatalf("DB lost original late Manager receipt or sibling: %v", retained)
+ 			}
+-			if generation.wrapperBorrows != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge {
++			if generation.wrapperBorrowCountV6() != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge {
+ 				t.Fatal("failed finalization lost original generation/Snapshot borrow")
+ 			}
+ 			charge := registry.MetadataOwner().Bytes()
+@@ -121,13 +121,13 @@ func TestOriginalGenerationWrapperCloseRacesLastSnapshot(t *testing.T) {
+ 		}
+ 		g := d.idx.Load()
+ 		g.wrapperMu.Lock()
+-		originalBorrows := g.wrapperBorrows
++		originalBorrows := g.wrapperBorrowCountV6()
+ 		g.wrapperMu.Unlock()
+ 		s := d.AcquireSnapshot()
+ 		if s == nil {
+ 			t.Fatal("missing actual original Snapshot")
+ 		}
+-		if s.idx != g || g.wrapperBorrows != originalBorrows+1 || g.metadataCharge == 0 {
++		if s.idx != g || g.wrapperBorrowCountV6() != originalBorrows+1 || g.metadataCharge == 0 {
+ 			t.Fatal("original wrapper was not retained/admitted")
+ 		}
+ 		start := make(chan struct{})
+@@ -144,7 +144,7 @@ func TestOriginalGenerationWrapperCloseRacesLastSnapshot(t *testing.T) {
+ 				t.Fatal(err)
+ 			}
+ 		}
+-		if g.wrapperBorrows != 0 || g.metadataCharge != 0 || g.registry != nil || g.pager != nil {
++		if g.wrapperBorrowCountV6() != 0 || g.metadataCharge != 0 || g.registry != nil || g.pager != nil {
+ 			t.Fatal("successful original final wrapper completion did not scrub/refund")
+ 		}
+ 	}
+@@ -221,7 +221,7 @@ func TestOriginalGenerationPublishedFailureConcurrentInspection(t *testing.T) {
+ 	close(start)
+ 	wg.Wait()
+ 	var late *valuelog.ManagerCleanupFailure
+-	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrows != 1 {
++	if !errors.As(snapshotErr, &late) || !errors.As(d.backgroundError(), &late) || g.failedSnapshots != s || g.wrapperBorrowCountV6() != 1 {
+ 		t.Fatalf("late physical completion lost from published original receipt: %v", snapshotErr)
+ 	}
+ 	missing := errors.New("unrelated missing cause")
+diff --git a/TreeDB/db/stable_pager_owned_operations.go b/TreeDB/db/stable_pager_owned_operations.go
+index 6a9c584b1..8ac5525c6 100644
+--- a/TreeDB/db/stable_pager_owned_operations.go
++++ b/TreeDB/db/stable_pager_owned_operations.go
+@@ -2,6 +2,7 @@ package db
+ 
+ import (
+ 	"os"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"unsafe"
+@@ -24,6 +25,7 @@ type stablePagerOwnedOperations struct {
+ 	transferred       atomic.Bool
+ 	snapshot          *Snapshot
+ 	pager             *pager.Pager
++	syncPath          string
+ 	counter           *atomic.Int64
+ 	owner             *primaryArenaOwnerV5
+ 	metadata          *retainedalloc.Owner
+@@ -33,12 +35,12 @@ type stablePagerOwnedOperations struct {
+ 	failedNext        *stablePagerOwnedOperations
+ }
+ 
+-func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner) (*stablePagerOwnedOperations, error) {
++func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {
+ 	if snapshot == nil || snapshot.idx == nil || snapshot.db == nil || metadata == nil {
+ 		return nil, rootpublication.ErrResourceOwnership
+ 	}
+ 	owner := snapshot.idx.primaryOwner
+-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stablePagerOwnedOperations{})))
++	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))) + retainedalloc.AllocationCharge(uint64(len(syncPath)))
+ 	if err := metadata.AddPending(charge); err != nil {
+ 		return nil, err
+ 	}
+@@ -57,7 +59,7 @@ func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata
+ 			return nil, err
+ 		}
+ 	}
+-	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, counter: snapshot.stableIndexCaptureCounter, owner: owner, metadata: metadata, originalCustody: custody, charge: charge}
++	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, syncPath: strings.Clone(syncPath), counter: snapshot.stableIndexCaptureCounter, owner: owner, metadata: metadata, originalCustody: custody, charge: charge}
+ 	operations.refs.Store(1)
+ 	return operations, nil
+ }
+@@ -76,7 +78,7 @@ func (operations *stablePagerOwnedOperations) FlushThrough(*os.File, rootpublica
+ 	return nil
+ }
+ func (operations *stablePagerOwnedOperations) SyncThrough(file *os.File, _ rootpublication.DurableFrontier) error {
+-	return operations.pager.SyncIndexDataWithStableFile(file)
++	return operations.pager.SyncIndexDataWithStableFileAtPath(file, operations.syncPath)
+ }
+ func (operations *stablePagerOwnedOperations) Release() (consumed bool, err error) {
+ 	n := operations.refs.Add(-1)
+@@ -165,6 +167,7 @@ func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) error
+ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() error {
+ 	owner, metadata, charge := operations.owner, operations.MetadataOwner(), operations.charge
+ 	operations.pager = nil
++	operations.syncPath = ""
+ 	if operations.failure.causes[0] != nil {
+ 		if owner != nil {
+ 			owner.retainFailedPagerOperations(operations)
+diff --git a/TreeDB/db/stable_resource.go b/TreeDB/db/stable_resource.go
+index 0ffbcc013..975be0d00 100644
+--- a/TreeDB/db/stable_resource.go
++++ b/TreeDB/db/stable_resource.go
+@@ -665,25 +665,16 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
+ 		if spec.OnRelease != nil || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OwnedOperations != nil {
+ 			return nil, rootpublication.ErrResourceOwnership
+ 		}
+-		var e error
+-		ownedOperations, e = newStablePagerOwnedOperations(snapshot, p, spec.MetadataOwner)
+-		if e != nil {
+-			return nil, e
+-		}
+ 		defer func() {
++			if ownedOperations == nil {
++				return
++			}
+ 			consumed, err := ownedOperations.Release()
+ 			if !consumed && err == nil {
+ 				err = rootpublication.ErrResourceOwnership
+ 			}
+ 			retErr = errors.Join(retErr, err)
+ 		}()
+-		spec.OwnedOperations = ownedOperations
+-	}
+-	if ownedOperations == nil && spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
+-		pager := p
+-		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
+-			return pager.SyncIndexDataWithStableFile(file)
+-		}
+ 	}
+ 	database := snapshot.db
+ 	var namespace *rootpublication.StableNamespaceToken
+@@ -708,6 +699,20 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
+ 		if err != nil {
+ 			return err
+ 		}
++		if spec.MetadataOwner != nil {
++			ownedOperations, err = newStablePagerOwnedOperations(snapshot, p, spec.MetadataOwner, file.Name())
++			if err != nil {
++				return err
++			}
++			spec.OwnedOperations = ownedOperations
++		} else if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
++			// Capture the original spelling while the original handle is live.
++			// The callback retains its duplicate handle, never a pathname authority.
++			syncPath := file.Name()
++			spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
++				return p.SyncIndexDataWithStableFileAtPath(file, syncPath)
++			}
++		}
+ 		registry := database.StableResourceIdentityPinRegistry()
+ 		identity, err := rootpublication.StableIdentityFromFile(file)
+ 		if err != nil {
+diff --git a/TreeDB/db/stable_resource_test.go b/TreeDB/db/stable_resource_test.go
+index b39bcbc9a..1ce616f7a 100644
+--- a/TreeDB/db/stable_resource_test.go
++++ b/TreeDB/db/stable_resource_test.go
+@@ -280,58 +280,74 @@ func TestCaptureStableIndexFileResourceSyncThroughSurvivesDBClose(t *testing.T)
+ 	if !rootpublication.StableRelativeNamespaceSupported() {
+ 		t.Skip("stable index namespace capture unsupported on Windows")
+ 	}
+-	dir := t.TempDir()
+-	database, err := Open(Options{Dir: dir})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	snapshot := database.AcquireStableSnapshot()
+-	if snapshot == nil {
+-		_ = database.Close()
+-		t.Fatal("AcquireStableSnapshot returned nil")
+-	}
+-	token, err := snapshot.CaptureStableIndexFileResource()
+-	if err != nil {
+-		_ = snapshot.Close()
+-		_ = database.Close()
+-		t.Fatal(err)
+-	}
+-	defer token.Release()
++	for _, owned := range []bool{false, true} {
++		name := "legacy"
++		if owned {
++			name = "original_owned"
++		}
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			database, err := Open(Options{Dir: dir, IndexPrimaryDirectory: owned})
++			if err != nil {
++				t.Fatal(err)
++			}
++			snapshot := database.AcquireStableSnapshot()
++			if snapshot == nil {
++				_ = database.Close()
++				t.Fatal("AcquireStableSnapshot returned nil")
++			}
++			var token *rootpublication.StableResourceToken
++			if owned {
++				token, err = snapshot.captureOwnedStableIndexFileResource()
++			} else {
++				token, err = snapshot.CaptureStableIndexFileResource()
++			}
++			if err != nil {
++				_ = snapshot.Close()
++				_ = database.Close()
++				t.Fatal(err)
++			}
++			defer token.Release()
++			if owned && snapshot.stablePagerCompletion == nil {
++				t.Fatal("owned capture did not retain original pager operations")
++			}
+ 
+-	if err := snapshot.Close(); err != nil {
+-		t.Fatal(err)
+-	}
+-	if err := database.Close(); err != nil {
+-		t.Fatal(err)
+-	}
++			if err := snapshot.Close(); err != nil {
++				t.Fatal(err)
++			}
++			if err := database.Close(); err != nil {
++				t.Fatal(err)
++			}
+ 
+-	var events []durabilitycut.Event
+-	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+-		if event.Resource == durabilitycut.ResourceIndex {
+-			events = append(events, event)
+-		}
+-		return nil
+-	})
+-	if err := token.SyncThrough(); err != nil {
+-		restore()
+-		t.Fatalf("sync exact index handle after DB close: %v", err)
+-	}
+-	restore()
+-	points := make([]durabilitycut.Point, len(events))
+-	for i, event := range events {
+-		if event.Root != dir || event.Path != filepath.Join(dir, indexFileName) {
+-			t.Fatalf("index durability event root=%q path=%q", event.Root, event.Path)
+-		}
+-		points[i] = event.Point
+-	}
+-	if got, want := points, []durabilitycut.Point{durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync}; !slices.Equal(got, want) {
+-		t.Fatalf("index durability points=%v want %v", got, want)
+-	}
++			var events []durabilitycut.Event
++			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
++				if event.Resource == durabilitycut.ResourceIndex {
++					events = append(events, event)
++				}
++				return nil
++			})
++			if err := token.SyncThrough(); err != nil {
++				restore()
++				t.Fatalf("sync exact index handle after DB close: %v", err)
++			}
++			restore()
++			points := make([]durabilitycut.Point, len(events))
++			for i, event := range events {
++				if event.Root != dir || event.Path != filepath.Join(dir, indexFileName) {
++					t.Fatalf("index durability event root=%q path=%q", event.Root, event.Path)
++				}
++				points[i] = event.Point
++			}
++			if got, want := points, []durabilitycut.Point{durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync}; !slices.Equal(got, want) {
++				t.Fatalf("index durability points=%v want %v", got, want)
++			}
+ 
+-	token.Release()
+-	token.Release()
+-	if got := database.stableIndexCaptures.Load(); got != 0 {
+-		t.Fatalf("stable-index leases=%d want 0", got)
++			token.Release()
++			token.Release()
++			if got := database.stableIndexCaptures.Load(); got != 0 {
++				t.Fatalf("stable-index leases=%d want 0", got)
++			}
++		})
+ 	}
+ }
+ 
+diff --git a/TreeDB/db/vacuum_collection_publication_guard_test.go b/TreeDB/db/vacuum_collection_publication_guard_test.go
+index f43b5be35..36fefd29d 100644
+--- a/TreeDB/db/vacuum_collection_publication_guard_test.go
++++ b/TreeDB/db/vacuum_collection_publication_guard_test.go
+@@ -66,7 +66,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 		"idx.Store": {
+ 			publicationGuardDBMethodID("closeAllIndexes"),
+ 			publicationGuardPackageFuncID("openReadOnly"),
+-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
++			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
+ 			publicationGuardPackageFuncID("openWithLock"),
+ 			publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
+ 		},
+@@ -78,7 +78,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 			publicationGuardDBMethodID("RefreshValueLogSet"),
+ 			publicationGuardDBMethodID("finalizeCommitLockedWithOptions"),
+ 			publicationGuardPackageFuncID("openReadOnly"),
+-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
++			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
+ 			publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
+ 			publicationGuardDBMethodID("publishLeafGenerationState"),
+ 			publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
+@@ -86,7 +86,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 			publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
+ 		},
+ 		"state.CompareAndSwap": {publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView")},
+-		"state.Swap":           {publicationGuardPackageFuncID("openWithLock")},
++		"state.Swap":           {publicationGuardDBMethodID("initializeRecoveredSnapshotV1")},
+ 	}
+ 
+ 	gotAtomicCallers := make(map[string]map[string]struct{})
+@@ -153,8 +153,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 		publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView"):      false,
+ 		publicationGuardDBMethodID("finalizeCommitLockedWithOptions"):           true,
+ 		publicationGuardPackageFuncID("openReadOnly"):                           false,
+-		publicationGuardPackageFuncID("openReadOnlyNoLock"):                     false,
+-		publicationGuardPackageFuncID("openWithLock"):                           false,
++		publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"):       false,
++		publicationGuardDBMethodID("initializeRecoveredSnapshotV1"):             false,
+ 		publicationGuardDBMethodID("publishCompactStorageValueLogSet"):          false,
+ 		publicationGuardDBMethodID("publishLeafGenerationState"):                false,
+ 		publicationGuardDBMethodID("publishValueLogSetNoRefresh"):               false,
+@@ -264,6 +264,19 @@ func (db *DB) bypass(next uint64) {
+ func (db *DB) bypass(next uint64) {
+ 	holder := stateHolder{state: db.state.Load()}
+ 	holder.state.SystemRootPageID = next
++}`,
++		"assigned struct field alias": `type assignedStateHolder struct { state *DBState }
++func (db *DB) bypass(next uint64) {
++	holder := assignedStateHolder{}
++	holder.state = db.state.Load()
++	holder.state.SystemRootPageID = next
++}`,
++		"assigned container external escape": `type externalStateHolder struct { state *DBState }
++func unknownStateHolder(*externalStateHolder)
++func (db *DB) bypass(next uint64) {
++	holder := externalStateHolder{}
++	holder.state = db.state.Load()
++	unknownStateHolder(&holder)
+ }`,
+ 		"closure returned": `func (db *DB) bypass(next uint64) {
+ 	state := db.state.Load()
+@@ -305,6 +318,22 @@ func (db *DB) bypass(next uint64) {
+ 	}
+ }
+ 
++func TestPublicationSourceGuardKeepsFieldAliasesSeparateFromContainer(t *testing.T) {
++	source := loadPublicationGuardFixture(t, `type holderWithState struct { state *DBState; diagnostic uint64 }
++func (holder *holderWithState) diagnosticValue() uint64 { return holder.diagnostic }
++func (db *DB) safe(next uint64) {
++	holder := holderWithState{}
++	holder.state = db.state.Load()
++	published := holder.state
++	_ = published.RootPageID
++	db.systemRootPublishEpoch.Add(holder.diagnosticValue())
++}`)
++	analysis := analyzePublicationGuard(t, source)
++	if len(analysis.stateWrites) != 0 {
++		t.Fatalf("typed guard confused a retained state field with its unrelated container: %+v", analysis.stateWrites)
++	}
++}
++
+ func TestPublicationSourceGuardAllowsCopiedStateMutation(t *testing.T) {
+ 	source := loadPublicationGuardFixture(t, `func (db *DB) safe(next uint64) {
+ 	published := db.state.Load()
+@@ -508,6 +537,7 @@ const (
+ 	publicationGuardTaintSnapshotView
+ 	publicationGuardTaintStateSlot
+ 	publicationGuardTaintSnapshotViewSlot
++	publicationGuardTaintContainer
+ )
+ 
+ type publicationGuardTaintAnalysis struct {
+@@ -582,7 +612,7 @@ func publicationGuardFindStateWrites(t *testing.T, source *publicationGuardSourc
+ 					break
+ 				}
+ 				for _, arg := range n.Args {
+-					if ta.expr(arg)&publicationGuardTaintState != 0 {
++					if ta.expr(arg)&(publicationGuardTaintState|publicationGuardTaintContainer) != 0 {
+ 						writes = append(writes, publicationGuardStateWrite{caller: caller, pos: arg.Pos(), detail: "published DBState escapes to a call without an analyzed body"})
+ 					}
+ 				}
+@@ -663,7 +693,9 @@ func (ta *publicationGuardTaintAnalysis) propagateAssignment(lhs, rhs ast.Expr)
+ 			return ta.addExprObjectTaint(sel.X, publicationGuardTaintSnapshotView) || changed
+ 		}
+ 	}
+-	return ta.addExprObjectTaint(sel.X, kind) || changed
++	// A retained field makes the container an escape risk, not a DBState
++	// pointer. Keep unrelated fields/method results separate from that alias.
++	return ta.addExprObjectTaint(sel.X, publicationGuardTaintContainer) || changed
+ }
+ 
+ func (ta *publicationGuardTaintAnalysis) propagateCall(call *ast.CallExpr) bool {
+@@ -722,7 +754,7 @@ func (ta *publicationGuardTaintAnalysis) expr(expr ast.Expr) publicationGuardTai
+ 		if kind := ta.objectTaint[selection.Obj()]; kind != 0 {
+ 			return kind
+ 		}
+-		if ta.expr(expr.X)&publicationGuardTaintState != 0 && publicationGuardIsPointerTo(expr, ta.source.info, ta.dbStateType) {
++		if ta.expr(expr.X)&(publicationGuardTaintState|publicationGuardTaintContainer) != 0 && publicationGuardIsPointerTo(expr, ta.source.info, ta.dbStateType) {
+ 			return publicationGuardTaintState
+ 		}
+ 		return 0
+@@ -786,7 +818,11 @@ func (ta *publicationGuardTaintAnalysis) compositeTaint(lit *ast.CompositeLit) p
+ 	if ptr, ok := types.Unalias(typ).(*types.Pointer); ok {
+ 		typ = ptr.Elem()
+ 	}
+-	want := publicationGuardTaintState
++	want := publicationGuardTaintContainer
++	switch types.Unalias(typ).Underlying().(type) {
++	case *types.Slice, *types.Array, *types.Map:
++		want = publicationGuardTaintState
++	}
+ 	switch {
+ 	case types.Identical(types.Unalias(typ), types.Unalias(ta.snapshotType)):
+ 		want = publicationGuardTaintSnapshot
+@@ -843,8 +879,10 @@ func (ta *publicationGuardTaintAnalysis) addExprObjectTaint(expr ast.Expr, kind
+ 		if selection == nil {
+ 			return false
+ 		}
+-		changed := ta.addObjectTaint(selection.Obj(), kind)
+-		return ta.addExprObjectTaint(expr.X, kind) || changed
++		// Track this field without treating every other field of its enclosing
++		// object as the same pointer/container. Selector lookup retains this
++		// exact field's taint, including nested holders passed to unknown calls.
++		return ta.addObjectTaint(selection.Obj(), kind)
+ 	default:
+ 		return false
+ 	}
+diff --git a/TreeDB/db/vacuum_online.go b/TreeDB/db/vacuum_online.go
+index 886964747..2261a502c 100644
+--- a/TreeDB/db/vacuum_online.go
++++ b/TreeDB/db/vacuum_online.go
+@@ -757,6 +757,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 		newZ.SetPrimaryDirectory(false)
+ 	}
+ 
++	var sharedBase *vacuumSharedBase
++	if replacementGen.primary != nil {
++		sharedBase = &vacuumSharedBase{zipper: newZ, pager: newPager}
++	}
+ 	var systemLeavesAppended bool
+ 	var olderReplacement *rebuiltDurableRootV1
+ 	var olderReplacementSource rootpublication.DurableRootRecordV1
+@@ -777,7 +781,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 		}
+ 		recordingAlloc := newVacuumRecordingAllocator(newAlloc)
+ 		rebuildStarted := time.Now()
+-		rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
++		rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootWithPublicationLockV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc, false, sharedBase)
+ 		systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
+ 		runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
+ 		runStats.OlderRootRebuilds++
+@@ -862,7 +866,15 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 	userTreeStarted := time.Now()
+ 	var newRoot uint64
+ 	userLeavesAppended := false
+-	if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(baseState.RootPageID) {
++	var sharedHandled bool
++	newRoot, sharedHandled, userLeavesAppended, err = sharedBase.build(db, baseSnap, baseState.RootPageID, newAlloc)
++	if err != nil {
++		cleanupNewPager()
++		return err
++	}
++	if sharedHandled {
++		// Exact materialized base plus this version's validated PRIMARY delta.
++	} else if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(baseState.RootPageID) {
+ 		if db.leafPageLog == nil {
+ 			cleanupNewPager()
+ 			return fmt.Errorf("vacuum: leaf page log not configured")
+@@ -971,7 +983,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 			return err
+ 		}
+ 		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
+-		if err := freeVacuumRetired(newAlloc, retired); err != nil {
++		if err := sharedBase.release(newAlloc, retired); err != nil {
+ 			cleanupNewPager()
+ 			return err
+ 		}
+@@ -1001,7 +1013,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 			return err
+ 		}
+ 		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || db.indexOuterLeavesInValueLog
+-		if err := freeVacuumRetired(newAlloc, retired); err != nil {
++		if err := sharedBase.release(newAlloc, retired); err != nil {
+ 			return err
+ 		}
+ 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+@@ -1201,7 +1213,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 					}
+ 					recordingAlloc := newVacuumRecordingAllocator(newAlloc)
+ 					rebuildStarted := time.Now()
+-					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
++					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootWithPublicationLockV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc, false, sharedBase)
+ 					systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
+ 					runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
+ 					runStats.OlderRootRebuilds++
+@@ -1225,7 +1237,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
+ 					rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
+ 					rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
+-					if err := freeVacuumRetired(newAlloc, olderReplacement.pages); err != nil {
++					if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {
+ 						resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
+ 						successorCloseErr := successor.Close()
+ 						cleanupNewPager()
+@@ -1484,7 +1496,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
+ 				finalSyncErr = errors.New("vacuum primary: two independent slots required")
+ 			} else {
+ 				var persistedPrimaryManifest *leafGenerationManifest
+-				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest)
++				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest, sharedBase)
+ 				if persistedPrimaryManifest != nil {
+ 					stagedLeafGenerationView = newLeafGenerationView(persistedPrimaryManifest)
+ 					leafGenerationChanged = true
+@@ -1877,7 +1889,7 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
+ 	return db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, newPager, alloc, false)
+ }
+ 
+-func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool) (rebuilt rebuiltDurableRootV1, work rebuiltRecoverableRootWorkV1, err error) {
++func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool, sharedBases ...*vacuumSharedBase) (rebuilt rebuiltDurableRootV1, work rebuiltRecoverableRootWorkV1, err error) {
+ 	if roots == nil || newPager == nil || alloc == nil {
+ 		return rebuiltDurableRootV1{}, work, errors.New("vacuum: missing recoverable-root rebuild input")
+ 	}
+@@ -1907,7 +1919,18 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
+ 		userRoot uint64
+ 	)
+ 	userLeavesAppended := false
+-	if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(root.UserRootPageID) {
++	var sharedBase *vacuumSharedBase
++	if len(sharedBases) != 0 {
++		sharedBase = sharedBases[0]
++	}
++	var sharedHandled bool
++	userRoot, sharedHandled, userLeavesAppended, err = sharedBase.build(db, snapshot, root.UserRootPageID, alloc)
++	if err != nil {
++		return rebuiltDurableRootV1{}, work, err
++	}
++	if sharedHandled {
++		// Reuse only construction-local DATA, never a component in the old arena.
++	} else if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(root.UserRootPageID) {
+ 		rootData, readErr := snapshot.idx.pager.Get(root.UserRootPageID)
+ 		if readErr != nil {
+ 			return rebuiltDurableRootV1{}, work, readErr
+diff --git a/TreeDB/db/vacuum_original_completion_test.go b/TreeDB/db/vacuum_original_completion_test.go
+index 66be26215..2fd8b5dd3 100644
+--- a/TreeDB/db/vacuum_original_completion_test.go
++++ b/TreeDB/db/vacuum_original_completion_test.go
+@@ -44,7 +44,7 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
+ 		if original == nil || original.primary != nil {
+ 			t.Fatalf("fixture missed ordinary DATA source: %p", original)
+ 		}
+-		sourceBorrows = original.wrapperBorrows
++		sourceBorrows = original.wrapperBorrowCountV6()
+ 		attempts++
+ 		if err := original.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
+ 			t.Errorf("physical fault: %v", err)
+@@ -59,10 +59,10 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
+ 	if !errors.As(err, &receipt) || receipt.generation == nil || receipt.generation.startupDB == nil ||
+ 		receipt.generation != original || receipt.generation.startupLock == nil ||
+ 		receipt.generation.startupCustody != nil ||
+-		receipt.generation.wrapperBorrows != sourceBorrows ||
++		receipt.generation.wrapperBorrowCountV6() != sourceBorrows ||
+ 		receipt.generation.metadataCharge == 0 {
+ 		t.Fatalf("offline cleanup dropped original source/replacement/LOCK custody: source=%p receipt=%p borrows=%d before=%d err=%v",
+-			original, receipt, original.wrapperBorrows, sourceBorrows, err)
++			original, receipt, original.wrapperBorrowCountV6(), sourceBorrows, err)
+ 	}
+ 	g := receipt.generation
+ 	if g.startupDB.idx.Load() != nil {
+@@ -509,12 +509,12 @@ func TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource(t *testin
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	before, borrows := owner.Bytes(), source.wrapperBorrows
++	before, borrows := owner.Bytes(), source.wrapperBorrowCountV6()
+ 	budget.setLimit(before)
+ 	replacement, admissionErr := newStartupIndexGeneration(d, lock)
+ 	budget.setLimit(math.MaxUint64)
+ 	if replacement != nil || !errors.Is(admissionErr, retainedalloc.ErrCapacity) ||
+-		owner.Bytes() != before || source.wrapperBorrows != borrows {
++		owner.Bytes() != before || source.wrapperBorrowCountV6() != borrows {
+ 		t.Fatalf("refused original replacement changed source/admission: replacement=%p err=%v", replacement, admissionErr)
+ 	}
+ 	enrollment.Close()
+@@ -538,9 +538,9 @@ func TestOfflineVacuumReplacementAdmissionRefusalRetainsOriginalSource(t *testin
+ 		source.startupDB != d || source.startupLock != lock ||
+ 		// Completed physical-Close call borrows drain on refusal; the original
+ 		// maintenance source borrow and failed physical receipt remain.
+-		source.wrapperBorrows != borrows || source.metadataCharge == 0 {
++		source.wrapperBorrowCountV6() != borrows || source.metadataCharge == 0 {
+ 		t.Fatalf("admission/source Close lost original custody: completion=%p/%d attempts=%d source=%p receipt=%p borrows=%d before=%d err=%v",
+-			metadata, charge, attempts, source, receipt, source.wrapperBorrows, borrows, refusal)
++			metadata, charge, attempts, source, receipt, source.wrapperBorrowCountV6(), borrows, refusal)
+ 	}
+ 	registry.Close()
+ 	charged := owner.Bytes()
+@@ -586,7 +586,7 @@ func TestOfflineVacuumSetupRefusalConsumesOriginalSourceSuccessfully(t *testing.
+ 	testDBCloseHook = func(d *DB) {
+ 		g := d.idx.Load()
+ 		if g == nil || g.startupDB != d || g.startupManager != d.valueLogManager ||
+-			g.startupLock == nil || g.wrapperBorrows != 1 {
++			g.startupLock == nil || g.wrapperBorrowCountV6() != 1 {
+ 			t.Fatal("original source borrow missing")
+ 		}
+ 		owner = g.metadata
+diff --git a/TreeDB/db/vlog_gc_incremental.go b/TreeDB/db/vlog_gc_incremental.go
+index c910262a0..97dad866f 100644
+--- a/TreeDB/db/vlog_gc_incremental.go
++++ b/TreeDB/db/vlog_gc_incremental.go
+@@ -747,7 +747,7 @@ func (db *DB) scanValueLogRefCountsOwned(ctx context.Context) (valueLogRefCounts
+ 	}
+ 	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+ 		Collectors:    maintenanceReachabilityValueLogRefCounts,
+-		CountMetadata: db.valueLogRefTracker.metadata,
++		CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
+ 	})
+ 	if err != nil {
+ 		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(err, snap.Close())
+@@ -815,6 +815,18 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
+ 	return db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq)
+ }
+ 
++// buildValueLogRefDeltaForApply consumes the producer's borrowed receipt before
++// the caller releases either the source root or output construction. Logical
++// removals remain unchanged; only the proven unchanged raw-leaf base may reuse
++// the already admitted physical dependency closure.
++func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
++	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
++	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
++		delta.requiresCandidateProjection = false
++	}
++	return delta, err
++}
++
+ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
+ 	delta, err := db.buildValueLogRefDeltaWithOptions(p, rootID, baseSeq, entries, ranges, oldPointerRefs, oldEntriesRemoved, oldPointerRefsCollected, false)
+ 	if err != nil || delta == nil {
+diff --git a/TreeDB/internal/primaryarena/owned_file_test.go b/TreeDB/internal/primaryarena/owned_file_test.go
+index aab97034a..db3d48467 100644
+--- a/TreeDB/internal/primaryarena/owned_file_test.go
++++ b/TreeDB/internal/primaryarena/owned_file_test.go
+@@ -45,7 +45,7 @@ func TestOpenCapsuleOwnedFileFailedFormatClosesHandle(t *testing.T) {
+ 	if !errors.Is(err, ErrFormat) || a != nil {
+ 		t.Fatalf("a=%p err=%v", a, err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("handle not closed: %v", err)
+ 	}
+ }
+diff --git a/TreeDB/internal/rootpublication/coordinator.go b/TreeDB/internal/rootpublication/coordinator.go
+index 17cec305a..429f9971b 100644
+--- a/TreeDB/internal/rootpublication/coordinator.go
++++ b/TreeDB/internal/rootpublication/coordinator.go
+@@ -937,34 +937,36 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
+ 		var tail *primaryTerminalCompletionV6
+ 		for i := 0; i < remove; i++ {
+ 			entry := &c.pending[i]
+-			if set := entry.candidate.resourceSet(); set != nil {
+-				txn := entry.candidate.DurableRoot()
+-				var node *primaryTerminalCompletionV6
+-				var err error
+-				if txn.isConstructedPrimaryV6() {
+-					node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
+-				} else {
++			txn := entry.candidate.DurableRoot()
++			var node *primaryTerminalCompletionV6
++			var err error
++			if txn.isConstructedPrimaryV6() {
++				node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
++			} else {
++				if set := entry.candidate.resourceSet(); set != nil {
+ 					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
+-					if err == nil {
+-						node, err = txn.finishOrdinaryDataMetadataV6()
+-					}
+ 				}
+-				if err != nil {
+-					c.removeCompletedPendingPrefixV6(completed, removedBytes)
+-					c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+-					c.failWaitersLocked(c.poison)
+-					c.clearPublishRequestLocked()
+-					c.notifyLocked()
+-					return completion
++				// An absent physical closure still owns the original DATA
++				// transaction terminal and its containing metadata receipt.
++				if err == nil {
++					node, err = txn.finishOrdinaryDataMetadataV6()
+ 				}
+-				if node != nil {
+-					if tail == nil {
+-						completion.head = node
+-					} else {
+-						tail.next = node
+-					}
+-					tail = node
++			}
++			if err != nil {
++				c.removeCompletedPendingPrefixV6(completed, removedBytes)
++				c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
++				c.failWaitersLocked(c.poison)
++				c.clearPublishRequestLocked()
++				c.notifyLocked()
++				return completion
++			}
++			if node != nil {
++				if tail == nil {
++					completion.head = node
++				} else {
++					tail.next = node
+ 				}
++				tail = node
+ 			}
+ 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+ 			*entry = pendingEntry{}
+@@ -976,6 +978,12 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
+ 		} else {
+ 			c.pendingBytes = 0
+ 		}
++		// The consumed group is now the predecessor for admission. Its physical
++		// terminal accounting remains joined below before durable waiters/ACK.
++		// A late older Finish must never restore an older admission frontier.
++		if completion.sequence > c.durableRootSequence {
++			c.durableRootLineage, c.durableRootSequence = completion.lineage, completion.sequence
++		}
+ 		// Keep the original attempt outstanding through actual terminal
+ 		// accounting. WaitThrough cannot observe a new durable frontier yet.
+ 		c.publishing = true
+diff --git a/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go b/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go
+index f32110da7..cb3455287 100644
+--- a/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go
++++ b/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go
+@@ -3,6 +3,7 @@ package rootpublication
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	"github.com/snissn/gomap/TreeDB/freelist"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/page"
+@@ -13,7 +14,7 @@ import (
+ 
+ // Reuses the original DATA allocator/publisher fixture through the selected
+ // constructor's public metadata input; it does not install private phase state.
+-func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, abortErr error, lineage DurableRootLineageID, seq uint64) *durableRootTransactionFixture {
++func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, abortErr error, lineage DurableRootLineageID, seq uint64, absent ...bool) *durableRootTransactionFixture {
+ 	t.Helper()
+ 	withPayload := false
+ 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+@@ -118,9 +119,11 @@ func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, ab
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	fixture.resources, err = NewStableResourceSetBuilder().Freeze()
+-	if err != nil {
+-		t.Fatal(err)
++	if len(absent) == 0 || !absent[0] {
++		fixture.resources, err = NewStableResourceSetBuilder().Freeze()
++		if err != nil {
++			t.Fatal(err)
++		}
+ 	}
+ 	fixture.candidate, err = NewPreparedRootCandidate(CandidateSpec{
+ 		Frontier: NewFrontier(seq, 2, 3, 0, 0), TotalPages: generation.HighWater(),
+@@ -237,3 +240,42 @@ func TestDurableRootTransactionSelectedDataFailedAbortRetainsExactDebt(t *testin
+ 		t.Fatal("failed physical abort lost original debt or repeated effect")
+ 	}
+ }
++
++// An absent physical closure still has original transaction terminal custody.
++// Both single and coalesced publication must complete it before WaitThrough.
++func TestAbsentPhysicalClosureCompletesOriginalDataTerminal(t *testing.T) {
++	for _, count := range []int{1, 2} {
++		t.Run(fmt.Sprint(count), func(t *testing.T) {
++			var owners [2]retainedalloc.Owner
++			var fixtures []*durableRootTransactionFixture
++			c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
++				return PublishResult{Outcome: PublishSucceeded}
++			})})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer c.Stop(context.Background())
++			for i := 0; i < count; i++ {
++				owners[i].Initialize(0)
++				f := newSelectedDataTerminalFixture(t, &owners[i], nil, durableLineage(1), uint64(i+2), true)
++				if f.candidate.Resources() != nil || owners[i].Bytes() == 0 {
++					t.Fatal("fixture must retain original terminal charge and no physical closure")
++				}
++				fixtures = append(fixtures, f)
++				if err = c.Enqueue(context.Background(), f.candidate); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if err = c.WaitThrough(context.Background(), uint64(count+1)); err != nil {
++				t.Fatal(err)
++			}
++			for i, f := range fixtures {
++				if f.tx.Owner() != ResourceOwnerReleased || f.tx.phase != durableRootConsumed || f.tx.terminalMetadataV6 != nil ||
++					f.tx.input.PreparedCOW != nil || f.tx.activate != nil || f.tx.consume != nil || f.tx.abort != nil || f.tx.fail != nil ||
++					owners[i].Bytes() != 0 || f.consumes.Load() != 1 {
++					t.Fatalf("original terminal incomplete: owner=%v phase=%v bytes=%d consumes=%d", f.tx.Owner(), f.tx.phase, owners[i].Bytes(), f.consumes.Load())
++				}
++			}
++		})
++	}
++}
+diff --git a/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go b/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
+index 234336f20..7b441b250 100644
+--- a/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
++++ b/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
+@@ -45,10 +45,12 @@ func TestNamespaceContainingRefundAfterOriginalCallUnlock(t *testing.T) {
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
++	t.Cleanup(func() { _ = parent.Close() })
+ 	child, e := os.Create(filepath.Join(dir, "primary"))
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
++	t.Cleanup(func() { _ = child.Close() })
+ 	var owner retainedalloc.Owner
+ 	owner.Initialize(0)
+ 	proof, e := NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
+@@ -133,10 +135,12 @@ func TestNamespaceOrdinaryContainingReleaseDoesNotAllocateReceipt(t *testing.T)
+ 		if e != nil {
+ 			t.Fatal(e)
+ 		}
++		t.Cleanup(func() { _ = parent.Close() })
+ 		child, e := os.Create(filepath.Join(dir, "primary"))
+ 		if e != nil {
+ 			t.Fatal(e)
+ 		}
++		t.Cleanup(func() { _ = child.Close() })
+ 		proofs[i], e = NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
+ 		if e != nil {
+ 			t.Fatal(e)
+diff --git a/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go b/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go
+index 44969c81c..fd0929416 100644
+--- a/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go
++++ b/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go
+@@ -19,9 +19,35 @@ func PrimaryBankMetadataEdgesV5(class primaryarena.Class, image []byte) ([]prima
+ 	return primaryBankMetadataEdgesV5(class, image, nil, nil)
+ }
+ 
+-// Fixed page-local validation scratch belongs to the same arena metadata owner.
+-// Borrowed codec fields never escape this synchronous scope.
++// Records have exactly two owning edges; manifests have at most one. The
++// decoder's validation-only dependency capacity does not belong to these
++// results. Every result remains independently owned through Close because
++// recovery retains parent edges while recursively decoding children.
+ type primaryBankMetadataScratchV5 struct {
++	owner  *retainedalloc.Owner
++	charge uint64
++	edges  [2]primaryarena.MetadataEdge
++	count  int
++}
++
++func (s *primaryBankMetadataScratchV5) Edges() []primaryarena.MetadataEdge {
++	if s.count == 0 {
++		return nil
++	}
++	return s.edges[:s.count]
++}
++func (s *primaryBankMetadataScratchV5) Close() {
++	if s.owner == nil {
++		return
++	}
++	owner, charge := s.owner, s.charge
++	*s = primaryBankMetadataScratchV5{}
++	owner.RemovePending(charge)
++}
++
++// Only dependency pages need the full page-local child/codec arrays. Borrowed
++// codec fields never escape this result's synchronous decode scope.
++type primaryBankDependencyScratchV5 struct {
+ 	owner      *retainedalloc.Owner
+ 	charge     uint64
+ 	edges      [page.PageSize / 8]primaryarena.MetadataEdge
+@@ -29,30 +55,45 @@ type primaryBankMetadataScratchV5 struct {
+ 	dependency dependencyBorrowScratch
+ }
+ 
+-func (s *primaryBankMetadataScratchV5) Edges() []primaryarena.MetadataEdge {
++func (s *primaryBankDependencyScratchV5) Edges() []primaryarena.MetadataEdge {
+ 	if s.count == 0 {
+ 		return nil
+ 	}
+ 	return s.edges[:s.count]
+ }
+-func (s *primaryBankMetadataScratchV5) Close() {
++func (s *primaryBankDependencyScratchV5) Close() {
+ 	if s.owner == nil {
+ 		return
+ 	}
+ 	owner, charge := s.owner, s.charge
+-	*s = primaryBankMetadataScratchV5{}
++	*s = primaryBankDependencyScratchV5{}
+ 	owner.RemovePending(charge)
+ }
++
+ func PrimaryBankMetadataEdgesOwnedV5(class primaryarena.Class, image []byte, owner *retainedalloc.Owner) (primaryarena.MetadataEdgeScratch, error) {
+ 	if owner == nil {
+ 		return nil, ErrResourceOwnership
+ 	}
++	if class == primaryarena.Dependency {
++		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankDependencyScratchV5{})))
++		if err := owner.AddPending(charge); err != nil {
++			return nil, err
++		}
++		s := &primaryBankDependencyScratchV5{owner: owner, charge: charge}
++		edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], &s.dependency)
++		if err != nil {
++			s.Close()
++			return nil, err
++		}
++		s.count = len(edges)
++		return s, nil
++	}
+ 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryBankMetadataScratchV5{})))
+ 	if err := owner.AddPending(charge); err != nil {
+ 		return nil, err
+ 	}
+ 	s := &primaryBankMetadataScratchV5{owner: owner, charge: charge}
+-	edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], &s.dependency)
++	edges, err := primaryBankMetadataEdgesV5(class, image, s.edges[:0], nil)
+ 	if err != nil {
+ 		s.Close()
+ 		return nil, err
+diff --git a/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go b/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
+index 4ed9d5c89..73a2b0b1e 100644
+--- a/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
++++ b/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
+@@ -60,9 +60,6 @@ func (c *Coordinator) removeCompletedPendingPrefixV6(n int, bytes uint64) {
+ func (c *Coordinator) completePublicationLockedV6(done primaryPublicationCompletionV6) {
+ 	c.durable, c.oldestRecoverable = done.frontier, done.oldest
+ 	c.reachabilityEpoch++
+-	if done.sequence != 0 {
+-		c.durableRootLineage, c.durableRootSequence = done.lineage, done.sequence
+-	}
+ 	c.lastGroupSize, c.lastService = done.groupSize, done.service
+ 	if c.ewmaService == 0 {
+ 		c.ewmaService = done.service
+diff --git a/TreeDB/internal/rootpublication/resource_set.go b/TreeDB/internal/rootpublication/resource_set.go
+index e647f6f66..b4330d30f 100644
+--- a/TreeDB/internal/rootpublication/resource_set.go
++++ b/TreeDB/internal/rootpublication/resource_set.go
+@@ -2767,6 +2767,15 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
+ 		source.mu.Unlock()
+ 		return nil, false, ErrResourceOwnership
+ 	}
++	// Only a genuinely absent generic closure has no ownership to clone.
++	// Empty selected metadata, directory leases, evidence and pin accounting
++	// remain real independent edges even when there are no physical entries.
++	if source.metadata == nil && !source.selected && source.extras == nil &&
++		len(source.entries) == 0 && source.kindViews == nil && len(source.pinHighWater) == 0 &&
++		!source.releasedDirectoryLease {
++		source.mu.Unlock()
++		return nil, true, nil
++	}
+ 	if directory := source.emptyDependencyDirectoryLocked(); directory != nil {
+ 		var owner *retainedalloc.Owner
+ 		if source.metadata != nil {
+@@ -3767,7 +3776,9 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
+ 			return nil, work, err
+ 		}
+ 		if shared {
+-			work.PhysicalRootShares = uint64(cloned.kindViews.len())
++			if cloned != nil {
++				work.PhysicalRootShares = uint64(cloned.kindViews.len())
++			}
+ 			return cloned, work, nil
+ 		}
+ 	}
+diff --git a/TreeDB/internal/rootpublication/resource_token.go b/TreeDB/internal/rootpublication/resource_token.go
+index a699752eb..fd1dc7fe4 100644
+--- a/TreeDB/internal/rootpublication/resource_token.go
++++ b/TreeDB/internal/rootpublication/resource_token.go
+@@ -1649,7 +1649,11 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
+ 		}
+ 		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceCreationProof{}))) + retainedalloc.AllocationCharge(uint64(len(name))) + fileCharge
+ 		if stableNamespaceCreationPersistsThroughChild() {
+-			childCharge, e := StableFileMetadataCharge(uint64(len(child.Name()) + len("#stable-pin")))
++			suffix := len("#stable-pin")
++			if runtime.GOOS == "windows" {
++				suffix = len("#stable-sync-pin")
++			}
++			childCharge, e := StableFileMetadataCharge(uint64(len(child.Name()) + suffix))
+ 			if e != nil {
+ 				return nil, e
+ 			}
+@@ -1677,7 +1681,7 @@ func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name st
+ 	}
+ 	proof.persistence = proof.parent
+ 	if stableNamespaceCreationPersistsThroughChild() {
+-		proof.persistence, err = duplicateStableFile(child)
++		proof.persistence, err = duplicateStableSyncFile(child)
+ 		if err != nil {
+ 			return fail(fmt.Errorf("duplicate namespace proof child: %w", err))
+ 		}
+diff --git a/TreeDB/internal/valuelog/manager.go b/TreeDB/internal/valuelog/manager.go
+index 4e4591651..11535e3f5 100644
+--- a/TreeDB/internal/valuelog/manager.go
++++ b/TreeDB/internal/valuelog/manager.go
+@@ -143,6 +143,9 @@ type File struct {
+ 
+ 	remapMu        sync.Mutex
+ 	remapRequested atomic.Bool
++	// Queued/running asynchronous remap borrows this original containing File.
++	// closeMu serializes admission with Close; Close joins outside all locks.
++	remapWorkers sync.WaitGroup
+ 
+ 	currentMappingV6       ownedMmapV6
+ 	legacyMappingV6        bool
+@@ -2384,6 +2387,28 @@ func (m *Manager) CurrentSetNoRefreshWithMaxFiles(maxFiles int) (*Set, error) {
+ 	return m.currentSetLocked(), nil
+ }
+ 
++// CurrentSetNoRefreshForPublication captures the same exact live file edges as
++// CurrentSetNoRefresh. An absent physical closure is represented by nil instead
++// of an empty owned Set. Limit validation, emptiness and acquisition all observe
++// the same locked registry; no file can be registered between those decisions.
++// Exported snapshot callers retain the nonnil CurrentSet contract.
++func (m *Manager) CurrentSetNoRefreshForPublication(maxFiles *int) (*Set, error) {
++	if maxFiles != nil && *maxFiles < 0 {
++		return nil, fmt.Errorf("value log snapshot: negative file limit %d", *maxFiles)
++	}
++	m.mu.RLock()
++	defer m.mu.RUnlock()
++	if maxFiles != nil && len(m.files) > *maxFiles {
++		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), *maxFiles)
++	}
++	for _, f := range m.files {
++		if !m.closing && !f.IsZombie.Load() && !f.closed.Load() {
++			return m.currentSetLocked(), nil
++		}
++	}
++	return nil, nil
++}
++
+ // CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.
+ // Unrelated registrations cannot enlarge this snapshot. The caller releases it
+ // through Release, just like CurrentSetNoRefresh.
+diff --git a/TreeDB/internal/valuelog/native_mvcc_file_close.go b/TreeDB/internal/valuelog/native_mvcc_file_close.go
+index b1dc34b12..65dfb0f72 100644
+--- a/TreeDB/internal/valuelog/native_mvcc_file_close.go
++++ b/TreeDB/internal/valuelog/native_mvcc_file_close.go
+@@ -41,6 +41,23 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
+ 	if !native && (state.nativeOwned || f.nativeCallbacks.Load()) {
+ 		return false, ErrNativeMVCCFileWork
+ 	}
++	// A finite native turn may retry the same join without hiding a wait.
++	// Ordinary Close stops admission before waiting for the actual queued worker.
++	// No Manager membership lock is held by published-File retirement callers.
++	if !native && f.remapRequested.Load() {
++		f.closed.Store(true)
++		f.closeMu.Unlock()
++		f.remapWorkers.Wait()
++		f.closeMu.Lock()
++		// Another closer may have completed or claimed the original state while
++		// this closer joined the same worker without holding its retirement lock.
++		if state.phase == 8 {
++			return true, f.closeErr
++		}
++		if state.nativeOwned || f.nativeCallbacks.Load() {
++			return false, ErrNativeMVCCFileWork
++		}
++	}
+ 	for {
+ 		switch state.phase {
+ 		case 0:
+@@ -66,6 +83,11 @@ func (f *File) closeOriginalStep(native bool, w *iterator.OrdinalScanWork) (bool
+ 			state.cause = errors.Join(f.constructionParentErrors[0], f.constructionParentErrors[1])
+ 			state.phase = 1
+ 		case 1:
++			// Phase zero admitted the original close gate. A queued worker may
++			// finish, but no new worker can enter while native retirement yields.
++			if native && f.remapRequested.Load() {
++				return false, nil
++			}
+ 			if !reserveManagerWrapperWork(w, 1, 2*uint64(unsafe.Sizeof([]byte{}))+128) {
+ 				return false, nil
+ 			}
+@@ -233,6 +255,12 @@ func closeNativeMVCCMappingV6(mapping *ownedMmapV6, native bool, w *iterator.Ord
+ 		available = w.ByteLimit - w.Bytes
+ 	}
+ 	overhead := 2 * uint64(unsafe.Sizeof(*mapping))
++	// A constructor mapping can only unmap whole platform pages. Distinguish
++	// an impossible fresh grant from an ordinary exhausted remainder.
++	minimum := overhead + uint64(page)
++	if w != nil && (w.RecordLimit < 1 || w.ByteLimit < minimum) {
++		return false, &iterator.OrdinalUnitTooLarge{Records: 1, Bytes: minimum}
++	}
+ 	if available <= overhead {
+ 		return false, nil
+ 	}
+diff --git a/TreeDB/internal/valuelog/native_mvcc_file_close_test.go b/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
+index 22982da28..b7ebdbdcf 100644
+--- a/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
++++ b/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
+@@ -5,7 +5,9 @@ import (
+ 	"errors"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ 	"testing"
++	"unsafe"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	templ "github.com/snissn/gomap/TreeDB/template"
+@@ -14,25 +16,89 @@ import (
+ func TestNativeMVCCOriginalFilePhysicalClose(t *testing.T) {
+ 	path := filepath.Join(t.TempDir(), "value.log")
+ 	writer, err := NewWriter(path, 1)
+-	if err != nil { t.Fatal(err) }
+-	if _, err = writer.Append(0, nil, 1, bytes.Repeat([]byte("real-original-file"), 150000)); err != nil { t.Fatal(err) }
+-	if err = writer.Close(); err != nil { t.Fatal(err) }
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = writer.Append(0, nil, 1, bytes.Repeat([]byte("real-original-file"), 150000)); err != nil {
++		t.Fatal(err)
++	}
++	if err = writer.Close(); err != nil {
++		t.Fatal(err)
++	}
+ 	file, err := openFile(path, 1, nil, nil, templ.DecodeOptions{}, nil)
+-	if err != nil { t.Fatal(err) }
++	if err != nil {
++		t.Fatal(err)
++	}
+ 	defer file.Close()
+-	if !file.remapToFileSize() { t.Fatal("original constructor did not map persisted file") }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); done || err != nil || file.closeAttempted || file.closed.Load() { t.Fatal("zero-work close effect") }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1<<20}); done || err != nil || !file.closed.Load() { t.Fatal("close did not pause", err) }
+-	if err := file.Close(); !errors.Is(err, ErrNativeMVCCFileWork) { t.Fatal("ordinary close stole native custody", err) }
+-	if _, err := file.File.Stat(); err != nil { t.Fatal("OS close preceded admitted physical phases", err) }
++	mapped := file.remapToFileSize()
++	if !mapped && (runtime.GOOS != "windows") {
++		t.Fatal("original constructor did not map persisted file")
++	}
++
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); done || err != nil || file.closeAttempted || file.closed.Load() {
++		t.Fatal("zero-work close effect")
++	}
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}); done || err != nil || !file.closed.Load() {
++		t.Fatal("close did not pause", err)
++	}
++	if err := file.Close(); !errors.Is(err, ErrNativeMVCCFileWork) {
++		t.Fatal("ordinary close stole native custody", err)
++	}
++	if _, err := file.File.Stat(); err != nil {
++		t.Fatal("OS close preceded admitted physical phases", err)
++	}
+ 	turns := 0
+ 	for ; turns < 10000; turns++ {
+-		work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 8192}
++		work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: uint64(max(8192, 2*os.Getpagesize()))}
+ 		done, err := file.CloseNativeMVCCStep(work)
+-		if err != nil || work.Records > 32 || work.Bytes > 8192 { t.Fatal("physical quantum", err) }
+-		if done { break }
++		if err != nil || work.Records > 32 || work.Bytes > work.ByteLimit {
++			t.Fatal("physical quantum", err)
++		}
++		if done {
++			break
++		}
++	}
++	if turns == 10000 || file.currentMappingV6.remainingV6() != 0 || len(file.deadMappings) != 0 {
++		t.Fatal("physical mapping survived cleanup")
++	}
++	if err := file.File.Close(); !errors.Is(err, os.ErrClosed) {
++		t.Fatal("original handle not closed", err)
++	}
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); !done || err != nil {
++		t.Fatal("terminal cleanup replay", done, err)
++	}
++}
++
++func TestNativeOriginalMappingFreshQuantumTooSmall(t *testing.T) {
++	if !(runtime.GOOS != "windows") {
++		t.Skip("platform uses retained file reads without mmap")
++	}
++	path := filepath.Join(t.TempDir(), "mapping.log")
++	if err := os.WriteFile(path, make([]byte, os.Getpagesize()), 0600); err != nil {
++		t.Fatal(err)
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	mapping, err := mapOwnedReadOnlyV6(f, os.Getpagesize())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer mapping.closeV6()
++	minimum := 2*uint64(unsafe.Sizeof(mapping)) + uint64(os.Getpagesize())
++	before := mapping.remainingV6()
++	_, err = closeNativeMVCCMappingV6(&mapping, true, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum - 1})
++	var large *iterator.OrdinalUnitTooLarge
++	if !errors.As(err, &large) || large.Bytes != minimum || mapping.remainingV6() != before {
++		t.Fatal("fresh impossible mapping unit", err)
++	}
++	work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum, Bytes: 1}
++	if done, err := closeNativeMVCCMappingV6(&mapping, true, work); done || err != nil || mapping.remainingV6() != before {
++		t.Fatal("residual grant should yield", done, err)
++	}
++	if done, err := closeNativeMVCCMappingV6(&mapping, true, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum}); !done || err != nil {
++		t.Fatal("fresh fitting grant", done, err)
+ 	}
+-	if turns == 10000 || file.currentMappingV6.remainingV6() != 0 || len(file.deadMappings) != 0 { t.Fatal("physical mapping survived cleanup") }
+-	if _, err := file.File.Stat(); !errors.Is(err, os.ErrClosed) { t.Fatal("original handle not closed", err) }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); !done || err != nil { t.Fatal("terminal cleanup replay", done, err) }
+ }
+diff --git a/TreeDB/internal/valuelog/native_mvcc_set_release_test.go b/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
+index 8f1c34d73..bf01f000f 100644
+--- a/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
++++ b/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
+@@ -60,7 +60,7 @@ func TestNativeMVCCOriginalSetPhysicalClose(t *testing.T) {
+ 			if len(m.files) != 0 || set.Files != nil || f.producerCharge != 0 || m.producerCharge != 0 || f.nativeCallbacks.Load() {
+ 				t.Fatal("actual terminal aliases/debt survive success")
+ 			}
+-			if _, err := originalHandle.Stat(); !errors.Is(err, os.ErrClosed) {
++			if err := originalHandle.Close(); !errors.Is(err, os.ErrClosed) {
+ 				t.Fatal("actual original OS handle not closed", err)
+ 			}
+ 			if ready, err := m.ReleaseNativeMVCCSetStep(set, &iterator.OrdinalScanWork{}); !ready || err != nil {
+diff --git a/TreeDB/internal/valuelog/original_cleanup.go b/TreeDB/internal/valuelog/original_cleanup.go
+index c962ed28e..e228f9bcc 100644
+--- a/TreeDB/internal/valuelog/original_cleanup.go
++++ b/TreeDB/internal/valuelog/original_cleanup.go
+@@ -135,7 +135,7 @@ func (e *ManagerCleanupFailure) Is(target error) bool {
+ func (f *File) refundProducerMetadata() {
+ 	f.closeMu.Lock()
+ 	defer f.closeMu.Unlock()
+-	if !f.producerDetached.Load() || f.terminalWalk.Load() || f.closeErr != nil || f.terminalParentErr != nil || f.constructionParentErrors[0] != nil || f.constructionParentErrors[1] != nil || f.RefCount.Load() != 0 || f.producerDeleteGuards.Load() != 0 {
++	if !f.producerDetached.Load() || f.terminalWalk.Load() || f.closeErr != nil || f.terminalParentErr != nil || f.constructionParentErrors[0] != nil || f.constructionParentErrors[1] != nil || f.RefCount.Load() != 0 || f.producerDeleteGuards.Load() != 0 || f.remapRequested.Load() {
+ 		return
+ 	}
+ 	// An admitted destructive caller owns deleteMu until its exact-parent
+diff --git a/TreeDB/internal/valuelog/reader_mmap.go b/TreeDB/internal/valuelog/reader_mmap.go
+index b0240939c..70a7b3a17 100644
+--- a/TreeDB/internal/valuelog/reader_mmap.go
++++ b/TreeDB/internal/valuelog/reader_mmap.go
+@@ -304,24 +304,35 @@ func (f *File) retirePersistentMmapToDeadLocked() bool {
+ }
+ 
+ func (f *File) maybeScheduleRemap() {
+-	if f == nil || f.closed.Load() || !f.usesPersistentMmap() {
++	if f == nil || f.closed.Load() {
++		return
++	}
++	// Admission belongs to the original File before launch. Close gates it
++	// under this same lock, then joins outside both closeMu and Manager.mu.
++	f.closeMu.Lock()
++	defer f.closeMu.Unlock()
++	if f.closed.Load() || f.File == nil || !f.usesPersistentMmap() {
+ 		return
+ 	}
+ 	data, _ := f.mmapData.Load().([]byte)
+-	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+-		// If we have already exhausted our dead-mapping budget, we will not be
+-		// able to remap again without risking use-after-unmap for callers holding
+-		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
+-		if data != nil {
+-			return
+-		}
++	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
++		return
+ 	}
+ 	if !f.remapRequested.CompareAndSwap(false, true) {
+ 		return
+ 	}
++	f.remapWorkers.Add(1)
++	manager, file := f.manager, f.File
+ 	go func() {
+-		defer f.remapRequested.Store(false)
+-		f.remapToFileSizePersistentOnly()
++		defer func() {
++			// No worker access to original aliases remains after this scope. The
++			// same closeMu excludes containing refund until the original join ends.
++			f.closeMu.Lock()
++			f.remapRequested.Store(false)
++			f.remapWorkers.Done()
++			f.closeMu.Unlock()
++		}()
++		f.remapToFileSizeWithAliases(true, manager, file)
+ 	}()
+ }
+ 
+@@ -375,9 +386,24 @@ func (f *File) remapToFileSize() bool {
+ }
+ 
+ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
+-	if f == nil || f.closed.Load() || f.File == nil {
++	if f == nil {
+ 		return false
+ 	}
++	// Capture aliases under their actual retirement lock. The async caller's
++	// original worker join (or a synchronous reader's File borrow) retains them.
++	f.closeMu.Lock()
++	if f.closed.Load() || f.File == nil {
++		f.closeMu.Unlock()
++		return false
++	}
++	m, file := f.manager, f.File
++	f.closeMu.Unlock()
++	return f.remapToFileSizeWithAliases(requirePersistent, m, file)
++}
++
++// Aliases are captured by the original reader borrow or async worker admission.
++// The original containing File remains live until that actual operation exits.
++func (f *File) remapToFileSizeWithAliases(requirePersistent bool, m *Manager, file *os.File) bool {
+ 	// Cheap conservative bailouts precede the manager lock. Authoritative
+ 	// policy, cap and budget checks below serialize admission with publication.
+ 	data, _ := f.mmapData.Load().([]byte)
+@@ -390,7 +416,6 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
+ 			return false
+ 		}
+ 	}
+-	m := f.manager
+ 	if m != nil {
+ 		// Match demotion and Manager.Close lock order. Current files also
+ 		// take this lock because they may become sealed while awaiting remap.
+@@ -402,7 +427,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
+ 	}
+ 	f.remapMu.Lock()
+ 	defer f.remapMu.Unlock()
+-	if f.closed.Load() || f.File == nil {
++	if f.closed.Load() {
+ 		return false
+ 	}
+ 	if requirePersistent && !f.usesPersistentMmap() {
+@@ -422,7 +447,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
+ 		}
+ 	}
+ 
+-	info, err := f.File.Stat()
++	info, err := file.Stat()
+ 	if err != nil {
+ 		return false
+ 	}
+@@ -468,7 +493,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
+ 		f.sealedLazyMmapDeniedCountCap.Store(0)
+ 		f.sealedLazyMmapDeniedBytesCap.Store(0)
+ 	}
+-	mapping, err := mapOwnedReadOnlyV6(f.File, int(mapSize))
++	mapping, err := mapOwnedReadOnlyV6(file, int(mapSize))
+ 	if err != nil {
+ 		return false
+ 	}
+diff --git a/TreeDB/maintenance_leaf_vlog_test.go b/TreeDB/maintenance_leaf_vlog_test.go
+index de7d6ae34..a4de54665 100644
+--- a/TreeDB/maintenance_leaf_vlog_test.go
++++ b/TreeDB/maintenance_leaf_vlog_test.go
+@@ -3,6 +3,8 @@ package treedb_test
+ import (
+ 	"bytes"
+ 	"context"
++	"crypto/sha256"
++	"errors"
+ 	"fmt"
+ 	"math/rand"
+ 	"os"
+@@ -27,7 +29,14 @@ func mainIndexPath(rootDir string) string {
+ 	return filepath.Join(rootDir, "index.db")
+ }
+ 
+-func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecordV1 {
++// mainMaterializedMeta describes the durable sequence and its DATA base, not
++// the logical PRIMARY directory ID. Maintenance assertions inspect that base.
++type mainMaterializedMeta struct {
++	CommitSeq      uint64
++	UserRootPageID uint64
++}
++
++func readMainMeta(t *testing.T, rootDir string) mainMaterializedMeta {
+ 	t.Helper()
+ 	indexPath := mainIndexPath(rootDir)
+ 	p, err := pager.OpenReadOnly(indexPath, 256*1024)
+@@ -36,6 +45,55 @@ func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecor
+ 	}
+ 	defer func() { _ = p.Close() }()
+ 
++	primaryPath := indexPath + ".primary"
++	if _, statErr := os.Stat(primaryPath); statErr == nil {
++		primary, openErr := pager.OpenReadOnly(primaryPath, 256*1024)
++		if openErr != nil {
++			t.Fatal(openErr)
++		}
++		defer primary.Close()
++		header, headerErr := primary.Get(0)
++		if headerErr != nil || !page.VerifyChecksumNonMutating(header) || string(header[16:24]) != "TDPRCAPB" {
++			t.Fatalf("invalid PRIMARY capsule header: %v", headerErr)
++		}
++		var uuid [16]byte
++		copy(uuid[:], header[32:48])
++		var selected mainMaterializedMeta
++		for slot := uint64(0); slot < 2; slot++ {
++			image := make([]byte, rootpublication.PrimaryCapsuleSizeV6)
++			complete := true
++			for n := uint64(0); n < 3; n++ {
++				part, readErr := primary.Get(2 + slot*3 + n)
++				if readErr != nil {
++					complete = false
++					break
++				}
++				copy(image[n*page.PageSize:], part)
++			}
++			if !complete {
++				continue
++			}
++			view, decodeErr := rootpublication.DecodePrimaryCapsuleV6(image, slot, uuid)
++			if decodeErr != nil {
++				continue
++			}
++			current := view.Current()
++			base, readErr := p.Get(current.Primary.BaseRootPageID)
++			if readErr != nil || !page.VerifyChecksumNonMutating(base) || sha256.Sum256(base) != current.Primary.BaseDigest {
++				t.Fatalf("capsule slot %d DATA base integrity: %v", slot, readErr)
++			}
++			if current.Record.CommitSeq > selected.CommitSeq {
++				selected = mainMaterializedMeta{CommitSeq: current.Record.CommitSeq, UserRootPageID: current.Primary.BaseRootPageID}
++			}
++		}
++		if selected.CommitSeq == 0 {
++			t.Fatalf("no valid durable PRIMARY capsule in %s", primaryPath)
++		}
++		return selected
++	} else if !os.IsNotExist(statErr) {
++		t.Fatal(statErr)
++	}
++
+ 	readMetaAt := func(id uint64) (page.DurableMetaV1, bool) {
+ 		data, err := p.Get(id)
+ 		if err != nil {
+@@ -75,7 +133,7 @@ func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecor
+ 	if err != nil {
+ 		t.Fatalf("decode durable-root record page %d: %v", selected.RootRecordPageID, err)
+ 	}
+-	return record
++	return mainMaterializedMeta{CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID}
+ }
+ 
+ func requireMainRootLeafLogChildren(t *testing.T, rootDir string, rootID uint64) {
+@@ -399,11 +457,16 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
+ 		t.Fatalf("expected leaf_vlog files before rewrite")
+ 	}
+ 
++	var before map[string][]byte
++	if !rootpublication.StableRelativeNamespaceSupported() {
++		before = offlineLeafFixtureFiles(t, mainDir)
++	}
+ 	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+-	if err != nil {
++	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
++		requireOfflineLeafFixtureUnchanged(t, mainDir, before)
++	} else if err != nil {
+ 		t.Fatalf("ValueLogRewriteOffline: %v", err)
+-	}
+-	if stats.RecordsCopied == 0 {
++	} else if stats.RecordsCopied == 0 {
+ 		t.Fatalf("expected offline rewrite to copy records, stats=%+v", stats)
+ 	}
+ 
+@@ -421,13 +484,12 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
+ 	}
+ 	defer reopen.Close()
+ 
+-	got, err := reopen.Get([]byte("rew-off-0010"))
+-	if err != nil {
+-		t.Fatalf("get after reopen: %v", err)
+-	}
+-	want := bytes.Repeat([]byte{10}, 2*1024)
+-	if !bytes.Equal(got, want) {
+-		t.Fatalf("value mismatch after reopen: got=%dB want=%dB", len(got), len(want))
++	for i := 0; i < 128; i++ {
++		got, err := reopen.Get([]byte(fmt.Sprintf("rew-off-%04d", i)))
++		want := bytes.Repeat([]byte{byte(i % 251)}, 2*1024)
++		if err != nil || !bytes.Equal(got, want) {
++			t.Fatalf("reopened value %d: got=%dB want=%dB err=%v", i, len(got), len(want), err)
++		}
+ 	}
+ }
+ 
+@@ -441,9 +503,11 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
+ 		t.Fatalf("open: %v", err)
+ 	}
+ 
+-	// Keep the tree small so the root is an internal page with explicit
+-	// leaf-log children.
+-	for i := 0; i < 16; i++ {
++	// Exceed the PRIMARY directory's 49 classes so this fixture actually
++	// materializes a DATA base with leaf-log children. A 16-row fixture stays
++	// wholly in PRIMARY and cannot test rewriting DATA leaf-page records.
++	const keyCount = 64
++	for i := 0; i < keyCount; i++ {
+ 		key := []byte(fmt.Sprintf("rew-inline-%03d", i))
+ 		val := bytes.Repeat([]byte{byte(i)}, 32)
+ 		if err := db.Set(key, val); err != nil {
+@@ -462,11 +526,17 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
+ 	metaBefore := readMainMeta(t, dir)
+ 	requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)
+ 
++	mainDir := filepath.Dir(mainIndexPath(dir))
++	var before map[string][]byte
++	if !rootpublication.StableRelativeNamespaceSupported() {
++		before = offlineLeafFixtureFiles(t, mainDir)
++	}
+ 	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+-	if err != nil {
++	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
++		requireOfflineLeafFixtureUnchanged(t, mainDir, before)
++	} else if err != nil {
+ 		t.Fatalf("ValueLogRewriteOffline: %v", err)
+-	}
+-	if stats.RecordsCopied == 0 || stats.BytesAfter == 0 {
++	} else if stats.RecordsCopied == 0 || stats.BytesAfter == 0 {
+ 		t.Fatalf("expected rewrite to copy leaf-page records, stats=%+v", stats)
+ 	}
+ 
+@@ -479,12 +549,11 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
+ 	}
+ 	defer reopen.Close()
+ 
+-	got, err := reopen.Get([]byte("rew-inline-010"))
+-	if err != nil {
+-		t.Fatalf("get after reopen: %v", err)
+-	}
+-	if len(got) != 32 {
+-		t.Fatalf("expected 32B value after reopen, got %dB", len(got))
++	for i := 0; i < keyCount; i++ {
++		got, err := reopen.Get([]byte(fmt.Sprintf("rew-inline-%03d", i)))
++		if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 32)) {
++			t.Fatalf("reopened inline value %d: %x %v", i, got, err)
++		}
+ 	}
+ }
+ 
+@@ -570,3 +639,44 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
+ 		t.Fatalf("expected %dB value after gc, got %dB", valSize, len(got))
+ 	}
+ }
++
++// offlineLeafFixtureFiles binds refusal to the exact closed fixture bytes.
++func offlineLeafFixtureFiles(t *testing.T, dir string) map[string][]byte {
++	t.Helper()
++	files := make(map[string][]byte)
++	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		if entry.IsDir() {
++			return nil
++		}
++		data, err := os.ReadFile(path)
++		if err != nil {
++			return err
++		}
++		name, err := filepath.Rel(dir, path)
++		if err != nil {
++			return err
++		}
++		files[name] = data
++		return nil
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return files
++}
++
++func requireOfflineLeafFixtureUnchanged(t *testing.T, dir string, before map[string][]byte) {
++	t.Helper()
++	after := offlineLeafFixtureFiles(t, dir)
++	if len(after) != len(before) {
++		t.Fatalf("unsupported request changed file inventory: %d -> %d", len(before), len(after))
++	}
++	for name, data := range before {
++		if !bytes.Equal(data, after[name]) {
++			t.Fatalf("unsupported request changed %s", name)
++		}
++	}
++}
+diff --git a/TreeDB/offline_maintenance_format_config_test.go b/TreeDB/offline_maintenance_format_config_test.go
+index 6ba32ff54..d9fe9e827 100644
+--- a/TreeDB/offline_maintenance_format_config_test.go
++++ b/TreeDB/offline_maintenance_format_config_test.go
+@@ -12,6 +12,7 @@ import (
+ 
+ 	treedb "github.com/snissn/gomap/TreeDB"
+ 	treedbdb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"github.com/snissn/gomap/TreeDB/pager"
+@@ -103,11 +104,34 @@ func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
+ 		t.Fatalf("close: %v", err)
+ 	}
+ 
+-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
++	indexPath := filepath.Join(dir, "index.db")
++	before, err := os.ReadFile(indexPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	err = treedb.VacuumIndexOffline(treedb.Options{Dir: dir})
++	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
++		after, readErr := os.ReadFile(indexPath)
++		if readErr != nil || !bytes.Equal(before, after) {
++			t.Fatalf("unsupported vacuum changed index: %v", readErr)
++		}
++	} else if err != nil {
+ 		t.Fatalf("VacuumIndexOffline: %v", err)
+ 	}
+ 
+-	flags := leafFlagsInIndex(t, filepath.Join(dir, "index.db"))
++	reopened, err := treedb.Open(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer reopened.Close()
++	for i := 0; i < 256; i++ {
++		got, readErr := reopened.Get([]byte(fmt.Sprintf("k%04d", i)))
++		if readErr != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 16)) {
++			t.Fatalf("reopened value %d: %x %v", i, got, readErr)
++		}
++	}
++
++	flags := leafFlagsInIndex(t, indexPath)
+ 	if flags&leafPrefixCompressedFlag == 0 {
+ 		t.Fatalf("expected vacuum to preserve leaf prefix compression (flags=%#x)", flags)
+ 	}
+@@ -142,14 +166,35 @@ func TestValueLogRewriteOffline_LoadsPersistedFormatConfig(t *testing.T) {
+ 		t.Fatalf("close: %v", err)
+ 	}
+ 
+-	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
++	indexPath := filepath.Join(dir, "index.db")
++	before, err := os.ReadFile(indexPath)
+ 	if err != nil {
+-		t.Fatalf("ValueLogRewriteOffline: %v", err)
++		t.Fatal(err)
+ 	}
+-	if stats.RecordsCopied == 0 {
++	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
++	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
++		after, readErr := os.ReadFile(indexPath)
++		if readErr != nil || !bytes.Equal(before, after) {
++			t.Fatalf("unsupported rewrite changed index: %v", readErr)
++		}
++	} else if err != nil {
++		t.Fatalf("ValueLogRewriteOffline: %v", err)
++	} else if stats.RecordsCopied == 0 {
+ 		t.Fatalf("expected offline rewrite to copy records, stats=%+v", stats)
+ 	}
+ 
++	reopened, err := treedb.Open(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer reopened.Close()
++	for i := 0; i < 128; i++ {
++		got, readErr := reopened.Get([]byte(fmt.Sprintf("p%04d", i)))
++		if readErr != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 64)) {
++			t.Fatalf("reopened pointer %d: %x %v", i, got, readErr)
++		}
++	}
++
+ 	flags := leafFlagsInIndex(t, filepath.Join(dir, "index.db"))
+ 	if flags&leafPrefixCompressedFlag == 0 {
+ 		t.Fatalf("expected rewrite to preserve leaf prefix compression (flags=%#x)", flags)
+diff --git a/TreeDB/pager/adjacent_write_work_test.go b/TreeDB/pager/adjacent_write_work_test.go
+index e63240ec1..bfa04b164 100644
+--- a/TreeDB/pager/adjacent_write_work_test.go
++++ b/TreeDB/pager/adjacent_write_work_test.go
+@@ -10,7 +10,8 @@ import (
+ 
+ func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
+ 	path := filepath.Join(t.TempDir(), "index.db.primary")
+-	p, e := Open(path, 4*page.PageSize)
++	chunkSize := max(int64(4*page.PageSize), mmapOffsetGranularity())
++	p, e := Open(path, chunkSize)
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+@@ -57,7 +58,7 @@ func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
+ 	if e = p.Close(); e != nil {
+ 		t.Fatal(e)
+ 	}
+-	p, e = Open(path, 4*page.PageSize)
++	p, e = Open(path, chunkSize)
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+diff --git a/TreeDB/pager/owned_file_test.go b/TreeDB/pager/owned_file_test.go
+index 5c7d37bad..2c724dc7a 100644
+--- a/TreeDB/pager/owned_file_test.go
++++ b/TreeDB/pager/owned_file_test.go
+@@ -31,7 +31,7 @@ func TestOpenOwnedFileUsesTransferredHandle(t *testing.T) {
+ 	if err := p.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("transferred file remains open: %v", err)
+ 	}
+ 	got, err := os.ReadFile(diagnostic)
+@@ -50,7 +50,7 @@ func TestOpenOwnedFileFailureTransfersCleanup(t *testing.T) {
+ 		if err == nil || p != nil {
+ 			t.Fatalf("p=%p err=%v", p, err)
+ 		}
+-		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++		if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 			t.Fatalf("file not closed: %v", err)
+ 		}
+ 	})
+@@ -102,7 +102,7 @@ func TestOwnedFileMappingFailureClosesExactHandle(t *testing.T) {
+ 	if err == nil || p != nil {
+ 		t.Fatalf("read-only mapping unexpectedly initialized: %p %v", p, err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("failed mapping lost file: %v", err)
+ 	}
+ }
+@@ -145,7 +145,7 @@ func TestPagerPartialUnmapRetainsMappingAndBlocksAccess(t *testing.T) {
+ 	if err := p.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("cleanup did not close exact handle: %v", err)
+ 	}
+ }
+diff --git a/TreeDB/pager/pager.go b/TreeDB/pager/pager.go
+index 62004d0e4..2ae023c94 100644
+--- a/TreeDB/pager/pager.go
++++ b/TreeDB/pager/pager.go
+@@ -1057,10 +1057,25 @@ func (p *Pager) SyncIndexDataWithStableFileWithWork(file *os.File, w *iterator.O
+ // Caller controls were already reserved on this same grant. They contribute to
+ // fresh impossibility without charging the native snapshot a second time.
+ func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
++	p.mu.RLock()
++	path := p.path
++	p.mu.RUnlock()
++	return p.syncIndexDataWithStableFileAtPath(file, path, w, callerRecords, callerBytes)
++}
++
++// SyncIndexDataWithStableFileAtPath preserves a capture's diagnostic identity
++// after the original pager retires. Only the retained handle supplies authority;
++// this path is never opened or used to rediscover a file.
++func (p *Pager) SyncIndexDataWithStableFileAtPath(file *os.File, path string) error {
++	_, err := p.syncIndexDataWithStableFileAtPath(file, path, nil, 0, 0)
++	return err
++}
++
++func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
+ 	if file == nil {
+ 		return false, errors.New("pager: stable index file unavailable")
+ 	}
+-	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes)
++	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes, path)
+ 	if !done || err != nil {
+ 		return done, err
+ 	}
+@@ -1068,7 +1083,7 @@ func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *i
+ 		p.durableFileSize.Store(info.Size())
+ 	}
+ 	if !p.readOnly && !p.memoryOnly {
+-		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); e != nil {
++		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path); e != nil {
+ 			return false, e
+ 		}
+ 	}
+@@ -1083,7 +1098,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
+ 	_, err := p.syncDirtyChunksWithFileWork(syncFile, firstChunk, syncTarget, nil, false, 0, 0)
+ 	return err
+ }
+-func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64) (bool, error) {
++func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64, indexPath ...string) (bool, error) {
+ 	if p.readOnly {
+ 		return false, ErrReadOnly
+ 	}
+@@ -1091,6 +1106,10 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
+ 		return true, nil
+ 	}
+ 	p.mu.Lock()
++	path := p.path
++	if len(indexPath) != 0 {
++		path = indexPath[0]
++	}
+ 	// takeFrom scans the actual dirty word span, writes selected membership,
+ 	// allocates its owned ordinal snapshot, then rechecks range hints. Include
+ 	// the restoration path and the ordinary parallel worker/channel control.
+@@ -1101,7 +1120,7 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
+ 	records := uint64(5) + 4*span + 5*n + workers
+ 	traffic := uint64(4096) + 128*span + 256*n + 1024*workers
+ 	if indexCut {
+-		traffic += uint64(len(p.path))*8 + 2048
++		traffic += uint64(len(path))*8 + 2048
+ 	}
+ 	if err := pagerCallerMinimum(w, records, traffic, callerRecords, callerBytes); err != nil {
+ 		p.mu.Unlock()
+@@ -1118,7 +1137,7 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
+ 
+ 	var syncErr error
+ 	if indexCut {
+-		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path)
++		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path)
+ 	}
+ 	// Hold mappings stable through mapped-range and file sync.
+ 	p.mu.RLock()
+diff --git a/TreeDB/pager/readonly_owned_metadata_test.go b/TreeDB/pager/readonly_owned_metadata_test.go
+index 49cada6b6..970b01eac 100644
+--- a/TreeDB/pager/readonly_owned_metadata_test.go
++++ b/TreeDB/pager/readonly_owned_metadata_test.go
+@@ -71,7 +71,7 @@ func TestReadOnlyOwnedMetadataAdmissionAndLifetime(t *testing.T) {
+ 				if !errors.Is(err, ErrFileSize) || p != nil || charge != 0 || !consumed || owner.Bytes() != 0 {
+ 					t.Fatalf("p=%p charge=%d consumed=%v err=%v owner=%d", p, charge, consumed, err, owner.Bytes())
+ 				}
+-				if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++				if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 					t.Fatal("consumed exact file remains open", err)
+ 				}
+ 			case "actual-close-refusal":
+diff --git a/TreeDB/primary_joint_vacuum_v6_test.go b/TreeDB/primary_joint_vacuum_v6_test.go
+index ab581da11..bb49877ba 100644
+--- a/TreeDB/primary_joint_vacuum_v6_test.go
++++ b/TreeDB/primary_joint_vacuum_v6_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/tree"
+ 	"io"
+ 	"path/filepath"
++	"runtime"
+ 	"testing"
+ )
+ 
+@@ -66,18 +67,28 @@ func TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut(t *test
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+-	if e = d.backend.VacuumIndexOnline(context.Background()); !errors.Is(e, rootpublication.ErrResourcePinned) {
++	// Register the original cut cleanup before any platform-specific assertion.
++	defer cut.Close()
++	before := d.backend.State().CommitSeq
++	e = d.backend.VacuumIndexOnline(context.Background())
++	if runtime.GOOS == "windows" {
++		if !errors.Is(e, errVacuumUnsupported) || d.backend.State().CommitSeq != before {
++			t.Fatalf("unsupported online replacement changed state: %v", e)
++		}
++	} else if !errors.Is(e, rootpublication.ErrResourcePinned) {
+ 		t.Fatalf("held cut refusal: %v", e)
+ 	}
+ 	if e = cut.Close(); e != nil {
+ 		t.Fatal(e)
+ 	}
+-	before := d.backend.State().CommitSeq
+-	if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
+-		t.Fatal(e)
+-	}
+-	if d.backend.State().CommitSeq != before+1 {
+-		t.Fatal("joint publication did not advance once")
++	if runtime.GOOS != "windows" {
++		before = d.backend.State().CommitSeq
++		if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
++			t.Fatal(e)
++		}
++		if d.backend.State().CommitSeq != before+1 {
++			t.Fatal("joint publication did not advance once")
++		}
+ 	}
+ 	if got, e := held.Get([]byte("base-003")); e != nil || !bytes.Equal(got, value) {
+ 		t.Fatalf("old reader: %v", e)
+diff --git a/TreeDB/profile_entrypoint_inventory_test.go b/TreeDB/profile_entrypoint_inventory_test.go
+index 2f0ab14d8..c99f97cb8 100644
+--- a/TreeDB/profile_entrypoint_inventory_test.go
++++ b/TreeDB/profile_entrypoint_inventory_test.go
+@@ -29,10 +29,10 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
+ 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
+ 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
+ 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
+-		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
++		"LeafGenerationPlan", "MaintenancePhase", "NativeMVCCBudgetV6", "NewBatch", "NewBatchWithSize",
+ 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+ 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetSync", "Stats", "SupportsMVCCReadCut",
+-		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
++		"StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+ 	}
+ 	slices.Sort(want)
+ 	if !slices.Equal(methods, want) {
+@@ -67,6 +67,12 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
+ 		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
+ 	}
+ 	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
++	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_mvcc_prune.go"))
++	for _, name := range []string{"NativeMVCCBudgetV6", "StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6"} {
++		for _, fragment := range []string{"db.lifecycleMu.RLock()", "defer db.lifecycleMu.RUnlock()", "db.cached == nil || db.backend == nil", "db.cached." + name + "("} {
++			profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, fragment)
++		}
++	}
+ 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
+ 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
+ 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))
+diff --git a/TreeDB/zipper/primary_directory.go b/TreeDB/zipper/primary_directory.go
+index 2884af825..cabc5a62e 100644
+--- a/TreeDB/zipper/primary_directory.go
++++ b/TreeDB/zipper/primary_directory.go
+@@ -424,10 +424,12 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges
+ 	if _, err = z.loadPrimaryOperand(base, nil, &metrics, scratch); err != nil {
+ 		return 0, nil, metrics, err
+ 	}
++	unchangedBase := true
+ 	// Large ordinary batches/ranges and keys exceeding directory capacity use
+ 	// the genuine materialized-base path. All consolidation and COW work remains
+ 	// in returned metrics and in the same allocator/retirement packet.
+ 	if len(ranges) > 0 || !primaryEntriesFitUnion(entries, ops) {
++		unchangedBase = false
+ 		var reclaimed []uint64
+ 		base, baseSeq, reclaimed, err = z.primaryMaterialize(base, baseSeq, entries, len(entries), cfg, &metrics, scratch)
+ 		if err != nil {
+@@ -581,6 +583,12 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges
+ 	}
+ 	metrics.ZipperApplyOps = len(ops) + len(ranges)
+ 	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, constructor)
++	if err == nil && unchangedBase && constructor != nil && cfg.unchangedPrimaryBase != nil {
++		*cfg.unchangedPrimaryBase = unchangedPrimaryBaseEvidence{
++			pager: z.pager, arena: z.primaryArena, input: rootID, output: root,
++			constructor: constructor,
++		}
++	}
+ 	return root, retired, metrics, err
+ }
+ func primaryEntriesFitKeys(ops []batch.Entry) bool { return primaryEntriesFitUnion(nil, ops) }
+diff --git a/TreeDB/zipper/read_only_prepare.go b/TreeDB/zipper/read_only_prepare.go
+index b598439ca..84f1b1d5a 100644
+--- a/TreeDB/zipper/read_only_prepare.go
++++ b/TreeDB/zipper/read_only_prepare.go
+@@ -96,6 +96,10 @@ type ApplyResult struct {
+ 	// that did not collect apply-fed reference evidence.
+ 	OldPointerRefsCollected bool
+ 
++	// unchangedPrimaryBase is apply-local evidence from the actual sealed
++	// constructor. It owns no edge and expires with that constructor.
++	unchangedPrimaryBase unchangedPrimaryBaseEvidence
++
+ 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
+ 	// true or opt-in parallel apply needs the M1 span plan for gating. It is
+ 	// planning metadata only; it owns no pager or leaf-log output.
+@@ -1117,11 +1121,17 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
+ 	if opts.ParallelApplyConcurrency == 1 {
+ 		applyCfg.maxParallelWorkers = 1
+ 	}
+-	var oldPointerRefs PointerRefCounts
+-	var oldEntriesRemoved uint64
++	// These operands have the same synchronous apply lifetime. Keep the
++	// producer receipt in the existing collection control, not a separate owner.
++	var collection struct {
++		pointers      PointerRefCounts
++		removed       uint64
++		unchangedBase unchangedPrimaryBaseEvidence
++	}
+ 	if opts.CollectOldPointerRefs {
+-		applyCfg.oldPointerRefs = &oldPointerRefs
+-		applyCfg.oldEntriesRemoved = &oldEntriesRemoved
++		applyCfg.oldPointerRefs = &collection.pointers
++		applyCfg.oldEntriesRemoved = &collection.removed
++		applyCfg.unchangedPrimaryBase = &collection.unchangedBase
+ 	}
+ 	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
+ 		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
+@@ -1137,9 +1147,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
+ 	result.PendingRetiredPages = retired
+ 	result.Metrics = metrics
+ 	if err == nil && opts.CollectOldPointerRefs {
+-		result.OldPointerRefs = oldPointerRefs
+-		result.OldEntriesRemoved = oldEntriesRemoved
++		result.OldPointerRefs = collection.pointers
++		result.OldEntriesRemoved = collection.removed
+ 		result.OldPointerRefsCollected = true
++		result.unchangedPrimaryBase = collection.unchangedBase
+ 	}
+ 	result.ReadOnlyPrepare = prepared
+ 	result.ReadOnlyPrepareNs = preparedNs
+diff --git a/TreeDB/zipper/zipper.go b/TreeDB/zipper/zipper.go
+index 5ac0b93e2..4fa7571ca 100644
+--- a/TreeDB/zipper/zipper.go
++++ b/TreeDB/zipper/zipper.go
+@@ -1859,12 +1859,13 @@ const (
+ )
+ 
+ type applyRunConfig struct {
+-	materializedBase   bool
+-	maxParallelWorkers int
+-	workerPool         *ApplyWorkerPool
+-	leafPagePersister  leafPagePersistSink
+-	oldPointerRefs     *PointerRefCounts
+-	oldEntriesRemoved  *uint64
++	materializedBase     bool
++	maxParallelWorkers   int
++	workerPool           *ApplyWorkerPool
++	leafPagePersister    leafPagePersistSink
++	oldPointerRefs       *PointerRefCounts
++	oldEntriesRemoved    *uint64
++	unchangedPrimaryBase *unchangedPrimaryBaseEvidence
+ }
+ 
+ // Apply applies the batch to the tree rooted at rootID.

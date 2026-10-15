@@ -1,0 +1,6 @@
+{
+  "Replace": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-final-main-20261015/TreeDB/db/vacuum_online.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/vacuum-original-structural-observation/vacuum_online.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111-final-main-20261015/TreeDB/db/durable_primary_rebuild_v5.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111-final-base-20261015/ci-read-custody-repair-20261015/vacuum-original-structural-observation/durable_primary_rebuild_v5.go"
+  }
+}

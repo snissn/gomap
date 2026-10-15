@@ -1,0 +1,35 @@
+{
+  "note": "Exact historical producer preview; compilation blocked on absent retained primitives. Not current implementation source.",
+  "files": [
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "sha256": "d9ac6d7823d89dabdd27a11647e0193c51bcfd08e3af39dbd83143b8aa1caee8",
+      "bytes": 17284
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_materialized_write_v6.go",
+      "sha256": "acda557f7f3fb42e216ebb286e6cfbe43e4ce8fba425dc4b88fd7f0a317d63f4",
+      "bytes": 7857
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_leaf_output_v6.go",
+      "sha256": "7e677cb6909827966f4d2fbfd8dc5558e360a2f9b4cd338bbeced6096f65559c",
+      "bytes": 1157
+    },
+    {
+      "path": "TreeDB/zipper/materialized_input_work_v6.go",
+      "sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+      "bytes": 11925
+    },
+    {
+      "path": "TreeDB/zipper/materialized_write_work.go",
+      "sha256": "e7cce55781d8d690c7d759a9cf25eb0a7e6bacf5137e9ad96e4073bbd457398f",
+      "bytes": 24409
+    },
+    {
+      "path": "TreeDB/zipper/native_materialized_delta_v6.go",
+      "sha256": "fdd60d430c4d765bb512d4b714b70a4f5ccc19a769e56e427f6a1c79743f08c2",
+      "bytes": 2695
+    }
+  ]
+}

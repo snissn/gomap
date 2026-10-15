@@ -1,0 +1,54 @@
+ M TreeDB/cmd/treemap/vlog_audit_test.go
+ M TreeDB/db/api.go
+ M TreeDB/db/batch.go
+ M TreeDB/db/command_wal_publish.go
+ M TreeDB/db/db.go
+ M TreeDB/db/durable_root_runtime.go
+ M TreeDB/db/index_gen.go
+ M TreeDB/db/native_generation_failure_predicates_test.go
+ M TreeDB/db/native_mvcc_snapshot_close_v6.go
+ M TreeDB/db/pools.go
+ M TreeDB/db/prepared_root_publication_profile.go
+ M TreeDB/db/root_publication_activation.go
+ M TreeDB/db/root_publication_build_group.go
+ M TreeDB/db/snapshot_manager_cleanup_test.go
+ M TreeDB/db/stable_pager_owned_operations.go
+ M TreeDB/db/stable_resource.go
+ M TreeDB/db/stable_resource_test.go
+ M TreeDB/db/vacuum_original_completion_test.go
+ M TreeDB/db/vlog_gc_incremental.go
+ M TreeDB/internal/primaryarena/read_root_v6.go
+ M TreeDB/internal/rootpublication/admission.go
+ M TreeDB/internal/rootpublication/coordinator.go
+ M TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go
+ M TreeDB/internal/rootpublication/durable_root_transaction.go
+ M TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go
+ M TreeDB/internal/rootpublication/primary_bank_metadata_v5.go
+ M TreeDB/internal/rootpublication/primary_terminal_completion_v6.go
+ M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+ M TreeDB/internal/rootpublication/resource_set.go
+ M TreeDB/internal/rootpublication/resource_token.go
+ M TreeDB/internal/valuelog/manager.go
+ M TreeDB/internal/valuelog/native_mvcc_file_close.go
+ M TreeDB/internal/valuelog/native_mvcc_file_close_test.go
+ M TreeDB/internal/valuelog/original_cleanup.go
+ M TreeDB/internal/valuelog/reader_mmap.go
+ M TreeDB/pager/pager.go
+ M TreeDB/zipper/primary_directory.go
+ M TreeDB/zipper/read_only_prepare.go
+ M TreeDB/zipper/zipper.go
+?? TreeDB/db/one_shot_custody_test.go
+?? TreeDB/db/primary_dependency_projection_test.go
+?? TreeDB/db/publication_absent_closure_test.go
+?? TreeDB/internal/rootpublication/admission_terminal_join_v6_test.go
+?? TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go
+?? TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go
+?? TreeDB/internal/rootpublication/native_primary_finish_work_v6.go
+?? TreeDB/internal/rootpublication/native_publication_v6.go
+?? TreeDB/internal/rootpublication/native_publication_v6_test.go
+?? TreeDB/internal/rootpublication/primary_bank_metadata_compact_v5_test.go
+?? TreeDB/internal/rootpublication/resource_absent_closure_test.go
+?? TreeDB/internal/valuelog/publication_set_test.go
+?? TreeDB/internal/valuelog/remap_original_custody_test.go
+?? TreeDB/zipper/primary_base_evidence.go
+?? TreeDB/zipper/primary_base_evidence_test.go

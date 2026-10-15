@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/internal/primaryarena",
+    "-run",
+    "^(TestPrimary|TestNativeMVCC)",
+    "-count=1",
+    "-timeout=40s"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOPROXY": "off"
+  },
+  "exit": 0,
+  "seconds": 2.419896364212036
+}

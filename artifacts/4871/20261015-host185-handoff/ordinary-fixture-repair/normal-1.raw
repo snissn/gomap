@@ -1,0 +1,17 @@
+--- FAIL: TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication (0.31s)
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).prepareRootPublicationVisibleInstallV1: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).retainOriginalCleanupError: published DBState escapes to a call without an analyzed body
+    vacuum_collection_publication_guard_test.go:116: published DBState mutated in github.com/snissn/gomap/TreeDB/db.(*DB).closeAfterHooks: published DBState escapes to a call without an analyzed body
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.349s
+FAIL

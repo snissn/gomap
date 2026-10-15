@@ -1,0 +1,10 @@
+[
+  "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+  "test",
+  "-p=1",
+  "./TreeDB",
+  "-run",
+  "^(TestCompactStorageFullPacksLeafGenerationDebtOffline|TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters|TestValueLogRewriteOffline_LoadsPersistedFormatConfig)$",
+  "-count=1",
+  "-timeout=90s"
+]

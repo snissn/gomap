@@ -1,0 +1,260 @@
+[
+  {
+    "path": "TreeDB/cmd/treemap/vlog_audit_test.go",
+    "sha256": "7a6705b74f7c0a947e161413973aae8cee3df9cc86fc3a07cf2b8c6586f6cae7",
+    "bytes": 16739,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/api.go",
+    "sha256": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e",
+    "bytes": 57170,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/batch.go",
+    "sha256": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "bytes": 34967,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/db.go",
+    "sha256": "8deb531d17d3f0546a9a40f608643b7e6323d9ac7e66bcac5108f05d1a5eac56",
+    "bytes": 211434,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/durable_root_runtime.go",
+    "sha256": "eb708af7ae7c01c8eb94f489c9c131c8dadb9006beee9fc7127b555091c08c26",
+    "bytes": 136175,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/index_gen.go",
+    "sha256": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03",
+    "bytes": 11023,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/native_generation_failure_predicates_test.go",
+    "sha256": "ae9be63b9719ca5fac210b7c78459a6886008290b03bac225aeb1ceb0dce15d2",
+    "bytes": 2785,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "sha256": "3d4de86fde886f9122d1dc1353fb67bddf58680d1b26136e2cafdbb6e2f58640",
+    "bytes": 7215,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/one_shot_custody_test.go",
+    "sha256": "9b56d9fac3d54d536e9cab759f52627b49ef0ed78c4fe71b3b4b191621761c1d",
+    "bytes": 3537,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/db/pools.go",
+    "sha256": "b187c1083cbf794a286f0bfd02082f3a320f0b16d561c828645c2a0b4a41fa0c",
+    "bytes": 8184,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/prepared_root_publication_profile.go",
+    "sha256": "ff6886e8592834cca1fd803d8ca766111885c990f9e9c43db64631f38c0dd3ad",
+    "bytes": 6349,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/primary_dependency_projection_test.go",
+    "sha256": "0c9c67bafc2c8b07b2c961565c280e925f0dde8d0f96475f13b150060b10feb0",
+    "bytes": 4980,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/db/publication_absent_closure_test.go",
+    "sha256": "800c33b632d7558ca63f8ea97b92c243e47820732681dd38e8b18d6c714b035a",
+    "bytes": 1427,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/db/root_publication_activation.go",
+    "sha256": "d4cd8fc0cbd6553b8ebfcefafe2cbd30eebec1fe50cf62bd9a9977a49cb7a068",
+    "bytes": 78661,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/root_publication_build_group.go",
+    "sha256": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f",
+    "bytes": 21132,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/snapshot_manager_cleanup_test.go",
+    "sha256": "828434f38e71751ebb2de844a097a5a2f97fe6defe60da7c46be36fe41cb4557",
+    "bytes": 7248,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/stable_pager_owned_operations.go",
+    "sha256": "8e7ef4509c85d4334fd99fa9cd85a68f158b3d7372e5e9f7ac7c14aeb579b266",
+    "bytes": 7114,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/stable_resource.go",
+    "sha256": "08dbc2fc598a294ca5f7e9217a5cf53eb0ae661898e8937ccc9edcbb542bc51b",
+    "bytes": 35999,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/stable_resource_test.go",
+    "sha256": "4680163d431a88bd7950d1da0f5af492ceb0a2064780af3c71565c01257c9904",
+    "bytes": 13252,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/vacuum_original_completion_test.go",
+    "sha256": "5202f85eee540a33a1bafb41260ca0367b74dbba509092f1ad661652488c0580",
+    "bytes": 28250,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/db/vlog_gc_incremental.go",
+    "sha256": "370ab557eb503a82952c98145d015639e4e50290bba3e6dd9ce9efb6b1df26bb",
+    "bytes": 34648,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/admission_terminal_join_v6_test.go",
+    "sha256": "82ec62200b99b7178e45b385cb51fa7beef5a7e802bcf654d68a8e83d93cc05e",
+    "bytes": 4254,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/coordinator.go",
+    "sha256": "3b415763b02c4e2b9a6f19b5fff4ed8e23849e50a08af3554c37bbefa2bc120d",
+    "bytes": 47614,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go",
+    "sha256": "23ffbe171dbb35515c13a38c2e18be828cc65d4b7ecc22d70dd2b0c32eaac4f8",
+    "bytes": 9903,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_bank_metadata_compact_v5_test.go",
+    "sha256": "56a3b56b6107d432e9c073b60c591bbd98b6149d0db6b93842ae4b432d512613",
+    "bytes": 3152,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "sha256": "bffe5e9c18ff2bd0eafc82da653fe98472ea3c48a59c913f0dc055851369b7e7",
+    "bytes": 7471,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "sha256": "1a696f69bf53cbd1727233c57e8e3c6ba10084a9a66ffca4b93437b0d7681c77",
+    "bytes": 3629,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_absent_closure_test.go",
+    "sha256": "1bc570d6ef54901a37732aec0628c6c7a715fce18deea0657060a0fc28a835a2",
+    "bytes": 1447,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_set.go",
+    "sha256": "4c72669c5f99d2cb4cfefb57b962d20e36ce946429ae030834595f91e7f5a38f",
+    "bytes": 178870,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/rootpublication/resource_token.go",
+    "sha256": "16659b905320bbd784fc60037298fda7fd233ade6b573707f5d31adfcb8d188b",
+    "bytes": 100938,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/manager.go",
+    "sha256": "bf16356324aef7f9f978b2f581ed49d0ec7e253767e9973a961f7d7152655710",
+    "bytes": 104302,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/native_mvcc_file_close.go",
+    "sha256": "7b34b45a54ca498417098924bfc84ae7e82974d8c4f9a670b5a5d818573bfecc",
+    "bytes": 8137,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "sha256": "b2e0f1c96d3f639e1fa2be49aac0b798d16a0d66edffcea5d3d2377c0e6c743b",
+    "bytes": 3539,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/original_cleanup.go",
+    "sha256": "de4b42562db296a197277447d48ee19f74704ce1c21b8e99ede09f3033a47622",
+    "bytes": 7162,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/publication_set_test.go",
+    "sha256": "d724618f99e94eb223c8c32db810bf11b4c184b3079656785e1c53d8e75be599",
+    "bytes": 1504,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/internal/valuelog/reader_mmap.go",
+    "sha256": "0cf4e4fd67d745acd7fe097a0260ed506ad25cc288ee011d299b47201ab4df1d",
+    "bytes": 41701,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/internal/valuelog/remap_original_custody_test.go",
+    "sha256": "c36b96504d9870ba3b64f99e3fbbd2dd0e2644fbc6e1cc647f2b2ab05bd0b58b",
+    "bytes": 4321,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/pager/pager.go",
+    "sha256": "608b5dc1ec11a72e7f7dc66031c720765d327c15a7f245f289453aadbf483bc9",
+    "bytes": 46128,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/zipper/primary_base_evidence.go",
+    "sha256": "8c1b836f44219b5669cc6087d62826daf06d1b994c38dc9d11698df09aacc528",
+    "bytes": 1395,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/zipper/primary_base_evidence_test.go",
+    "sha256": "b2980fb3518853b87a4160dc9c8326795287fa08113c1633bd17db9c1cccc45c",
+    "bytes": 3305,
+    "tracked": false
+  },
+  {
+    "path": "TreeDB/zipper/primary_directory.go",
+    "sha256": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b",
+    "bytes": 26581,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/zipper/read_only_prepare.go",
+    "sha256": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881",
+    "bytes": 57129,
+    "tracked": true
+  },
+  {
+    "path": "TreeDB/zipper/zipper.go",
+    "sha256": "03c0dacef19c72e4695f148d31e684d5fb331754f56130ebf752aaea26b70269",
+    "bytes": 136426,
+    "tracked": true
+  }
+]

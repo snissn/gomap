@@ -1,0 +1,12 @@
+{
+  "head": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-actual-split-20261015",
+  "branch": "codex/4878-actual-split-20261015",
+  "mode": "git",
+  "overlay_paths": 43,
+  "overlay_manifest_sha256": "6cbc2613c25ef5b5bb8703a23ef7d3f4b9fe345fa7ec3e23c2ca9621259d9f92",
+  "artifact": "a5406f13dd05fb305c5a83d88d54686ab2cd461b",
+  "index_sha256": "cf92fda8e58382b9d2dce11f5febfb83740f01773722d07c69ff905851ff0203",
+  "runtime": "not run",
+  "old_native": "protected; no writes"
+}

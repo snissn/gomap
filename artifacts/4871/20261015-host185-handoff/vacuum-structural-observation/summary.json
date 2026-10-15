@@ -1,0 +1,118 @@
+{
+  "records": [
+    {
+      "sequence": 6,
+      "label": "retained-root-build",
+      "index_generation": 1,
+      "index_object": "0x398f309fb860",
+      "base_ref": {
+        "Kind": 0,
+        "Page": 1049,
+        "Log": {
+          "FileID": 0,
+          "Offset": 0,
+          "RecordLengthHint": 0,
+          "SubIndex": 0
+        }
+      },
+      "base_digest": "2cfec5c5530f6078e66802c0c4628e8e32adad40e8c67102f03e3c999942e8e2",
+      "base_sequence": 5,
+      "component_count": 1,
+      "components": [
+        {
+          "class": 0,
+          "digest": "c0e1c9bd3792f119707cc6550c2c97fbc82df82d9ca8a27b14affc52ed901321",
+          "key": "public-vacuum/0000",
+          "kind": 1,
+          "ref": {
+            "Kind": 0,
+            "Page": 4611686018427387915,
+            "Log": {
+              "FileID": 0,
+              "Offset": 0,
+              "RecordLengthHint": 0,
+              "SubIndex": 0
+            }
+          },
+          "revision": 4
+        }
+      ],
+      "source_data_pages": 297,
+      "output_user_pages": 297,
+      "output_system_pages": 1
+    },
+    {
+      "sequence": 7,
+      "label": "visible-user-build",
+      "index_generation": 1,
+      "index_object": "0x398f309fb860",
+      "base_ref": {
+        "Kind": 0,
+        "Page": 1049,
+        "Log": {
+          "FileID": 0,
+          "Offset": 0,
+          "RecordLengthHint": 0,
+          "SubIndex": 0
+        }
+      },
+      "base_digest": "2cfec5c5530f6078e66802c0c4628e8e32adad40e8c67102f03e3c999942e8e2",
+      "base_sequence": 5,
+      "component_count": 1,
+      "components": [
+        {
+          "class": 0,
+          "digest": "e8b4b8e7987f3e0af11966a9fe52fbb411d5591841d3bcc0e2d7abc0bfff28c6",
+          "key": "public-vacuum/0000",
+          "kind": 1,
+          "ref": {
+            "Kind": 0,
+            "Page": 4611686018427387912,
+            "Log": {
+              "FileID": 0,
+              "Offset": 0,
+              "RecordLengthHint": 0,
+              "SubIndex": 0
+            }
+          },
+          "revision": 5
+        }
+      ],
+      "source_data_pages": 297,
+      "output_user_pages": 297,
+      "output_system_pages": 0
+    },
+    {
+      "sequence": 5,
+      "label": "retained-root-build",
+      "index_generation": 1,
+      "index_object": "0x398f309fb860",
+      "base_ref": {
+        "Kind": 0,
+        "Page": 1049,
+        "Log": {
+          "FileID": 0,
+          "Offset": 0,
+          "RecordLengthHint": 0,
+          "SubIndex": 0
+        }
+      },
+      "base_digest": "2cfec5c5530f6078e66802c0c4628e8e32adad40e8c67102f03e3c999942e8e2",
+      "base_sequence": 5,
+      "component_count": 0,
+      "components": null,
+      "source_data_pages": 297,
+      "output_user_pages": 297,
+      "output_system_pages": 1
+    }
+  ],
+  "source_data_sum": 891,
+  "source_data_union": 297,
+  "output_user_sum": 891,
+  "output_user_union": 891,
+  "fixture_mutated": false,
+  "product_mutated": false,
+  "before_bytes": 4980736,
+  "after_bytes": 3702784,
+  "shrink_percent": 25.657894736842103
+}

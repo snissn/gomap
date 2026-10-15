@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/internal/rootpublication",
+    "-run",
+    "^TestNativeBuilderHandoffPreservesOriginalOnRefusalV6$",
+    "-count=1",
+    "-timeout=30s",
+    "-v"
+  ],
+  "exit": 1,
+  "seconds": 1.8661575317382812
+}

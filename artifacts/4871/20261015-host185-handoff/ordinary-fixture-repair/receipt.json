@@ -1,0 +1,43 @@
+{
+  "head": "b3c7ff702538e552e685ded554a79eb256a3380c",
+  "index": "6c107c7b18c0fec50145fff023772d63243cda2d7dd078a1f78c1ae5cd664539",
+  "rows": 3763,
+  "source_unchanged": true,
+  "head_unchanged": true,
+  "index_unchanged": true,
+  "results": [
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/internal/primaryarena",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/pager",
+        "-run",
+        "^(TestNamespaceContainingRefundAfterOriginalCallUnlock|TestNamespaceOrdinaryContainingReleaseDoesNotAllocateReceipt|TestOpenOwnedFileUsesTransferredHandle|TestOpenOwnedFileFailureTransfersCleanup|TestOwnedFileMappingFailureClosesExactHandle|TestReadOnlyOwnedMetadataAdmissionAndLifetime|TestReadOnlyOriginalPathRetainsPartialCleanupInError|TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability|TestOpenCapsuleOwnedFileFailedFormatClosesHandle|TestNativeMVCCOriginalFilePhysicalClose|TestNativeMVCCOriginalSetPhysicalClose)$",
+        "-count=1",
+        "-timeout=90s"
+      ],
+      "exit": 0,
+      "timeout": false,
+      "seconds": 4.670938218012452
+    },
+    {
+      "argv": [
+        "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "^(TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge|TestLeafManifestRevisionGCHeldAndRecovery5066|TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication|TestPublicationSourceGuardRejectsPublishedStateMutationFixtures)$",
+        "-count=1",
+        "-timeout=90s"
+      ],
+      "exit": 1,
+      "timeout": false,
+      "seconds": 18.9929130920209
+    }
+  ]
+}

@@ -1,0 +1,1121 @@
+package db
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
+)
+
+const (
+	valueLogRefCountsFileName = "vlog_ref_counts.meta"
+	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
+	//
+	// Version 6 binds counts to the exact captured DATA/PRIMARY incarnation.
+	// Version 5 tracks value_vlog references reachable from the user tree,
+	// system tree, and collection root trees. leaf_vlog reachability is owned by
+	// leaf-generation GC and intentionally excluded here. Older metadata is
+	// intentionally treated as stale/corrupt and rebuilt from a full scan.
+	// TreeDB is still pre-alpha, so we do not preserve old
+	// vlog_ref_counts.meta encodings yet.
+	valueLogRefCountsVersion = uint32(6)
+)
+
+var (
+	valueLogRefCountsMagic = [8]byte{'T', 'V', 'R', 'E', 'F', 'C', 'N', 'T'}
+	errValueLogRefCorrupt  = errors.New("treedb: corrupt value-log ref counters metadata")
+)
+
+type valueLogRefResolutionSource string
+
+const (
+	valueLogRefResolutionSourceTracker        valueLogRefResolutionSource = "tracker"
+	valueLogRefResolutionSourceFallbackScan   valueLogRefResolutionSource = "fallback_scan"
+	valueLogRefResolutionSourceValidationScan valueLogRefResolutionSource = "validation_scan"
+)
+
+var scanValueLogRefCountsHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+var lookupValueLogRefAtKeyHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerScanValueLogRefCountsHook(hook func()) func() {
+	scanValueLogRefCountsHook.mu.Lock()
+	prev := scanValueLogRefCountsHook.fn
+	scanValueLogRefCountsHook.fn = hook
+	scanValueLogRefCountsHook.mu.Unlock()
+	return func() {
+		scanValueLogRefCountsHook.mu.Lock()
+		scanValueLogRefCountsHook.fn = prev
+		scanValueLogRefCountsHook.mu.Unlock()
+	}
+}
+
+func runScanValueLogRefCountsHook() {
+	scanValueLogRefCountsHook.mu.Lock()
+	hook := scanValueLogRefCountsHook.fn
+	scanValueLogRefCountsHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func registerLookupValueLogRefAtKeyHook(hook func()) func() {
+	lookupValueLogRefAtKeyHook.mu.Lock()
+	prev := lookupValueLogRefAtKeyHook.fn
+	lookupValueLogRefAtKeyHook.fn = hook
+	lookupValueLogRefAtKeyHook.mu.Unlock()
+	return func() {
+		lookupValueLogRefAtKeyHook.mu.Lock()
+		lookupValueLogRefAtKeyHook.fn = prev
+		lookupValueLogRefAtKeyHook.mu.Unlock()
+	}
+}
+
+func runLookupValueLogRefAtKeyHook() {
+	lookupValueLogRefAtKeyHook.mu.Lock()
+	hook := lookupValueLogRefAtKeyHook.fn
+	lookupValueLogRefAtKeyHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+type valueLogRefDelta struct {
+	inline                      [16]valueLogRefDeltaEntry
+	inlineN                     int
+	changes                     map[uint32]int64
+	positives                   map[uint32]int64
+	requiresCandidateProjection bool
+	allowEmptyDependencyReuse   bool
+	outerLeafDependencyReuse    bool
+}
+
+const valueLogRefDeltaPromotedMapInitCap = 128
+const valueLogRefDeltaPoolMaxRetainedEntries = 512
+
+var valueLogRefDeltaPool = sync.Pool{
+	New: func() any {
+		return &valueLogRefDelta{}
+	},
+}
+
+type valueLogRefDeltaEntry struct {
+	fileID uint32
+	delta  int64
+}
+
+func newValueLogRefDelta() *valueLogRefDelta {
+	d, _ := valueLogRefDeltaPool.Get().(*valueLogRefDelta)
+	if d == nil {
+		return &valueLogRefDelta{}
+	}
+	return d
+}
+
+func releaseValueLogRefDelta(d *valueLogRefDelta) {
+	if d == nil {
+		return
+	}
+	d.resetForReuse()
+	valueLogRefDeltaPool.Put(d)
+}
+
+func (d *valueLogRefDelta) resetForReuse() {
+	if d == nil {
+		return
+	}
+	if d.inlineN > 0 {
+		clear(d.inline[:d.inlineN])
+		d.inlineN = 0
+	}
+	d.requiresCandidateProjection = false
+	d.allowEmptyDependencyReuse = false
+	d.outerLeafDependencyReuse = false
+	if d.changes != nil {
+		// Keep small/typical maps warm for reuse; drop unusually large maps.
+		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
+			d.changes = nil
+		} else {
+			clear(d.changes)
+		}
+	}
+	if d.positives != nil {
+		if len(d.positives) > valueLogRefDeltaPoolMaxRetainedEntries {
+			d.positives = nil
+		} else {
+			clear(d.positives)
+		}
+	}
+}
+
+func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
+	if d == nil || delta == 0 {
+		return
+	}
+	if delta > 0 {
+		d.addPositive(fileID, delta)
+	}
+	d.addChange(fileID, delta)
+}
+
+// addChange merges only the net reference-count change. Callers that combine
+// already-accounted deltas use it together with addPositive so transient
+// positive references retain their exact pending-append release accounting.
+func (d *valueLogRefDelta) addChange(fileID uint32, delta int64) {
+	if d == nil || delta == 0 {
+		return
+	}
+	if d.changes == nil {
+		for i := 0; i < d.inlineN; i++ {
+			if d.inline[i].fileID != fileID {
+				continue
+			}
+			next := d.inline[i].delta + delta
+			if next == 0 {
+				last := d.inlineN - 1
+				d.inline[i] = d.inline[last]
+				d.inline[last] = valueLogRefDeltaEntry{}
+				d.inlineN = last
+				return
+			}
+			d.inline[i].delta = next
+			return
+		}
+		if d.inlineN < len(d.inline) {
+			d.inline[d.inlineN] = valueLogRefDeltaEntry{fileID: fileID, delta: delta}
+			d.inlineN++
+			return
+		}
+		capHint := d.inlineN + 1
+		if capHint < valueLogRefDeltaPromotedMapInitCap {
+			capHint = valueLogRefDeltaPromotedMapInitCap
+		}
+		d.changes = make(map[uint32]int64, capHint)
+		for i := 0; i < d.inlineN; i++ {
+			entry := d.inline[i]
+			if entry.delta == 0 {
+				continue
+			}
+			d.changes[entry.fileID] = entry.delta
+			d.inline[i] = valueLogRefDeltaEntry{}
+		}
+		d.inlineN = 0
+	}
+	next := d.changes[fileID] + delta
+	if next == 0 {
+		delete(d.changes, fileID)
+		return
+	}
+	d.changes[fileID] = next
+}
+
+func (d *valueLogRefDelta) addPositive(fileID uint32, delta int64) {
+	if d == nil || fileID == 0 || delta <= 0 {
+		return
+	}
+	if d.positives == nil {
+		d.positives = make(map[uint32]int64, valueLogRefDeltaPromotedMapInitCap)
+	}
+	d.positives[fileID] += delta
+}
+
+func (d *valueLogRefDelta) forEachPositive(fn func(fileID uint32, count int64) error) error {
+	if d == nil || len(d.positives) == 0 {
+		return nil
+	}
+	for fileID, count := range d.positives {
+		if count <= 0 {
+			continue
+		}
+		if err := fn(fileID, count); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *valueLogRefDelta) forEachChange(fn func(fileID uint32, change int64) error) error {
+	if d == nil {
+		return nil
+	}
+	if d.changes != nil {
+		for fileID, change := range d.changes {
+			if err := fn(fileID, change); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := 0; i < d.inlineN; i++ {
+		entry := d.inline[i]
+		if entry.delta == 0 {
+			continue
+		}
+		if err := fn(entry.fileID, entry.delta); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type valueLogRefTracker struct {
+	cacheReadFile                            *os.File
+	cacheReadData                            []byte
+	cacheReadFileCharge, cacheReadDataCharge uint64
+	cacheReadAttempted                       bool
+	cacheReadErr                             error
+	cacheReadFailure                         rootpublication.OriginalReleaseFailure
+	incarnation                              valueLogRefIncarnation
+	metadata                                 *retainedalloc.Owner
+	metadataCharge                           uint64
+	mu                                       sync.RWMutex
+	revision                                 uint64
+	commitSeq                                uint64
+	counts                                   valueLogRefCounts
+	valid                                    bool
+	dirty                                    bool
+}
+
+func newValueLogRefTracker() *valueLogRefTracker {
+	return &valueLogRefTracker{}
+}
+
+func (t *valueLogRefTracker) canTrack(baseSeq uint64) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.valid && t.commitSeq == baseSeq
+}
+
+// Map input is a diagnostic compatibility seam. Production consumers transfer
+// the original admitted collector directly through replaceOwned.
+func (t *valueLogRefTracker) replace(counts map[uint32]uint64, seq uint64, incarnation valueLogRefIncarnation, dirty bool) error {
+	if t == nil {
+		return nil
+	}
+	next, err := valueLogRefCountsFromMap(t.metadata, counts)
+	if err != nil {
+		return err
+	}
+	t.replaceOwned(&next, seq, incarnation, dirty)
+	return nil
+}
+func (t *valueLogRefTracker) replaceOwned(counts *valueLogRefCounts, seq uint64, incarnation valueLogRefIncarnation, dirty bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	old := t.counts.take()
+	t.counts = counts.take()
+	t.commitSeq, t.incarnation, t.valid, t.dirty = seq, incarnation, true, dirty
+	t.revision++
+	old.close()
+	t.mu.Unlock()
+}
+
+func (t *valueLogRefTracker) revisionSnapshot() uint64 {
+	if t == nil {
+		return 0
+	}
+	t.mu.RLock()
+	revision := t.revision
+	t.mu.RUnlock()
+	return revision
+}
+
+func (t *valueLogRefTracker) replaceUnlessAdvanced(counts map[uint32]uint64, seq uint64, incarnation valueLogRefIncarnation, dirty bool, revision uint64) bool {
+	if t == nil {
+		return false
+	}
+	next, err := valueLogRefCountsFromMap(t.metadata, counts)
+	if err != nil {
+		return false
+	}
+	defer next.close()
+	return t.replaceUnlessAdvancedOwned(&next, seq, incarnation, dirty, revision)
+}
+func (t *valueLogRefTracker) replaceUnlessAdvancedOwned(counts *valueLogRefCounts, seq uint64, incarnation valueLogRefIncarnation, dirty bool, revision uint64) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Same-sequence physical replacement is advancement too.
+	if t.revision != revision && (t.commitSeq > seq || (t.commitSeq == seq && t.incarnation != incarnation)) {
+		return false
+	}
+	old := t.counts.take()
+	t.counts = counts.take()
+	t.commitSeq, t.incarnation, t.valid, t.dirty = seq, incarnation, true, dirty
+	t.revision++
+	old.close()
+	return true
+}
+
+func (t *valueLogRefTracker) invalidate() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.valid = false
+	t.revision++
+	t.mu.Unlock()
+}
+
+func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, generation uint64, delta *valueLogRefDelta) error {
+	if t == nil {
+		return nil
+	}
+	if delta == nil {
+		return errors.New("treedb: missing value-log ref delta")
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !t.valid {
+		// Invalidation is the conservative fallback for commits without an exact
+		// delta. Later deltas cannot repair missing history, so leave the optional
+		// tracker invalid until a full rebuild instead of poisoning the DB.
+		return nil
+	}
+	if generation != t.incarnation.indexID {
+		return fmt.Errorf("treedb: value-log ref tracker physical generation mismatch: have=%d next=%d", t.incarnation.indexID, generation)
+	}
+	if nextCommitSeq != t.commitSeq+1 {
+		return fmt.Errorf("treedb: value-log ref tracker sequence mismatch: have=%d next=%d", t.commitSeq, nextCommitSeq)
+	}
+
+	if err := delta.forEachChange(func(fileID uint32, change int64) error {
+		switch {
+		case change > 0:
+			cur := t.counts.get(fileID)
+			if uint64(change) > ^uint64(0)-cur {
+				return fmt.Errorf("treedb: value-log ref tracker overflow: file=%d", fileID)
+			}
+			if err := t.counts.set(fileID, cur+uint64(change)); err != nil {
+				return err
+			}
+		case change < 0:
+			cur := t.counts.get(fileID)
+			dec := uint64(-change)
+			if dec > cur {
+				return fmt.Errorf("treedb: value-log ref tracker underflow: file=%d have=%d dec=%d", fileID, cur, dec)
+			}
+			cur -= dec
+			if err := t.counts.set(fileID, cur); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, retainedalloc.ErrCapacity) {
+			// The write is already accepted. This optional derived cache cannot
+			// turn an admission refusal into rejection/reapplication of it.
+			t.valid = false
+			t.revision++
+			t.counts.close()
+			return nil
+		}
+		return err
+	}
+
+	t.commitSeq = nextCommitSeq
+	t.dirty = true
+	t.revision++
+	return nil
+}
+
+func (t *valueLogRefTracker) referencedSet(commitSeq uint64) (map[uint32]struct{}, bool) {
+	if t == nil {
+		return nil, false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.valid || t.commitSeq != commitSeq {
+		return nil, false
+	}
+	out := t.counts.referencedSet()
+	return out, true
+}
+
+func (t *valueLogRefTracker) dirtySnapshot() (uint64, valueLogRefIncarnation, uint64, map[uint32]uint64, bool) {
+	seq, inc, revision, counts, ok, err := t.dirtySnapshotOwned()
+	if err != nil || !ok {
+		return 0, valueLogRefIncarnation{}, 0, nil, false
+	}
+	defer counts.close()
+	return seq, inc, revision, counts.toMap(), true
+}
+func (t *valueLogRefTracker) dirtySnapshotOwned() (uint64, valueLogRefIncarnation, uint64, valueLogRefCounts, bool, error) {
+	if t == nil {
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, nil
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.valid || !t.dirty {
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, nil
+	}
+	counts, err := t.counts.clone()
+	if err != nil {
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, err
+	}
+	return t.commitSeq, t.incarnation, t.revision, counts, true, nil
+}
+
+func (t *valueLogRefTracker) markClean(commitSeq uint64, incarnation valueLogRefIncarnation, revision uint64) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.valid && t.commitSeq == commitSeq && t.incarnation == incarnation && t.revision == revision {
+		if t.dirty {
+			t.dirty = false
+			t.revision++
+		}
+	}
+	t.mu.Unlock()
+}
+
+func (db *DB) valueLogRefCountsPath() string {
+	if db == nil || db.dir == "" {
+		return ""
+	}
+	return filepath.Join(db.dir, valueLogRefCountsFileName)
+}
+
+func (db *DB) currentCommitSeq() uint64 {
+	if db == nil {
+		return 0
+	}
+	if state := db.state.Load(); state != nil {
+		return state.CommitSeq
+	}
+	db.mu.RLock()
+	seq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	return seq
+}
+
+func (db *DB) initValueLogRefTracker() error {
+	if db == nil {
+		return nil
+	}
+	if err := db.allocateValueLogRefTracker(); err != nil {
+		return err
+	}
+	loaded, err := db.loadValueLogRefTracker()
+	if err != nil {
+		return err
+	}
+	if loaded {
+		return nil
+	}
+	counts, commitSeq, incarnation, err := db.scanValueLogRefCountsOwned(context.Background())
+	if err != nil {
+		return err
+	}
+	db.valueLogRefTracker.replaceOwned(&counts, commitSeq, incarnation, true)
+	return db.persistValueLogRefTracker()
+}
+
+func (db *DB) loadValueLogRefTracker() (_ bool, retErr error) {
+	path := db.valueLogRefCountsPath()
+	if path == "" {
+		return false, nil
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		err := errors.New("capture ref cache load basis")
+		if snap != nil {
+			err = errors.Join(err, snap.Close())
+		}
+		return false, err
+	}
+	commitSeq := snap.state.CommitSeq
+	incarnation, captureErr := captureValueLogRefIncarnation(snap.idx)
+	if err := errors.Join(captureErr, snap.Close()); err != nil {
+		return false, err
+	}
+	defer func() {
+		cleanup := db.valueLogRefTracker.finishCacheRead()
+		if cleanup != nil {
+			db.retainOriginalCleanupError(cleanup)
+		}
+		retErr = errors.Join(retErr, cleanup)
+	}()
+	data, err := db.valueLogRefTracker.readCache(path)
+	if err != nil {
+		if os.IsNotExist(err) || errors.Is(err, errValueLogRefCorrupt) {
+			return false, nil
+		}
+		return false, err
+	}
+	disk, err := decodeValueLogRefCountsOwned(data, db.valueLogRefTracker.metadata)
+	if err != nil {
+		// Corrupt metadata is non-fatal: rebuild from full scan.
+		if errors.Is(err, errValueLogRefCorrupt) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer disk.records.close()
+	if disk.commitSeq != commitSeq || !disk.incarnation.samePhysical(incarnation) {
+		return false, nil
+	}
+	db.valueLogRefTracker.replaceOwned(&disk.records, disk.commitSeq, incarnation, false)
+	return true, nil
+}
+
+func (db *DB) persistValueLogRefTracker() error {
+	if db == nil || db.valueLogRefTracker == nil {
+		return nil
+	}
+	path := db.valueLogRefCountsPath()
+	if path == "" {
+		return nil
+	}
+	commitSeq, incarnation, revision, counts, ok, err := db.valueLogRefTracker.dirtySnapshotOwned()
+	if err != nil {
+		return err
+	}
+	defer counts.close()
+	if !ok {
+		return nil
+	}
+	blob, charge, err := encodeValueLogRefCountsOwned(commitSeq, incarnation, &counts)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		clear(blob)
+		blob = nil
+		if counts.metadata != nil {
+			counts.metadata.RemovePending(charge)
+		}
+	}()
+	if err := writeFileAtomic(path, blob, 0o644); err != nil {
+		return err
+	}
+	db.valueLogRefTracker.markClean(commitSeq, incarnation, revision)
+	return nil
+}
+
+func (db *DB) persistValueLogRefTrackerBestEffort() {
+	if err := db.persistValueLogRefTracker(); err != nil {
+		db.reportError(err)
+	}
+}
+
+func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error) {
+	refs, _, err := db.referencedValueLogSegmentsWithSource(ctx)
+	return refs, err
+}
+
+func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, error) {
+	refs, source, _, err := db.referencedValueLogSegmentsWithSourceAtSeq(ctx)
+	return refs, source, err
+}
+
+func (db *DB) referencedValueLogSegmentsWithSourceAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
+	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, false)
+}
+
+func (db *DB) referencedValueLogSegmentsForGCAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
+	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, true)
+}
+
+func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Context, guardConcurrentAdvance bool) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	seq, generation := db.currentValueLogRefView()
+	var trackerRevisionBeforeScan uint64
+	// Outer-leaf maintenance needs both logical ValuePtrs and raw leaf-log
+	// segments. Publication only applies logical deltas, so GC/rewrite cannot
+	// serve outer-leaf maintenance from this tracker even after a full rebuild.
+	useTracker := db.valueLogRefTracker != nil && !db.indexOuterLeavesInValueLog
+	if db.valueLogRefTracker != nil {
+		trackerRevisionBeforeScan = db.valueLogRefTracker.revisionSnapshot()
+	}
+	if useTracker {
+		if refs, ok := db.valueLogRefTracker.referencedSetGeneration(seq, generation); ok {
+			return refs, valueLogRefResolutionSourceTracker, seq, nil
+		}
+	}
+	counts, scannedSeq, incarnation, err := db.scanValueLogRefCountsOwned(ctx)
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, valueLogRefResolutionSourceFallbackScan, 0, refreshErr
+		}
+		counts, scannedSeq, incarnation, err = db.scanValueLogRefCountsOwned(ctx)
+	}
+	if err != nil {
+		return nil, valueLogRefResolutionSourceFallbackScan, 0, err
+	}
+	defer counts.close()
+	refs := counts.referencedSet()
+	if db.valueLogRefTracker != nil {
+		if guardConcurrentAdvance {
+			db.valueLogRefTracker.replaceUnlessAdvancedOwned(&counts, scannedSeq, incarnation, true, trackerRevisionBeforeScan)
+		} else {
+			db.valueLogRefTracker.replaceOwned(&counts, scannedSeq, incarnation, true)
+		}
+	}
+
+	return refs, valueLogRefResolutionSourceFallbackScan, scannedSeq, nil
+}
+
+// Logical-only diagnostic projection; production replacement uses the bound result.
+func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {
+	counts, seq, _, err := db.scanValueLogRefCountsBound(ctx)
+	return counts, seq, err
+}
+
+func (db *DB) scanValueLogRefCountsBound(ctx context.Context) (map[uint32]uint64, uint64, valueLogRefIncarnation, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runScanValueLogRefCountsHook()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		err := errors.New("missing db state")
+		if snap != nil {
+			err = errors.Join(err, snap.Close())
+		}
+		return nil, 0, valueLogRefIncarnation{}, err
+	}
+	commitSeq := snap.state.CommitSeq
+	incarnation, captureErr := captureValueLogRefIncarnation(snap.idx)
+	if captureErr != nil {
+		return nil, 0, valueLogRefIncarnation{}, errors.Join(captureErr, snap.Close())
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors: maintenanceReachabilityValueLogRefCounts,
+	})
+	if err != nil {
+		return nil, 0, valueLogRefIncarnation{}, errors.Join(err, snap.Close())
+	}
+	if err := snap.Close(); err != nil {
+		return nil, 0, valueLogRefIncarnation{}, err
+	}
+	return result.valueLogRefCounts, commitSeq, incarnation, nil
+}
+
+func (db *DB) scanValueLogRefCountsOwned(ctx context.Context) (valueLogRefCounts, uint64, valueLogRefIncarnation, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runScanValueLogRefCountsHook()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		err := errors.New("missing db state")
+		if snap != nil {
+			err = errors.Join(err, snap.Close())
+		}
+		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, err
+	}
+	commitSeq := snap.state.CommitSeq
+	incarnation, captureErr := captureValueLogRefIncarnation(snap.idx)
+	if captureErr != nil {
+		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(captureErr, snap.Close())
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:    maintenanceReachabilityValueLogRefCounts,
+		CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
+	})
+	if err != nil {
+		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(err, snap.Close())
+	}
+	if err := snap.Close(); err != nil {
+		result.countRecords.close()
+		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, err
+	}
+	return result.countRecords.take(), commitSeq, incarnation, nil
+}
+
+func (db *DB) referencedValueLogSegmentsForRecoverableRootSet(ctx context.Context, roots *RecoverableRootSet) (map[uint32]struct{}, error) {
+	if roots == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	captured := roots.Roots()
+	if len(captured) == 0 {
+		return nil, ErrRecoverableRootSetStale
+	}
+	snap := roots.AcquireSnapshotForRoot(captured[0])
+	if snap == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	protectedRootIDs := make([]uint64, 0, len(captured))
+	protectedSystemRootIDs := make([]uint64, 0, len(captured))
+	for _, root := range captured {
+		protectedRootIDs = append(protectedRootIDs, root.UserRootPageID)
+		protectedSystemRootIDs = append(protectedSystemRootIDs, root.SystemRootPageID)
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:               maintenanceReachabilityValueLogRefCounts,
+		ProtectedRootIDs:         protectedRootIDs,
+		ProtectedSystemRootIDs:   protectedSystemRootIDs,
+		ProjectProtectedValueLog: true,
+	})
+	closeErr := snap.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return result.valueLogReferencedSegments, nil
+}
+
+func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {
+	opts := tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}
+	if snap != nil && root.kind == maintenanceRootUser && root.rootID == snap.treeRoot {
+		return snap.tree.IteratorWithOptions(nil, nil, opts)
+	}
+	return tree.New(snap.idx.pager, &snap.reader, root.rootID).IteratorWithOptions(nil, nil, opts)
+}
+
+func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
+	if db == nil {
+		return false
+	}
+	// Outer-leaf publication consumes this apply-local delta independently of
+	// the persisted GC tracker. It proves the common additive/unchanged
+	// transition without rescanning the candidate tree; subtractive transitions
+	// still fall back to exact projection.
+	if db.indexOuterLeavesInValueLog {
+		return true
+	}
+	return db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq)
+}
+
+// buildValueLogRefDeltaForApply consumes the producer's borrowed receipt before
+// the caller releases either the source root or output construction. Logical
+// removals remain unchanged; only the proven unchanged raw-leaf base may reuse
+// the already admitted physical dependency closure.
+func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
+	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
+	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
+		delta.requiresCandidateProjection = false
+	}
+	return delta, err
+}
+
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
+	delta, err := db.buildValueLogRefDeltaWithOptions(p, rootID, baseSeq, entries, ranges, oldPointerRefs, oldEntriesRemoved, oldPointerRefsCollected, false)
+	if err != nil || delta == nil {
+		return delta, err
+	}
+	// All ordinary apply paths capture the producer inventory here, before
+	// final registration acknowledges and clears created non-current segments.
+	// Physical membership must not become a logical ValuePtr reference count.
+	delta.outerLeafDependencyReuse = db.indexOuterLeavesInValueLog
+	if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, delta); err != nil {
+		releaseValueLogRefDelta(delta)
+		return nil, err
+	}
+	return delta, err
+}
+
+func (db *DB) buildValueLogRefDeltaWithOptions(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool, force bool) (*valueLogRefDelta, error) {
+	if !force && !db.shouldCollectValueLogRefDelta(baseSeq) {
+		return nil, nil
+	}
+	delta := newValueLogRefDelta()
+	if db.indexOuterLeavesInValueLog {
+		// TreeDB's initial logical root is a non-zero empty leaf page. Inspect
+		// that one page rather than treating every dependency-empty rewrite as
+		// a first publication; the latter can hide collection-root resources.
+		switch {
+		case rootID == 0:
+			delta.allowEmptyDependencyReuse = true
+		case p != nil:
+			rootPage, err := p.Get(rootID)
+			if err != nil {
+				releaseValueLogRefDelta(delta)
+				return nil, err
+			}
+			delta.allowEmptyDependencyReuse = node.NewNode(rootPage).Count() == 0
+		}
+	}
+	if oldPointerRefsCollected {
+		delta.requiresCandidateProjection = db.indexOuterLeavesInValueLog && oldEntriesRemoved > 0
+		var countErr error
+		oldPointerRefs.ForEach(func(fileID uint32, count uint64) bool {
+			if !page.IsValueLogFileID(fileID) {
+				return true
+			}
+			if count > uint64(^uint64(0)>>1) {
+				countErr = fmt.Errorf("treedb: value-log ref decrement overflow for file %d: %d", fileID, count)
+				return false
+			}
+			delta.add(fileID, -int64(count))
+			return true
+		})
+		if countErr != nil {
+			releaseValueLogRefDelta(delta)
+			return nil, countErr
+		}
+		for i := range entries {
+			if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+				delta.add(entries[i].ValuePtr.FileID, 1)
+			}
+		}
+		return delta, nil
+	}
+
+	// Fail safe for any caller that requests tracking without apply-fed evidence.
+	// This preserves correctness while making the normal foreground path measurable
+	// through lookupValueLogRefAtKeyHook.
+	if p == nil {
+		return delta, nil
+	}
+	tr := tree.New(p, nil, rootID)
+	for _, r := range ranges {
+		it := tr.IteratorWithOptions(r.Start, r.End, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		for it.Valid() {
+			_, ptr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+				delta.add(ptr.FileID, -1)
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		if err := it.Close(); err != nil {
+			return nil, err
+		}
+	}
+	for i := range entries {
+		if !batchpkg.DeleteRangesContainKey(ranges, entries[i].Key) {
+			oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
+			if err != nil {
+				return nil, err
+			}
+			if oldRef {
+				delta.add(oldFileID, -1)
+			}
+		}
+		if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+			delta.add(entries[i].ValuePtr.FileID, 1)
+		}
+	}
+	return delta, nil
+}
+
+func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDelta {
+	if db == nil {
+		return nil
+	}
+	if db.indexOuterLeavesInValueLog {
+		return newValueLogRefDelta()
+	}
+	if db.valueLogRefTracker == nil || !db.canTrackValueLogRefs(baseSeq) {
+		return nil
+	}
+	return newValueLogRefDelta()
+}
+
+func lookupValueLogRefAtKey(tr *tree.Tree, key []byte) (uint32, bool, error) {
+	runLookupValueLogRefAtKeyHook()
+	if tr == nil {
+		return 0, false, nil
+	}
+	entry, err := tr.GetEntry(key)
+	if err != nil {
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		return 0, false, nil
+	}
+	return entry.ValuePtr.FileID, true, nil
+}
+
+type valueLogRefCountsDisk struct {
+	incarnation valueLogRefIncarnation
+	commitSeq   uint64
+	counts      map[uint32]uint64 // diagnostic projection only
+	records     valueLogRefCounts
+}
+
+func encodeValueLogRefCounts(seq uint64, inc valueLogRefIncarnation, counts map[uint32]uint64) ([]byte, error) {
+	records, err := valueLogRefCountsFromMap(nil, counts)
+	if err != nil {
+		return nil, err
+	}
+	defer records.close()
+	blob, _, err := encodeValueLogRefCountsOwned(seq, inc, &records)
+	return blob, err
+}
+
+func encodeValueLogRefCountsOwned(commitSeq uint64, incarnation valueLogRefIncarnation, counts *valueLogRefCounts) ([]byte, uint64, error) {
+	if !incarnation.valid() {
+		return nil, 0, errValueLogRefCorrupt
+	}
+	if uint64(counts.used) > uint64(^uint32(0)) || counts.used > (int(^uint(0)>>1)-256)/12 {
+		return nil, 0, retainedalloc.ErrCapacity
+	}
+	size := len(valueLogRefCountsMagic) + 4 + 8 + valueLogRefIncarnationDiskSize + 4 + counts.used*12 + 4
+	idsCharge := retainedalloc.AllocationCharge(uint64(counts.used) * 4)
+	bufferCharge := retainedalloc.AllocationCharge(uint64(size))
+	if idsCharge > ^uint64(0)-bufferCharge {
+		return nil, 0, retainedalloc.ErrCapacity
+	}
+	if counts.metadata != nil {
+		if err := counts.metadata.AddPending(idsCharge + bufferCharge); err != nil {
+			return nil, 0, err
+		}
+	}
+	ids := make([]uint32, 0, counts.used)
+	for _, slot := range counts.slots {
+		if slot.fileID != 0 {
+			ids = append(ids, slot.fileID)
+		}
+	}
+	slices.Sort(ids)
+	defer func() {
+		clear(ids)
+		ids = nil
+		if counts.metadata != nil {
+			counts.metadata.RemovePending(idsCharge)
+		}
+	}()
+	buf := make([]byte, 0, size)
+	buf = append(buf, valueLogRefCountsMagic[:]...)
+	var tmp4 [4]byte
+	var tmp8 [8]byte
+	binary.LittleEndian.PutUint32(tmp4[:], valueLogRefCountsVersion)
+	buf = append(buf, tmp4[:]...)
+	binary.LittleEndian.PutUint64(tmp8[:], commitSeq)
+	buf = append(buf, tmp8[:]...)
+	buf = appendValueLogRefIncarnation(buf, incarnation)
+	binary.LittleEndian.PutUint32(tmp4[:], uint32(len(ids)))
+	buf = append(buf, tmp4[:]...)
+	for _, fileID := range ids {
+		binary.LittleEndian.PutUint32(tmp4[:], fileID)
+		buf = append(buf, tmp4[:]...)
+		binary.LittleEndian.PutUint64(tmp8[:], counts.get(fileID))
+		buf = append(buf, tmp8[:]...)
+	}
+	checksum := crc.Checksum(buf)
+	binary.LittleEndian.PutUint32(tmp4[:], checksum)
+	buf = append(buf, tmp4[:]...)
+	return buf, bufferCharge, nil
+}
+
+func decodeValueLogRefCounts(data []byte) (valueLogRefCountsDisk, error) {
+	disk, err := decodeValueLogRefCountsOwned(data, nil)
+	if err != nil {
+		return disk, err
+	}
+	disk.counts = disk.records.toMap()
+	disk.records.close()
+	return disk, nil
+}
+
+func decodeValueLogRefCountsOwned(data []byte, owner *retainedalloc.Owner) (valueLogRefCountsDisk, error) {
+	const base = 8 + 4 + 8 + valueLogRefIncarnationDiskSize + 4 + 4 // magic + version + seq + count + crc
+	if len(data) < base {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	if len(data) < len(valueLogRefCountsMagic)+4 {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	if got := data[:len(valueLogRefCountsMagic)]; string(got) != string(valueLogRefCountsMagic[:]) {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	payload := data[:len(data)-4]
+	gotCRC := binary.LittleEndian.Uint32(data[len(data)-4:])
+	if crc.Checksum(payload) != gotCRC {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	off := len(valueLogRefCountsMagic)
+	ver := binary.LittleEndian.Uint32(payload[off : off+4])
+	off += 4
+	if ver != valueLogRefCountsVersion {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	commitSeq := binary.LittleEndian.Uint64(payload[off : off+8])
+	off += 8
+	incarnation, err := decodeValueLogRefIncarnation(payload[off : off+valueLogRefIncarnationDiskSize])
+	if err != nil {
+		return valueLogRefCountsDisk{}, err
+	}
+	off += valueLogRefIncarnationDiskSize
+	n := binary.LittleEndian.Uint32(payload[off : off+4])
+	off += 4
+	if uint64(n) != uint64(len(payload)-off)/12 || (len(payload)-off)%12 != 0 {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	expected := len(valueLogRefCountsMagic) + 4 + 8 + valueLogRefIncarnationDiskSize + 4 + int(n)*(4+8) + 4
+	if len(data) != expected {
+		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+	}
+	counts := valueLogRefCounts{metadata: owner}
+	if n != 0 {
+		if err := counts.reserve(int(n)); err != nil {
+			return valueLogRefCountsDisk{}, err
+		}
+	}
+	success := false
+	defer func() {
+		if !success {
+			counts.close()
+		}
+	}()
+	var previous uint32
+	for i := uint32(0); i < n; i++ {
+		fileID := binary.LittleEndian.Uint32(payload[off : off+4])
+		off += 4
+		refCount := binary.LittleEndian.Uint64(payload[off : off+8])
+		off += 8
+		if fileID == 0 || (i != 0 && fileID <= previous) || refCount == 0 {
+			return valueLogRefCountsDisk{}, errValueLogRefCorrupt
+		}
+		previous = fileID
+		if err := counts.set(fileID, refCount); err != nil {
+			return valueLogRefCountsDisk{}, err
+		}
+	}
+	success = true
+	return valueLogRefCountsDisk{
+		commitSeq:   commitSeq,
+		incarnation: incarnation,
+		records:     counts.take(),
+	}, nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return atomicfile.Write(path, data, perm)
+}

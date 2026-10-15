@@ -1,0 +1,7 @@
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication [build failed]
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.002s [no tests to run]
+FAIL
+# github.com/snissn/gomap/TreeDB/internal/rootpublication [github.com/snissn/gomap/TreeDB/internal/rootpublication.test]
+TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go:409:31: candidate.ResourceSet undefined (type *PreparedRootCandidate has no field or method ResourceSet, but does have method resourceSet)

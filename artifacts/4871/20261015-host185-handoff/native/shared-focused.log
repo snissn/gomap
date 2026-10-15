@@ -1,0 +1,44 @@
+=== RUN   TestNativeTransactionCallbacksRefuseOpaqueV6
+--- PASS: TestNativeTransactionCallbacksRefuseOpaqueV6 (0.00s)
+=== RUN   TestPrimaryFinishWorkRefusalResumesOriginalV6
+--- PASS: TestPrimaryFinishWorkRefusalResumesOriginalV6 (0.00s)
+=== RUN   TestNativeTransactionBindingUsesSuppliedWorkV6
+    durable_root_transaction_work_callbacks_v6_test.go:177: native binding stage only: records=3 bytes=3488
+--- PASS: TestNativeTransactionBindingUsesSuppliedWorkV6 (0.00s)
+=== RUN   TestNativeTransactionOrdinaryNilCallbacksUnchangedV6
+--- PASS: TestNativeTransactionOrdinaryNilCallbacksUnchangedV6 (0.00s)
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry
+=== RUN   TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure
+--- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6 (0.00s)
+    --- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry (0.00s)
+    --- PASS: TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure (0.00s)
+=== RUN   TestNativeTransactionCallbackErrorIdentityV6
+--- PASS: TestNativeTransactionCallbackErrorIdentityV6 (0.00s)
+=== RUN   TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor
+--- PASS: TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor (0.00s)
+=== RUN   TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop
+--- PASS: TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop (0.00s)
+=== RUN   TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor
+--- PASS: TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor (0.00s)
+=== RUN   TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess
+--- PASS: TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess (0.00s)
+=== RUN   TestNativePublicationStopSettlesFailedOriginalAndStillStops
+--- PASS: TestNativePublicationStopSettlesFailedOriginalAndStillStops (0.00s)
+=== RUN   TestPrimaryFinishContainingRefundJoinsOriginalCall
+=== RUN   TestPrimaryFinishContainingRefundJoinsOriginalCall/finish
+=== RUN   TestPrimaryFinishContainingRefundJoinsOriginalCall/recovery
+--- PASS: TestPrimaryFinishContainingRefundJoinsOriginalCall (0.00s)
+    --- PASS: TestPrimaryFinishContainingRefundJoinsOriginalCall/finish (0.00s)
+    --- PASS: TestPrimaryFinishContainingRefundJoinsOriginalCall/recovery (0.00s)
+=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop
+=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop/ack
+=== RUN   TestPrimaryFinishAccountingBeforeAckAndStop/stop
+--- PASS: TestPrimaryFinishAccountingBeforeAckAndStop (0.03s)
+    --- PASS: TestPrimaryFinishAccountingBeforeAckAndStop/ack (0.00s)
+    --- PASS: TestPrimaryFinishAccountingBeforeAckAndStop/stop (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.029s
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.001s [no tests to run]

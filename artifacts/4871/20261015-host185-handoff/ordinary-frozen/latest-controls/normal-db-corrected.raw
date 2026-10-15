@@ -1,0 +1,10 @@
+=== RUN   TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt
+--- PASS: TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt (0.00s)
+=== RUN   TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation
+--- PASS: TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation (0.00s)
+=== RUN   TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError
+--- PASS: TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError (0.00s)
+=== RUN   TestVacuumSharedBaseRetainsVersionsAcrossRecapture
+--- PASS: TestVacuumSharedBaseRetainsVersionsAcrossRecapture (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.013s

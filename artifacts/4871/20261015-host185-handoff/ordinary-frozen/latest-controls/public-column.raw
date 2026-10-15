@@ -1,0 +1,29 @@
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes
+    column_physical_query_test.go:4097: q1_dictionary_codes routed sidecar allocs/run=27.00 want <= 26.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes
+    column_physical_query_test.go:4097: q2_dictionary_codes routed sidecar allocs/run=46.00 want <= 45.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values
+    column_physical_query_test.go:4097: q3_int64_values routed sidecar allocs/run=16.00 want <= 15.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64
+    column_physical_query_test.go:4097: q4a_dictionary_int64 routed sidecar allocs/run=42.00 want <= 41.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64
+    column_physical_query_test.go:4097: q4b_dictionary_int64 routed sidecar allocs/run=42.00 want <= 41.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64
+    column_physical_query_test.go:4097: q5_dictionary_int64 routed sidecar allocs/run=43.00 want <= 42.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata
+    column_physical_query_test.go:4097: q4b_metadata routed sidecar allocs/run=40.00 want <= 39.00
+=== RUN   TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata
+    column_physical_query_test.go:4097: q5_metadata routed sidecar allocs/run=40.00 want <= 39.00
+--- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634 (0.02s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q1_dictionary_codes (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q2_dictionary_codes (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q3_int64_values (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4a_dictionary_int64 (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_dictionary_int64 (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_dictionary_int64 (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q4b_metadata (0.00s)
+    --- FAIL: TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634/q5_metadata (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/collections	0.025s
+FAIL

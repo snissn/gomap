@@ -1,0 +1,2 @@
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress
+--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (12.30s)

@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/internal/primaryarena",
+    "-run",
+    "^(TestNativePublication|TestNativeTransaction|TestPrimaryFinish)",
+    "-count=1",
+    "-timeout=30s",
+    "-v"
+  ],
+  "exit": 0,
+  "seconds": 2.097372531890869
+}

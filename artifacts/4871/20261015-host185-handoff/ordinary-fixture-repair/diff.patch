@@ -1,0 +1,480 @@
+diff --git a/TreeDB/cow_public_review_regression_test.go b/TreeDB/cow_public_review_regression_test.go
+index 549575ddd..e14f91df1 100644
+--- a/TreeDB/cow_public_review_regression_test.go
++++ b/TreeDB/cow_public_review_regression_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"strconv"
++	"strings"
+ 	"sync"
+ 	"testing"
+ 	"time"
+@@ -222,13 +223,23 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
+ 				t.Fatalf("rewrite changed logical revision: got=%d want=%d error=%v", revision, entry.Revision, err)
+ 			}
+ 			current.Close()
+-			_, err = database.CompactStorage(context.Background(), CompactStorageOptions{})
+-			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+-				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+-					t.Fatalf("unsupported leaf-pack promotion: %v", err)
++			report, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
++			packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
++			if err != nil {
++				if packSupported || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || len(report.Phases) == 0 || !strings.HasPrefix(report.Phases[len(report.Phases)-1].Name, "leaf-generation-pack-") {
++					t.Fatalf("ordinary compaction after selected rewrite: %v (phases=%+v)", err, report.Phases)
++				}
++			} else if !packSupported {
++				// The public planner may have no eligible pack work. Unsupported
++				// promotion is required only when a real pack is selected.
++				if len(report.LeafGenerationPacks) == 0 {
++					t.Fatal("compaction omitted leaf-pack planning")
++				}
++				for _, pack := range report.LeafGenerationPacks {
++					if pack.Ran || pack.SkipReason == "" || len(pack.Selection.GenerationIDs) != 0 {
++						t.Fatalf("unsupported promotion reported applied/selected pack: %+v", pack)
++					}
+ 				}
+-			} else if err != nil {
+-				t.Fatalf("ordinary compaction after selected rewrite: %v", err)
+ 			}
+ 			if err := database.Set([]byte("a"), []byte("late")); err != nil {
+ 				t.Fatal(err)
+diff --git a/TreeDB/db/leaf_manifest_revision_gc_5066_test.go b/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
+index bf6c414e9..cbdd345a8 100644
+--- a/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
++++ b/TreeDB/db/leaf_manifest_revision_gc_5066_test.go
+@@ -266,18 +266,29 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	dir := LeafLogDirPath(database.dir)
+-	var recoveryNames []string
++	var recoveryNames [2]string
++	var recoveryErrors [2]error
+ 	database.durablePublishMu.Lock()
+-	for _, resources := range database.durableRoot.slotResources {
+-		for _, token := range resources.Tokens() {
+-			if token.Kind() == rootpublication.ResourceOuterLeafManifest {
+-				recoveryNames = append(recoveryNames, token.ResourceID())
++	for slot, resources := range database.durableRoot.slotResources {
++		// Selected sets expose tokens only through a scoped borrow. Decode the
++		// exact immutable revision, as recovery does, rather than inspecting
++		// the optional generic-set diagnostic slice.
++		recoveryErrors[slot] = resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
++			manifest, found, err := loadSelectedDurableLeafGenerationManifestTokens(tokens)
++			if err != nil {
++				return err
+ 			}
+-		}
++			if found {
++				recoveryNames[slot] = leafGenerationDurableManifestFileName(manifest.ManifestRevision)
++			}
++			return nil
++		})
+ 	}
+ 	database.durablePublishMu.Unlock()
+-	if len(recoveryNames) < 2 {
+-		t.Fatalf("both recovery slots not represented: %v", recoveryNames)
++	for slot, name := range recoveryNames {
++		if recoveryErrors[slot] != nil || name == "" {
++			t.Fatalf("recovery slot %d manifest=%q error=%v", slot, name, recoveryErrors[slot])
++		}
+ 	}
+ 	for range 5 {
+ 		closure, err := database.PrepareLeafGenerationManifestStableClosure()
+diff --git a/TreeDB/db/original_rootset_authority_completion_test.go b/TreeDB/db/original_rootset_authority_completion_test.go
+index 987b9a172..7294828e6 100644
+--- a/TreeDB/db/original_rootset_authority_completion_test.go
++++ b/TreeDB/db/original_rootset_authority_completion_test.go
+@@ -10,6 +10,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ )
+ 
+ type originalClosureAdmissionBudget struct {
+@@ -91,6 +92,12 @@ func TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge(t *testing
+ 		t.Fatal(err)
+ 	}
+ 	authority, err := newLeafGenerationPackPromotionAuthority(database, stagingRoot, stagingDir, LeafLogDirPath(database.dir))
++	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
++		if authority != nil || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || owner.Bytes() != before || database.backgroundError() != nil {
++			t.Fatalf("unsupported promotion must refuse before original custody: authority=%p err=%v charge=%d", authority, err, owner.Bytes())
++		}
++		return
++	}
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/TreeDB/db/vacuum_collection_publication_guard_test.go b/TreeDB/db/vacuum_collection_publication_guard_test.go
+index f43b5be35..6b9104527 100644
+--- a/TreeDB/db/vacuum_collection_publication_guard_test.go
++++ b/TreeDB/db/vacuum_collection_publication_guard_test.go
+@@ -66,7 +66,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 		"idx.Store": {
+ 			publicationGuardDBMethodID("closeAllIndexes"),
+ 			publicationGuardPackageFuncID("openReadOnly"),
+-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
++			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
+ 			publicationGuardPackageFuncID("openWithLock"),
+ 			publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
+ 		},
+@@ -78,7 +78,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 			publicationGuardDBMethodID("RefreshValueLogSet"),
+ 			publicationGuardDBMethodID("finalizeCommitLockedWithOptions"),
+ 			publicationGuardPackageFuncID("openReadOnly"),
+-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
++			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
+ 			publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
+ 			publicationGuardDBMethodID("publishLeafGenerationState"),
+ 			publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
+@@ -86,7 +86,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 			publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
+ 		},
+ 		"state.CompareAndSwap": {publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView")},
+-		"state.Swap":           {publicationGuardPackageFuncID("openWithLock")},
++		"state.Swap":           {publicationGuardDBMethodID("initializeRecoveredSnapshotV1")},
+ 	}
+ 
+ 	gotAtomicCallers := make(map[string]map[string]struct{})
+@@ -153,8 +153,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
+ 		publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView"):      false,
+ 		publicationGuardDBMethodID("finalizeCommitLockedWithOptions"):           true,
+ 		publicationGuardPackageFuncID("openReadOnly"):                           false,
+-		publicationGuardPackageFuncID("openReadOnlyNoLock"):                     false,
+-		publicationGuardPackageFuncID("openWithLock"):                           false,
++		publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"):       false,
++		publicationGuardDBMethodID("initializeRecoveredSnapshotV1"):             false,
+ 		publicationGuardDBMethodID("publishCompactStorageValueLogSet"):          false,
+ 		publicationGuardDBMethodID("publishLeafGenerationState"):                false,
+ 		publicationGuardDBMethodID("publishValueLogSetNoRefresh"):               false,
+diff --git a/TreeDB/internal/primaryarena/owned_file_test.go b/TreeDB/internal/primaryarena/owned_file_test.go
+index aab97034a..db3d48467 100644
+--- a/TreeDB/internal/primaryarena/owned_file_test.go
++++ b/TreeDB/internal/primaryarena/owned_file_test.go
+@@ -45,7 +45,7 @@ func TestOpenCapsuleOwnedFileFailedFormatClosesHandle(t *testing.T) {
+ 	if !errors.Is(err, ErrFormat) || a != nil {
+ 		t.Fatalf("a=%p err=%v", a, err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("handle not closed: %v", err)
+ 	}
+ }
+diff --git a/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go b/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
+index 234336f20..7b441b250 100644
+--- a/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
++++ b/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go
+@@ -45,10 +45,12 @@ func TestNamespaceContainingRefundAfterOriginalCallUnlock(t *testing.T) {
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
++	t.Cleanup(func() { _ = parent.Close() })
+ 	child, e := os.Create(filepath.Join(dir, "primary"))
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
++	t.Cleanup(func() { _ = child.Close() })
+ 	var owner retainedalloc.Owner
+ 	owner.Initialize(0)
+ 	proof, e := NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
+@@ -133,10 +135,12 @@ func TestNamespaceOrdinaryContainingReleaseDoesNotAllocateReceipt(t *testing.T)
+ 		if e != nil {
+ 			t.Fatal(e)
+ 		}
++		t.Cleanup(func() { _ = parent.Close() })
+ 		child, e := os.Create(filepath.Join(dir, "primary"))
+ 		if e != nil {
+ 			t.Fatal(e)
+ 		}
++		t.Cleanup(func() { _ = child.Close() })
+ 		proofs[i], e = NewOwnedStableNamespaceCreationProof(parent, child, "primary", &owner)
+ 		if e != nil {
+ 			t.Fatal(e)
+diff --git a/TreeDB/internal/valuelog/native_mvcc_file_close_test.go b/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
+index 22982da28..b7ebdbdcf 100644
+--- a/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
++++ b/TreeDB/internal/valuelog/native_mvcc_file_close_test.go
+@@ -5,7 +5,9 @@ import (
+ 	"errors"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ 	"testing"
++	"unsafe"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	templ "github.com/snissn/gomap/TreeDB/template"
+@@ -14,25 +16,89 @@ import (
+ func TestNativeMVCCOriginalFilePhysicalClose(t *testing.T) {
+ 	path := filepath.Join(t.TempDir(), "value.log")
+ 	writer, err := NewWriter(path, 1)
+-	if err != nil { t.Fatal(err) }
+-	if _, err = writer.Append(0, nil, 1, bytes.Repeat([]byte("real-original-file"), 150000)); err != nil { t.Fatal(err) }
+-	if err = writer.Close(); err != nil { t.Fatal(err) }
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = writer.Append(0, nil, 1, bytes.Repeat([]byte("real-original-file"), 150000)); err != nil {
++		t.Fatal(err)
++	}
++	if err = writer.Close(); err != nil {
++		t.Fatal(err)
++	}
+ 	file, err := openFile(path, 1, nil, nil, templ.DecodeOptions{}, nil)
+-	if err != nil { t.Fatal(err) }
++	if err != nil {
++		t.Fatal(err)
++	}
+ 	defer file.Close()
+-	if !file.remapToFileSize() { t.Fatal("original constructor did not map persisted file") }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); done || err != nil || file.closeAttempted || file.closed.Load() { t.Fatal("zero-work close effect") }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1<<20}); done || err != nil || !file.closed.Load() { t.Fatal("close did not pause", err) }
+-	if err := file.Close(); !errors.Is(err, ErrNativeMVCCFileWork) { t.Fatal("ordinary close stole native custody", err) }
+-	if _, err := file.File.Stat(); err != nil { t.Fatal("OS close preceded admitted physical phases", err) }
++	mapped := file.remapToFileSize()
++	if !mapped && (runtime.GOOS != "windows") {
++		t.Fatal("original constructor did not map persisted file")
++	}
++
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); done || err != nil || file.closeAttempted || file.closed.Load() {
++		t.Fatal("zero-work close effect")
++	}
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}); done || err != nil || !file.closed.Load() {
++		t.Fatal("close did not pause", err)
++	}
++	if err := file.Close(); !errors.Is(err, ErrNativeMVCCFileWork) {
++		t.Fatal("ordinary close stole native custody", err)
++	}
++	if _, err := file.File.Stat(); err != nil {
++		t.Fatal("OS close preceded admitted physical phases", err)
++	}
+ 	turns := 0
+ 	for ; turns < 10000; turns++ {
+-		work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 8192}
++		work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: uint64(max(8192, 2*os.Getpagesize()))}
+ 		done, err := file.CloseNativeMVCCStep(work)
+-		if err != nil || work.Records > 32 || work.Bytes > 8192 { t.Fatal("physical quantum", err) }
+-		if done { break }
++		if err != nil || work.Records > 32 || work.Bytes > work.ByteLimit {
++			t.Fatal("physical quantum", err)
++		}
++		if done {
++			break
++		}
++	}
++	if turns == 10000 || file.currentMappingV6.remainingV6() != 0 || len(file.deadMappings) != 0 {
++		t.Fatal("physical mapping survived cleanup")
++	}
++	if err := file.File.Close(); !errors.Is(err, os.ErrClosed) {
++		t.Fatal("original handle not closed", err)
++	}
++	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); !done || err != nil {
++		t.Fatal("terminal cleanup replay", done, err)
++	}
++}
++
++func TestNativeOriginalMappingFreshQuantumTooSmall(t *testing.T) {
++	if !(runtime.GOOS != "windows") {
++		t.Skip("platform uses retained file reads without mmap")
++	}
++	path := filepath.Join(t.TempDir(), "mapping.log")
++	if err := os.WriteFile(path, make([]byte, os.Getpagesize()), 0600); err != nil {
++		t.Fatal(err)
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	mapping, err := mapOwnedReadOnlyV6(f, os.Getpagesize())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer mapping.closeV6()
++	minimum := 2*uint64(unsafe.Sizeof(mapping)) + uint64(os.Getpagesize())
++	before := mapping.remainingV6()
++	_, err = closeNativeMVCCMappingV6(&mapping, true, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum - 1})
++	var large *iterator.OrdinalUnitTooLarge
++	if !errors.As(err, &large) || large.Bytes != minimum || mapping.remainingV6() != before {
++		t.Fatal("fresh impossible mapping unit", err)
++	}
++	work := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum, Bytes: 1}
++	if done, err := closeNativeMVCCMappingV6(&mapping, true, work); done || err != nil || mapping.remainingV6() != before {
++		t.Fatal("residual grant should yield", done, err)
++	}
++	if done, err := closeNativeMVCCMappingV6(&mapping, true, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: minimum}); !done || err != nil {
++		t.Fatal("fresh fitting grant", done, err)
+ 	}
+-	if turns == 10000 || file.currentMappingV6.remainingV6() != 0 || len(file.deadMappings) != 0 { t.Fatal("physical mapping survived cleanup") }
+-	if _, err := file.File.Stat(); !errors.Is(err, os.ErrClosed) { t.Fatal("original handle not closed", err) }
+-	if done, err := file.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); !done || err != nil { t.Fatal("terminal cleanup replay", done, err) }
+ }
+diff --git a/TreeDB/internal/valuelog/native_mvcc_set_release_test.go b/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
+index 8f1c34d73..bf01f000f 100644
+--- a/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
++++ b/TreeDB/internal/valuelog/native_mvcc_set_release_test.go
+@@ -60,7 +60,7 @@ func TestNativeMVCCOriginalSetPhysicalClose(t *testing.T) {
+ 			if len(m.files) != 0 || set.Files != nil || f.producerCharge != 0 || m.producerCharge != 0 || f.nativeCallbacks.Load() {
+ 				t.Fatal("actual terminal aliases/debt survive success")
+ 			}
+-			if _, err := originalHandle.Stat(); !errors.Is(err, os.ErrClosed) {
++			if err := originalHandle.Close(); !errors.Is(err, os.ErrClosed) {
+ 				t.Fatal("actual original OS handle not closed", err)
+ 			}
+ 			if ready, err := m.ReleaseNativeMVCCSetStep(set, &iterator.OrdinalScanWork{}); !ready || err != nil {
+diff --git a/TreeDB/pager/adjacent_write_work_test.go b/TreeDB/pager/adjacent_write_work_test.go
+index e63240ec1..bfa04b164 100644
+--- a/TreeDB/pager/adjacent_write_work_test.go
++++ b/TreeDB/pager/adjacent_write_work_test.go
+@@ -10,7 +10,8 @@ import (
+ 
+ func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
+ 	path := filepath.Join(t.TempDir(), "index.db.primary")
+-	p, e := Open(path, 4*page.PageSize)
++	chunkSize := max(int64(4*page.PageSize), mmapOffsetGranularity())
++	p, e := Open(path, chunkSize)
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+@@ -57,7 +58,7 @@ func TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability(t *testing.T) {
+ 	if e = p.Close(); e != nil {
+ 		t.Fatal(e)
+ 	}
+-	p, e = Open(path, 4*page.PageSize)
++	p, e = Open(path, chunkSize)
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+diff --git a/TreeDB/pager/owned_file_test.go b/TreeDB/pager/owned_file_test.go
+index 5c7d37bad..2c724dc7a 100644
+--- a/TreeDB/pager/owned_file_test.go
++++ b/TreeDB/pager/owned_file_test.go
+@@ -31,7 +31,7 @@ func TestOpenOwnedFileUsesTransferredHandle(t *testing.T) {
+ 	if err := p.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("transferred file remains open: %v", err)
+ 	}
+ 	got, err := os.ReadFile(diagnostic)
+@@ -50,7 +50,7 @@ func TestOpenOwnedFileFailureTransfersCleanup(t *testing.T) {
+ 		if err == nil || p != nil {
+ 			t.Fatalf("p=%p err=%v", p, err)
+ 		}
+-		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++		if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 			t.Fatalf("file not closed: %v", err)
+ 		}
+ 	})
+@@ -102,7 +102,7 @@ func TestOwnedFileMappingFailureClosesExactHandle(t *testing.T) {
+ 	if err == nil || p != nil {
+ 		t.Fatalf("read-only mapping unexpectedly initialized: %p %v", p, err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("failed mapping lost file: %v", err)
+ 	}
+ }
+@@ -145,7 +145,7 @@ func TestPagerPartialUnmapRetainsMappingAndBlocksAccess(t *testing.T) {
+ 	if err := p.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 		t.Fatalf("cleanup did not close exact handle: %v", err)
+ 	}
+ }
+diff --git a/TreeDB/pager/readonly_owned_metadata_test.go b/TreeDB/pager/readonly_owned_metadata_test.go
+index 49cada6b6..970b01eac 100644
+--- a/TreeDB/pager/readonly_owned_metadata_test.go
++++ b/TreeDB/pager/readonly_owned_metadata_test.go
+@@ -71,7 +71,7 @@ func TestReadOnlyOwnedMetadataAdmissionAndLifetime(t *testing.T) {
+ 				if !errors.Is(err, ErrFileSize) || p != nil || charge != 0 || !consumed || owner.Bytes() != 0 {
+ 					t.Fatalf("p=%p charge=%d consumed=%v err=%v owner=%d", p, charge, consumed, err, owner.Bytes())
+ 				}
+-				if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
++				if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+ 					t.Fatal("consumed exact file remains open", err)
+ 				}
+ 			case "actual-close-refusal":
+diff --git a/TreeDB/primary_joint_vacuum_v6_test.go b/TreeDB/primary_joint_vacuum_v6_test.go
+index ab581da11..bb49877ba 100644
+--- a/TreeDB/primary_joint_vacuum_v6_test.go
++++ b/TreeDB/primary_joint_vacuum_v6_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/tree"
+ 	"io"
+ 	"path/filepath"
++	"runtime"
+ 	"testing"
+ )
+ 
+@@ -66,18 +67,28 @@ func TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut(t *test
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+-	if e = d.backend.VacuumIndexOnline(context.Background()); !errors.Is(e, rootpublication.ErrResourcePinned) {
++	// Register the original cut cleanup before any platform-specific assertion.
++	defer cut.Close()
++	before := d.backend.State().CommitSeq
++	e = d.backend.VacuumIndexOnline(context.Background())
++	if runtime.GOOS == "windows" {
++		if !errors.Is(e, errVacuumUnsupported) || d.backend.State().CommitSeq != before {
++			t.Fatalf("unsupported online replacement changed state: %v", e)
++		}
++	} else if !errors.Is(e, rootpublication.ErrResourcePinned) {
+ 		t.Fatalf("held cut refusal: %v", e)
+ 	}
+ 	if e = cut.Close(); e != nil {
+ 		t.Fatal(e)
+ 	}
+-	before := d.backend.State().CommitSeq
+-	if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
+-		t.Fatal(e)
+-	}
+-	if d.backend.State().CommitSeq != before+1 {
+-		t.Fatal("joint publication did not advance once")
++	if runtime.GOOS != "windows" {
++		before = d.backend.State().CommitSeq
++		if e = d.backend.VacuumIndexOnline(context.Background()); e != nil {
++			t.Fatal(e)
++		}
++		if d.backend.State().CommitSeq != before+1 {
++			t.Fatal("joint publication did not advance once")
++		}
+ 	}
+ 	if got, e := held.Get([]byte("base-003")); e != nil || !bytes.Equal(got, value) {
+ 		t.Fatalf("old reader: %v", e)
+diff --git a/TreeDB/profile_entrypoint_inventory_test.go b/TreeDB/profile_entrypoint_inventory_test.go
+index 2f0ab14d8..c99f97cb8 100644
+--- a/TreeDB/profile_entrypoint_inventory_test.go
++++ b/TreeDB/profile_entrypoint_inventory_test.go
+@@ -29,10 +29,10 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
+ 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
+ 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
+ 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
+-		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
++		"LeafGenerationPlan", "MaintenancePhase", "NativeMVCCBudgetV6", "NewBatch", "NewBatchWithSize",
+ 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+ 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetSync", "Stats", "SupportsMVCCReadCut",
+-		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
++		"StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+ 	}
+ 	slices.Sort(want)
+ 	if !slices.Equal(methods, want) {
+@@ -67,6 +67,12 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
+ 		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
+ 	}
+ 	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
++	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_mvcc_prune.go"))
++	for _, name := range []string{"NativeMVCCBudgetV6", "StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6"} {
++		for _, fragment := range []string{"db.lifecycleMu.RLock()", "defer db.lifecycleMu.RUnlock()", "db.cached == nil || db.backend == nil", "db.cached." + name + "("} {
++			profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, fragment)
++		}
++	}
+ 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
+ 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
+ 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))

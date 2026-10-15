@@ -1,0 +1,4 @@
+=== RUN   TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen
+--- PASS: TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	0.044s

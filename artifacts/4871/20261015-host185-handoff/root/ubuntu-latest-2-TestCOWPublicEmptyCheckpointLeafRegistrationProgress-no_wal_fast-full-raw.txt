@@ -1,0 +1,5 @@
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:353: unused leaf physically reclaimed: polls=1 elapsed=57.154µs
+--- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.84s)

@@ -1,0 +1,6 @@
+=== RUN   TestNativeBuilderHandoffPreservesOriginalOnRefusalV6
+    durable_root_transaction_work_callbacks_v6_test.go:393: invalid root publication candidate: candidate frontier does not match exact primary authority
+--- FAIL: TestNativeBuilderHandoffPreservesOriginalOnRefusalV6 (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s
+FAIL

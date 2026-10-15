@@ -1,0 +1,131 @@
+{
+  "source": "/Users/michaelseiler/.codex/skills",
+  "scope": "Exact skill contents used by source coordinator, including current working-copy changes; global target skills left unchanged.",
+  "files": [
+    {
+      "path": "codex-issue-graph-executor/SKILL.md",
+      "sha256": "28a44a94867cdb0053c23fb2266ee4a6affe9e0a9c538e9364dfb228c9487d23",
+      "bytes": 43610
+    },
+    {
+      "path": "codex-issue-graph-executor/agents/openai.yaml",
+      "sha256": "9c9b3c915f6c917fc2dc0d6334ce7874c4121bf9c689044010d3c9f611c703ce",
+      "bytes": 493
+    },
+    {
+      "path": "codex-issue-graph-executor/references/dependency-execution.md",
+      "sha256": "cf11acd5df8b4e2cb03363f9ee028aaecfaf406089d10dddf932af4176bfb5d1",
+      "bytes": 19824
+    },
+    {
+      "path": "codex-issue-graph-executor/references/disk-cleanup.md",
+      "sha256": "bba6723ab10b7eb4cba0853e1c0c80c55b6ffe6a87043133b0ba052f10fb5403",
+      "bytes": 7992
+    },
+    {
+      "path": "codex-issue-graph-executor/references/worker-prompts.md",
+      "sha256": "aea76821ee320ee589e221a8d51934fe0d4534e4ab3f13a4248b816322411a53",
+      "bytes": 15859
+    },
+    {
+      "path": "codex-issue-graph-executor/references/worktree-creation.md",
+      "sha256": "98713f8af7d61f09a960c54462e96ff0e2ced5c24c93941b36a31337a63e783b",
+      "bytes": 5065
+    },
+    {
+      "path": "codex-issue-graph-executor/scripts/create_worktree.py",
+      "sha256": "be3c805af6dd6f696a3ef897db1d5cf3efd6fa7a664b9428c81228c08146833a",
+      "bytes": 10735
+    },
+    {
+      "path": "codex-issue-graph-executor/scripts/test_create_worktree.py",
+      "sha256": "44fa07ceb30963588379401ab1aeac2564b21ec58a71a21a038385ee813a017a",
+      "bytes": 19497
+    },
+    {
+      "path": "gh-issue-planner/SKILL.md",
+      "sha256": "b923d9979d1b17652629e7aae9944493943f3e1d6c8d988677784ba939f1ce21",
+      "bytes": 34104
+    },
+    {
+      "path": "gh-issue-planner/agents/openai.yaml",
+      "sha256": "54a0769498d4a06281feac4acb844012470442fbc3166bce502455361630d13d",
+      "bytes": 287
+    },
+    {
+      "path": "gh-issue-planner/references/existing-design-integration.md",
+      "sha256": "ec4028f316495554e7824be0ce523c2a48dcee8fc93fded1b50a93d4248d43b7",
+      "bytes": 8618
+    },
+    {
+      "path": "gh-issue-planner/references/gomap.md",
+      "sha256": "fb1e972743426da6397144efdcdacb14590cbf8db30585301983ccc3e1ebca83",
+      "bytes": 13509
+    },
+    {
+      "path": "gh-issue-planner/references/high-capability-planning.md",
+      "sha256": "e72a901ba04b33347ea981f3bb1e8818c8a054bffb2947e69b6ae927d1c0af32",
+      "bytes": 5658
+    },
+    {
+      "path": "gh-issue-planner/references/issue-graph-planning.md",
+      "sha256": "4c74800b49f560fb46ee5eca754a41c12c5696749b7eb9df460b23106b1e84e1",
+      "bytes": 14639
+    },
+    {
+      "path": "gh-issue-planner/references/polystore.md",
+      "sha256": "987bd84632d1614c810a7e24b21bbe2825c4fec2fcb5f50d04acc490c575d64e",
+      "bytes": 2709
+    },
+    {
+      "path": "gh-issue-planner/references/tracker-issue-template.md",
+      "sha256": "2885ece47623a45c6413faa7be763ef7368fd98c91526a542fe24541bf638ba3",
+      "bytes": 28259
+    },
+    {
+      "path": "github-pr-mergeable/AGENTS.md",
+      "sha256": "a83fe743f28281b37d20e487cddcabc3981a6b51ad578949c54a298724d2330f",
+      "bytes": 2758
+    },
+    {
+      "path": "github-pr-mergeable/SKILL.md",
+      "sha256": "94c25fb0274760005e3b5e81a50cc79ce0c72bd04e92f76333ec9329a9eeca4c",
+      "bytes": 27732
+    },
+    {
+      "path": "github-pr-mergeable/agents/openai.yaml",
+      "sha256": "d1f97b6f4446446fe35efe213d37420c73b48570e11f979d6ca1346daca9c490",
+      "bytes": 514
+    },
+    {
+      "path": "github-pr-mergeable/references/internal-review-fallback.md",
+      "sha256": "a673ec989c2873cb785e8066327775876e2efc46a036c5aafc15abd832bdba34",
+      "bytes": 3070
+    },
+    {
+      "path": "github-pr-mergeable/references/retained-evidence-velocity.md",
+      "sha256": "2a42ba9369f32b1e01a601d9c41d373089435f87f867f9930e3efd1a41a9476c",
+      "bytes": 1697
+    },
+    {
+      "path": "github-pr-mergeable/scripts/codex_review_gate.py",
+      "sha256": "64110d141962e6fa81002fde2f68e8695a655a19ff29bfdbfdb81726157cc41c",
+      "bytes": 22425
+    },
+    {
+      "path": "go-performance-optimization/SKILL.md",
+      "sha256": "567167fe1a7c6007a7448d87341b5899f949adc82af033f0286cccb858a83109",
+      "bytes": 10510
+    },
+    {
+      "path": "go-performance-optimization/references/gomap.md",
+      "sha256": "52da512baa5df59466bbe8ec059cf3d07f7b7b4f35c2f90652d4b31c431e1920",
+      "bytes": 2160
+    },
+    {
+      "path": "go-performance-optimization/references/profiling-and-measurement.md",
+      "sha256": "235b3ab65e9f8bc1181bc8e171e989526538fdf40ddc00be880acede79457379",
+      "bytes": 8065
+    }
+  ]
+}

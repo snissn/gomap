@@ -1,0 +1,5 @@
+--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline (0.00s)
+    maintenance_leaf_vlog_test.go:525: root 2 type=4 want internal leaf-log root
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.068s
+FAIL

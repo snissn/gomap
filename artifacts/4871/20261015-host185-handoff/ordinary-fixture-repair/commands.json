@@ -1,0 +1,35 @@
+[
+  [
+    "go",
+    "test",
+    "-p=1",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/internal/primaryarena",
+    "./TreeDB/internal/valuelog",
+    "./TreeDB/pager",
+    "-run",
+    "^(TestNamespaceContainingRefundAfterOriginalCallUnlock|TestNamespaceOrdinaryContainingReleaseDoesNotAllocateReceipt|TestOpenOwnedFileUsesTransferredHandle|TestOpenOwnedFileFailureTransfersCleanup|TestOwnedFileMappingFailureClosesExactHandle|TestReadOnlyOwnedMetadataAdmissionAndLifetime|TestReadOnlyOriginalPathRetainsPartialCleanupInError|TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability|TestOpenCapsuleOwnedFileFailedFormatClosesHandle|TestNativeMVCCOriginalFilePhysicalClose|TestNativeMVCCOriginalSetPhysicalClose)$",
+    "-count=1",
+    "-timeout=90s"
+  ],
+  [
+    "go",
+    "test",
+    "-p=1",
+    "./TreeDB/db",
+    "-run",
+    "^(TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge|TestLeafManifestRevisionGCHeldAndRecovery5066|TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication|TestPublicationSourceGuardRejectsPublishedStateMutationFixtures)$",
+    "-count=1",
+    "-timeout=90s"
+  ],
+  [
+    "go",
+    "test",
+    "-p=1",
+    "./TreeDB",
+    "-run",
+    "^(TestDurabilityProfilePublicEntrypointInventory|TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut|TestCOWPublicSelectedSourceRewriteKeepsOldCuts)$",
+    "-count=1",
+    "-timeout=90s"
+  ]
+]

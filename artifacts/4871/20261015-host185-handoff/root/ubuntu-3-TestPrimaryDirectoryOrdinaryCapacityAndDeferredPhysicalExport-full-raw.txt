@@ -1,0 +1,4 @@
+=== RUN   TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport
+    primary_directory_test.go:201: last root type 11
+    primary_directory_test.go:242: legacy TreeDB meta requires rebuild: freelist_patricia_v2 marker missing on nonempty index; rebuild required
+--- FAIL: TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport (1.34s)

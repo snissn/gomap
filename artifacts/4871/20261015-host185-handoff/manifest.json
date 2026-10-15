@@ -1,0 +1,1677 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 12218,
+    "sha256": "291e9c724d71a3a18919ba1b9497a7af614fea1404b5c013308d3ee4ca39ad5d"
+  },
+  {
+    "path": "native/HANDOFF.md",
+    "bytes": 6242,
+    "sha256": "3bc1dc5e739e24fc6910884f62fc8cac21710ae93a50fcc30a850ed9956b74a5"
+  },
+  {
+    "path": "native/actual-split-preimages/admission.go",
+    "bytes": 5968,
+    "sha256": "67bae4ebe803e337571ff301e9b9e79d8c3a090c0e1ab5fc51b4cac4d26d86cf"
+  },
+  {
+    "path": "native/actual-split-preimages/command_wal_publish.go",
+    "bytes": 37961,
+    "sha256": "b4d897254b600baca9cdd91b98d91a4b93bd8ebd9913d3da9c76a2849bc7721b"
+  },
+  {
+    "path": "native/actual-split-preimages/coordinator.go",
+    "bytes": 47614,
+    "sha256": "3b415763b02c4e2b9a6f19b5fff4ed8e23849e50a08af3554c37bbefa2bc120d"
+  },
+  {
+    "path": "native/actual-split-preimages/durable_root_transaction.go",
+    "bytes": 23354,
+    "sha256": "f62efa97fbd13eda17d721a1aa2d6b4ed0b1e861b86d6dff340e32877ba43cf4"
+  },
+  {
+    "path": "native/actual-split-preimages/durable_root_transaction_native_mvcc_v6.go",
+    "bytes": 7897,
+    "sha256": "8f91058ed04cf32622975d267895381ebde3fe2afe01a2df099c6109d23b19c5"
+  },
+  {
+    "path": "native/actual-split-preimages/native_mvcc_current_delete_v6.go",
+    "bytes": 12365,
+    "sha256": "f1e26c1b7928f61b707ae1fd845dbb55dda41b46d605f298d2029f796e1d1704"
+  },
+  {
+    "path": "native/actual-split-preimages/primary_terminal_completion_v6.go",
+    "bytes": 3629,
+    "sha256": "1a696f69bf53cbd1727233c57e8e3c6ba10084a9a66ffca4b93437b0d7681c77"
+  },
+  {
+    "path": "native/actual-split-preimages/primary_transaction_construction_v6.go",
+    "bytes": 19084,
+    "sha256": "8e00263fae73e0b074981983b6d36d1ac9eeda479a3e09fad45c30c1445f4985"
+  },
+  {
+    "path": "native/actual-split-preimages/read_root_v6.go",
+    "bytes": 15765,
+    "sha256": "484dba4d6a64b4198ff442e17558a7db697f3b4969cba28b7de8c93764da7c76"
+  },
+  {
+    "path": "native/actual-split-preimages/root_publication_activation.go",
+    "bytes": 78661,
+    "sha256": "d4cd8fc0cbd6553b8ebfcefafe2cbd30eebec1fe50cf62bd9a9977a49cb7a068"
+  },
+  {
+    "path": "native/create_worktree.py",
+    "bytes": 10735,
+    "sha256": "be3c805af6dd6f696a3ef897db1d5cf3efd6fa7a664b9428c81228c08146833a"
+  },
+  {
+    "path": "native/frozen43-input-manifest.json",
+    "bytes": 8099,
+    "sha256": "6cbc2613c25ef5b5bb8703a23ef7d3f4b9fe345fa7ec3e23c2ca9621259d9f92"
+  },
+  {
+    "path": "native/handoff-artifacts-manifest.json",
+    "bytes": 18400,
+    "sha256": "f50d9e1efb99b2f2f4195f5c89f29c86b46948c683a505b950b555b5b6690e87"
+  },
+  {
+    "path": "native/handoff-git-status.txt",
+    "bytes": 2660,
+    "sha256": "4d65d35578717e7cc30d84fab18fb3a67e1623485c729c3e9a6dccae1eda1ca9"
+  },
+  {
+    "path": "native/handoff-source-manifest.json",
+    "bytes": 22215,
+    "sha256": "4ba6ad2981497986a70fe8025fe97339dcebcdf35ed3b9afda22e3e435e0bc9a"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/cmd/treemap/vlog_audit_test.go",
+    "bytes": 16739,
+    "sha256": "7a6705b74f7c0a947e161413973aae8cee3df9cc86fc3a07cf2b8c6586f6cae7"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/api.go",
+    "bytes": 57170,
+    "sha256": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/batch.go",
+    "bytes": 34967,
+    "sha256": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/command_wal_publish.go",
+    "bytes": 38213,
+    "sha256": "4ebc5ac3788447ff92f3216c9997c21f0794ac3975ef0b9cdc3b945dbe5c0426"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/db.go",
+    "bytes": 211434,
+    "sha256": "8deb531d17d3f0546a9a40f608643b7e6323d9ac7e66bcac5108f05d1a5eac56"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/durable_root_runtime.go",
+    "bytes": 136175,
+    "sha256": "eb708af7ae7c01c8eb94f489c9c131c8dadb9006beee9fc7127b555091c08c26"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/index_gen.go",
+    "bytes": 11023,
+    "sha256": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/native_generation_failure_predicates_test.go",
+    "bytes": 2785,
+    "sha256": "ae9be63b9719ca5fac210b7c78459a6886008290b03bac225aeb1ceb0dce15d2"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "bytes": 7215,
+    "sha256": "3d4de86fde886f9122d1dc1353fb67bddf58680d1b26136e2cafdbb6e2f58640"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/one_shot_custody_test.go",
+    "bytes": 3537,
+    "sha256": "9b56d9fac3d54d536e9cab759f52627b49ef0ed78c4fe71b3b4b191621761c1d"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/pools.go",
+    "bytes": 8184,
+    "sha256": "b187c1083cbf794a286f0bfd02082f3a320f0b16d561c828645c2a0b4a41fa0c"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/prepared_root_publication_profile.go",
+    "bytes": 6349,
+    "sha256": "ff6886e8592834cca1fd803d8ca766111885c990f9e9c43db64631f38c0dd3ad"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/primary_dependency_projection_test.go",
+    "bytes": 4980,
+    "sha256": "0c9c67bafc2c8b07b2c961565c280e925f0dde8d0f96475f13b150060b10feb0"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/publication_absent_closure_test.go",
+    "bytes": 1427,
+    "sha256": "800c33b632d7558ca63f8ea97b92c243e47820732681dd38e8b18d6c714b035a"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/root_publication_activation.go",
+    "bytes": 79004,
+    "sha256": "532e376eb0254ec9e1543744c3434395a3740cdf71c7966bd8eb930ea239a79b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/root_publication_build_group.go",
+    "bytes": 21132,
+    "sha256": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/snapshot_manager_cleanup_test.go",
+    "bytes": 7248,
+    "sha256": "828434f38e71751ebb2de844a097a5a2f97fe6defe60da7c46be36fe41cb4557"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/stable_pager_owned_operations.go",
+    "bytes": 7114,
+    "sha256": "8e7ef4509c85d4334fd99fa9cd85a68f158b3d7372e5e9f7ac7c14aeb579b266"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/stable_resource.go",
+    "bytes": 35999,
+    "sha256": "08dbc2fc598a294ca5f7e9217a5cf53eb0ae661898e8937ccc9edcbb542bc51b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/stable_resource_test.go",
+    "bytes": 13252,
+    "sha256": "4680163d431a88bd7950d1da0f5af492ceb0a2064780af3c71565c01257c9904"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/vacuum_original_completion_test.go",
+    "bytes": 28250,
+    "sha256": "5202f85eee540a33a1bafb41260ca0367b74dbba509092f1ad661652488c0580"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/db/vlog_gc_incremental.go",
+    "bytes": 34648,
+    "sha256": "370ab557eb503a82952c98145d015639e4e50290bba3e6dd9ce9efb6b1df26bb"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/primaryarena/read_root_v6.go",
+    "bytes": 16266,
+    "sha256": "6152f860e0745de2ef621165127ab471811143fe83dff586f77b65b27d5276c4"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/admission.go",
+    "bytes": 6444,
+    "sha256": "520a7ad2ae5aa385b3425ef5839411458067bf6d23c4f28a90a09593ecbd601e"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/admission_terminal_join_v6_test.go",
+    "bytes": 4254,
+    "sha256": "82ec62200b99b7178e45b385cb51fa7beef5a7e802bcf654d68a8e83d93cc05e"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/coordinator.go",
+    "bytes": 48657,
+    "sha256": "71dccec1a8208e3bfe5c3002a98c516dab370443dfb9a9188b517be940625ce5"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go",
+    "bytes": 9903,
+    "sha256": "23ffbe171dbb35515c13a38c2e18be828cc65d4b7ecc22d70dd2b0c32eaac4f8"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "bytes": 26658,
+    "sha256": "bd22dd73531cbd4ec9ed35d8a6c62bb6ac75c5e2c6030361e4d17bcfa6d73f62"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "bytes": 7918,
+    "sha256": "ec44d094efcaea097159c9876a2ed800924dddfa9d4b2d7f934c8ff271223a89"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+    "bytes": 1725,
+    "sha256": "27ee6c0fb71099e3961b9effe5ce72ede7e01fdfd51cb979f56e01430f7c25d7"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "bytes": 20405,
+    "sha256": "cb2b2479a386b73b81afa8a856462f23c420c0c24df2598bd5d2369c144aff54"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "bytes": 5809,
+    "sha256": "cab4f85876060a31e247a1ef3a8062aaa90a6b7f94d49933211b068c9c0a6faa"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "bytes": 13398,
+    "sha256": "0e4f5b3745b9743b97efb5ca56340d04efd3247e51605c0a2135d71f23e91b44"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/native_publication_v6_test.go",
+    "bytes": 7154,
+    "sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/primary_bank_metadata_compact_v5_test.go",
+    "bytes": 3152,
+    "sha256": "56a3b56b6107d432e9c073b60c591bbd98b6149d0db6b93842ae4b432d512613"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "bytes": 7471,
+    "sha256": "bffe5e9c18ff2bd0eafc82da653fe98472ea3c48a59c913f0dc055851369b7e7"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "bytes": 3702,
+    "sha256": "489a530f5521316d6fc23a3d55174101631833fead12dcd11f4d0b4a4ad723a5"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "bytes": 24042,
+    "sha256": "c648813694db12a25c769ba1f762a933a4caa13758684631175a2bd7e73ab7c7"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/resource_absent_closure_test.go",
+    "bytes": 1447,
+    "sha256": "1bc570d6ef54901a37732aec0628c6c7a715fce18deea0657060a0fc28a835a2"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/resource_set.go",
+    "bytes": 178870,
+    "sha256": "4c72669c5f99d2cb4cfefb57b962d20e36ce946429ae030834595f91e7f5a38f"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/rootpublication/resource_token.go",
+    "bytes": 100938,
+    "sha256": "16659b905320bbd784fc60037298fda7fd233ade6b573707f5d31adfcb8d188b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/manager.go",
+    "bytes": 104302,
+    "sha256": "bf16356324aef7f9f978b2f581ed49d0ec7e253767e9973a961f7d7152655710"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/native_mvcc_file_close.go",
+    "bytes": 8137,
+    "sha256": "7b34b45a54ca498417098924bfc84ae7e82974d8c4f9a670b5a5d818573bfecc"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "bytes": 3539,
+    "sha256": "b2e0f1c96d3f639e1fa2be49aac0b798d16a0d66edffcea5d3d2377c0e6c743b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/original_cleanup.go",
+    "bytes": 7162,
+    "sha256": "de4b42562db296a197277447d48ee19f74704ce1c21b8e99ede09f3033a47622"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/publication_set_test.go",
+    "bytes": 1504,
+    "sha256": "d724618f99e94eb223c8c32db810bf11b4c184b3079656785e1c53d8e75be599"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/reader_mmap.go",
+    "bytes": 41701,
+    "sha256": "0cf4e4fd67d745acd7fe097a0260ed506ad25cc288ee011d299b47201ab4df1d"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/internal/valuelog/remap_original_custody_test.go",
+    "bytes": 4321,
+    "sha256": "c36b96504d9870ba3b64f99e3fbbd2dd0e2644fbc6e1cc647f2b2ab05bd0b58b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/pager/pager.go",
+    "bytes": 46128,
+    "sha256": "608b5dc1ec11a72e7f7dc66031c720765d327c15a7f245f289453aadbf483bc9"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/zipper/primary_base_evidence.go",
+    "bytes": 1395,
+    "sha256": "8c1b836f44219b5669cc6087d62826daf06d1b994c38dc9d11698df09aacc528"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/zipper/primary_base_evidence_test.go",
+    "bytes": 3305,
+    "sha256": "b2980fb3518853b87a4160dc9c8326795287fa08113c1633bd17db9c1cccc45c"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/zipper/primary_directory.go",
+    "bytes": 26581,
+    "sha256": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/zipper/read_only_prepare.go",
+    "bytes": 57129,
+    "sha256": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881"
+  },
+  {
+    "path": "native/handoff-source/TreeDB/zipper/zipper.go",
+    "bytes": 136426,
+    "sha256": "03c0dacef19c72e4695f148d31e684d5fb331754f56130ebf752aaea26b70269"
+  },
+  {
+    "path": "native/native-builder-handoff-green.json",
+    "bytes": 339,
+    "sha256": "f7c2041ba8125db7010b95b1e5cd405005334a4552c4d4e7a12e189054a0fc00"
+  },
+  {
+    "path": "native/native-builder-handoff-green.log",
+    "bytes": 366,
+    "sha256": "3fafc31a0285c387e3685aaf0b8ab3f49e335867e09c471e12e8b336b742bea7"
+  },
+  {
+    "path": "native/native-builder-handoff.log",
+    "bytes": 527,
+    "sha256": "a80b2dee7f33f56390ef86067cf93ed8c4960c66eb22feef716c559586a11abe"
+  },
+  {
+    "path": "native/producer-compile.log",
+    "bytes": 1007,
+    "sha256": "e1b0cc8b9b066261be9b1d1ab9821be550fb99b165b9df46fa3a5c26414ea56e"
+  },
+  {
+    "path": "native/reference64/coordinator.go",
+    "bytes": 48849,
+    "sha256": "d47ec469cd64b4247516d9a656da0a392740ed2227b6e25a6f9a20dc706f3c0b"
+  },
+  {
+    "path": "native/reference64/durable_root_transaction.go",
+    "bytes": 26673,
+    "sha256": "c7121e73fdf5ddb67b3a664e3ba477d360763b51f81fcee355059f41d1c65a02"
+  },
+  {
+    "path": "native/reference64/durable_root_transaction_native_mvcc_v6.go",
+    "bytes": 7944,
+    "sha256": "9a0f731ed4112b2c7607faad4df88abf5c1e5d9dfc26ea8a564f5b4a9556c72c"
+  },
+  {
+    "path": "native/reference64/durable_root_transaction_work_callbacks_v6.go",
+    "bytes": 1749,
+    "sha256": "a7a94d34a2ba83d466c835e31b88240f850db5e03aca75a5987b099d9cc8c551"
+  },
+  {
+    "path": "native/reference64/native_primary_finish_work_v6.go",
+    "bytes": 5859,
+    "sha256": "bfa32a8bf04f1679ea43b438d8f24ce72232dce3158d64a00a524551407aeab4"
+  },
+  {
+    "path": "native/reference64/native_publication_v6.go",
+    "bytes": 12134,
+    "sha256": "c3ebc80732e20e4fad6e965673740a34c317863a46fe6a204e7ca7103786141f"
+  },
+  {
+    "path": "native/reference64/primary_terminal_completion_v6.go",
+    "bytes": 3683,
+    "sha256": "ee18f78bc1870e1b44ec42729f9470f9e5109c3a41f98bb7a094516a63b1eece"
+  },
+  {
+    "path": "native/reference64/primary_transaction_construction_v6.go",
+    "bytes": 24214,
+    "sha256": "e20996e7ca85789c503160350bd590883ccca5552e1fb6b79bf1f72c13e53612"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "bytes": 17284,
+    "sha256": "d9ac6d7823d89dabdd27a11647e0193c51bcfd08e3af39dbd83143b8aa1caee8"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/db/native_mvcc_leaf_output_v6.go",
+    "bytes": 1157,
+    "sha256": "7e677cb6909827966f4d2fbfd8dc5558e360a2f9b4cd338bbeced6096f65559c"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "bytes": 7857,
+    "sha256": "acda557f7f3fb42e216ebb286e6cfbe43e4ce8fba425dc4b88fd7f0a317d63f4"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/zipper/materialized_input_work_v6.go",
+    "bytes": 11925,
+    "sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/zipper/materialized_write_work.go",
+    "bytes": 24409,
+    "sha256": "e7cce55781d8d690c7d759a9cf25eb0a7e6bacf5137e9ad96e4073bbd457398f"
+  },
+  {
+    "path": "native/retained-producer-port-preview/TreeDB/zipper/native_materialized_delta_v6.go",
+    "bytes": 2695,
+    "sha256": "fdd60d430c4d765bb512d4b714b70a4f5ccc19a769e56e427f6a1c79743f08c2"
+  },
+  {
+    "path": "native/retained-producer-port-preview/manifest.json",
+    "bytes": 1222,
+    "sha256": "82efca4f418902330cb86a1a52dad35c72373a0c2a437f22b026fb873d1a527c"
+  },
+  {
+    "path": "native/retained-producer-predecessor-census.json",
+    "bytes": 25740,
+    "sha256": "eb5bb7be687b49922164d781191ed8a1a310571d6cd3f837dc2034b50fd13965"
+  },
+  {
+    "path": "native/setup-command.json",
+    "bytes": 439,
+    "sha256": "ac0de2967451bee0f9e79be8d1d2767b52268508646500c4ef987d1462f19566"
+  },
+  {
+    "path": "native/setup-receipt.json",
+    "bytes": 551,
+    "sha256": "30263ce8aaae501aa8a1a9f0da6702664e66b85034c552b93e1fd7cb33b8671c"
+  },
+  {
+    "path": "native/setup.stderr",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "native/setup.stdout",
+    "bytes": 405,
+    "sha256": "ce83fe795baca86e9ec241a5fa31c942b3af3f6053367fe9abb68e8d3eda45aa"
+  },
+  {
+    "path": "native/shared-compile.json",
+    "bytes": 532,
+    "sha256": "dea075b03123f72f3ef837b7fdd50dd8de5094e761582816496b99f29111a51f"
+  },
+  {
+    "path": "native/shared-compile.log",
+    "bytes": 133,
+    "sha256": "8be204877925c3e012337202f81ad85e87fd2dae564ee8df1713562881e60f1e"
+  },
+  {
+    "path": "native/shared-focused.json",
+    "bytes": 386,
+    "sha256": "ca314db543c9cee516fb4be9c0c5ae7b2724409ea82984de9af79acc55e42645"
+  },
+  {
+    "path": "native/shared-focused.log",
+    "bytes": 2923,
+    "sha256": "cecad0a7fa48d2c4ac30479698a153c4eb0a5e4a5c5144019c171f16dec9f64d"
+  },
+  {
+    "path": "ordinary-HANDOFF.md",
+    "bytes": 10633,
+    "sha256": "c11b3eb61872981f977a17f2ef245e8a62fec844cdcd1cb246fa68afded59820"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-corrected-command.json",
+    "bytes": 398,
+    "sha256": "971c6ef141255456e99eadc7e2ace5e5770244cb7469bbe5c83d7918440a1de4"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-corrected.raw",
+    "bytes": 46,
+    "sha256": "b06b6ed5ae708ccbe8676ffdd7cc01f7b5c9c8f264e5bc1fd53b4d26336b0acc"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-final-after.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-final-before.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-final-command.json",
+    "bytes": 400,
+    "sha256": "ab0d80e718b39835f87f4df5e17eef0cb67da4466a3c87ed4bef680fe2ea02f4"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-final-receipt.json",
+    "bytes": 112,
+    "sha256": "1537ae7410f7fbeda068b77ba5530ea33dfbbcdbd837ddadc2bd0fa986fa128c"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-final.raw",
+    "bytes": 64,
+    "sha256": "e11721967e8c429abfcec691019e5005430ad7fd1e36da002e45257a0e0693e5"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-matching-after.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-matching-before.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-matching-command.json",
+    "bytes": 398,
+    "sha256": "971c6ef141255456e99eadc7e2ace5e5770244cb7469bbe5c83d7918440a1de4"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-matching-receipt.json",
+    "bytes": 112,
+    "sha256": "1a7931a0083a8ff68713b1a59ebbd18e1022c4e3914147b148c025e6842e9aa5"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-field-matching.raw",
+    "bytes": 46,
+    "sha256": "ea4d007ad10eb1bf3e772c8060b161bf9219b80f34a3880650a8e4db6ea7bc41"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-final-after.json",
+    "bytes": 451026,
+    "sha256": "1eb2af1c104ec56094fec7565e9fc144dada6ef28645389cff51bcdbe555fcd1"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-final-before.json",
+    "bytes": 451026,
+    "sha256": "1eb2af1c104ec56094fec7565e9fc144dada6ef28645389cff51bcdbe555fcd1"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-final-command.json",
+    "bytes": 398,
+    "sha256": "971c6ef141255456e99eadc7e2ace5e5770244cb7469bbe5c83d7918440a1de4"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-final-receipt.json",
+    "bytes": 112,
+    "sha256": "75b3c8d439b233b25f31f5294deb9eb4ee9c3cf2711784a9e24cd08db3d6a89a"
+  },
+  {
+    "path": "ordinary-fixture-repair/analyzer-final.raw",
+    "bytes": 36544,
+    "sha256": "63e25f63b8dc88843b6fe944160c23aef259cbb278dfa745eb1302b21de7439d"
+  },
+  {
+    "path": "ordinary-fixture-repair/batch-gofmt.raw",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/compact_storage_cached_internal_test.go",
+    "bytes": 23688,
+    "sha256": "a86bdcb58a655a36cd437869d22605821e2992fbb40f0a9620a11789570f3326"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/compact_storage_test.go",
+    "bytes": 12170,
+    "sha256": "93ff7bd0474015bf57597906ffbb621dfdac4d237fe9928bc3d63e6b2e98057a"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/cow_public_review_regression_test.go",
+    "bytes": 13411,
+    "sha256": "78405693b66163beeb22a0895e5e01cc4b85766549968f4170390e6bd045dd2f"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "bytes": 17356,
+    "sha256": "9097d03d84329d708e1a843594d74fe8a67ef90d9f55163b43c8d6621cac1efe"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/db/original_rootset_authority_completion_test.go",
+    "bytes": 4415,
+    "sha256": "84601c2f8c7993d8c90a1190a3f43fe03b690dae096bfbd880d2cd59fc6e5bac"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/db/primary_offline_pair_v6.go",
+    "bytes": 15812,
+    "sha256": "49db8d323ccf32f6cf3bbb030457f7427e344c7ebbcbb58e0754b98b170e3ea4"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/db/primary_offline_pair_v6_test.go",
+    "bytes": 27557,
+    "sha256": "f70e86aea042564b8aab16a2cf254239e59a88e001b2a51cc26adc06ed878f50"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/db/vacuum_collection_publication_guard_test.go",
+    "bytes": 43586,
+    "sha256": "273e94240beb5815344d85a349f0cd37b6ce7a734a01505669f6745b8e8e59ac"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/internal/primaryarena/owned_file_test.go",
+    "bytes": 1855,
+    "sha256": "38d090e2091f7eba34cf378a7361c232d8ea18efad7f56e6696dceb7dcf94ca0"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+    "bytes": 3836,
+    "sha256": "36f2f67ea5854406276c7a3c81427bec7265c89f47ea4f9298fa49b6a5958075"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "bytes": 3539,
+    "sha256": "b2e0f1c96d3f639e1fa2be49aac0b798d16a0d66edffcea5d3d2377c0e6c743b"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/internal/valuelog/native_mvcc_set_release_test.go",
+    "bytes": 7324,
+    "sha256": "60a51fc8ba3a5c07f30b439eea52b817025c31661126502fcd37359b04e15cad"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/maintenance_leaf_vlog_test.go",
+    "bytes": 15757,
+    "sha256": "7d87be32df6a5f17e9da9bc724e562ade6f2dd5078d67d4c9cd0ba71e761a678"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/offline_maintenance_format_config_test.go",
+    "bytes": 4831,
+    "sha256": "962a7c176f0aa12ec882779a1845c6d17d1f4078747051ac07594351c2f929ba"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/pager/adjacent_write_work_test.go",
+    "bytes": 2004,
+    "sha256": "5bde7f3ca93d7130fc98d42245f3f7f6edf9493c0d33c918919f977e43694273"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/pager/owned_file_test.go",
+    "bytes": 4310,
+    "sha256": "527d0ab4936a680dfa951d6a6f27d40c77c7afa10556385a8e1267d11cb3f432"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/pager/readonly_owned_metadata_test.go",
+    "bytes": 4188,
+    "sha256": "bebab6b66768efe503df6f36c22b2c87939b524c8c0cb2694cbad073bde9d158"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/primary_joint_vacuum_v6_test.go",
+    "bytes": 3222,
+    "sha256": "79ea9b361e5ebf537623a83552a828818d9cc3521132aad20d156978b2162d63"
+  },
+  {
+    "path": "ordinary-fixture-repair/before/TreeDB/profile_entrypoint_inventory_test.go",
+    "bytes": 11251,
+    "sha256": "7e83871251625c5a972cb04f9db5b05c5ea3c06ea807641b1cb9c5e8fee1f729"
+  },
+  {
+    "path": "ordinary-fixture-repair/caller-normal-after.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/caller-normal-before.json",
+    "bytes": 451026,
+    "sha256": "4029a31da13c892abf7b6f0119429ff82743ccc1367e9dd1e3926e559a29f8bc"
+  },
+  {
+    "path": "ordinary-fixture-repair/caller-normal-command.json",
+    "bytes": 349,
+    "sha256": "619726c6c91cb7175599aef0b2bb38f8ac95a19671430b0ffccec1288d57d8c4"
+  },
+  {
+    "path": "ordinary-fixture-repair/caller-normal-receipt.json",
+    "bytes": 111,
+    "sha256": "7d01b4624b79587cfd348d0eb4095ffcd7676bc2d4599dca94154eae65cf643c"
+  },
+  {
+    "path": "ordinary-fixture-repair/caller-normal.raw",
+    "bytes": 43,
+    "sha256": "05468201509a449101f4e7ad709af0ab8b537227352b354be8762caabfda5d41"
+  },
+  {
+    "path": "ordinary-fixture-repair/commands.json",
+    "bytes": 1407,
+    "sha256": "10d43a009142b39f9a9035e9d0eb0f6bcfcf4a653730a07b0db776ceec08fe87"
+  },
+  {
+    "path": "ordinary-fixture-repair/diff.patch",
+    "bytes": 23350,
+    "sha256": "4b5a85982578b4936d38285b6284a5d32ca895fd1d7ad58998e6c0efbe19709a"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source-manifest.json",
+    "bytes": 3015,
+    "sha256": "6f08593a92f27349f8fc895648d5089c50af3994fba55ecdba4bfde6a7770b1b"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source-receipt.json",
+    "bytes": 246,
+    "sha256": "650f6473a9c5060fd6708b01e29df3c5a419aa6421517a0664c11458fa6b7bf7"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/compact_storage_cached_internal_test.go",
+    "bytes": 23985,
+    "sha256": "76b9e00cf0941b733518a20bc36ea72b94cc7f9637b541cca5a6541c5aaa70c7"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/compact_storage_test.go",
+    "bytes": 13231,
+    "sha256": "ce384bea888a4a4e89f5e7624dba85c81e36d3775413b7a4cc90307dc79167b6"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/cow_public_review_regression_test.go",
+    "bytes": 14040,
+    "sha256": "5e3361753349008c6f6ef5f3f204ec7ae0ed1c6eb7b5a19be55c33ed6aba9244"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "bytes": 17847,
+    "sha256": "84301b302a44eeaf78fb2b6665333cc1b88bb9ed8fe5409c001973b37f9fe1ed"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/db/original_rootset_authority_completion_test.go",
+    "bytes": 4904,
+    "sha256": "dc14a00b9205d1e3fad0785306eb9af4e15046ae483f0cedb35effd534527afb"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/db/primary_offline_pair_v6.go",
+    "bytes": 16160,
+    "sha256": "331bf7f58d7ac16863b5ffef181ad9db4f2293e744db9562dfdca7c3f65b5b46"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/db/primary_offline_pair_v6_test.go",
+    "bytes": 29106,
+    "sha256": "0b77ca5b2ac5b200adc41c6c489dd9ef0d8ac670d62ab47a56527474d086b443"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/db/vacuum_collection_publication_guard_test.go",
+    "bytes": 45393,
+    "sha256": "63fed04ccc41549e646bc74a29be9640079e67efecc48047517a5b3a887d5ffd"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/internal/primaryarena/owned_file_test.go",
+    "bytes": 1853,
+    "sha256": "f9b73852a1fd7a7cd07080bfd53c0b99a051b42277c31364f433f4443299496b"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+    "bytes": 4004,
+    "sha256": "e89f028b4d2bff2ae63a4e76985b05c29ba839ee98bfc81372ac4ecbf6305d6e"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "bytes": 3537,
+    "sha256": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/internal/valuelog/native_mvcc_set_release_test.go",
+    "bytes": 7322,
+    "sha256": "96ceae7e64f823f7542724ba18158b70b76857c324af88a154c434ea6da0f478"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/maintenance_leaf_vlog_test.go",
+    "bytes": 19674,
+    "sha256": "8d87c97ba2f325f35e7831db69f6ee0b305513fa6eb7729b487fa98144e8b2a4"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/offline_maintenance_format_config_test.go",
+    "bytes": 6451,
+    "sha256": "e824d24b454fc28c594de29b7c42e504b0939781ae8217fd8af1e6bed319a904"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/pager/adjacent_write_work_test.go",
+    "bytes": 2059,
+    "sha256": "33aefd1fabeac7fb5a8aa4c7b986ff6afe5367197ac543c7d6929372405b7a0b"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/pager/owned_file_test.go",
+    "bytes": 4302,
+    "sha256": "94dbafaf4cd5a07664c54e16eb5bfa9e2253f039ca79e5173ffb43192249cec5"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/pager/readonly_owned_metadata_test.go",
+    "bytes": 4186,
+    "sha256": "c0e5f6357bd8a4dca91c98c50de9cd40b47007c4410dea71b84548ee1002eeea"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/primary_joint_vacuum_v6_test.go",
+    "bytes": 3604,
+    "sha256": "7e2c64e061b0c457dcd5e4ceae75fcb42d751b7333b6c8bfb1677534b04a48ee"
+  },
+  {
+    "path": "ordinary-fixture-repair/final-compatible-source/TreeDB/profile_entrypoint_inventory_test.go",
+    "bytes": 11793,
+    "sha256": "dbec57ad985d5768c6b7b7882e536e921ac9d60488ab2d1f1a31b77a8d3afd3f"
+  },
+  {
+    "path": "ordinary-fixture-repair/focused-runner.py",
+    "bytes": 1716,
+    "sha256": "8684a490dc1c6be849a4b182faefe6b62de1df611576fdb124a61d9ec29ada7b"
+  },
+  {
+    "path": "ordinary-fixture-repair/inputs-after.json",
+    "bytes": 542513,
+    "sha256": "3f9dafca80f99d92a7a82787391d29e9e53efe8b4df0d5b31991d249f19e7221"
+  },
+  {
+    "path": "ordinary-fixture-repair/inputs-before.json",
+    "bytes": 542513,
+    "sha256": "3f9dafca80f99d92a7a82787391d29e9e53efe8b4df0d5b31991d249f19e7221"
+  },
+  {
+    "path": "ordinary-fixture-repair/nonlast-original-guard-after.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "ordinary-fixture-repair/nonlast-original-guard-before.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "ordinary-fixture-repair/nonlast-original-guard-command.json",
+    "bytes": 252,
+    "sha256": "f3f985a1109118aee62ed6571a77b8d19b3344ff0bb5f81bf897554275ee6cde"
+  },
+  {
+    "path": "ordinary-fixture-repair/nonlast-original-guard-receipt.json",
+    "bytes": 112,
+    "sha256": "b0dc9d7cb0aa88f7b38c9a71a3555bda67c9a08a8feac8aafc6b5ff6ee0d4098"
+  },
+  {
+    "path": "ordinary-fixture-repair/nonlast-original-guard.raw",
+    "bytes": 234,
+    "sha256": "c789c5e46e29a42a0f0d75e5694c9b1bafa91d7397ad785d616f434b5163894c"
+  },
+  {
+    "path": "ordinary-fixture-repair/normal-0.raw",
+    "bytes": 243,
+    "sha256": "b3d7aac6e5beac53749c78765090fa12004707f007ab8526c3471e2ec0c45739"
+  },
+  {
+    "path": "ordinary-fixture-repair/normal-1.raw",
+    "bytes": 2934,
+    "sha256": "d726a7e556428aec773e144d9562d118b3f5d3151a950d15c6308734519c7ae3"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-pair-normal-after.json",
+    "bytes": 451026,
+    "sha256": "35ca6f6b8a88bc88d2eb51b299b0ad9103ef612b9cb863f13b56d88c33ff6bfb"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-pair-normal-before.json",
+    "bytes": 451026,
+    "sha256": "35ca6f6b8a88bc88d2eb51b299b0ad9103ef612b9cb863f13b56d88c33ff6bfb"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-pair-normal-command.json",
+    "bytes": 359,
+    "sha256": "22d092afde3f08ad4980fa9b90493442e50bd5cf17f7c6ab3ecf9a86b8e16d71"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-pair-normal-receipt.json",
+    "bytes": 111,
+    "sha256": "b4edf0e7eec21b1cd3fb59aade98855222d886cf969461525090e2ebe8653b81"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-pair-normal.raw",
+    "bytes": 46,
+    "sha256": "05e13c9344a2ebf1d93cd3855c9624f7af3a880f7a17c34cdb4c2fd6ea493ea6"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-materialized-normal-after.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-materialized-normal-before.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-materialized-normal-command.json",
+    "bytes": 546,
+    "sha256": "61aec397b8507a0e675d5053c4a548dc1a7fd1a0312e96092d4e2ae588abfff9"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-materialized-normal-receipt.json",
+    "bytes": 112,
+    "sha256": "a28f8c604759e1d9b686cb75d17300b69d2bc96bc39dabff6042558800c197fe"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-materialized-normal.raw",
+    "bytes": 43,
+    "sha256": "6bdd5982aa6d66a7d58e080df76622e29742e9c9f5a59d5b5586d3eeb27c9929"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-normal-after.json",
+    "bytes": 451026,
+    "sha256": "3f8a3b09706fcc709ccd99a0a935c67aecc65edbb2a0a4ed4de44bf5411105c5"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-normal-before.json",
+    "bytes": 451026,
+    "sha256": "3f8a3b09706fcc709ccd99a0a935c67aecc65edbb2a0a4ed4de44bf5411105c5"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-normal-command.json",
+    "bytes": 546,
+    "sha256": "61aec397b8507a0e675d5053c4a548dc1a7fd1a0312e96092d4e2ae588abfff9"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-normal-receipt.json",
+    "bytes": 111,
+    "sha256": "4055e44ee763dcbceb99c1d1e4c0ae8940a0c4a2c65c172ce9705dc0cf6f3ad5"
+  },
+  {
+    "path": "ordinary-fixture-repair/offline-public-capsule-normal.raw",
+    "bytes": 237,
+    "sha256": "69288dfe08ec52330cdbd72c9867726505d4376e414e37116c0c9a16b65689ae"
+  },
+  {
+    "path": "ordinary-fixture-repair/paths.json",
+    "bytes": 973,
+    "sha256": "b3b93907c68149f474dfffe1327591e43e5e6fbdfc9ddd05821443a1af98a7a8"
+  },
+  {
+    "path": "ordinary-fixture-repair/physical-compaction-normal-after.json",
+    "bytes": 451026,
+    "sha256": "35ca6f6b8a88bc88d2eb51b299b0ad9103ef612b9cb863f13b56d88c33ff6bfb"
+  },
+  {
+    "path": "ordinary-fixture-repair/physical-compaction-normal-before.json",
+    "bytes": 451026,
+    "sha256": "35ca6f6b8a88bc88d2eb51b299b0ad9103ef612b9cb863f13b56d88c33ff6bfb"
+  },
+  {
+    "path": "ordinary-fixture-repair/physical-compaction-normal-command.json",
+    "bytes": 359,
+    "sha256": "a671c649a0142ef152b3d0e733869fbf8302d39174380d991284e8d257a0c4af"
+  },
+  {
+    "path": "ordinary-fixture-repair/physical-compaction-normal-receipt.json",
+    "bytes": 112,
+    "sha256": "2f6b56d6adbf5ba7b41273194086258678ecd88e30d45d33991b4a9f981848d0"
+  },
+  {
+    "path": "ordinary-fixture-repair/physical-compaction-normal.raw",
+    "bytes": 43,
+    "sha256": "c19b2ee6a377a3491f3f6ba7bedc932b167e2593c5b93aa181c1be11374e5b5f"
+  },
+  {
+    "path": "ordinary-fixture-repair/receipt.json",
+    "bytes": 1846,
+    "sha256": "78316798eff8690cbffe6e5668ba03f7897187f18bdd22b7aa29f019245e397e"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/cow_public_review_regression_test.go",
+    "bytes": 14040,
+    "sha256": "5e3361753349008c6f6ef5f3f204ec7ae0ed1c6eb7b5a19be55c33ed6aba9244"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "bytes": 17847,
+    "sha256": "84301b302a44eeaf78fb2b6665333cc1b88bb9ed8fe5409c001973b37f9fe1ed"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/db/original_rootset_authority_completion_test.go",
+    "bytes": 4904,
+    "sha256": "dc14a00b9205d1e3fad0785306eb9af4e15046ae483f0cedb35effd534527afb"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/db/vacuum_collection_publication_guard_test.go",
+    "bytes": 43628,
+    "sha256": "e2cb5c27aa2b73b1ceffd0aeb6e449fa8595fcad36fac1d65ae4c132ed1bc099"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/internal/primaryarena/owned_file_test.go",
+    "bytes": 1853,
+    "sha256": "f9b73852a1fd7a7cd07080bfd53c0b99a051b42277c31364f433f4443299496b"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+    "bytes": 4004,
+    "sha256": "e89f028b4d2bff2ae63a4e76985b05c29ba839ee98bfc81372ac4ecbf6305d6e"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "bytes": 3537,
+    "sha256": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/internal/valuelog/native_mvcc_set_release_test.go",
+    "bytes": 7322,
+    "sha256": "96ceae7e64f823f7542724ba18158b70b76857c324af88a154c434ea6da0f478"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/pager/adjacent_write_work_test.go",
+    "bytes": 2059,
+    "sha256": "33aefd1fabeac7fb5a8aa4c7b986ff6afe5367197ac543c7d6929372405b7a0b"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/pager/owned_file_test.go",
+    "bytes": 4302,
+    "sha256": "94dbafaf4cd5a07664c54e16eb5bfa9e2253f039ca79e5173ffb43192249cec5"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/pager/readonly_owned_metadata_test.go",
+    "bytes": 4186,
+    "sha256": "c0e5f6357bd8a4dca91c98c50de9cd40b47007c4410dea71b84548ee1002eeea"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/primary_joint_vacuum_v6_test.go",
+    "bytes": 3604,
+    "sha256": "7e2c64e061b0c457dcd5e4ceae75fcb42d751b7333b6c8bfb1677534b04a48ee"
+  },
+  {
+    "path": "ordinary-fixture-repair/source/TreeDB/profile_entrypoint_inventory_test.go",
+    "bytes": 11793,
+    "sha256": "dbec57ad985d5768c6b7b7882e536e921ac9d60488ab2d1f1a31b77a8d3afd3f"
+  },
+  {
+    "path": "ordinary-frozen/HANDOFF.md",
+    "bytes": 10633,
+    "sha256": "c11b3eb61872981f977a17f2ef245e8a62fec844cdcd1cb246fa68afded59820"
+  },
+  {
+    "path": "ordinary-frozen/all-nested-module-census.json",
+    "bytes": 644431,
+    "sha256": "c3ac0926fe45a7ce071cd34f7f971d8cd1bfd7cb84d9e9395b6964bb2047c6a1"
+  },
+  {
+    "path": "ordinary-frozen/evidence-manifest.json",
+    "bytes": 16155,
+    "sha256": "2743507ddd41e6a57886844c64fd4d14d5b1217f3f42920051a01dbd3928b908"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db-corrected.after.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db-corrected.before.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db-corrected.command.json",
+    "bytes": 657,
+    "sha256": "e0891b78e8374d3349c8aa8901715debfe7d7e7f5b5d112da41f1f3ed7fa572d"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db-corrected.raw",
+    "bytes": 649,
+    "sha256": "1e674b9a18089fc93b1c9e786a64926be3ae43cb319f781610b4a761be824b4d"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db-corrected.receipt.json",
+    "bytes": 95,
+    "sha256": "94972fe624ed62d43b4285f77f6dbaebc34d3b25cf240da232aa1ccb603bef13"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db.after.json",
+    "bytes": 449045,
+    "sha256": "65ee57a168c1c032fe4c2d43d9eb470f3e31c046f892dbedf625a42296a044d8"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db.before.json",
+    "bytes": 449045,
+    "sha256": "65ee57a168c1c032fe4c2d43d9eb470f3e31c046f892dbedf625a42296a044d8"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db.command.json",
+    "bytes": 895,
+    "sha256": "04be2a5d8be5799cac2b82f0a57216327454b315ecc98df1107fbfa1beea51f3"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db.raw",
+    "bytes": 407,
+    "sha256": "4819ab97a2aa961e433525821553d66791f66d946a6bfea829d4341a36332bea"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/normal-db.receipt.json",
+    "bytes": 982,
+    "sha256": "c0dfa45b4d3767cbb65e95ec6ebafdf5e691b3f1547d6e72550719aefdd36433"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-column.after.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-column.before.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-column.command.json",
+    "bytes": 479,
+    "sha256": "84c3cdc8fad3ab0772dbfc1f606aeebb46b6aea9fdf7431a5767b6f9f2aa0938"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-column.raw",
+    "bytes": 2510,
+    "sha256": "da53ad81afbdafd7b876b17ccd1cbf1468ab1c3a576c6e67b16e700f4fd093ea"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-column.receipt.json",
+    "bytes": 95,
+    "sha256": "05dd8e967ad64028180b2f57f6fb1f6adf9de783c949b8ff71ca813986e06421"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-shrink.after.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-shrink.before.json",
+    "bytes": 441686,
+    "sha256": "abe695db4bf907740d5ff0ca24dc132991b52fbbd1e3f607f29178d70d6df814"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-shrink.command.json",
+    "bytes": 460,
+    "sha256": "ba572d4e2f522647b9cfe4388610751f4a4c021c497e6e9982f0c4a7d0c031a1"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-shrink.raw",
+    "bytes": 178,
+    "sha256": "cc1764ab595817c83b99184fdafc17f6fea2ccf5b9e626ff004a1182414f62ff"
+  },
+  {
+    "path": "ordinary-frozen/latest-controls/public-shrink.receipt.json",
+    "bytes": 95,
+    "sha256": "e544805f2b8caa63145d93502a92a78638111ab368e70dbaa98490f929b57493"
+  },
+  {
+    "path": "ordinary-frozen/owned-source-manifest.json",
+    "bytes": 12814,
+    "sha256": "3a2a85ba0519067d8738e2723839da05da4c6de4cf00eb9e1b34520a5c2997f6"
+  },
+  {
+    "path": "ordinary-frozen/receipt.json",
+    "bytes": 1022,
+    "sha256": "e603431f933d5a58d93f3862a73c661461a98f2609248a4c66064ddee7a8646f"
+  },
+  {
+    "path": "ordinary-frozen/source-census.json",
+    "bytes": 641425,
+    "sha256": "1292c8d1e54de196ff5ef4e420d067994436ceb4519b50cc91a62384475a1779"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/cmd/treemap/vlog_audit_test.go",
+    "bytes": 16739,
+    "sha256": "7a6705b74f7c0a947e161413973aae8cee3df9cc86fc3a07cf2b8c6586f6cae7"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/compact_storage_cached_internal_test.go",
+    "bytes": 23985,
+    "sha256": "76b9e00cf0941b733518a20bc36ea72b94cc7f9637b541cca5a6541c5aaa70c7"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/compact_storage_test.go",
+    "bytes": 13231,
+    "sha256": "ce384bea888a4a4e89f5e7624dba85c81e36d3775413b7a4cc90307dc79167b6"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/cow_public_review_regression_test.go",
+    "bytes": 14040,
+    "sha256": "5e3361753349008c6f6ef5f3f204ec7ae0ed1c6eb7b5a19be55c33ed6aba9244"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/api.go",
+    "bytes": 57170,
+    "sha256": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/batch.go",
+    "bytes": 34967,
+    "sha256": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/db.go",
+    "bytes": 211434,
+    "sha256": "8deb531d17d3f0546a9a40f608643b7e6323d9ac7e66bcac5108f05d1a5eac56"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/durable_primary_rebuild_v5.go",
+    "bytes": 23695,
+    "sha256": "36576fe8ec65180efa1c8902c6921b0b07ec85f4a8693925acd4ebf1efa61acc"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/durable_root_runtime.go",
+    "bytes": 136175,
+    "sha256": "eb708af7ae7c01c8eb94f489c9c131c8dadb9006beee9fc7127b555091c08c26"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/index_gen.go",
+    "bytes": 11023,
+    "sha256": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "bytes": 17847,
+    "sha256": "84301b302a44eeaf78fb2b6665333cc1b88bb9ed8fe5409c001973b37f9fe1ed"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/native_generation_failure_predicates_test.go",
+    "bytes": 2785,
+    "sha256": "ae9be63b9719ca5fac210b7c78459a6886008290b03bac225aeb1ceb0dce15d2"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "bytes": 7215,
+    "sha256": "3d4de86fde886f9122d1dc1353fb67bddf58680d1b26136e2cafdbb6e2f58640"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/one_shot_custody_test.go",
+    "bytes": 3537,
+    "sha256": "9b56d9fac3d54d536e9cab759f52627b49ef0ed78c4fe71b3b4b191621761c1d"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/original_rootset_authority_completion_test.go",
+    "bytes": 4904,
+    "sha256": "dc14a00b9205d1e3fad0785306eb9af4e15046ae483f0cedb35effd534527afb"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/pools.go",
+    "bytes": 8184,
+    "sha256": "b187c1083cbf794a286f0bfd02082f3a320f0b16d561c828645c2a0b4a41fa0c"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/prepared_root_publication_profile.go",
+    "bytes": 6349,
+    "sha256": "ff6886e8592834cca1fd803d8ca766111885c990f9e9c43db64631f38c0dd3ad"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_arena_owner_v5.go",
+    "bytes": 8736,
+    "sha256": "5af224fd8a56a5479d36c2e22b2aa78912e22577d52c693bb8c54b567cd46758"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_arena_release_work.go",
+    "bytes": 7957,
+    "sha256": "d3a617c32599768e604e818599d130c0d6ed1abb96b31a56f6a73b7eb87ee302"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_arena_release_work_test.go",
+    "bytes": 5437,
+    "sha256": "ad213b076773917e71a196062b421929055160ccf0783d52962a35e0d3d159a3"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_dependency_projection_test.go",
+    "bytes": 4980,
+    "sha256": "0c9c67bafc2c8b07b2c961565c280e925f0dde8d0f96475f13b150060b10feb0"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_offline_pair_v6.go",
+    "bytes": 16160,
+    "sha256": "331bf7f58d7ac16863b5ffef181ad9db4f2293e744db9562dfdca7c3f65b5b46"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/primary_offline_pair_v6_test.go",
+    "bytes": 29106,
+    "sha256": "0b77ca5b2ac5b200adc41c6c489dd9ef0d8ac670d62ab47a56527474d086b443"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/publication_absent_closure_test.go",
+    "bytes": 1427,
+    "sha256": "800c33b632d7558ca63f8ea97b92c243e47820732681dd38e8b18d6c714b035a"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/root_publication_activation.go",
+    "bytes": 78661,
+    "sha256": "d4cd8fc0cbd6553b8ebfcefafe2cbd30eebec1fe50cf62bd9a9977a49cb7a068"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/root_publication_build_group.go",
+    "bytes": 21132,
+    "sha256": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/snapshot_manager_cleanup_test.go",
+    "bytes": 7248,
+    "sha256": "828434f38e71751ebb2de844a097a5a2f97fe6defe60da7c46be36fe41cb4557"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/stable_pager_owned_operations.go",
+    "bytes": 7114,
+    "sha256": "8e7ef4509c85d4334fd99fa9cd85a68f158b3d7372e5e9f7ac7c14aeb579b266"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/stable_resource.go",
+    "bytes": 35999,
+    "sha256": "08dbc2fc598a294ca5f7e9217a5cf53eb0ae661898e8937ccc9edcbb542bc51b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/stable_resource_test.go",
+    "bytes": 13252,
+    "sha256": "4680163d431a88bd7950d1da0f5af492ceb0a2064780af3c71565c01257c9904"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vacuum_collection_publication_guard_test.go",
+    "bytes": 45393,
+    "sha256": "63fed04ccc41549e646bc74a29be9640079e67efecc48047517a5b3a887d5ffd"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vacuum_online.go",
+    "bytes": 88644,
+    "sha256": "b569ba79001044a2fc69df97b6154cae8f4946b9b1a8515c45d7490c91b62d52"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vacuum_original_completion_test.go",
+    "bytes": 28250,
+    "sha256": "5202f85eee540a33a1bafb41260ca0367b74dbba509092f1ad661652488c0580"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vacuum_shared_base.go",
+    "bytes": 7019,
+    "sha256": "d7ffba1f8a506e7a2072cffe2c277207a48996b6592fff36108fd876ee91b2c7"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vacuum_shared_base_test.go",
+    "bytes": 4375,
+    "sha256": "2d66e596af54c5637553239647fbe80bb6633150e6e9f0f776b2d2a94fa6349d"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/db/vlog_gc_incremental.go",
+    "bytes": 34648,
+    "sha256": "370ab557eb503a82952c98145d015639e4e50290bba3e6dd9ce9efb6b1df26bb"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/primaryarena/owned_file_test.go",
+    "bytes": 1853,
+    "sha256": "f9b73852a1fd7a7cd07080bfd53c0b99a051b42277c31364f433f4443299496b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/admission_terminal_join_v6_test.go",
+    "bytes": 4254,
+    "sha256": "82ec62200b99b7178e45b385cb51fa7beef5a7e802bcf654d68a8e83d93cc05e"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/coordinator.go",
+    "bytes": 47614,
+    "sha256": "3b415763b02c4e2b9a6f19b5fff4ed8e23849e50a08af3554c37bbefa2bc120d"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/data_terminal_completion_v6_test.go",
+    "bytes": 9903,
+    "sha256": "23ffbe171dbb35515c13a38c2e18be828cc65d4b7ecc22d70dd2b0c32eaac4f8"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+    "bytes": 4004,
+    "sha256": "e89f028b4d2bff2ae63a4e76985b05c29ba839ee98bfc81372ac4ecbf6305d6e"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/primary_bank_metadata_compact_v5_test.go",
+    "bytes": 3152,
+    "sha256": "56a3b56b6107d432e9c073b60c591bbd98b6149d0db6b93842ae4b432d512613"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "bytes": 7471,
+    "sha256": "bffe5e9c18ff2bd0eafc82da653fe98472ea3c48a59c913f0dc055851369b7e7"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "bytes": 3629,
+    "sha256": "1a696f69bf53cbd1727233c57e8e3c6ba10084a9a66ffca4b93437b0d7681c77"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/resource_absent_closure_test.go",
+    "bytes": 1447,
+    "sha256": "1bc570d6ef54901a37732aec0628c6c7a715fce18deea0657060a0fc28a835a2"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/resource_set.go",
+    "bytes": 178870,
+    "sha256": "4c72669c5f99d2cb4cfefb57b962d20e36ce946429ae030834595f91e7f5a38f"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/rootpublication/resource_token.go",
+    "bytes": 100938,
+    "sha256": "16659b905320bbd784fc60037298fda7fd233ade6b573707f5d31adfcb8d188b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/manager.go",
+    "bytes": 104302,
+    "sha256": "bf16356324aef7f9f978b2f581ed49d0ec7e253767e9973a961f7d7152655710"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/native_mvcc_file_close.go",
+    "bytes": 8137,
+    "sha256": "7b34b45a54ca498417098924bfc84ae7e82974d8c4f9a670b5a5d818573bfecc"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "bytes": 3537,
+    "sha256": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/native_mvcc_set_release_test.go",
+    "bytes": 7322,
+    "sha256": "96ceae7e64f823f7542724ba18158b70b76857c324af88a154c434ea6da0f478"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/original_cleanup.go",
+    "bytes": 7162,
+    "sha256": "de4b42562db296a197277447d48ee19f74704ce1c21b8e99ede09f3033a47622"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/publication_set_test.go",
+    "bytes": 1504,
+    "sha256": "d724618f99e94eb223c8c32db810bf11b4c184b3079656785e1c53d8e75be599"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/reader_mmap.go",
+    "bytes": 41701,
+    "sha256": "0cf4e4fd67d745acd7fe097a0260ed506ad25cc288ee011d299b47201ab4df1d"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/internal/valuelog/remap_original_custody_test.go",
+    "bytes": 4321,
+    "sha256": "c36b96504d9870ba3b64f99e3fbbd2dd0e2644fbc6e1cc647f2b2ab05bd0b58b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/maintenance_leaf_vlog_test.go",
+    "bytes": 19674,
+    "sha256": "8d87c97ba2f325f35e7831db69f6ee0b305513fa6eb7729b487fa98144e8b2a4"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/offline_maintenance_format_config_test.go",
+    "bytes": 6451,
+    "sha256": "e824d24b454fc28c594de29b7c42e504b0939781ae8217fd8af1e6bed319a904"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/pager/adjacent_write_work_test.go",
+    "bytes": 2059,
+    "sha256": "33aefd1fabeac7fb5a8aa4c7b986ff6afe5367197ac543c7d6929372405b7a0b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/pager/owned_file_test.go",
+    "bytes": 4302,
+    "sha256": "94dbafaf4cd5a07664c54e16eb5bfa9e2253f039ca79e5173ffb43192249cec5"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/pager/pager.go",
+    "bytes": 46128,
+    "sha256": "608b5dc1ec11a72e7f7dc66031c720765d327c15a7f245f289453aadbf483bc9"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/pager/readonly_owned_metadata_test.go",
+    "bytes": 4186,
+    "sha256": "c0e5f6357bd8a4dca91c98c50de9cd40b47007c4410dea71b84548ee1002eeea"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/primary_joint_vacuum_v6_test.go",
+    "bytes": 3604,
+    "sha256": "7e2c64e061b0c457dcd5e4ceae75fcb42d751b7333b6c8bfb1677534b04a48ee"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/profile_entrypoint_inventory_test.go",
+    "bytes": 11793,
+    "sha256": "dbec57ad985d5768c6b7b7882e536e921ac9d60488ab2d1f1a31b77a8d3afd3f"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/zipper/primary_base_evidence.go",
+    "bytes": 1395,
+    "sha256": "8c1b836f44219b5669cc6087d62826daf06d1b994c38dc9d11698df09aacc528"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/zipper/primary_base_evidence_test.go",
+    "bytes": 3305,
+    "sha256": "b2980fb3518853b87a4160dc9c8326795287fa08113c1633bd17db9c1cccc45c"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/zipper/primary_directory.go",
+    "bytes": 26581,
+    "sha256": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/zipper/read_only_prepare.go",
+    "bytes": 57129,
+    "sha256": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881"
+  },
+  {
+    "path": "ordinary-frozen/source/TreeDB/zipper/zipper.go",
+    "bytes": 136426,
+    "sha256": "03c0dacef19c72e4695f148d31e684d5fb331754f56130ebf752aaea26b70269"
+  },
+  {
+    "path": "ordinary-frozen/status.txt",
+    "bytes": 3105,
+    "sha256": "5361a5acc8c4f600e943f5b098b69288beabed19c9a7cc3e5d689d1528862f74"
+  },
+  {
+    "path": "ordinary-frozen/tracked.patch",
+    "bytes": 141694,
+    "sha256": "0ed6eb744651c65a8aae5d0cf353b90206e85e188b9a153e62d9e31eba6eca5e"
+  },
+  {
+    "path": "root/CONTINUATION.md",
+    "bytes": 12218,
+    "sha256": "291e9c724d71a3a18919ba1b9497a7af614fea1404b5c013308d3ee4ca39ad5d"
+  },
+  {
+    "path": "root/canonical-before.json",
+    "bytes": 66449,
+    "sha256": "319032669aed43792a64a653b57e0f184ba86b5181dcf32d9401548bc6778b84"
+  },
+  {
+    "path": "root/issue-4871-before.json",
+    "bytes": 69416,
+    "sha256": "4bc28de12910d0b4d511c09af6da28e8c68421f1268ddffab30a7fb7ad56d013"
+  },
+  {
+    "path": "root/issue-4878-before.json",
+    "bytes": 65191,
+    "sha256": "16322c8aaaad8a85920487ce43eb897cec531f73adff412156d8c125cf21a1af"
+  },
+  {
+    "path": "root/issue-5111-before.json",
+    "bytes": 37358,
+    "sha256": "a93f63ac2879ce4190550cccf9af1bdedd137f1a7be8f2724d7770117d5913f9"
+  },
+  {
+    "path": "root/pr-5127-before.json",
+    "bytes": 269,
+    "sha256": "6d1304b66446009ec6333416d7c20ade0df1326f457c8d81b23c9cab6363f876"
+  },
+  {
+    "path": "root/pr5127-viability-body-readback.json",
+    "bytes": 24536,
+    "sha256": "be858fb59feeb0c35279bf0ac2bca954b99a34cf686c2b28f4e2406f9295734a"
+  },
+  {
+    "path": "root/skills-manifest.json",
+    "bytes": 4776,
+    "sha256": "f08371f22ed92ec4afc87bf8dfd67c4ae003d32110d0e87129389d1c146caa7b"
+  },
+  {
+    "path": "root/skills.tar.gz",
+    "bytes": 102641,
+    "sha256": "335b7fe8fb48e8492cd5212936652e6bfd5553bd3a88a4bc286bbe39a11d90cb"
+  },
+  {
+    "path": "root/ubuntu-3-TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport-full-raw.txt",
+    "bytes": 349,
+    "sha256": "ab94467d7dc07cd0af101e4e1feb298856d6d7ae39dbe261d96138741aa4901d"
+  },
+  {
+    "path": "root/ubuntu-latest-2-TestCOWPublicEmptyCheckpointLeafRegistrationProgress-command_wal_durable-full-raw.txt",
+    "bytes": 26346,
+    "sha256": "cb4a2c226a857e325dbd97140a8d4ac790186e9c7afcc789bb23579c0ac400cb"
+  },
+  {
+    "path": "root/ubuntu-latest-2-TestCOWPublicEmptyCheckpointLeafRegistrationProgress-command_wal_relaxed-full-raw.txt",
+    "bytes": 26351,
+    "sha256": "5e71fcbeb7e4d9986b34488c75ff18d602b0470f3efaaaf4ee97a9ac3c312bd5"
+  },
+  {
+    "path": "root/ubuntu-latest-2-TestCOWPublicEmptyCheckpointLeafRegistrationProgress-full-raw.txt",
+    "bytes": 135,
+    "sha256": "02c946de215aff35d363fe6ceebfa3a729cf88dc1dd5e8ac1fc17b84ca3a3b22"
+  },
+  {
+    "path": "root/ubuntu-latest-2-TestCOWPublicEmptyCheckpointLeafRegistrationProgress-no_wal_fast-full-raw.txt",
+    "bytes": 528,
+    "sha256": "4e889df72d86bbb623d2a58b5a67c043519e41d375b37cf902adb0aa183e7be5"
+  },
+  {
+    "path": "source-snapshots.json",
+    "bytes": 31543,
+    "sha256": "46e79abbe35f44196d4fc99459d7e464582b2bbc15ef0720fa975321b1a59190"
+  },
+  {
+    "path": "vacuum-structural-observation/after.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "vacuum-structural-observation/before.json",
+    "bytes": 451026,
+    "sha256": "98d8de3e0ec03159807d127a561b4db130deddc18759a00be561291eadfdcf76"
+  },
+  {
+    "path": "vacuum-structural-observation/command.json",
+    "bytes": 731,
+    "sha256": "dabe36d325a9c19baa0a011875a277d3160ef4e3009c1b2563b314a00b27100d"
+  },
+  {
+    "path": "vacuum-structural-observation/durable_primary_rebuild_v5.go",
+    "bytes": 23400,
+    "sha256": "cf30963fa68086d7ab6c664f339c46c059969884aeefce60f15d944c0a017e3e"
+  },
+  {
+    "path": "vacuum-structural-observation/manifest.json",
+    "bytes": 1670,
+    "sha256": "701867cf9e4ed126eb7d7ac1f61838ad4113ffa4fb1034b96400ba93c7696d9f"
+  },
+  {
+    "path": "vacuum-structural-observation/normal.raw",
+    "bytes": 20962,
+    "sha256": "a9ce4925155b38a5a1576d59ffeb4c44361b5249aa98b24514a110e7d1ea09f3"
+  },
+  {
+    "path": "vacuum-structural-observation/observations.json",
+    "bytes": 35393,
+    "sha256": "48bf7d9fac211a7efd8cce681570e37b7e91b996945bf480c3cf22a21ed8142f"
+  },
+  {
+    "path": "vacuum-structural-observation/overlay-source-identities.json",
+    "bytes": 904,
+    "sha256": "f8c45e3e72bef62d4cc0e898776f25cca560712887db684c1d7dd8be824177b8"
+  },
+  {
+    "path": "vacuum-structural-observation/overlay.json",
+    "bytes": 651,
+    "sha256": "2a4f72bdd4fa942263e319ecfb85e16cea9187ddcda983e04a8821b821b690d5"
+  },
+  {
+    "path": "vacuum-structural-observation/preflight.txt",
+    "bytes": 19555,
+    "sha256": "b79220c7c981eda1dba16d257e25e35e199d3d4b76cd56fc6ef298ee808331ab"
+  },
+  {
+    "path": "vacuum-structural-observation/receipt.json",
+    "bytes": 111,
+    "sha256": "dfef57f59d123ca4b1c35e46b286e35b9685d94086e49ab52e13a3f77b27f5fa"
+  },
+  {
+    "path": "vacuum-structural-observation/summary.json",
+    "bytes": 3030,
+    "sha256": "7195b9e3654ef2309d2974ebaa4b26d526aab941016412e03bc90450c7de1437"
+  },
+  {
+    "path": "vacuum-structural-observation/summary.md",
+    "bytes": 1815,
+    "sha256": "a11f2e240065b420b8f3cdd72d05353e08b8da3c8d82e896b569d67afa2f0132"
+  },
+  {
+    "path": "vacuum-structural-observation/vacuum_online.go",
+    "bytes": 90343,
+    "sha256": "311713d9300e6e3f8c06af0e3cb68b056ca2634cdeb180da25edad56e4f2077a"
+  }
+]
