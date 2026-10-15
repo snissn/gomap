@@ -1,0 +1,8 @@
+{"Time":"2026-10-14T15:30:04.190032091-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Time":"2026-10-14T15:30:04.19202385-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut"}
+{"Time":"2026-10-14T15:30:04.19203141-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut","Output":"=== RUN   TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut\n"}
+{"Time":"2026-10-14T15:30:04.213172184-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut","Output":"--- PASS: TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut (0.02s)\n"}
+{"Time":"2026-10-14T15:30:04.213207175-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut","Elapsed":0.02}
+{"Time":"2026-10-14T15:30:04.213213595-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Time":"2026-10-14T15:30:04.213390976-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"ok  \tgithub.com/snissn/gomap/TreeDB\t0.023s\n"}
+{"Time":"2026-10-14T15:30:04.213404127-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Elapsed":0.023}

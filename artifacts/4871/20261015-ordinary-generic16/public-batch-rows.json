@@ -1,0 +1,34 @@
+[
+  {
+    "sample": 1,
+    "label": "before",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     65068 ns/op\t  154894 B/op\t     285 allocs/op",
+    "ns": 65068.0,
+    "bytes": 154894.0,
+    "allocs": 285.0
+  },
+  {
+    "sample": 1,
+    "label": "projected",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     67849 ns/op\t  154894 B/op\t     285 allocs/op",
+    "ns": 67849.0,
+    "bytes": 154894.0,
+    "allocs": 285.0
+  },
+  {
+    "sample": 2,
+    "label": "projected",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     69093 ns/op\t  154894 B/op\t     285 allocs/op",
+    "ns": 69093.0,
+    "bytes": 154894.0,
+    "allocs": 285.0
+  },
+  {
+    "sample": 2,
+    "label": "before",
+    "raw": "BenchmarkConditionalTxnBaselineBatchWrite \t     100\t     67253 ns/op\t  154894 B/op\t     286 allocs/op",
+    "ns": 67253.0,
+    "bytes": 154894.0,
+    "allocs": 286.0
+  }
+]

@@ -1,0 +1,4 @@
+=== RUN   TestPrimarySharedTransactionV6SinglePublicationOwner
+    primary_shared_transaction_v6_test.go:227: borrowed candidate changed transaction identity
+--- FAIL: TestPrimarySharedTransactionV6SinglePublicationOwner (0.01s)
+FAIL

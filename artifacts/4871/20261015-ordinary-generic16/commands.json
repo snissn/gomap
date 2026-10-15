@@ -1,0 +1,187 @@
+[
+  {
+    "name": "build-before-public-db",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/before-db.test",
+      "./TreeDB/db"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "wall_seconds": 0.814864962361753,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "focused-shared-normal",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-json",
+      "-count=1",
+      "-timeout=90s",
+      "-run",
+      "^(TestLeafBuilderWorkSharesEncoderAndRefusesBeforeEffects|TestAppendWorkRechecksCapacityAfterReusedAllocation|TestCandidateRootMembershipRejectsRetiredAndForeignGenerationV1|TestSetWithWork.*|TestIdentityPinRegistry.*|TestStableResourceTokenPinsIdentityRegistryUntilExactRelease|TestBuildWithOptions.*|TestBuildRejectsUnfittableParentSeparator|TestBuild)$",
+      "./TreeDB/node",
+      "./TreeDB/freelist",
+      "./TreeDB/internal/cowbtree",
+      "./TreeDB/internal/rootpublication",
+      "./TreeDB/internal/bulk"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "wall_seconds": 2.968582654837519,
+    "raw_sha256": "167a2d20a5cb3c9c1a3015845fe5cef1bbe8348000d250340859f40b86825779"
+  },
+  {
+    "name": "build-projected-public-db",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-c",
+      "-trimpath",
+      "-buildvcs=false",
+      "-o",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/projected-db.test",
+      "./TreeDB/db"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "4"
+    },
+    "exit": 0,
+    "wall_seconds": 16.339155070949346,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "public-batch-1-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/before-db.test",
+      "-test.run",
+      "^$",
+      "-test.bench",
+      "^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchmem",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.v",
+      "-test.timeout=30s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.4646404078230262,
+    "raw_sha256": "58c9dbde4a6d66888e9407f380e5dfac6c448dc4723417dbf68c130b3d2d5cd6"
+  },
+  {
+    "name": "public-batch-1-projected",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/projected-db.test",
+      "-test.run",
+      "^$",
+      "-test.bench",
+      "^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchmem",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.v",
+      "-test.timeout=30s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.4141601137816906,
+    "raw_sha256": "0eaf58f39041dc5bfd8a843a2d83c5dff3d1f2e324792816d869d1dea2900bba"
+  },
+  {
+    "name": "public-batch-2-projected",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/projected-db.test",
+      "-test.run",
+      "^$",
+      "-test.bench",
+      "^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchmem",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.v",
+      "-test.timeout=30s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.4142661429941654,
+    "raw_sha256": "f8abf7c896b22a1db54690fabca810aad4821ece8f0280fd191087bc5ea23b12"
+  },
+  {
+    "name": "public-batch-2-before",
+    "argv": [
+      "taskset",
+      "-c",
+      "0",
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/before-db.test",
+      "-test.run",
+      "^$",
+      "-test.bench",
+      "^BenchmarkConditionalTxnBaselineBatchWrite$",
+      "-test.benchmem",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.v",
+      "-test.timeout=30s"
+    ],
+    "env": {
+      "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "CGO_ENABLED": "1",
+      "GOMAXPROCS": "1"
+    },
+    "exit": 0,
+    "wall_seconds": 0.4143095938488841,
+    "raw_sha256": "89f7835be0d1bc84a0ec952c4ebd44eec27c813f432dfc9828cd516e5e9b376f"
+  }
+]

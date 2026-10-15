@@ -1,0 +1,166 @@
+{
+  "native_head": "a465bdbd5fe1158dd130ab45871fcaacbf8ced60",
+  "ordinary_head": "a934ea4c7a90b95bc15d9feb6ee9a3edde6502eb",
+  "paths": [
+    {
+      "path": "TreeDB/internal/bulk/builder.go",
+      "bytes": 10437,
+      "sha256": "b33d489f16dc68fc1b8df349017340232d9c46aa31fa59c17821d9276c47d476",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "247b78b8dab973338d985227216e1ed151035bce8c1bfbf163b582b8bf343b16",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/bulk/leaf_output_work.go",
+      "bytes": 3982,
+      "sha256": "e6c927fa7e8a5151b653f05e4c4bbb0e683e1e12e4d2faeb94db30538310e0d6",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/node/builder.go",
+      "bytes": 56721,
+      "sha256": "124134e217fd6a427acd3966580a002fd64962b0b03a25763a56c222430d70ff",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "5193abd9de4d4c3fbeee044af99af82d5dc3a68063c7f38834b4bd8261692f36",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/node/builder_work.go",
+      "bytes": 2443,
+      "sha256": "a9e6d4d6765b60943130482699881f05a9d1d3caba27bd5c8a10ccb5354c6932",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/node/builder_work_test.go",
+      "bytes": 1668,
+      "sha256": "7210ff16a5224a1240c6839e3d0686d7ebdec41a17b40b8c8744912bcf252471",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "test",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/generation_snapshot_v1.go",
+      "bytes": 3890,
+      "sha256": "48fe7d7c0f526f363b4e1a3cae90b6ebee1b1411c11f115bc14145983a977d7f",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "b535cc1758f523d5cbf998b6c9e9833a9870be1ba8a56d3a75e884867fe2577b",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "bytes": 29116,
+      "sha256": "8821aaaad2413246f8938b5a17a60291213b4667797d4407c07db99d6f7cb900",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "f6b2584ad301c25f5cb4ca9d6733ce94e9ccfba1a969e69d519eec48d5d188e0",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/append_work.go",
+      "bytes": 5375,
+      "sha256": "0ed83dc2e9454d69fcbe90914b490fb6e230b6743156468e4a37fb0d7e2a3a25",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/append_work_test.go",
+      "bytes": 1847,
+      "sha256": "9b4cba903bc320e7e19eb26781fd6d73bcf533c28827d1a892c50d4efa01a9a9",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "test",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/candidate_root_membership_v1.go",
+      "bytes": 1828,
+      "sha256": "832abce64162cfecae4592549d5ac5a75ecbdc3927ba414ec1fee9d5d0dcc3ec",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/freelist/candidate_root_membership_v1_test.go",
+      "bytes": 2138,
+      "sha256": "81a0c31f664428d1a614797b3f3cc5dc1968abe16ed8920cf7b4b6864a5528d1",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "test",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map.go",
+      "bytes": 32457,
+      "sha256": "ba60d20abaee7745aa38fbbdbaa43eec65ad261e099d559ac4864f325c683f52",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "93bc64acb04e4a0c36d77efaae12ae33ffb69094b76e930df307ca62d4978a3f",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map_mutation_work.go",
+      "bytes": 5585,
+      "sha256": "69d452cbb7458b2669c6cc5824c7e4b0a37412e3b7eeffe7bc499c11ede95b89",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map_mutation_work_test.go",
+      "bytes": 10433,
+      "sha256": "e93e0e17633cdcd6d040522290562ca28aed6f8033cffd33baf598848de2dfcc",
+      "ordinary_exists": false,
+      "ordinary_before_sha256": null,
+      "role": "test",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "bytes": 29204,
+      "sha256": "134f01058f3d1c3ce014ad0b1824d3f662dc452ba626571a26e312024bb695a6",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "354baa6013d738ee1abfa8c7100df78977cb78924a377e7e1e10ff0b5bc710eb",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_data_certificate_v6.go",
+      "bytes": 6607,
+      "sha256": "90f9e24db240428d46fe5486e84ce1c072a8b9806086d9dff7b270b9aba4045e",
+      "ordinary_exists": true,
+      "ordinary_before_sha256": "fceb54a32f1ddf0375d0731e4554a4daf1e6a2da6e97629059ad629d7e1ed229",
+      "role": "production",
+      "state": "stable; no planned near-term edit"
+    }
+  ],
+  "required_preexisting_companions": [
+    "TreeDB/internal/cowbtree/string_cursor.go (Work declaration)",
+    "TreeDB/pager/grow_work.go (original Growth guarded progress)",
+    "TreeDB/pager/write_work.go (original bounded page writes)",
+    "TreeDB/internal/retainedalloc/owner.go (original admission owner)"
+  ],
+  "hold_coupled_originals": [
+    "TreeDB/caching/cow_batch.go",
+    "TreeDB/caching/cow_resources.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/root_publication_build_group.go",
+    "TreeDB/internal/rootpublication/coordinator.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go"
+  ],
+  "db_go": "no planned immediate edit; native lifecycle fields/hooks require exact hunk selection and helper closure, not whole-file import",
+  "exclusions": "native public/publisher helpers are not required by these16 reusable source members; no diagnostic feature activation or protected fixture is transferred"
+}

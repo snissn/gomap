@@ -1,0 +1,438 @@
+    PID COMMAND
+      1 systemd
+      2 kthreadd
+      3 pool_workqueue_release
+      4 kworker/R-rcu_gp
+      5 kworker/R-sync_wq
+      6 kworker/R-kvfree_rcu_reclaim
+      7 kworker/R-slub_flushwq
+      8 kworker/R-netns
+     10 kworker/0:0H-kblockd
+     13 kworker/R-mm_percpu_wq
+     14 ksoftirqd/0
+     15 rcu_preempt
+     16 rcu_exp_par_gp_kthread_worker/0
+     17 rcu_exp_gp_kthread_worker
+     18 migration/0
+     19 kprobe-optimizer
+     20 idle_inject/0
+     21 cpuhp/0
+     22 cpuhp/1
+     23 idle_inject/1
+     24 migration/1
+     25 ksoftirqd/1
+     27 kworker/1:0H-kblockd
+     28 cpuhp/2
+     29 idle_inject/2
+     30 migration/2
+     31 ksoftirqd/2
+     33 kworker/2:0H-kblockd
+     34 cpuhp/3
+     35 idle_inject/3
+     36 migration/3
+     37 ksoftirqd/3
+     39 kworker/3:0H-kblockd
+     40 cpuhp/4
+     41 idle_inject/4
+     42 migration/4
+     43 ksoftirqd/4
+     45 kworker/4:0H-kblockd
+     46 cpuhp/5
+     47 idle_inject/5
+     48 migration/5
+     49 ksoftirqd/5
+     51 kworker/5:0H-kblockd
+     52 cpuhp/6
+     53 idle_inject/6
+     54 migration/6
+     55 ksoftirqd/6
+     57 kworker/6:0H-kblockd
+     58 cpuhp/7
+     59 idle_inject/7
+     60 migration/7
+     61 ksoftirqd/7
+     63 kworker/7:0H-kblockd
+     64 cpuhp/8
+     65 idle_inject/8
+     66 migration/8
+     67 ksoftirqd/8
+     69 kworker/8:0H-kblockd
+     70 cpuhp/9
+     71 idle_inject/9
+     72 migration/9
+     73 ksoftirqd/9
+     75 kworker/9:0H-kblockd
+     76 cpuhp/10
+     77 idle_inject/10
+     78 migration/10
+     79 ksoftirqd/10
+     81 kworker/10:0H-kblockd
+     82 cpuhp/11
+     83 idle_inject/11
+     84 migration/11
+     85 ksoftirqd/11
+     87 kworker/11:0H-kblockd
+     88 cpuhp/12
+     89 idle_inject/12
+     90 migration/12
+     91 ksoftirqd/12
+     93 kworker/12:0H-kblockd
+     94 cpuhp/13
+     95 idle_inject/13
+     96 migration/13
+     97 ksoftirqd/13
+     99 kworker/13:0H-kblockd
+    100 cpuhp/14
+    101 idle_inject/14
+    102 migration/14
+    103 ksoftirqd/14
+    105 kworker/14:0H-kblockd
+    106 cpuhp/15
+    107 idle_inject/15
+    108 migration/15
+    109 ksoftirqd/15
+    111 kworker/15:0H-kblockd
+    112 kdevtmpfs
+    113 kworker/R-inet_frag_wq
+    114 rcu_tasks_kthread
+    115 rcu_tasks_rude_kthread
+    116 kauditd
+    117 khungtaskd
+    118 oom_reaper
+    121 kworker/R-writeback
+    122 kcompactd0
+    123 ksmd
+    124 khugepaged
+    125 kworker/R-kblockd
+    126 kworker/R-blkcg_punt_bio
+    127 kworker/R-kintegrityd
+    128 irq/9-acpi
+    131 kworker/R-tpm_dev_wq
+    132 kworker/R-ata_sff
+    133 kworker/R-md_bitmap
+    134 kworker/R-md_llbitmap_io
+    135 kworker/R-md_llbitmap_unplug
+    136 kworker/R-edac-poller
+    137 kworker/R-devfreq_wq
+    139 watchdogd
+    141 kworker/R-quota_events_unbound
+    142 irq/26-AMD-Vi
+    144 kswapd0
+    145 ecryptfs-kthread
+    146 kworker/R-kthrotld
+    148 kworker/R-acpi_thermal_pm
+    149 kworker/R-mld
+    150 kworker/R-ipv6_addrconf
+    151 kworker/R-kstrp
+    175 kworker/R-charger_manager
+    176 irq/27-ACPI:Event
+    177 irq/28-ACPI:Event
+    178 irq/29-ACPI:Event
+    414 scsi_eh_0
+    415 kworker/R-scsi_tmf_0
+    416 scsi_eh_1
+    417 kworker/R-scsi_tmf_1
+    418 scsi_eh_2
+    419 kworker/R-scsi_tmf_2
+    420 scsi_eh_3
+    421 kworker/R-scsi_tmf_3
+    422 scsi_eh_4
+    423 kworker/R-scsi_tmf_4
+    424 scsi_eh_5
+    425 kworker/R-scsi_tmf_5
+    431 kworker/R-nvme-wq
+    432 kworker/R-nvme-reset-wq
+    433 kworker/R-nvme-delete-wq
+    434 kworker/R-nvme-auth-wq
+    456 kworker/14:1H-kblockd
+    459 jbd2/nvme1n1p2-8
+    460 kworker/R-ext4-rsv-conversion
+    469 kworker/4:1H-kblockd
+    478 kworker/5:1H-kblockd
+    518 systemd-journal
+    554 kworker/3:1H-kblockd
+    556 systemd-resolve
+    559 systemd-oomd
+    560 kworker/7:1H-kblockd
+    561 kworker/6:1H-kblockd
+    563 systemd-udevd
+    566 kworker/8:1H-kblockd
+    569 psimon
+    622 kworker/0:1H-kblockd
+    804 kworker/R-cfg80211
+    912 nv_queue
+    913 nv_mem_pool_scrubber_queue
+    914 nv_mem_pool_scrubber_queue
+    915 nv_mem_pool_scrubber_queue
+    916 nv_queue
+    917 nv_open_q
+    931 nvidia-modeset/kthread_q
+    932 nvidia-modeset/deferred_close_kthread_q
+    934 irq/125-nvidia
+    935 irq/126-nvidia
+    936 irq/127-nvidia
+    937 irq/128-nvidia
+    938 irq/129-nvidia
+    939 irq/130-nvidia
+    940 irq/131-nvidia
+    941 irq/132-nvidia
+    942 nvidia
+    943 nv_queue
+    965 napi/phy0-0
+    966 napi/phy0-0
+    967 napi/phy0-0
+    987 kworker/15:1H-kblockd
+    997 kworker/1:1H-kblockd
+   1005 kworker/10:1H-kblockd
+   1017 kworker/R-amdgpu-reset-dev
+   1038 kworker/R-ttm
+   1291 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+   1292 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+   1293 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+   1294 kworker/R-dm_vblank_control_workqueue
+   1295 card1-crtc0
+   1296 card1-crtc1
+   1297 card1-crtc2
+   1298 card1-crtc3
+   1299 kworker/R-gfx_0.0.0
+   1300 kworker/R-gfx_0.1.0
+   1301 kworker/R-comp_1.0.0
+   1302 kworker/R-comp_1.1.0
+   1303 kworker/R-comp_1.2.0
+   1304 kworker/R-comp_1.3.0
+   1305 kworker/R-comp_1.0.1
+   1306 kworker/R-comp_1.1.1
+   1307 kworker/R-comp_1.2.1
+   1308 kworker/R-comp_1.3.1
+   1309 kworker/R-sdma0
+   1310 kworker/R-vcn_dec_0
+   1311 kworker/R-vcn_enc_0.0
+   1312 kworker/R-vcn_enc_0.1
+   1313 kworker/R-jpeg_dec
+   1541 UVM global queue
+   1542 UVM deferred release queue
+   1543 UVM Tools Event Queue
+   1680 mt76-tx phy0
+   1740 avahi-daemon
+   1741 bluetoothd
+   1742 chronyd-starter
+   1744 dbus-daemon
+   1746 kworker/2:1H-kblockd
+   1751 networkd-dispat
+   1758 polkitd
+   1768 nvidia-persiste
+   1771 accounts-daemon
+   1774 cron
+   1775 switcheroo-cont
+   1778 systemd-logind
+   1780 udisksd
+   1801 avahi-daemon
+   1838 chronyd
+   1839 rsyslogd
+   1890 chronyd
+   1892 kworker/13:1H-kblockd
+   1894 kworker/11:1H-kblockd
+   1901 NetworkManager
+   1902 wpa_supplicant
+   1943 ModemManager
+   1953 kworker/12:1H-kblockd
+   2073 kworker/9:1H-kblockd
+   2104 unattended-upgr
+   2123 gdm3
+   2131 gdm-session-wor
+   2148 systemd
+   2175 (sd-pam)
+   2205 dbus-daemon
+   2206 pipewire
+   2226 rtkit-daemon
+   2227 mpris-proxy
+   2228 wireplumber
+   2229 pipewire
+   2230 pipewire-pulse
+   2232 gdm-wayland-ses
+   2236 gnome-session-i
+   2335 xdg-document-po
+   2397 xdg-permission-
+   2415 fusermount3
+   2446 gcr-ssh-agent
+   2447 gnome-session-c
+   2448 ssh-agent
+   2470 gvfsd
+   2478 gvfsd-fuse
+   2481 gnome-session-s
+   2499 gnome-shell
+   2611 nvidia-drm/timeline-111
+   2644 at-spi-bus-laun
+   2651 dbus-daemon
+   2653 at-spi2-registr
+   2654 colord
+   2687 gnome-shell-cal
+   2697 evolution-sourc
+   2699 gjs
+   2715 upowerd
+   2716 ibus-daemon
+   2718 gsd-a11y-settin
+   2719 gsd-color
+   2723 gsd-datetime
+   2724 gsd-housekeepin
+   2725 gsd-keyboard
+   2730 gsd-media-keys
+   2732 gsd-power
+   2736 gsd-print-notif
+   2738 gsd-rfkill
+   2743 gsd-screensaver
+   2761 gsd-sharing
+   2765 gsd-disk-utilit
+   2769 gsd-smartcard
+   2771 gsd-sound
+   2773 evolution-alarm
+   2788 gsd-usb-protect
+   2793 gsd-wwan
+   2808 update-notifier
+   2871 ibus-memconf
+   2873 ibus-extension-
+   2881 ibus-portal
+   2895 gvfs-udisks2-vo
+   2899 gjs
+   2943 gvfs-afc-volume
+   2951 gvfs-gphoto2-vo
+   2960 xdg-desktop-por
+   2974 goa-daemon
+   2986 gvfs-mtp-volume
+   2987 xdg-desktop-por
+   2993 gvfs-goa-volume
+   3005 goa-identity-se
+   3014 evolution-calen
+   3026 ibus-engine-sim
+   3040 evolution-addre
+   3083 dconf-service
+   3093 gvfsd-trash
+   3148 xdg-desktop-por
+   3170 gsd-printer
+   3217 user-session-he
+   3280 snapd-desktop-i
+   3396 power-profiles-
+   3418 krfcommd
+   3448 gvfsd-metadata
+   3459 ubuntu-insights
+   4644 tmux: server
+   4645 bash
+  12562 kworker/6:0-mm_percpu_wq
+ 135177 kworker/0:1-events
+ 158697 sshd
+ 186093 bash
+ 207155 kworker/8:1-mm_percpu_wq
+ 236788 fwupd
+ 239885 snap
+ 401319 kworker/3:2-mm_percpu_wq
+ 442220 kworker/1:2-events
+ 562156 kworker/5:2-events
+ 603735 kworker/7:1-events
+ 617180 kworker/9:2-events
+ 635493 npm exec @opena
+ 635506 sh
+ 635507 node
+ 635514 codex
+ 636713 codex-code-mode
+ 641695 npm exec @opena
+ 641706 sh
+ 641707 node
+ 641714 codex
+ 642973 codex-code-mode
+ 702881 bash
+ 702975 npm exec @opena
+ 702986 sh
+ 702987 node
+ 702994 codex
+ 704105 codex-code-mode
+ 711445 kworker/4:0-events
+ 725816 kworker/12:0-mm_percpu_wq
+ 739805 kworker/11:1-events
+ 772689 kworker/11:2
+ 774339 kworker/12:1
+ 776184 npm exec @opena
+ 776227 sh
+ 776228 node
+ 776235 codex
+ 776738 kworker/15:0
+ 787960 kworker/u64:1-events_unbound
+ 796547 kworker/10:1-events
+ 797649 kworker/7:0-cgroup_free
+ 804935 kworker/u64:2-events_unbound
+ 817800 kworker/13:0-cgroup_free
+ 822171 kworker/0:0-cgroup_free
+ 823925 kworker/2:2-mm_percpu_wq
+ 825845 kworker/u64:0-events_unbound
+ 826618 kworker/10:2-cgroup_free
+ 827426 kworker/14:2-cgroup_release
+ 833260 kworker/6:1-memcg
+ 835004 kworker/2:1-cgroup_free
+ 835576 kworker/4:1-cgroup_free
+ 836624 kworker/5:0-cgroup_free
+ 837445 kworker/u64:4-flush-259:0
+ 839827 kworker/9:0-cgroup_free
+ 841460 kworker/7:2-cgroup_free
+ 841879 kworker/13:2-cgroup_release
+ 843551 kworker/3:1-cgroup_free
+ 844519 kworker/8:2
+ 845686 kworker/1:0-events
+ 847292 kworker/2:0
+ 850548 kworker/5:1-cgroup_free
+ 851421 kworker/10:0
+ 852296 kworker/0:2
+ 853579 sshd-session
+ 853620 sshd-session
+ 853621 python3
+ 853672 ps
+ 938177 update-notifier
+ 938196 apport-gtk
+1130414 psimon
+1130690 psimon
+1195087 bash
+1195196 sudo
+1195263 sudo
+1195264 su
+1195268 systemd
+1195270 (sd-pam)
+1195292 dbus-daemon
+1195294 user-session-he
+1195295 bash
+1195369 xdg-document-po
+1195376 xdg-permission-
+1195384 fusermount3
+1199661 containerd
+1200019 dockerd
+1394925 kworker/15:2-events
+1435980 snapd
+1766386 npm exec @opena
+1766397 sh
+1766398 node
+1766405 codex
+1957054 bash
+2246472 gnome-keyring-d
+2246474 gnome-keyring-d
+2516367 kworker/u65:2-ttm
+2566163 kworker/u65:5-ttm
+2718639 Xwayland
+2718654 gsd-xsettings
+2718667 mutter-x11-fram
+2718677 ibus-x11
+2971628 codex
+2972898 bash
+2977748 codex-code-mode
+3036473 bash
+3036614 sudo
+3036617 sudo
+3036618 su
+3036620 bash
+3112332 bash
+3728903 cupsd
+3728904 cups-browsed
+3728951 dbus
+3728952 dbus
+3845816 bash
+3845893 top
+3971444 bash
+4037386 kworker/14:1-events
+4101847 bash
+4101956 ssh

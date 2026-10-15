@@ -1,0 +1,31 @@
+{
+  "at_utc": "2026-10-15T01:31:02.328460+00:00",
+  "parent": "a934ea4c7a90b95bc15d9feb6ee9a3edde6502eb",
+  "source": "41dd12c84c874b1d9a0a1c8cdc9e160c9379f17c",
+  "projection_manifest_sha256": "b09c77712e632b9914ac9e610cf78a1e1630fc9bd1bea6d0ee94a72f1163b83e",
+  "projected_census_sha256": "ada9289be73adac1d981e2b048bf87f6b5e89221c9fb6a965a91600198a2f136",
+  "projected_files": 16,
+  "focused_checks": "Generic encoder/append/membership/map/pin/bulk PASS; public actual DATA materialization/candidate membership/pointer/read-cut/close/reopen PASS; race map/pin and3 actual ordinary constructor cases PASS.",
+  "inherited_failure": "SinglePublicationOwner terminal borrowed-candidate identity assertion fails identically on untoucheda934 and projection at line227. Overall extended race command RED; not waived or claimed passing.",
+  "performance": {
+    "before": {
+      "ns": 66160.5,
+      "bytes": 154894.0,
+      "allocs": 285.5
+    },
+    "projected": {
+      "ns": 68471.0,
+      "bytes": 154894.0,
+      "allocs": 285.0
+    },
+    "time_change_percent": 3.492265022180918
+  },
+  "qualification": "WIP source integration only; no production native/Q32/M0/PR/merge/parent acceptance.",
+  "independent_review": "/root/generic16_projection_review_sol61: no missing companion/integration blocker; ordinary caller and pin sizing reviewed.",
+  "docs": "No format or external behavior change; internal work APIs include source contracts. Production native activation remains in its owning packet.",
+  "stage": "pushed_and_remote_ref_verified",
+  "commit": "e0c2d5e19e97cc804e040c58c8ae7a7c476ba283",
+  "ref": "refs/heads/codex/5111-structural-repair-20261013",
+  "all_blobs_verified": true,
+  "remote_verified": true
+}

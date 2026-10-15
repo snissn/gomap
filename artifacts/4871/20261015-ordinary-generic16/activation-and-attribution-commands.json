@@ -1,0 +1,46 @@
+[
+  {
+    "name": "owner-assertion-attribution-before",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/before-db.test",
+      "-test.run",
+      "^TestPrimarySharedTransactionV6SinglePublicationOwner$",
+      "-test.v",
+      "-test.count=1",
+      "-test.timeout=30s"
+    ],
+    "exit": 1,
+    "wall_seconds": 0.06364592397585511,
+    "raw_sha256": "6cf090d8424f9886b928947fff35de091c546a379cce1e9ce9d5d4a161a655c1"
+  },
+  {
+    "name": "owner-assertion-attribution-projected",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-generic16-integration-20261015/binaries/projected-db.test",
+      "-test.run",
+      "^TestPrimarySharedTransactionV6SinglePublicationOwner$",
+      "-test.v",
+      "-test.count=1",
+      "-test.timeout=30s"
+    ],
+    "exit": 1,
+    "wall_seconds": 0.01569601194933057,
+    "raw_sha256": "2a88d881bd86110055ca4b7986d1588e3a5ceb7f344f630bf3970d77d00e2754"
+  },
+  {
+    "name": "public-materialization-activation",
+    "argv": [
+      "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+      "test",
+      "-json",
+      "-count=1",
+      "-timeout=60s",
+      "-run",
+      "^TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut$",
+      "./TreeDB"
+    ],
+    "exit": 0,
+    "wall_seconds": 12.583479358814657,
+    "raw_sha256": "c4c27b913fe51de1e7f4c2bb7c423ec18cf3a93b2369452fe6ac5db31db919d4"
+  }
+]

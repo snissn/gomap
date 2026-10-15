@@ -1,0 +1,33 @@
+{
+  "at_utc": "2026-10-15T01:28:13.400100+00:00",
+  "ordinary_before": "a934ea4c7a90b95bc15d9feb6ee9a3edde6502eb",
+  "source_commit": "41dd12c84c874b1d9a0a1c8cdc9e160c9379f17c",
+  "projection_manifest_sha256": "b09c77712e632b9914ac9e610cf78a1e1630fc9bd1bea6d0ee94a72f1163b83e",
+  "members": 16,
+  "required_companions": {
+    "TreeDB/internal/cowbtree/string_cursor.go": "d5e946fa7e83cb8d530786e7225d7c392e82ab8015ff27b382fff358607fab7f",
+    "TreeDB/pager/grow_work.go": "1694fb224c20369adcf7bf3bd31660fe988596ce492ff0ffa2c48302251240e8",
+    "TreeDB/pager/write_work.go": "fc548dc9df9ef22dc2ed0ede0e9af2ec847cbcc9a2643cff2a1f8f3086d28894",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d"
+  },
+  "ordinary_before_census_sha256": "7fee2a0a91017ee66883320fe62fb9e8a9312304ec877f4b04d76e3de1a4530c",
+  "projected_census_sha256": "ada9289be73adac1d981e2b048bf87f6b5e89221c9fb6a965a91600198a2f136",
+  "outside_source_preserved": 5801,
+  "index_sha256": "7aae8f5050d418c174d93a92634f29cb9c61cd7b2d3d2c761295faf221b8f6db",
+  "index_preserved": true,
+  "commands_passed": 7,
+  "public_batch_summary": {
+    "before": {
+      "ns": 66160.5,
+      "bytes": 154894.0,
+      "allocs": 285.5
+    },
+    "projected": {
+      "ns": 68471.0,
+      "bytes": 154894.0,
+      "allocs": 285.0
+    },
+    "time_change_percent": 3.492265022180918
+  },
+  "qualification": "Finite generic16 projection integration and two balanced pairs of public batch diagnostics. No graph/M0/native/PR acceptance."
+}
