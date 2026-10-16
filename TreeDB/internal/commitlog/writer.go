@@ -1046,7 +1046,14 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 // fast-path escape hatch; specialized allocation-free V2 encoders may replace
 // it without changing the persisted contract.
 func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
-	size, err := commandFrameV2EncodedSize(env)
+	// Keep validation local to this append: the journal's earlier preflight
+	// does not grant reusable authority over a caller-owned envelope. Reuse
+	// this normalized result only for the immediate size check and encoding.
+	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
+	if err != nil {
+		return err
+	}
+	size, err := preparedCommandFrameV2EncodedSize(env, preconditions)
 	if err != nil {
 		return err
 	}
@@ -1056,7 +1063,7 @@ func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
+	payload, err := encodePreparedCommandFrameV2To(w.scratch[:0], env, preconditions)
 	if err != nil {
 		return err
 	}
