@@ -1,0 +1,51 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/canonical-before-ledger-source-decision.json",
+    "path": "live-startup/canonical-before-ledger-source-decision.json.gz",
+    "source_sha256": "27b27ee7d4f9103d09d6074bb40200fbf32ee10f425d3270d0e171f11546eed1",
+    "stored_sha256": "250bc2d82d7755a0ed2157f850cee895d23fe5a339d990984d554bab2bb6a560",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/graph-current.json",
+    "path": "graph-current.json.gz",
+    "source_sha256": "b7a92df6321fc22dce9e14ab7ad94262e62807b08c3baf1a11c627be49b4d1db",
+    "stored_sha256": "e8a3e5b1f5b90e9f604404608cb9df3c0977eeea782725c710c5904fe7dae31a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-implementation-preparation.md",
+    "path": "native-decision/native-ledger-implementation-preparation.md",
+    "source_sha256": "9ea9453873bdb1e35593a409223f76e9751dfd238124659d4d442b1dd637ec9c",
+    "stored_sha256": "9ea9453873bdb1e35593a409223f76e9751dfd238124659d4d442b1dd637ec9c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-implementation-preparation.json",
+    "path": "native-decision/native-ledger-implementation-preparation.json",
+    "source_sha256": "b113eeb1831348db7e63c0147d27c04cd2caffbaa99a1244013259b08839e152",
+    "stored_sha256": "b113eeb1831348db7e63c0147d27c04cd2caffbaa99a1244013259b08839e152",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-minimum-continuing-writer-design.md",
+    "path": "native-decision/native-minimum-continuing-writer-design.md",
+    "source_sha256": "9d65a3b8492edacff49508d90914a41e019d4bb183dbfed7a0bad47cd18fb08d",
+    "stored_sha256": "9d65a3b8492edacff49508d90914a41e019d4bb183dbfed7a0bad47cd18fb08d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-minimum-continuing-writer-design.json",
+    "path": "native-decision/native-minimum-continuing-writer-design.json",
+    "source_sha256": "94edc8865f0d6fa2e55394e6d82d9aeb8e5e278080386d6ab4e7ab2a169394b8",
+    "stored_sha256": "94edc8865f0d6fa2e55394e6d82d9aeb8e5e278080386d6ab4e7ab2a169394b8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source-selection.md",
+    "path": "native-decision/root-native-ledger-source-selection.md",
+    "source_sha256": "63736977b62d008237db816afd58f5d7b98a3a95dc8067c0eb3fc4de37e49201",
+    "stored_sha256": "63736977b62d008237db816afd58f5d7b98a3a95dc8067c0eb3fc4de37e49201",
+    "encoding": "identity"
+  }
+]

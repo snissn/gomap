@@ -1,0 +1,5 @@
+# Canonical ledger source decision and prior state archive
+
+Root selects the original committed-reservation/receipt-Finish prerequisite, stable monotonic pinned burn descriptors and actual same-owner constructor/lifetime admission. The same canonical map storage must also close; its concrete replacement decision remains pending source advice. Source construction is authorized for the single native writer; no Go/runtime or Git lease is granted. Original Q32, general progress, full retained-memory, performance and final graph gates remain open.
+
+The complete prior canonical comment and local graph JSON are retained here before shortening the already merged ordinary mutable-progress history in the live canonical state. No activation metadata or historical evidence is discarded. The separate minimum inquiry establishes the missing producer handoff/lowering proof; bare CommitAt is not presumed to change snapshot acquisition epochs. All exact reports and source bindings accompany this packet.

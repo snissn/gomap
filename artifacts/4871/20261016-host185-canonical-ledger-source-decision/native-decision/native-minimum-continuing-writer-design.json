@@ -1,0 +1,51 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children": false,
+  "source_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "source_archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+  "disposition": "PREREQUISITE_NOT_CLOSED",
+  "existing_source01_disposition": "ACCEPT_QUIET_EPOCH_ONLY",
+  "commit_implies_epoch_change": false,
+  "current_commitseq_floor_proved": false,
+  "existing_constant_authoritative_aggregate": false,
+  "implementation_grant": false,
+  "runtime_executed": false,
+  "inspected_source_sha256": {
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "5e3b9af23f2b45337d79a0c095e3de9b4a72fdf6b48dc7d7b9110a303e500503",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+    "TreeDB/lifecycle/registry.go": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "TreeDB/lifecycle/native_mvcc_registry.go": "20b49a38337e9f4e40bca1157fbca00d0e8e5231c5ba8ea26de4c0eccdc88213",
+    "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "TreeDB/db/index_gen.go": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "TreeDB/db/snapshot_pins.go": "c2c3f66020578ad5720e666978be9ead09186381f4309fb3b463a95556b3428e",
+    "TreeDB/db/root_publication_build_group.go": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f",
+    "TreeDB/db/native_mvcc_data_dependency_release_v6.go": "ecdb6c46c73694163eb224b97f7855c3a70915e0d89df5c0b0c35c65d9f957f0",
+    "TreeDB/db/recoverable_root_set.go": "5cb1313ccb2db1b3a40a106b8f57fa5741d0ff749e8b362666887ea067bbc310",
+    "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "TreeDB/db/ordered_root_publish.go": "8bb484d2e64057cf3adcb449c411bf684ff8475d291200370261de97d73cd674",
+    "TreeDB/db/vlog_rewrite.go": "d1a75940c6798fb96d8c57534c90bdac62b461af45c965ecb51f1158e41975a3",
+    "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+    "TreeDB/db/mvcc_admission.go": "89c327c4f6dd01d0354677c3d0bd95dcb6114497e9e63e4a13df6abdae39efb2",
+    "TreeDB/caching/mvcc_admission.go": "f42a75f729f04289692626dde3356beb435c67f3c4474e1089dfe595aad1bc96",
+    "TreeDB/db/commit_combiner.go": "53251026d6e2904704ba678051e8b6c55aece1253de48236a1091aaae9a62f0f",
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11"
+  },
+  "report_sha256": "9d65a3b8492edacff49508d90914a41e019d4bb183dbfed7a0bad47cd18fb08d",
+  "required_prerequisites": [
+    "source DATA-floor protection before view escapes, including partial native births",
+    "overlapped SAME registry handoff and complete source producer coverage",
+    "no missed lower registration or cross-generation transfer during rolling observation",
+    "admitted bounded minimum maintenance for fast cohorts and ordinary fallback without permanent stale floor"
+  ],
+  "limitations": [
+    "no whole Q32 fit",
+    "no continuing-writer qualification",
+    "no source algorithm acceptance",
+    "no new registry or owner selected"
+  ]
+}
