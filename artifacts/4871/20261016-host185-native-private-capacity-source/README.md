@@ -1,0 +1,9 @@
+# Native private capacity source checkpoint and selected ledger design
+
+Frozen ad721ad3 source (10379 files, 15 changed paths against23e37) compiles in four selected packages with zero test bodies. Independent provisional production-source review accepts the finite private hash controls, exact clone admission and original cleanup integration, with one known empty-planner fixture assertion pending correction. Full source archive/member, baseline delta, compile before/after, argv/env/tool/raw and process receipts were independently verified by root. This packet is not the final source freeze: the sole writer continues the ledger observer and fixture correction.
+
+The new selected-empty constructor ledger design enumerates24 rows, exact formula/suppression/lifetime rules and missing scalar role facts. Root selects narrow observer additions, including original output-owner equality and pointer-count-map presence across the zipper package boundary. Shared runtime/table/owner-policy observations remain separate. P is a constructor admission envelope for its named domain, not an exact/transitive heap or atomic shared-state total. No completed numeric ledger is claimed yet.
+
+The read-only finaldriver-planning files describe a possible genuine ready-to-publish caller boundary. This is unselected planning and creates no publication allowance. Permanent cursor limits and sticky refusal forbid repurposing an old Q32-refused cursor with a larger budget.
+
+No changed-source testbody/benchmark, actual33 rerun, genuine native publication, Finish or ACK was executed by this packet. Q32/1MiB/33/80/4096 remains RED/ACK0 and full native/final graph gates remain open. Compile source archive is retained locally and hash-bound; lossless individual source manifest/delta/raw/receipt/design payloads are published here.

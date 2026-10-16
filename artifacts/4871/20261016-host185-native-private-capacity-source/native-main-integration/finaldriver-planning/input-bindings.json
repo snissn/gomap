@@ -1,0 +1,15 @@
+{
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "selected_files": {
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_publication_remainder_v6.go": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c"
+  },
+  "purpose": "Read-only future selected finaldriver control planning; no source/runtime grant or live-source assertions"
+}

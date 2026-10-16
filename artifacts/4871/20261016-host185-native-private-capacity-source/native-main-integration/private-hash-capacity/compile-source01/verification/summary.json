@@ -1,0 +1,22 @@
+{
+  "all_groups_empty": true,
+  "all_requested_packages_reported": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T04:45:23.350680+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/result.json"
+    }
+  ],
+  "source_files": 10379,
+  "source_manifest_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "test_bodies_executed": false,
+  "zero_test_RUN_verified": true
+}

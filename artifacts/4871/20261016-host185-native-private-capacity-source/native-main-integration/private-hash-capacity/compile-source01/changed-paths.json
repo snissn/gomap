@@ -1,0 +1,17 @@
+[
+  "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+  "TreeDB/freelist/allocator_preparation_work_v6.go",
+  "TreeDB/freelist/allocator_publication_work_v6.go",
+  "TreeDB/freelist/generation_v1_begin_work.go",
+  "TreeDB/freelist/generation_v1_emit_work.go",
+  "TreeDB/freelist/generation_v1_materialize_output_work.go",
+  "TreeDB/freelist/generation_v1_materialize_work.go",
+  "TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+  "TreeDB/freelist/generation_v1_prune_work.go",
+  "TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+  "TreeDB/freelist/generation_v1_txn.go",
+  "TreeDB/freelist/native_publication_bound_v6.go",
+  "TreeDB/freelist/private_control_capacity_v6.go",
+  "TreeDB/freelist/private_control_capacity_v6_test.go",
+  "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+]

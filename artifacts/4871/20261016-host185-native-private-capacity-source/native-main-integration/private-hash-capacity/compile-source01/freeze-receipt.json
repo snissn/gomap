@@ -1,0 +1,10 @@
+{
+  "source_files": 10379,
+  "source_manifest_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+  "source_archive_sha256": "1d89ee9b8a42a9787c05a3ee808e5c862b4c650d0b58ba3de5c63e181906ebf0",
+  "source_delta_sha256": "c0c141b479290aed9e9e0311bc16b09f26c9b6b658b6363548db4a9f9f808c28",
+  "changed_paths": 15,
+  "baseline_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_only_selection_sha256": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+  "addendum_sha256": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3"
+}

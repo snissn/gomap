@@ -1,0 +1,335 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION-20261016.md",
+    "path": "CONTINUATION-20261016.md",
+    "source_bytes": 41704,
+    "source_sha256": "0ae9385dfe77c00275b475afb0c3e1fe82c619be74fc3fddbd5d6e9b6c619c6e",
+    "stored_bytes": 41704,
+    "stored_sha256": "0ae9385dfe77c00275b475afb0c3e1fe82c619be74fc3fddbd5d6e9b6c619c6e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-hash-capacity-provisional-review.json",
+    "path": "native-decision/private-hash-capacity-provisional-review.json",
+    "source_bytes": 7169,
+    "source_sha256": "05aaefc223297ce073366e49987380fd802d46641ffb9ebbf554a74e108b9ce6",
+    "stored_bytes": 7169,
+    "stored_sha256": "05aaefc223297ce073366e49987380fd802d46641ffb9ebbf554a74e108b9ce6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-hash-capacity-provisional-review.md",
+    "path": "native-decision/private-hash-capacity-provisional-review.md",
+    "source_bytes": 8853,
+    "source_sha256": "1daf8b6603ca236d1b3e4a366a6b1d27e1aa65dbd0bd52b708b52a5bd07c6519",
+    "stored_bytes": 8853,
+    "stored_sha256": "1daf8b6603ca236d1b3e4a366a6b1d27e1aa65dbd0bd52b708b52a5bd07c6519",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-private-clone-admission-addendum.md",
+    "path": "native-decision/root-private-clone-admission-addendum.md",
+    "source_bytes": 3177,
+    "source_sha256": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "stored_bytes": 3177,
+    "stored_sha256": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-selected-ledger-zipper-access-addendum.md",
+    "path": "native-decision/root-selected-ledger-zipper-access-addendum.md",
+    "source_bytes": 1344,
+    "source_sha256": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "stored_bytes": 1344,
+    "stored_sha256": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-selected-private-ledger-addendum.md",
+    "path": "native-decision/root-selected-private-ledger-addendum.md",
+    "source_bytes": 7275,
+    "source_sha256": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec",
+    "stored_bytes": 7275,
+    "stored_sha256": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/selected-retained-closure-advice.json",
+    "path": "native-decision/selected-retained-closure-advice.json",
+    "source_bytes": 4952,
+    "source_sha256": "49d5d6b4ad3612ba4803a9c6ea224a472eb99c5427d19f43d1b53cf49ffa8bfd",
+    "stored_bytes": 4952,
+    "stored_sha256": "49d5d6b4ad3612ba4803a9c6ea224a472eb99c5427d19f43d1b53cf49ffa8bfd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/selected-retained-closure-advice.md",
+    "path": "native-decision/selected-retained-closure-advice.md",
+    "source_bytes": 11204,
+    "source_sha256": "274f44e29f66f7a4fd8fd2477a3db9bfab72a7a9b898c442e10733cfaa7e566a",
+    "stored_bytes": 11204,
+    "stored_sha256": "274f44e29f66f7a4fd8fd2477a3db9bfab72a7a9b898c442e10733cfaa7e566a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/selected-retained-ledger-design.json",
+    "path": "native-decision/selected-retained-ledger-design.json",
+    "source_bytes": 27533,
+    "source_sha256": "075d9872e1f600134fd02415c67738b0fa76a2bbe50ea4d43d3dca4ee4fcb3ff",
+    "stored_bytes": 27533,
+    "stored_sha256": "075d9872e1f600134fd02415c67738b0fa76a2bbe50ea4d43d3dca4ee4fcb3ff",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/selected-retained-ledger-design.md",
+    "path": "native-decision/selected-retained-ledger-design.md",
+    "source_bytes": 28238,
+    "source_sha256": "8a08a3ee5695b631212b06475d255ff243796515c3b3c6133908bb978b641fbf",
+    "stored_bytes": 28238,
+    "stored_sha256": "8a08a3ee5695b631212b06475d255ff243796515c3b3c6133908bb978b641fbf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/README.md",
+    "path": "native-main-integration/finaldriver-planning/README.md",
+    "source_bytes": 4533,
+    "source_sha256": "41ce6747f24233f5a50c4953569f9fbfef1ea87111186acff94bfdcfc8922a60",
+    "stored_bytes": 4533,
+    "stored_sha256": "41ce6747f24233f5a50c4953569f9fbfef1ea87111186acff94bfdcfc8922a60",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "source_bytes": 10233,
+    "source_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "stored_bytes": 10233,
+    "stored_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "source_bytes": 4577,
+    "source_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "stored_bytes": 4577,
+    "stored_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "source_bytes": 3531,
+    "source_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "stored_bytes": 3531,
+    "stored_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "source_bytes": 29610,
+    "source_sha256": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "stored_bytes": 29610,
+    "stored_sha256": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "source_bytes": 15407,
+    "source_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "stored_bytes": 15407,
+    "stored_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/db/native_publication_remainder_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/db/native_publication_remainder_v6.go",
+    "source_bytes": 8408,
+    "source_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "stored_bytes": 8408,
+    "stored_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "source_bytes": 28552,
+    "source_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "stored_bytes": 28552,
+    "stored_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/internal/rootpublication/native_publication_v6_test.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/internal/rootpublication/native_publication_v6_test.go",
+    "source_bytes": 7154,
+    "source_sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "stored_bytes": 7154,
+    "stored_sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/TreeDB/mvcc/prune_cursor_v6.go",
+    "path": "native-main-integration/finaldriver-planning/TreeDB/mvcc/prune_cursor_v6.go",
+    "source_bytes": 27829,
+    "source_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "stored_bytes": 27829,
+    "stored_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-planning/input-bindings.json",
+    "path": "native-main-integration/finaldriver-planning/input-bindings.json",
+    "source_bytes": 1357,
+    "source_sha256": "5851a1e80e769729732500cb355a50f8248210cc33a88fddf60820f7e742cdae",
+    "stored_bytes": 1357,
+    "stored_sha256": "5851a1e80e769729732500cb355a50f8248210cc33a88fddf60820f7e742cdae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/changed-paths.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/changed-paths.json",
+    "source_bytes": 812,
+    "source_sha256": "e89766a5b942095debe60c7e56d371cf8174d2993de919267874193429bdeb2a",
+    "stored_bytes": 812,
+    "stored_sha256": "e89766a5b942095debe60c7e56d371cf8174d2993de919267874193429bdeb2a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/freeze-receipt.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/freeze-receipt.json",
+    "source_bytes": 624,
+    "source_sha256": "47465201a453ca586d65cb67af4349a1e206c82ab79e7fac9466a61eb08cf022",
+    "stored_bytes": 624,
+    "stored_sha256": "47465201a453ca586d65cb67af4349a1e206c82ab79e7fac9466a61eb08cf022",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/proposed-commands.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/proposed-commands.json",
+    "source_bytes": 1534,
+    "source_sha256": "7e48e01bb1d30aeec68bd55ae3003003795346eead5839dca32da7696531f718",
+    "stored_bytes": 1534,
+    "stored_sha256": "7e48e01bb1d30aeec68bd55ae3003003795346eead5839dca32da7696531f718",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/run-verification.py",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/run-verification.py",
+    "source_bytes": 8091,
+    "source_sha256": "45f5441b2e1f48f5834b0b56f6d1c6f70562ff1391fa7372172410a63dc42770",
+    "stored_bytes": 8091,
+    "stored_sha256": "45f5441b2e1f48f5834b0b56f6d1c6f70562ff1391fa7372172410a63dc42770",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/source-frozen.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/source-frozen.json.gz",
+    "source_bytes": 1589361,
+    "source_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+    "stored_bytes": 463724,
+    "stored_sha256": "e4d118d97ca3cd376f4b3afe136dd433639fc005c7322b197ccac76606ac2eb5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/source.delta.patch",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/source.delta.patch.gz",
+    "source_bytes": 77545,
+    "source_sha256": "c0c141b479290aed9e9e0311bc16b09f26c9b6b658b6363548db4a9f9f808c28",
+    "stored_bytes": 17095,
+    "stored_sha256": "ccf1e14d135f842249b1950bef0f753ad4ce3a10ca05379abdeca3f7dbdfd3c4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/command.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/command.json",
+    "source_bytes": 1820,
+    "source_sha256": "c8e077a17d0b2c42d9639a646a5528fca55ebfd0845f9a6195207b511a249e85",
+    "stored_bytes": 1820,
+    "stored_sha256": "c8e077a17d0b2c42d9639a646a5528fca55ebfd0845f9a6195207b511a249e85",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/process.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/process.json",
+    "source_bytes": 144,
+    "source_sha256": "1b0dbda0fc73caa74fc93477d13adb14702ea450ae5aa74ddb9191f51da13684",
+    "stored_bytes": 144,
+    "stored_sha256": "1b0dbda0fc73caa74fc93477d13adb14702ea450ae5aa74ddb9191f51da13684",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/result.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/result.json",
+    "source_bytes": 9240,
+    "source_sha256": "0c12404096890b7e9e38d7c6a0186b7ceec9524a4a665b3e827bf112996c8077",
+    "stored_bytes": 9240,
+    "stored_sha256": "0c12404096890b7e9e38d7c6a0186b7ceec9524a4a665b3e827bf112996c8077",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/run.log",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/run.log.gz",
+    "source_bytes": 286,
+    "source_sha256": "8b872c82d4a0608467f0e116b41bf47ee8ace083f44c4eed744486238cd24798",
+    "stored_bytes": 138,
+    "stored_sha256": "7ae2981e3ed7b3b263308fc8acf919e8c1be5b577d1794427eb130d56c3c7bfc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/source-after.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/source-after.json.gz",
+    "source_bytes": 1589361,
+    "source_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+    "stored_bytes": 463723,
+    "stored_sha256": "32fc354dd99f7e8934d42e95dbc0e65003f5de2b26348c71363c589860134761",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/source-before.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/compile-only/source-before.json.gz",
+    "source_bytes": 1589361,
+    "source_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+    "stored_bytes": 463724,
+    "stored_sha256": "8be0d9555e6410d06b346bcaba5107767b588b55e67fbd16828a5cb1c8f0da75",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/identity.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/identity.json",
+    "source_bytes": 760,
+    "source_sha256": "1ba63238e3ab5f349956dadda3d2edfc3dcd50e69a9c9461cc4020b61c50c8db",
+    "stored_bytes": 760,
+    "stored_sha256": "1ba63238e3ab5f349956dadda3d2edfc3dcd50e69a9c9461cc4020b61c50c8db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/compile-source01/verification/summary.json",
+    "path": "native-main-integration/private-hash-capacity/compile-source01/verification/summary.json",
+    "source_bytes": 757,
+    "source_sha256": "1f9ad952b0e1e7d1dc05e03247b6c0bb4727e0ee4ecbc0bc6689f4bd0c660965",
+    "stored_bytes": 757,
+    "stored_sha256": "1f9ad952b0e1e7d1dc05e03247b6c0bb4727e0ee4ecbc0bc6689f4bd0c660965",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-compile01-root-verification.json",
+    "path": "native-main-integration/private-hash-compile01-root-verification.json",
+    "source_bytes": 3080,
+    "source_sha256": "6824d6de252ea73f3b614db537b27aac1cfcf3e056ce6ee001e8e415a83f13fa",
+    "stored_bytes": 3080,
+    "stored_sha256": "6824d6de252ea73f3b614db537b27aac1cfcf3e056ce6ee001e8e415a83f13fa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-private-hash-compile01.py",
+    "path": "native-main-integration/verify-private-hash-compile01.py",
+    "source_bytes": 5963,
+    "source_sha256": "f55da1518a261c41c913e1384af03543cfe2c4820fa5590c0d908fc4d514c032",
+    "stored_bytes": 5963,
+    "stored_sha256": "f55da1518a261c41c913e1384af03543cfe2c4820fa5590c0d908fc4d514c032",
+    "encoding": "identity"
+  }
+]
