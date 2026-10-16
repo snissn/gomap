@@ -1,0 +1,26 @@
+{
+  "actual33_executed": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 2,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T06:01:32.933926+00:00",
+  "focused_controls_executed": true,
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "normal-mvcc-ledger-cursor",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-mvcc-ledger-cursor",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10389,
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "source_still_frozen": true
+}

@@ -1,0 +1,170 @@
+{
+  "H01_added_roles": [
+    {
+      "charge": 8640,
+      "role": 0
+    },
+    {
+      "charge": 9152,
+      "role": 2
+    }
+  ],
+  "P": 1710512,
+  "P_complete": true,
+  "P_named_roots": 1728304,
+  "P_overflow": false,
+  "allowance_chosen": false,
+  "first_refusal": {
+    "calls": 162,
+    "error": "native MVCC transaction requires its original work-bearing caller",
+    "phase": 26
+  },
+  "fixture_completion": "PASS; unchanged original later writer34/stale cancellation/old-reader/reopen assertions completed; no native publication executed",
+  "group5_line": "native_prune_backend_route_v6_test.go:176: native-observer group=5 selectedConstructorComplete=true retainedUnionComplete=false namedIncomplete=nonempty-resource-logical-graphs,shared-H02-H03,current-owner-observations-not-atomic,future-Finish-geometry futureFinish=FutureGeometryUnobserved; phase7-backing-RemovalWork+BindFinish+alias-clear -> original-ContinueFinish/Retire -> post.oldState-root-and-Set-transfer -> real-release-queue/node/dependency/lastowner -> both-original-index-capture-Snapshot-and-custody -> original-Set-close -> output/input/private-scratch -> enrollment-and-outer-lease-last-alias -> original-terminal-token; hardIO=sticky-whole-original-frame-and-receipt-with-incomplete-Close/Stop noTransitiveHeapClaim=true noAllowance=true Q32=RED ACK=0",
+  "groups_emitted": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "named_complete": true,
+  "named_overflow": false,
+  "observations_atomic": false,
+  "observed_F_bytes": 882745,
+  "observed_F_records": 367,
+  "raw_log_sha256": "01d6eec18d878b5bdb0ec6786d928b86cb61ac6b25c57b2d5c285a2f3a5ac7a4",
+  "selected_P_rows": [
+    {
+      "charge": 1433808,
+      "complete": true,
+      "overflow": false,
+      "row": "P01"
+    },
+    {
+      "charge": 64,
+      "complete": true,
+      "overflow": false,
+      "row": "P02"
+    },
+    {
+      "charge": 2048,
+      "complete": true,
+      "overflow": false,
+      "row": "P03"
+    },
+    {
+      "charge": 448,
+      "complete": true,
+      "overflow": false,
+      "row": "P04"
+    },
+    {
+      "charge": 33024,
+      "complete": true,
+      "overflow": false,
+      "row": "P05"
+    },
+    {
+      "charge": 188416,
+      "complete": true,
+      "overflow": false,
+      "row": "P06"
+    },
+    {
+      "charge": 16,
+      "complete": true,
+      "overflow": false,
+      "row": "P07"
+    },
+    {
+      "charge": 528,
+      "complete": true,
+      "overflow": false,
+      "row": "P08"
+    },
+    {
+      "charge": 256,
+      "complete": true,
+      "overflow": false,
+      "row": "P09"
+    },
+    {
+      "charge": 0,
+      "complete": true,
+      "overflow": false,
+      "row": "P10"
+    },
+    {
+      "charge": 25280,
+      "complete": true,
+      "overflow": false,
+      "row": "P11"
+    },
+    {
+      "charge": 3856,
+      "complete": true,
+      "overflow": false,
+      "row": "P12"
+    },
+    {
+      "charge": 4112,
+      "complete": true,
+      "overflow": false,
+      "row": "P13"
+    },
+    {
+      "charge": 3072,
+      "complete": true,
+      "overflow": false,
+      "row": "P14"
+    },
+    {
+      "charge": 1088,
+      "complete": true,
+      "overflow": false,
+      "row": "P15"
+    },
+    {
+      "charge": 6144,
+      "complete": true,
+      "overflow": false,
+      "row": "P16"
+    },
+    {
+      "charge": 3488,
+      "complete": true,
+      "overflow": false,
+      "row": "P17"
+    },
+    {
+      "charge": 1088,
+      "complete": true,
+      "overflow": false,
+      "row": "P18"
+    },
+    {
+      "charge": 1824,
+      "complete": true,
+      "overflow": false,
+      "row": "P19"
+    },
+    {
+      "charge": 1888,
+      "complete": true,
+      "overflow": false,
+      "row": "P20"
+    },
+    {
+      "charge": 64,
+      "complete": true,
+      "overflow": false,
+      "row": "P21"
+    }
+  ],
+  "shared_H02_H03_excluded": true,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb",
+  "transitive_heap_claim": false,
+  "whole_retained_union_complete": false
+}

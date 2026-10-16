@@ -1,0 +1,59 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/mvcc",
+        "-run",
+        "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-tmp"
+      },
+      "executed": false,
+      "id": "actual33-cursor-ledger-observation",
+      "name": "actual33-cursor-ledger-observation",
+      "native_final_driver_publication_authorized": false,
+      "outer_timeout_seconds": 240,
+      "public_status": "Q32 RED/ACK0",
+      "race": false,
+      "requires_root_verification_grant": true,
+      "selector": "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+      "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+      "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+      "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+      "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb",
+      "top_level_tests": [
+        "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+      ]
+    }
+  ],
+  "required_child_tests": {},
+  "selected_test_files": {
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e"
+  },
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb"
+}

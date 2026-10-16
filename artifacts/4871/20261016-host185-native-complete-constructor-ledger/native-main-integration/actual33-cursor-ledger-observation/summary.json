@@ -1,0 +1,20 @@
+{
+  "actual33_executed": true,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T06:05:37.213182+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "actual33-cursor-ledger-observation",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10389,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_still_frozen": true
+}

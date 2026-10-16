@@ -1,0 +1,77 @@
+{
+  "ack": 0,
+  "allowance": null,
+  "caps_changed": false,
+  "diagnosis": "Unnecessary whole-cursor observer unit always exceeds byte quantum; two log-and-return exits bypass final expected-complete Fatal",
+  "fixed_comparison": {
+    "bytes": 6300,
+    "evidence": "source-only explicit scalar-struct amd64 layout arithmetic; actual code retains unsafe.Sizeof",
+    "records": 21
+  },
+  "go_commands": 0,
+  "inspected_selected_archive_members_match_live": true,
+  "inspected_sources": {
+    "TreeDB/caching/native_selected_ledger_for_test_v6.go": "e3d3b18c46ca1bb05d37ce297ebfa0ab1e1e52be80d0a44d0c151161db2d7eb4",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "1765478c51692dedc1f0cd7e36510d9f3aaf9db0d63743c7b26c6a4e3beb3871",
+    "TreeDB/db/native_selected_ledger_for_test_v6.go": "fce39859ca04c85c3fc27e04e404213bffc34806a85b094f91ea57b6f99955ca",
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/freelist/private_ledger_for_test_v6.go": "ebaf8ee22ef4d030b5e2350a452c06fabe1d32d7eb7fc17db35418dbce020c65",
+    "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+    "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6.go": "c0747f15bd80e9cd8efed88f7e5ce113fa752d7f17a455793d9bfe497843bb20",
+    "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go": "8f851edcd07e524cc420b4e76ac345eb16fd6359b33e2482eab24c3a5f918205",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "56c85430928b3a399404bd5f23c49af5c11c5e3bac5f1b40157467eaf42193bb",
+    "TreeDB/internal/rootpublication/selected_token_ledger_for_test_v6.go": "f0cebfd2561c47c6783df35869f7d7d8a232ba60e5710dd5ecaf787fcb03c9ae",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/pager/write_work.go": "e6f44bc3930565d62b996d9136bbae8fabf86b7f46ef62077a52b162762120da"
+  },
+  "numeric_P_observed": false,
+  "original_refusal_unit": {
+    "byte_limit": 1048576,
+    "bytes": 1592064,
+    "bytes_over_limit": 543488,
+    "failed_reserve_consumed": {
+      "bytes": 0,
+      "records": 0
+    },
+    "record_limit": 32,
+    "records": 1
+  },
+  "proposal_scope": [
+    "TreeDB/mvcc/native_selected_ledger_test.go",
+    "matching pure observer tests only"
+  ],
+  "proposed_per_invocation_prefix": {
+    "already_priced_scalar_bytes": 16,
+    "already_priced_scalar_records": 1,
+    "bytes": 16,
+    "capture_address_invocations": 3,
+    "new_additional_bytes": 720,
+    "new_additional_records": 45,
+    "preparation_invocations": 40,
+    "records": 1,
+    "retained_scalar_invocations": 1,
+    "retention_invocations": 2,
+    "source": "2*sizeof(actual pointer or uint64), before read/address result",
+    "total_bytes_across_separate_turns": 736,
+    "total_records_across_separate_turns": 46
+  },
+  "q32": "RED",
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-private-ledger-observation02/actual33-private-capacity-selected-ledger-observation02/run.log",
+  "raw_log_sha256": "8e9d26834de54d2868d54fd7728cd0ba56eeb3a8c8aeb980fe3c5dcc742c9e7a",
+  "report_sha256": "7172a3a4b7ec5f6c6facec5a154a34a2a0b653dcd769ab18919915e208abaefc",
+  "runtime_commands": 0,
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+  "source_edits": false,
+  "source_files": 10389,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-inventory-final/source-final.json",
+  "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "source_tree": "d63bc97e893e518c87687831a6e0a01a357268f2",
+  "supported_set_evaluation": {
+    "bytes": 8376,
+    "records": 22
+  }
+}

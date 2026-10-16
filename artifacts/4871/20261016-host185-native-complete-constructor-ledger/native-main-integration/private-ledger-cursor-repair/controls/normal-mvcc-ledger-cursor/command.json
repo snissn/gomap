@@ -1,0 +1,49 @@
+{
+  "actual_pgid": 1123424,
+  "actual_pid": 1123424,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "./TreeDB/mvcc",
+    "-run",
+    "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+    "-count=1",
+    "-v",
+    "-timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/tmp-normal"
+  },
+  "executed": true,
+  "grant_md_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+  "id": "normal-mvcc-ledger-cursor",
+  "launch_utc": "2026-10-16T06:01:20.755293+00:00",
+  "name": "normal-mvcc-ledger-cursor",
+  "outer_timeout_seconds": 240,
+  "proposal_json_sha256": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+  "race": false,
+  "selector": "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "top_level_tests": [
+    "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+    "TestNativeSelectedSetLedgerCombinationsV6",
+    "TestNativeSelectedLedgerObservationAdmissionV6"
+  ]
+}

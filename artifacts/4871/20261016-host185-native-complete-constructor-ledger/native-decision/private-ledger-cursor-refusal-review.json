@@ -1,0 +1,101 @@
+{
+  "disposition": "REJECT selected-constructor-completeness acceptance of observation02; ACCEPT retained packet as an honest incomplete diagnostic",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the required exact model.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "children_spawned": false,
+  "created_utc": "2026-10-16T05:54:47.381829+00:00",
+  "source": {
+    "manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+    "archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+    "files_independently_verified": 10389,
+    "tree": "d63bc97e893e518c87687831a6e0a01a357268f2",
+    "mutable_source_read": false,
+    "inspected_files": {
+      "TreeDB/mvcc/native_selected_ledger_test.go": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+      "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+      "TreeDB/db/native_selected_ledger_for_test_v6.go": "fce39859ca04c85c3fc27e04e404213bffc34806a85b094f91ea57b6f99955ca",
+      "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "1765478c51692dedc1f0cd7e36510d9f3aaf9db0d63743c7b26c6a4e3beb3871",
+      "TreeDB/caching/native_selected_ledger_for_test_v6.go": "e3d3b18c46ca1bb05d37ce297ebfa0ab1e1e52be80d0a44d0c151161db2d7eb4",
+      "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+      "TreeDB/freelist/private_ledger_for_test_v6.go": "ebaf8ee22ef4d030b5e2350a452c06fabe1d32d7eb7fc17db35418dbce020c65",
+      "TreeDB/internal/rootpublication/selected_token_ledger_for_test_v6.go": "f0cebfd2561c47c6783df35869f7d7d8a232ba60e5710dd5ecaf787fcb03c9ae",
+      "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go": "8f851edcd07e524cc420b4e76ac345eb16fd6359b33e2482eab24c3a5f918205",
+      "TreeDB/zipper/materialized_observer_for_test_v6.go": "311f3c30ca31e7512dfd31ebfa28abacaf5b57704d8b88e8a495dedb35a77e82",
+      "TreeDB/internal/primaryarena/retention.go": "c4d9150bda025702051ed62da3936434725bc33acd6cf222cd25944b64b69a1b",
+      "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083"
+    }
+  },
+  "evidence_bindings": {
+    "native-main-integration/actual33-private-ledger-observation02/artifact-manifest.json": "90a0fcbe1233a100989cd1ba091ff3fd34ab4b43cbdf3c09bbf46f07fbd56e27",
+    "native-main-integration/actual33-private-ledger-observation02/evidence.tar.gz": "17e51595b54d63d897f94cf2ce38967c1d1e7910cef0cbdd761523953f242adf",
+    "native-main-integration/actual33-private-ledger-observation02/observations.json": "a2461e568acd4c38b5681068f4eb425cf1eeb7ac14fef32c9107738149547528",
+    "native-main-integration/actual33-private-ledger-observation02/summary.json": "6b73c760ee7468529f2184c9f522422ad0dc784d80dafb64f9802531f3afd97a",
+    "native-main-integration/actual33-private-ledger-observation02/actual33-private-capacity-selected-ledger-observation02/run.log": "8e9d26834de54d2868d54fd7728cd0ba56eeb3a8c8aeb980fe3c5dcc742c9e7a",
+    "native-main-integration/actual33-private-ledger-observation02/actual33-private-capacity-selected-ledger-observation02/command.json": "168470375634a4b471a5781118250673a0442b56a18f8cd4454b18e613236dba",
+    "native-main-integration/actual33-private-ledger-observation02/actual33-private-capacity-selected-ledger-observation02/result.json": "dd8b01d6beef904fb58ae00ecb0dcfb4580f2481cd9709d53a60e2c3992233a1"
+  },
+  "verification": {
+    "source_archive_complete_match": true,
+    "artifact_payloads_verified": 20,
+    "evidence_archive_entries_verified": 21,
+    "per_command_manifests_match_frozen": true,
+    "one_test_run_pass": true,
+    "actual_pid_pgid": 1111706,
+    "leader_joined_groups_children_empty": true,
+    "timeout_signals_intervention": false
+  },
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "blocking expected selected-ledger observation",
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+      "line": 99,
+      "trigger": "Every current actual33 cursor on the retained linux/amd64 fixture.",
+      "cause": "One observer quantum has1MiB limit, while entry precharges2*sizeof(PruneCursor). Exact raw cursorRaw796032 implies requested1592064 bytes, so Reserve refuses before any selected rows are read. The actual helper reads selected cursor scalars/operands, not a whole cursor copy.",
+      "requested_records": 1,
+      "requested_bytes": 1592064,
+      "byte_limit": 1048576,
+      "correction": "Replace whole-cursor observer traffic with a source-derived scalar-operand price, ideally caching original preparation/capture/retention/retainedBytes operands once after preadmission. Preserve original cursor limits and all production caps."
+    },
+    {
+      "id": "R2",
+      "severity": "blocking test fidelity",
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+      "line": 100,
+      "cause": "Log+return at100-101 and145-146 skips final expected-complete assertions243-245, allowing the real promoted test to PASS without any P row. Outer testNativePreEffectGeometryV6 first basis refusal at native_prune_backend_route_v6_test.go231-234 also returns before the ledger.",
+      "correction": "In the expected selected-empty path fail on nil/missing cursor and observation admission/readiness failure, with exact requested/limit/used diagnostics. Guard comparison refusal likewise; preserve partial/unsupported flags and final complete checks. Generic observers may keep ready=false, but the selected expected-complete caller must reject it."
+    }
+  ],
+  "helper_branch_audit": [
+    "Only two direct early returns exist in testNativeSelectedConstructorLedgerV6: cursor admission and fixed comparison admission. Both currently log and return successfully.",
+    "All accessor ready flags, missing expected roles, shape/ownership/transfer/alias contradictions, bank unavailability and row-add refusals otherwise feed final Complete=false/Fatal. Do not turn any false-ready zero struct into valid zero charge.",
+    "selectedSetConstructorRowsV6 partial reserve returns leave rows incomplete, and total aggregation rejects them. Supported four wrappers:1initial+5role steps+8pair visits+at most8unique additions=22records; observed shared-kind shape needs20.",
+    "Fixed comparison turn reserves21records at144 using the existing explicit sizeof expression. Keep it, log exact operands/used/limits on refusal and fail the expected path. No runtime measurement of that turn was reached.",
+    "Each token summation turn uses at most8 one-record additions; enrollment add uses6; private control add uses3 per control; row total uses fresh1record32bytes per row. All counts are source-bounded, no quantum raising needed for arithmetic.",
+    "Accessor calls retain original layered Reserve expressions and original locks. Existing raw versions of retained/Set/index/transaction/manifest/capture/bank accessors returned ready. New private/enrollment/token/role accessors remain unexecuted in this helper; their readiness/completeness cannot be inferred from this PASS.",
+    "Outer generic F/geometry diagnostics explicitly track false completion; they are not complete-ledger proof. For this expected selected observation also reject initial mutable-basis readiness refusal so it cannot bypass the helper."
+  ],
+  "minimal_prescription": [
+    "Test/observer-only coherent patch: entry/comparison expected refusals fail; cache and price only actual scalar original operands, not the796032-byte containing cursor. No production ownership, budgets, constructors or cleanup changes justified by this failure.",
+    "One concrete source-shaped option: before caching c.preparation, &c.capture, c.retention and c.retainedBytes reserve1record and2*(sizeof(c)+sizeof(preparation pointer)+sizeof(capture pointer)+sizeof(retention pointer)+sizeof(retainedBytes)). On current64-bit layout this is80bytes. Use the cached original operands throughout; containing accessor methods still admit their own actual backing/field traffic. Retain separately admitted arithmetic and local comparison work. This is a proposed observer price, not runtime or publication allowance.",
+    "Log exact per-stage observer records/bytes and requested bounds on refusal; final PComplete/namedComplete and all21 expected row completeness flags must be true for this selected fixture, with unsupported shapes still failing rather than receiving guessed zero.",
+    "Use original fixture single caller/no intervening writer until after observation, retained original refs, accessor-local locks, Stable/transfer/identity predicates, and existing group basis-before/after equality/phase26 checks. No global snapshot or atomic whole-graph claim follows; Owner envelopes remain separate and not summed as physical payload.",
+    "After independent exact source/metadata review and root authorization, one new frozen-source run of the same anchored promoted test, original Q32/1MiB production/caller settings, original work/data/first-refusal/cancel/newerwriter/reopen assertions and original3m/240s deadlines is sufficient to evaluate this repaired observation. It is a causally changed test/observer run, not unchanged retry-to-pass. Do not grant it from this advice."
+  ],
+  "inference_limits": [
+    "Observation02 actual top-level test PASS remains true; selected P/P_named_roots were never evaluated or emitted. Packet observations correctly report incomplete.",
+    "Group3 computed367records/882745bytes is retained non-atomic applicable expression observation, not complete retained total or finaldriver budget. No value for P or named total is available.",
+    "Cursor entry refusal is an observation-pricing/test-oracle defect, not proof of production allocation/custody failure or a need for higher Q32/1MiB limits.",
+    "Remaining selected predicates may still fail after entry is repaired; current evidence cannot guarantee completeness or invent numeric missing rows.",
+    "Original old reader read is before newer writer34; no postwriter old-reader-read claim. Existing real newer writer, stale refusal, cancel/newest-output/reopen checks remain meaningful.",
+    "No genuine native activation/fence/Consume/Finish/publication, full FutureFinish bound, native qualification, numeric allowance or ACK. Q32 RED/ACK0 unchanged."
+  ],
+  "lease_released": true
+}

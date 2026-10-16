@@ -1,0 +1,21 @@
+{
+  "verified_utc": "2026-10-16T06:10:20.894225+00:00",
+  "verifier_sha256": "7bd97d88a85334eeba3b4cd572b9039eded65728813e10b8bb0d8d12caf2a74e",
+  "source_files": 10389,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "evidence_archive_sha256": "dd1fa65e7a2331758a45f490df85516e1cc975d787ff1c2e5f741970e0e5e806",
+  "evidence_archive_members": 21,
+  "evidence_manifest_sha256": "1b7b3354020af3ba090577d279780a6b8911f8f58cb4b68ecd7ee7be400299b4",
+  "execution_result": "PASS_LEDGER_COMPLETE",
+  "P": 1710512,
+  "P_named_roots": 1728304,
+  "supplemental_tmpdir_preflight_sha256": "547c2c2c85305bb94f04903938e3dca51a598d78ad9321f3cd9104379d122c8c",
+  "supplemental_tmpdir_preflight_note": "Runner emits preflight before Popen; file omitted from compact archive. Independently read and hash-bound here.",
+  "semantic_result": "Original actual33 PASS with 21 complete constructor rows P=1710512 and two complete named roots P_named_roots=1728304. Original Q32 refusal/ACK0 remains; no native publication, transitive-union claim, or work allowance.",
+  "command_metadata_note": "Grant executed:false is a template; actual receipt records executed:true and PID/PGID.",
+  "runtime_repeated": false,
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "public_status": "Q32 RED/ACK0; no native publication or allowance"
+}

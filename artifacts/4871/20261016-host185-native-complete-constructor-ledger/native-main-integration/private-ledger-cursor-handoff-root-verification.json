@@ -1,0 +1,7 @@
+{
+  "artifact_payloads_verified": 33,
+  "archive_members_verified": 33,
+  "handoff_sha256": "b1a605ff3c95ffc3e351d2d1888a71385ec9248d51d1b5dd33dcca77147c2c23",
+  "artifact_manifest_sha256": "6db343cded4cc70ec5f270fbf18e08b739b4886ccd876555bb8ea21291d1456f",
+  "evidence_sha256": "c4973e32d4132b9a9d733c16ef437093532172a5cc86d50d5fc2b264ce189c8b"
+}

@@ -1,0 +1,14 @@
+{
+  "verified_utc": "2026-10-16T06:00:11.301991+00:00",
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "source_files": 10389,
+  "changed_paths": [
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/mvcc/native_selected_ledger_test.go"
+  ],
+  "production_unchanged": true,
+  "full_source_archive_live_delta_index_verified": true,
+  "source_review": "Root full two-file diff read; independent review active",
+  "runtime_in_this_verification": false
+}

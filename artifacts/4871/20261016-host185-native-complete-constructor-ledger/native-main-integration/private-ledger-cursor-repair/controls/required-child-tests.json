@@ -1,0 +1,42 @@
+{
+  "TestNativeSelectedLedgerObservationAdmissionV6": [
+    "zero",
+    "record-short",
+    "byte-short",
+    "exact",
+    "nil-work",
+    "nil_cursor",
+    "cursor_operands",
+    "fixed_comparisons",
+    "initial_basis",
+    "incomplete_row"
+  ],
+  "TestNativeSelectedSetLedgerCombinationsV6": [
+    "kind-backing",
+    "kind-backing/missing-proof",
+    "kind-backing/unexpected-prep",
+    "kind-backing/opaque",
+    "kind-backing/no-owner",
+    "kind-backing/no-live",
+    "kind-backing/missing-backing",
+    "kind-backing/unavailable-row",
+    "kind-backing/unavailable-pair",
+    "kind-backing/metadata-contradiction",
+    "kind-backing/unequal-shared-charge",
+    "kind-backing/transfer-incomplete",
+    "kind-backing/overflow",
+    "empty-backing",
+    "empty-backing/missing-proof",
+    "empty-backing/unexpected-prep",
+    "empty-backing/opaque",
+    "empty-backing/no-owner",
+    "empty-backing/no-live",
+    "empty-backing/missing-backing",
+    "empty-backing/unavailable-row",
+    "empty-backing/unavailable-pair",
+    "empty-backing/metadata-contradiction",
+    "empty-backing/unequal-shared-charge",
+    "empty-backing/transfer-incomplete",
+    "empty-backing/overflow"
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "at_utc": "2026-10-16T06:04:32.956012+00:00",
+  "authority": "Existing user execute-and-merge instruction. One causally changed actual33 observation after reviewed two-test-file scalar observation and fail-closed oracle repair; complete frozen source, selected focused normal/race controls root-verified. This is not an unchanged retry.",
+  "benchmark_authorized": false,
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-tmp"
+    },
+    "executed": false,
+    "name": "actual33-cursor-ledger-observation",
+    "native_final_driver_publication_authorized": false,
+    "outer_timeout_seconds": 240,
+    "public_status": "Q32 RED/ACK0",
+    "requires_root_verification_grant": true,
+    "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+    "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+    "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+    "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb"
+  },
+  "focused_control_root_verification_sha256": "cd57dfdb42ea33da9f5bbddcebe9a65f6b950fc9fcd5057dabd8ab60277b8dbe",
+  "independent_focused_controls_review": "Additive independent review running on immutable completed two-call packet; source independently ACCEPT3fa32688 and root fully verified both calls.",
+  "maximum_commands": 1,
+  "ownership": {
+    "children": false,
+    "evidence": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation",
+    "git_github": "root only",
+    "model": "gpt-6.1-sol",
+    "operator": "/root/native_prerequisite",
+    "source_mutations": false
+  },
+  "prior_attempt": "Observation02 on8f3a passed Go but failed accounting goal through deterministic whole-cursor overpricing and silent return. Preserved raw/archives/root verification. Frozenbc2ebe repairs only two test files; sourceACCEPT3fa32688, root verified normal/race3top36child each. Final5cde43 changes only CI-impact discovery hash; production and all test bytes match accepted/testedbc2ebe. OriginalQ32 remains unchanged.",
+  "prior_incomplete_observation": {
+    "evidence_sha256": "17e51595b54d63d897f94cf2ce38967c1d1e7910cef0cbdd761523953f242adf",
+    "root_verification_sha256": "6bd2069737fcc09a90a3c9f469080c73cc863658c092444b89560ee97df1b6c1",
+    "semantic_status": "PASS_LEDGER_INCOMPLETE",
+    "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889"
+  },
+  "producer_limits": {
+    "bytes": 1048576,
+    "files": 17,
+    "guards": [
+      80,
+      4096
+    ],
+    "history": 33,
+    "indexes": 2,
+    "input": 32,
+    "records": 32,
+    "resources": 16
+  },
+  "publication_runtime_authorized": false,
+  "retries": 0,
+  "review_sha256": "3fa32688c3b9f28eb99772b58f920da496faa2eef02c584f09057a0dc4d25be0",
+  "root_inventory_receipt_sha256": "f4d1462f5032f64493cd68a9b12bc2e1d8367d0bb8a12dbc3ede8ed574c16925",
+  "scope": "ONE unchanged original promoted fixture:33 real versions/floor32/phase26/candidate8/seal13/two-original-index, selected+anchor and newerwriter34/stalecancel/oldreader/reopen assertions. Q32/1MiB/80/4096 unchanged. Require all21 complete P rows and both complete named-root rows, PComplete=true/namedComplete=true with no overflow and numeric P/P_named_roots; every unavailable fact or refusal fails. Keep selected constructor envelope separate from physical/transitive retained union and shared Owner/H02/H03. No finaldriver/publication/enqueue/adopt/fence/Consume/Finish/ACK grant. Bind exact frozen source/archive, stagedtree/index and compiler/env/process before/after. Verify exact TMPDIR exists/write-read-unlink immediately before launch. Preserve all raw outcome and stop after one call regardless result; no retry, edit, broader body or budget adjustment.",
+  "source_files": 10389,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "temporary_directory_preflight": {
+    "mount_verified": true,
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-tmp",
+    "root_created_before_grant": true,
+    "write_read_unlink_probe": true
+  }
+}

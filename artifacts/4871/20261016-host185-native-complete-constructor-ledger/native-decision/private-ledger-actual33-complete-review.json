@@ -1,0 +1,357 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "ONE actual33 previsibility observation: selected-empty constructor admission envelope and two explicitly named root allowances only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the user-required exact model; independent internally routed review used.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "children_spawned": false,
+  "findings": [],
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "source_files_verified": 10389,
+  "staged_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb",
+  "staged_paths": 216,
+  "metadata_binding": {
+    "prior_source_manifest": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "only_changed_path": ".github/ci/ci_impact.json",
+    "only_changed_field": "discovery_source_sha256",
+    "production_and_test_bytes_identical": true,
+    "root_inventory_hashes_verified": 25
+  },
+  "grant_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+  "artifact_manifest_sha256": "1b7b3354020af3ba090577d279780a6b8911f8f58cb4b68ecd7ee7be400299b4",
+  "evidence_archive_sha256": "dd1fa65e7a2331758a45f490df85516e1cc975d787ff1c2e5f741970e0e5e806",
+  "evidence_files_verified": 21,
+  "handoff_sha256": "e3d8814f95196250eb043906de0418b076a4584abbcdf91229809c55191088c5",
+  "observations_sha256": "4f21ade0447b1ae17b0b3209f64c37560407363d711e0970703a4814e83e1872",
+  "selected_payload_sha256": "e89a763499ba04de840688c2d82ad3a3329d81fa9703e957700b46120a377fc5",
+  "runner_sha256": "a4273dd3c00cab2a7ab8df12de79cfdde7d2fb89cf8d1547ffd93e6aa95422f9",
+  "raw_sha256": "01d6eec18d878b5bdb0ec6786d928b86cb61ac6b25c57b2d5c285a2f3a5ac7a4",
+  "result_sha256": "483bc80559887d64ccd41a41d3ba0ab35f487eed4d757edf78fa868a91a03104",
+  "summary_sha256": "160f4918a4aa8e40ca4454da2d021faba14e0d65fa60d2b71d2b10f48e588472",
+  "actual_command": {
+    "actual_pgid": 1127296,
+    "actual_pid": 1127296,
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-tmp"
+    },
+    "executed": true,
+    "id": "actual33-cursor-ledger-observation",
+    "launch_utc": "2026-10-16T06:05:34.789638+00:00",
+    "name": "actual33-cursor-ledger-observation",
+    "native_final_driver_publication_authorized": false,
+    "outer_timeout_seconds": 240,
+    "public_status": "Q32 RED/ACK0",
+    "race": false,
+    "requires_root_verification_grant": true,
+    "selection_json_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "selector": "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+    "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+    "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+    "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+    "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb",
+    "top_level_tests": [
+      "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+    ]
+  },
+  "compiler_binding": {
+    "VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+    "archive_verified_files": 10389,
+    "compiler_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "runner_pgid": 1127283,
+    "runner_pid": 1127285,
+    "runner_sha256": "a4273dd3c00cab2a7ab8df12de79cfdde7d2fb89cf8d1547ffd93e6aa95422f9",
+    "selected_test_files": {
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e"
+    },
+    "selection_json_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "selection_md_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+    "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "started_utc": "2026-10-16T06:05:33.651333+00:00",
+    "subreaper_verified": true
+  },
+  "command_results": {
+    "executed_count": 1,
+    "test_top_levels": 1,
+    "child_tests": 0,
+    "status": "PASS",
+    "test_elapsed_seconds": 0.183,
+    "command_elapsed_seconds": 1.5638883761130273,
+    "pid": 1127296,
+    "pgid": 1127296,
+    "leader_joined": true,
+    "group_and_adopted_children_empty": true,
+    "signals": [],
+    "timeout": false,
+    "source_before_after_equal_frozen": true,
+    "index_sha256_before_after": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+    "retry_count": 0
+  },
+  "selected_rows": [
+    {
+      "charge": 1433808,
+      "complete": true,
+      "overflow": false,
+      "row": "P01",
+      "description": "outer cursor policy payload"
+    },
+    {
+      "charge": 64,
+      "complete": true,
+      "overflow": false,
+      "row": "P02",
+      "description": "outer/capture lease headers"
+    },
+    {
+      "charge": 2048,
+      "complete": true,
+      "overflow": false,
+      "row": "P03",
+      "description": "captured backend Snapshot header"
+    },
+    {
+      "charge": 448,
+      "complete": true,
+      "overflow": false,
+      "row": "P04",
+      "description": "capture enrollment/binding/lease headers"
+    },
+    {
+      "charge": 33024,
+      "complete": true,
+      "overflow": false,
+      "row": "P05",
+      "description": "input construction"
+    },
+    {
+      "charge": 188416,
+      "complete": true,
+      "overflow": false,
+      "row": "P06",
+      "description": "output construction"
+    },
+    {
+      "charge": 16,
+      "complete": true,
+      "overflow": false,
+      "row": "P07",
+      "description": "allocator preparation control"
+    },
+    {
+      "charge": 528,
+      "complete": true,
+      "overflow": false,
+      "row": "P08",
+      "description": "private clone header/vectors"
+    },
+    {
+      "charge": 256,
+      "complete": true,
+      "overflow": false,
+      "row": "P09",
+      "description": "private hash backing"
+    },
+    {
+      "charge": 0,
+      "complete": true,
+      "overflow": false,
+      "row": "P10",
+      "description": "private sort backing"
+    },
+    {
+      "charge": 25280,
+      "complete": true,
+      "overflow": false,
+      "row": "P11",
+      "description": "transaction construction envelope"
+    },
+    {
+      "charge": 3856,
+      "complete": true,
+      "overflow": false,
+      "row": "P12",
+      "description": "seal holder plus transferred manifest"
+    },
+    {
+      "charge": 4112,
+      "complete": true,
+      "overflow": false,
+      "row": "P13",
+      "description": "commit runtime and retired backing"
+    },
+    {
+      "charge": 3072,
+      "complete": true,
+      "overflow": false,
+      "row": "P14",
+      "description": "Set wrappers"
+    },
+    {
+      "charge": 1088,
+      "complete": true,
+      "overflow": false,
+      "row": "P15",
+      "description": "kind/empty backing"
+    },
+    {
+      "charge": 6144,
+      "complete": true,
+      "overflow": false,
+      "row": "P16",
+      "description": "two index wrappers/operations/custody"
+    },
+    {
+      "charge": 3488,
+      "complete": true,
+      "overflow": false,
+      "row": "P17",
+      "description": "token metadata"
+    },
+    {
+      "charge": 1088,
+      "complete": true,
+      "overflow": false,
+      "row": "P18",
+      "description": "completion obligations"
+    },
+    {
+      "charge": 1824,
+      "complete": true,
+      "overflow": false,
+      "row": "P19",
+      "description": "physical metadata"
+    },
+    {
+      "charge": 1888,
+      "complete": true,
+      "overflow": false,
+      "row": "P20",
+      "description": "namespace metadata"
+    },
+    {
+      "charge": 64,
+      "complete": true,
+      "overflow": false,
+      "row": "P21",
+      "description": "pin states"
+    }
+  ],
+  "P": 1710512,
+  "P_complete": true,
+  "P_overflow": false,
+  "H01_added_roles": [
+    {
+      "charge": 8640,
+      "role": 0
+    },
+    {
+      "charge": 9152,
+      "role": 2
+    }
+  ],
+  "P_named_roots": 1728304,
+  "named_complete": true,
+  "named_overflow": false,
+  "arithmetic_verification": {
+    "P": "sum of all 21 ordered raw row charges = 1710512",
+    "named": "1710512 + 8640 + 9152 = 1728304",
+    "F_records": "155 fixed/coordinator/dispatch + 191 remainder + 8 frame validation + 13 allocator claim = 367",
+    "F_bytes": "446649 fixed/coordinator/dispatch + 112944 remainder + (2*152808 + 14048) frame validation + 3488 allocator claim = 882745"
+  },
+  "source_assertions_checked": [
+    "Original fixture: ProfileNoWALFast, outer leaves false, pointer threshold2048, background checkpoint disabled;33 real histories/floor32, reopen before pruning.",
+    "Original Q32/1MiB per public call retained; no prune/complete ACK, phase26/candidate8/seal13 and two original index operands required.",
+    "Selected helper requires entry/fixed-comparison admission, callee readiness and all 21 complete nonoverflow rows; manifest identity/transfer, actual proof holder, Set pair allocation dedup and both index/custody identities are prerequisites.",
+    "Each selected per-callee diagnostic observation retains its own Q32/1MiB; no aggregate observation grant substitutes for production/caller work.",
+    "Basis after groups1-5 is ready and equal; source explicitly says wholeGraphAtomic=false.",
+    "Original old DATA and oldReader value asserted before writer34; writer34 CommitDurable succeeds, stale original allocator rejects, original cursor Close succeeds, newer value survives cancellation/checkpoint/Close/reopen. No post-writer oldReader.Get claim."
+  ],
+  "raw_geometry_verified": {
+    "all_readiness_lines_true": true,
+    "groups": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "first_refusal_calls": 162,
+    "first_refusal_phase": 26,
+    "first_refusal_error": "native MVCC transaction requires its original work-bearing caller",
+    "manifest_charge": 768,
+    "manifest_transferred": true,
+    "clone_header_charge": 512,
+    "allocated_vector_charge": 16,
+    "abandoned_vector_charge": 0,
+    "private_hash_total": 256,
+    "sort_total": 0,
+    "Set_wrappers": {
+      "distinct": 4,
+      "each_charge": 768,
+      "total": 3072
+    },
+    "kind_backing": {
+      "distinct": 2,
+      "each_charge": 544,
+      "total": 1088
+    },
+    "cleared_preparation_set_absent": true,
+    "proof_holder_present": true,
+    "both_index_captures_valid": true,
+    "pending_physical_cleanup_custody_present": true,
+    "physical_cleanup_complete": false,
+    "all_basis_checks_equal": true
+  },
+  "inference_limits": [
+    "P is a constructor admission envelope including conservative policy/containing allowances; it is not exact heap or physical/transitive union.",
+    "Named total adds only H01 source/parent once and distinct target once; source and parent alias. Do not add role1 again, Owner payload envelopes, table/image rows or policy reserves again.",
+    "Whole retained union remains incomplete; H02/H03 shared graphs, nonempty resources, cross-observation atomicity and future real Finish remain unavailable.",
+    "Sequential same-basis checks do not turn separate locked observations into an atomic whole-graph snapshot.",
+    "F367/882745 is observed applicable non-atomic source-expression accounting, not executed final-turn work, a numeric allowance or Q32 success.",
+    "Original refusal remains Q32 RED/ACK0/no allowance; no native finaldriver/enqueue/adopt/fence/Consume/genuine Finish/publication/ACK executed.",
+    "No performance, CI, merge-readiness or successful native Close/physical settlement qualification."
+  ],
+  "lease_released": true,
+  "supplemental_evidence": {
+    "tmpdir_preflight_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/tmpdir-preflight.json",
+    "tmpdir_preflight_sha256": "547c2c2c85305bb94f04903938e3dca51a598d78ad9321f3cd9104379d122c8c",
+    "included_in_compact_manifest_or_archive": false,
+    "root_verification_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-complete-ledger-root-verification.json",
+    "root_verification_receipt_sha256": "64c8423645bf3cdb12326892e11f60279b4d4cd5877ef84ec894a2ae9b996bce",
+    "note": "Preflight independently inspected and hash-bound here and by root receipt; compact packet alone omits it. Publication must retain this supplemental file/receipt."
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "evidence_archive_sha256": "dd1fa65e7a2331758a45f490df85516e1cc975d787ff1c2e5f741970e0e5e806",
+  "files": {
+    "HANDOFF.md": "e3d8814f95196250eb043906de0418b076a4584abbcdf91229809c55191088c5",
+    "actual33-cursor-ledger-observation/command.json": "fdd23a4b54a65fc851166545d5814d581ead579303fff663a7efed13dd5e2b75",
+    "actual33-cursor-ledger-observation/environment.json": "48e0653054df04dbc42cb20600bdde122d0e4b15e5d755945897447ba07363a8",
+    "actual33-cursor-ledger-observation/process.json": "3dfdbe8f79546869285b6e4b61820aa1bf120515b8905b48b6555a7261268e87",
+    "actual33-cursor-ledger-observation/result.json": "483bc80559887d64ccd41a41d3ba0ab35f487eed4d757edf78fa868a91a03104",
+    "actual33-cursor-ledger-observation/run.log": "01d6eec18d878b5bdb0ec6786d928b86cb61ac6b25c57b2d5c285a2f3a5ac7a4",
+    "actual33-cursor-ledger-observation/selected-ledger-payload.json": "e89a763499ba04de840688c2d82ad3a3329d81fa9703e957700b46120a377fc5",
+    "actual33-cursor-ledger-observation/source-after.json": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "actual33-cursor-ledger-observation/source-before.json": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "grant-original.json": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "grant.json": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "handoff.json": "a06c49fc21fc6d4b06c0e50b6c07410c6a9928ba9538c2bf09f07f60cdf3271f",
+    "identity.json": "47d07a486bf2dc27590bef28b82517cd3acd5788a78b25cd5d5823171dffa0c9",
+    "index-after.json": "94b3e8d4cb2d92be06d1a8bf8884e64b4cfc12b6ff1118dda1fa1d787b79f614",
+    "index-binding.json": "b946fbc1b9952d37ba8913aa6c5aa58ff31fe2e9c41b8e555b7aa25664238568",
+    "observations.json": "4f21ade0447b1ae17b0b3209f64c37560407363d711e0970703a4814e83e1872",
+    "required-child-tests.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "run-observation.py": "a4273dd3c00cab2a7ab8df12de79cfdde7d2fb89cf8d1547ffd93e6aa95422f9",
+    "runner.log": "9254f9c39c72c3f0e5c84dd4e9d05a275bdcb99af500fb7e9da3a180ec195dd8",
+    "selection.json": "6d00fb9e45ca1db13f7e8b46ce5acc358e10ae5226df1643d3f0eb40576ef489",
+    "summary.json": "160f4918a4aa8e40ca4454da2d021faba14e0d65fa60d2b71d2b10f48e588472"
+  },
+  "referenced_full_source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4"
+}

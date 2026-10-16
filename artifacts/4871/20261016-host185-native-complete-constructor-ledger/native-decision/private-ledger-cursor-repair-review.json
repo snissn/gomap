@@ -1,0 +1,76 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Narrow immutable two-test-file source repair only. Focused runtime controls have not been inspected in this source report; later actual33 remains unexecuted on this source.",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "reviewer": "/root/ordinary_review",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model; internal independent review selected.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "children_spawned": false,
+  "created_utc": "2026-10-16T06:01:08.336324+00:00",
+  "source": {
+    "manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+    "delta_sha256": "18fe64f36561e4437bb7a2cc17466e1c4ef9ab7f3376f79951035eb3fdd04b2a",
+    "files_independently_archive_verified": 10389,
+    "baseline_manifest": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+    "changed_paths": {
+      "TreeDB/mvcc/native_selected_ledger_test.go": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e"
+    },
+    "baseline_staged_tree": "d63bc97e893e518c87687831a6e0a01a357268f2",
+    "staged_tree_is_not_new_source_tree": true,
+    "mutable_source_read": false
+  },
+  "bindings": {
+    "native-main-integration/private-ledger-cursor-repair/freeze-receipt.json": "ab92ab57974f5028b8662aa5c5e486d24d8843d9d74d08629070bfe9f46c5d95",
+    "native-main-integration/private-ledger-cursor-repair/proposed-commands.json": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+    "native-decision/root-private-ledger-cursor-repair.md": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+    "native-decision/private-ledger-cursor-refusal-review.md": "0bbf69f3cc3641263d9485e651e86d3d523fbbe089d99a7b0475165df2a849f5"
+  },
+  "blocking_findings": [],
+  "resolved_findings": {
+    "R1": "Replaced impossible1/1592064 containing-cursor observation price with1record and twice five scalar pointer/uint64 widths. Pinned64-bit expression80bytes. Cursor nil/admission check precedes actual reads; then four original operands are loaded once. No containing capture copied.",
+    "R2": "Entry and fixed-comparison guard refusals now invoke real testing.T.Fatalf through shared signal helper; outer initial basis refusal also Fatalf. No successful early return remains before final row and named-root completeness assertions."
+  },
+  "checks": [
+    "Complete archive matches all10389 manifest entries; baseline has identical file set and only the two selected test files differ. No production, benchmark, quota or caller policy change.",
+    "All parent cursor field uses in ledger helper are confined to the single postadmission cached assignment. unsafe.Sizeof selectors in pricing are unevaluated compile-time widths. Cached operands confined to synchronous invocation; no new reference, root, wrapper, owner or retained control.",
+    "RetainedBytes local retains separate P01 scalar-read/add admission. Preparation/capture/retention calls preserve original percallee Q32/1MiB admissions and locks; fixed comparison expression unchanged.",
+    "All21 row ownership, holder, transfer, alias dedup, opaque-shape, unsupported, overflow, token and bank predicates plus finalFatal logic preserved. Partial inner combiner refusal still propagates incomplete.",
+    "Group5 selectedConstructorComplete=true appears only after the helper returns successfully and group4 basis check; no earlier Log-return can reach it. retainedUnionComplete remainsfalse, shared H02/H03 and nonempty/atomicity/FutureFinish exclusions explicit.",
+    "Original actual33 production/caller limits, first route refusal, selected+anchor, writer34, stale cancellation, old reader and reopen assertions unchanged; exact original route is not included in the two focused selectors.",
+    "New admission test has zero/record-short/byte-short/exact/nil-work controls and exact failure-counter message checks for five named stages. The stage collaborator tests shared failure signaling only; it does not execute all actual stage branches or manufacture cursor/receipt/publication success."
+  ],
+  "proposed_controls": {
+    "calls": 2,
+    "modes": [
+      "normal",
+      "race"
+    ],
+    "package": "./TreeDB/mvcc",
+    "top_names": [
+      "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+      "TestNativeSelectedSetLedgerCombinationsV6",
+      "TestNativeSelectedLedgerObservationAdmissionV6"
+    ],
+    "expected_per_mode_top_pass": 3,
+    "expected_per_mode_children": 36,
+    "count": 1,
+    "go_timeout": "3m",
+    "outer_timeout_seconds": 240,
+    "go": "1.26.3",
+    "runtime_disposition": "Not yet independently reviewed; selectors/proposal independently inspected only."
+  },
+  "limits": [
+    "The focused tests do not invoke expected-positive actual33 helper or prove P/P_named_roots availability. Refused/missing/unsupported facts remain failures; no numeric values may be fabricated.",
+    "Pinned80byte expectation is intentionally a64-bit-layout focused fixture check, not a cross-layout byte claim.",
+    "Source archive and baseline staged index/tree are distinct bindings; no exact new commit/tree or hosted check acceptance.",
+    "No new actual33, complete selected real retained total, aggregate F/Finish bound, allowance choice, Q32 fit, native publication, performance or platform qualification.",
+    "Original observation02 remains incomplete despite historical testPASS; preserved unchanged. Q32 RED/ACK0/no allowance."
+  ],
+  "source_review_complete": true,
+  "runtime_review_pending": true
+}

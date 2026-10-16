@@ -1,0 +1,20 @@
+{
+  "at_utc": "2026-10-16T05:59:06.728491+00:00",
+  "baseline_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "caps_unchanged": true,
+  "changed_archive_sha256": "b97f1aabccf493fcdede87266387223e8ab71b210c029f294524c7cb9f28ca55",
+  "changed_paths": [
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/mvcc/native_selected_ledger_test.go"
+  ],
+  "delta_sha256": "18fe64f36561e4437bb7a2cc17466e1c4ef9ab7f3376f79951035eb3fdd04b2a",
+  "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256": "6f304fc6cef240c5f470215e29a2d10e9b8ffbfe7396795077e31a9cf406d654",
+  "prior_production_controls_reused_not_rerun": true,
+  "production_unchanged": true,
+  "selection_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "source_files": 10389,
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "staged_root_tree_unchanged_baseline": "d63bc97e893e518c87687831a6e0a01a357268f2"
+}

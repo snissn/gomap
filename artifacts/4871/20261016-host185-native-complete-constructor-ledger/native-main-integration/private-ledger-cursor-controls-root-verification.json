@@ -1,0 +1,36 @@
+{
+  "verified_utc": "2026-10-16T06:02:46.317693+00:00",
+  "verifier_sha256": "e17b2b00217277f955e4ba31aa41539db6c9613b14c7a357f7a6ffbd8c4a0c5d",
+  "source_verification_sha256": "33ec3dc3255d22db9cf1a00f02ea67593b745e9565fbfe78bf6e6a69ae8cf3c9",
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "full_command_source_tool_environment_process_verified": true,
+  "index_bound_as_unchanged_prior_staged_baseline": true,
+  "result": "PASS",
+  "commands_executed": 2,
+  "rows": [
+    {
+      "name": "normal-mvcc-ledger-cursor",
+      "top_PASS": 3,
+      "child_PASS": 36,
+      "elapsed_seconds": 4.0242685582488775,
+      "pid": 1123424,
+      "pgid": 1123424,
+      "raw_sha256": "f696b4f453dafa46d2f931be16f502be35b5cf28dd8b82f436c3ce10c08f3b32",
+      "result_sha256": "b3a81b28b920cd3fb1622ddd540534d3b0aaa9ab73710501be348e62a14092d9"
+    },
+    {
+      "name": "race-mvcc-ledger-cursor",
+      "top_PASS": 3,
+      "child_PASS": 36,
+      "elapsed_seconds": 6.328855678904802,
+      "pid": 1123498,
+      "pgid": 1123498,
+      "raw_sha256": "972da2624946d1d3c53517e19202d1b875d295389f5857fee212e3d51cfea327",
+      "result_sha256": "56acecdf4bc17bbf79bcb9afd596996f9ca0d748167ca5d42af7035682e002ef"
+    }
+  ],
+  "actual33_executed": false,
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; selected P remains unobserved"
+}

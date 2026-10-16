@@ -1,0 +1,929 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION-20261016.md",
+    "path": "CONTINUATION-20261016.md",
+    "source_bytes": 51982,
+    "source_sha256": "7618dcc6afd1125752094c8593c2e5ea759226ef23a8e06a1492de8b82f307b0",
+    "stored_bytes": 51982,
+    "stored_sha256": "7618dcc6afd1125752094c8593c2e5ea759226ef23a8e06a1492de8b82f307b0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-actual33-complete-review.json",
+    "path": "native-decision/private-ledger-actual33-complete-review.json",
+    "source_bytes": 13944,
+    "source_sha256": "94018c0fc420cb9032b344d5ee59f797884646929fdf67029c58ecf9e272c48b",
+    "stored_bytes": 13944,
+    "stored_sha256": "94018c0fc420cb9032b344d5ee59f797884646929fdf67029c58ecf9e272c48b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-actual33-complete-review.md",
+    "path": "native-decision/private-ledger-actual33-complete-review.md",
+    "source_bytes": 7058,
+    "source_sha256": "3b7d644c409f495a46605b0e35be77c776870eeb099462da395da6f82dd4d898",
+    "stored_bytes": 7058,
+    "stored_sha256": "3b7d644c409f495a46605b0e35be77c776870eeb099462da395da6f82dd4d898",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-controls-review.json",
+    "path": "native-decision/private-ledger-cursor-controls-review.json",
+    "source_bytes": 10000,
+    "source_sha256": "5cfe5707744cdda1cc55299a7b720f4428c405c7dffa2d349e2b0036f64f6cf2",
+    "stored_bytes": 10000,
+    "stored_sha256": "5cfe5707744cdda1cc55299a7b720f4428c405c7dffa2d349e2b0036f64f6cf2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-controls-review.md",
+    "path": "native-decision/private-ledger-cursor-controls-review.md",
+    "source_bytes": 4694,
+    "source_sha256": "c29003c2da6fdf0d799486509fb77d00477149a6cb2aa8d1248699cdbf4d9589",
+    "stored_bytes": 4694,
+    "stored_sha256": "c29003c2da6fdf0d799486509fb77d00477149a6cb2aa8d1248699cdbf4d9589",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-refusal-diagnosis.json",
+    "path": "native-decision/private-ledger-cursor-refusal-diagnosis.json",
+    "source_bytes": 4332,
+    "source_sha256": "2dac4dc6b64a76609a2fe194f218be68d87bc5e957d4c514aad78fa9492624e9",
+    "stored_bytes": 4332,
+    "stored_sha256": "2dac4dc6b64a76609a2fe194f218be68d87bc5e957d4c514aad78fa9492624e9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-refusal-diagnosis.md",
+    "path": "native-decision/private-ledger-cursor-refusal-diagnosis.md",
+    "source_bytes": 8154,
+    "source_sha256": "7172a3a4b7ec5f6c6facec5a154a34a2a0b653dcd769ab18919915e208abaefc",
+    "stored_bytes": 8154,
+    "stored_sha256": "7172a3a4b7ec5f6c6facec5a154a34a2a0b653dcd769ab18919915e208abaefc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-refusal-review.json",
+    "path": "native-decision/private-ledger-cursor-refusal-review.json",
+    "source_bytes": 10806,
+    "source_sha256": "8d46b9ef3979b1f9c8e011a2e7fbf607eb6ec2f308647b8e54c5d6cff50c2730",
+    "stored_bytes": 10806,
+    "stored_sha256": "8d46b9ef3979b1f9c8e011a2e7fbf607eb6ec2f308647b8e54c5d6cff50c2730",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-refusal-review.md",
+    "path": "native-decision/private-ledger-cursor-refusal-review.md",
+    "source_bytes": 5085,
+    "source_sha256": "0bbf69f3cc3641263d9485e651e86d3d523fbbe089d99a7b0475165df2a849f5",
+    "stored_bytes": 5085,
+    "stored_sha256": "0bbf69f3cc3641263d9485e651e86d3d523fbbe089d99a7b0475165df2a849f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-repair-review.json",
+    "path": "native-decision/private-ledger-cursor-repair-review.json",
+    "source_bytes": 5868,
+    "source_sha256": "424296302edb5a52578658ce829081a792bcfd4b036b22e4dde49e409d062752",
+    "stored_bytes": 5868,
+    "stored_sha256": "424296302edb5a52578658ce829081a792bcfd4b036b22e4dde49e409d062752",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-ledger-cursor-repair-review.md",
+    "path": "native-decision/private-ledger-cursor-repair-review.md",
+    "source_bytes": 3533,
+    "source_sha256": "3fa32688c3b9f28eb99772b58f920da496faa2eef02c584f09057a0dc4d25be0",
+    "stored_bytes": 3533,
+    "stored_sha256": "3fa32688c3b9f28eb99772b58f920da496faa2eef02c584f09057a0dc4d25be0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-private-ledger-cursor-actual33-grant.json",
+    "path": "native-decision/root-private-ledger-cursor-actual33-grant.json",
+    "source_bytes": 5308,
+    "source_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "stored_bytes": 5308,
+    "stored_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-private-ledger-cursor-repair.md",
+    "path": "native-decision/root-private-ledger-cursor-repair.md",
+    "source_bytes": 4670,
+    "source_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+    "stored_bytes": 4670,
+    "stored_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-complete-ledger-root-verification.json",
+    "path": "native-main-integration/actual33-complete-ledger-root-verification.json",
+    "source_bytes": 1484,
+    "source_sha256": "64c8423645bf3cdb12326892e11f60279b4d4cd5877ef84ec894a2ae9b996bce",
+    "stored_bytes": 1484,
+    "stored_sha256": "64c8423645bf3cdb12326892e11f60279b4d4cd5877ef84ec894a2ae9b996bce",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/HANDOFF.md",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/HANDOFF.md",
+    "source_bytes": 3564,
+    "source_sha256": "e3d8814f95196250eb043906de0418b076a4584abbcdf91229809c55191088c5",
+    "stored_bytes": 3564,
+    "stored_sha256": "e3d8814f95196250eb043906de0418b076a4584abbcdf91229809c55191088c5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/command.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/command.json",
+    "source_bytes": 2119,
+    "source_sha256": "fdd23a4b54a65fc851166545d5814d581ead579303fff663a7efed13dd5e2b75",
+    "stored_bytes": 2119,
+    "stored_sha256": "fdd23a4b54a65fc851166545d5814d581ead579303fff663a7efed13dd5e2b75",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/environment.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/environment.json",
+    "source_bytes": 10744,
+    "source_sha256": "48e0653054df04dbc42cb20600bdde122d0e4b15e5d755945897447ba07363a8",
+    "stored_bytes": 10744,
+    "stored_sha256": "48e0653054df04dbc42cb20600bdde122d0e4b15e5d755945897447ba07363a8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/process.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/process.json",
+    "source_bytes": 148,
+    "source_sha256": "3dfdbe8f79546869285b6e4b61820aa1bf120515b8905b48b6555a7261268e87",
+    "stored_bytes": 148,
+    "stored_sha256": "3dfdbe8f79546869285b6e4b61820aa1bf120515b8905b48b6555a7261268e87",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/result.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/result.json",
+    "source_bytes": 1811,
+    "source_sha256": "483bc80559887d64ccd41a41d3ba0ab35f487eed4d757edf78fa868a91a03104",
+    "stored_bytes": 1811,
+    "stored_sha256": "483bc80559887d64ccd41a41d3ba0ab35f487eed4d757edf78fa868a91a03104",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/run.log",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/run.log.gz",
+    "source_bytes": 37739,
+    "source_sha256": "01d6eec18d878b5bdb0ec6786d928b86cb61ac6b25c57b2d5c285a2f3a5ac7a4",
+    "stored_bytes": 5965,
+    "stored_sha256": "48175fa023a8b4b325b48c82ce288e4b7a3804473e602988b8392f4cc3d8306e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/selected-ledger-payload.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/selected-ledger-payload.json",
+    "source_bytes": 1734,
+    "source_sha256": "e89a763499ba04de840688c2d82ad3a3329d81fa9703e957700b46120a377fc5",
+    "stored_bytes": 1734,
+    "stored_sha256": "e89a763499ba04de840688c2d82ad3a3329d81fa9703e957700b46120a377fc5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/source-after.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/source-after.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "stored_bytes": 464231,
+    "stored_sha256": "a6fcfe927566e7841b90a9a734a2411c92b63b470682fbb4367ea70316236969",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/source-before.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/source-before.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "stored_bytes": 464232,
+    "stored_sha256": "b168871866779af7c92381cf8cb05c92c23737c4619c09c8a1ed13d8fa9e9e33",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/tmpdir-preflight.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/actual33-cursor-ledger-observation/tmpdir-preflight.json",
+    "source_bytes": 252,
+    "source_sha256": "547c2c2c85305bb94f04903938e3dca51a598d78ad9321f3cd9104379d122c8c",
+    "stored_bytes": 252,
+    "stored_sha256": "547c2c2c85305bb94f04903938e3dca51a598d78ad9321f3cd9104379d122c8c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/artifact-manifest.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/artifact-manifest.json",
+    "source_bytes": 2419,
+    "source_sha256": "1b7b3354020af3ba090577d279780a6b8911f8f58cb4b68ecd7ee7be400299b4",
+    "stored_bytes": 2419,
+    "stored_sha256": "1b7b3354020af3ba090577d279780a6b8911f8f58cb4b68ecd7ee7be400299b4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/grant-original.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/grant-original.json",
+    "source_bytes": 5308,
+    "source_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "stored_bytes": 5308,
+    "stored_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/grant.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/grant.json",
+    "source_bytes": 5308,
+    "source_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "stored_bytes": 5308,
+    "stored_sha256": "6132ae14096a2029091b7e3ce2208b7e6098e8c956f1f21d23195ecbe90e9d64",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/handoff.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/handoff.json",
+    "source_bytes": 2251,
+    "source_sha256": "a06c49fc21fc6d4b06c0e50b6c07410c6a9928ba9538c2bf09f07f60cdf3271f",
+    "stored_bytes": 2251,
+    "stored_sha256": "a06c49fc21fc6d4b06c0e50b6c07410c6a9928ba9538c2bf09f07f60cdf3271f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/identity.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/identity.json",
+    "source_bytes": 1103,
+    "source_sha256": "47d07a486bf2dc27590bef28b82517cd3acd5788a78b25cd5d5823171dffa0c9",
+    "stored_bytes": 1103,
+    "stored_sha256": "47d07a486bf2dc27590bef28b82517cd3acd5788a78b25cd5d5823171dffa0c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/index-after.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/index-after.json",
+    "source_bytes": 184,
+    "source_sha256": "94b3e8d4cb2d92be06d1a8bf8884e64b4cfc12b6ff1118dda1fa1d787b79f614",
+    "stored_bytes": 184,
+    "stored_sha256": "94b3e8d4cb2d92be06d1a8bf8884e64b4cfc12b6ff1118dda1fa1d787b79f614",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/index-binding.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/index-binding.json",
+    "source_bytes": 2851,
+    "source_sha256": "b946fbc1b9952d37ba8913aa6c5aa58ff31fe2e9c41b8e555b7aa25664238568",
+    "stored_bytes": 2851,
+    "stored_sha256": "b946fbc1b9952d37ba8913aa6c5aa58ff31fe2e9c41b8e555b7aa25664238568",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/observations.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/observations.json",
+    "source_bytes": 4085,
+    "source_sha256": "4f21ade0447b1ae17b0b3209f64c37560407363d711e0970703a4814e83e1872",
+    "stored_bytes": 4085,
+    "stored_sha256": "4f21ade0447b1ae17b0b3209f64c37560407363d711e0970703a4814e83e1872",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/required-child-tests.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/required-child-tests.json",
+    "source_bytes": 3,
+    "source_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "stored_bytes": 3,
+    "stored_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/run-observation.py",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/run-observation.py",
+    "source_bytes": 14916,
+    "source_sha256": "a4273dd3c00cab2a7ab8df12de79cfdde7d2fb89cf8d1547ffd93e6aa95422f9",
+    "stored_bytes": 14916,
+    "stored_sha256": "a4273dd3c00cab2a7ab8df12de79cfdde7d2fb89cf8d1547ffd93e6aa95422f9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/runner.log",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/runner.log.gz",
+    "source_bytes": 1007,
+    "source_sha256": "9254f9c39c72c3f0e5c84dd4e9d05a275bdcb99af500fb7e9da3a180ec195dd8",
+    "stored_bytes": 523,
+    "stored_sha256": "c8486b53e1f9bbfec2b9431e8f8174d72b1d83b8ac40acd089bfee73c56f5705",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/selection.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/selection.json",
+    "source_bytes": 2576,
+    "source_sha256": "6d00fb9e45ca1db13f7e8b46ce5acc358e10ae5226df1643d3f0eb40576ef489",
+    "stored_bytes": 2576,
+    "stored_sha256": "6d00fb9e45ca1db13f7e8b46ce5acc358e10ae5226df1643d3f0eb40576ef489",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/summary.json",
+    "path": "native-main-integration/actual33-cursor-ledger-observation/summary.json",
+    "source_bytes": 712,
+    "source_sha256": "160f4918a4aa8e40ca4454da2d021faba14e0d65fa60d2b71d2b10f48e588472",
+    "stored_bytes": 712,
+    "stored_sha256": "160f4918a4aa8e40ca4454da2d021faba14e0d65fa60d2b71d2b10f48e588472",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finalize-private-ledger-cursor-inventory.py",
+    "path": "native-main-integration/finalize-private-ledger-cursor-inventory.py",
+    "source_bytes": 4861,
+    "source_sha256": "9a2aa76e2ce4779e9b7f4982302c5ef522c58766149dbe04b2fa1d5eedb4c06b",
+    "stored_bytes": 4861,
+    "stored_sha256": "9a2aa76e2ce4779e9b7f4982302c5ef522c58766149dbe04b2fa1d5eedb4c06b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-controls-root-verification.json",
+    "path": "native-main-integration/private-ledger-cursor-controls-root-verification.json",
+    "source_bytes": 1493,
+    "source_sha256": "cd57dfdb42ea33da9f5bbddcebe9a65f6b950fc9fcd5057dabd8ab60277b8dbe",
+    "stored_bytes": 1493,
+    "stored_sha256": "cd57dfdb42ea33da9f5bbddcebe9a65f6b950fc9fcd5057dabd8ab60277b8dbe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-handoff-root-verification.json",
+    "path": "native-main-integration/private-ledger-cursor-handoff-root-verification.json",
+    "source_bytes": 348,
+    "source_sha256": "6436118c0284dce2d30cf51c053391afd5834d8cad2674c6e9ca7fffac5e3bc3",
+    "stored_bytes": 348,
+    "stored_sha256": "6436118c0284dce2d30cf51c053391afd5834d8cad2674c6e9ca7fffac5e3bc3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/complete-staged-check.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/complete-staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/complete-staged-check.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/complete-staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 46,
+    "stored_sha256": "2ded953d307b1fd69ca41abed3c2de50dc8b5812d9ac47e95ef301148f681e18",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/policy-after.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/policy-after.json",
+    "source_bytes": 117317,
+    "source_sha256": "6317c8ab8fabe41631cca5657c3093ab996852d57a3ec0187fcc703cf21df321",
+    "stored_bytes": 117317,
+    "stored_sha256": "6317c8ab8fabe41631cca5657c3093ab996852d57a3ec0187fcc703cf21df321",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/policy-before.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/policy-before.json",
+    "source_bytes": 117317,
+    "source_sha256": "2ee4e725e213b94b2e2c80973b070b81b06004aecd524f608bf6896439fc96fc",
+    "stored_bytes": 117317,
+    "stored_sha256": "2ee4e725e213b94b2e2c80973b070b81b06004aecd524f608bf6896439fc96fc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/receipt.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/receipt.json",
+    "source_bytes": 891,
+    "source_sha256": "f4d1462f5032f64493cd68a9b12bc2e1d8367d0bb8a12dbc3ede8ed574c16925",
+    "stored_bytes": 891,
+    "stored_sha256": "f4d1462f5032f64493cd68a9b12bc2e1d8367d0bb8a12dbc3ede8ed574c16925",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/refresh.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/refresh.json",
+    "source_bytes": 190,
+    "source_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "stored_bytes": 190,
+    "stored_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/refresh.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/refresh.log.gz",
+    "source_bytes": 79,
+    "source_sha256": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9",
+    "stored_bytes": 106,
+    "stored_sha256": "bda4c8e9b1340fdaefd08d11c1b535b18b2972d791744152259c06056665cef2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-contract.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/source-contract.json",
+    "source_bytes": 205,
+    "source_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "stored_bytes": 205,
+    "stored_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-contract.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/source-contract.log.gz",
+    "source_bytes": 83,
+    "source_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "stored_bytes": 112,
+    "stored_sha256": "ae5ec5dba59d17341c80378f10d66b5500abe0243d9e04420a14a69ae049e694",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/source-final.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "stored_bytes": 464231,
+    "stored_sha256": "99a79089ea6da70cc2d0b049ba2e6a78bcd2d2e2b88b56a840d25ec935ee05cc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/stage-frozen.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/stage-frozen.json",
+    "source_bytes": 260,
+    "source_sha256": "eebb3b2ac8717fccec9b81f11a2842fc0a3be912bed257adbb69d5c92e934b08",
+    "stored_bytes": 260,
+    "stored_sha256": "eebb3b2ac8717fccec9b81f11a2842fc0a3be912bed257adbb69d5c92e934b08",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/stage-frozen.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/stage-frozen.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "46e42763b954b8de361dc8dd2e2368798805b67c4dfa79b70adb5fa2880dcc09",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/stage-policy.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/stage-policy.json",
+    "source_bytes": 186,
+    "source_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "stored_bytes": 186,
+    "stored_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/stage-policy.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/stage-policy.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "0907dac19967fccb24f5d28949755774a71e42316c6334861bd5f752c4129cf4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-check.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-check.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "59356016b2b59be0449f323723b4a31bd75b62924e981c8c4d5d6c6d8ca8d7d1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-paths.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-paths.json",
+    "source_bytes": 189,
+    "source_sha256": "36e90d78cd1541a1b8da9e82c6b90f39747d9ee0c589bd539e4d8230890d1b5c",
+    "stored_bytes": 189,
+    "stored_sha256": "36e90d78cd1541a1b8da9e82c6b90f39747d9ee0c589bd539e4d8230890d1b5c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-paths.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-paths.log.gz",
+    "source_bytes": 10486,
+    "source_sha256": "4f4f59b6b5852c96c18282c07024e3cbc4cb26da44115384cd9c7f8fb70a23c5",
+    "stored_bytes": 1756,
+    "stored_sha256": "a50187fd2d6dd5a94fa2924795747ded5c6c6307d2f51f539194036d3194f4fb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-stat.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-stat.json",
+    "source_bytes": 174,
+    "source_sha256": "c83ce094ffbf317a76375deba2cda7e259fc723cb7ac61422e630620994e6a6b",
+    "stored_bytes": 174,
+    "stored_sha256": "c83ce094ffbf317a76375deba2cda7e259fc723cb7ac61422e630620994e6a6b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/staged-stat.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/staged-stat.log.gz",
+    "source_bytes": 13657,
+    "source_sha256": "87c1f0168ff42a3f0163000760f99ed0cc431d99f6d88400172adb052e8e554a",
+    "stored_bytes": 2958,
+    "stored_sha256": "15c8b9689fd8380e329ada567f8c13ff240011c07a4d644692ccf5d7def5455e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/tree-after.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/tree-after.json",
+    "source_bytes": 150,
+    "source_sha256": "92535f3f5b75aa8c16da04d1a35af92821c3e58bba57b12da3d1dbd015240d23",
+    "stored_bytes": 150,
+    "stored_sha256": "92535f3f5b75aa8c16da04d1a35af92821c3e58bba57b12da3d1dbd015240d23",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/tree-after.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/tree-after.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "62c924eb0d84e15615fe3dd0e2a25ab8e7285f48ada5ea160dd7b39cb0693c70",
+    "stored_bytes": 74,
+    "stored_sha256": "ef019499c4f762740d2b1ccdbe20fb08503d337d459e8220d868725aab42c437",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/tree-before.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/tree-before.json",
+    "source_bytes": 150,
+    "source_sha256": "607117cd37916f163941c34285ce7b66c7eb7c05238df265cad23711baf1f6c1",
+    "stored_bytes": 150,
+    "stored_sha256": "607117cd37916f163941c34285ce7b66c7eb7c05238df265cad23711baf1f6c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/tree-before.log",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/tree-before.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "fbd2e502d3b92345decf8de144c98ab8a245d2d4a0eb2dc3cb558ea19e5b7b5a",
+    "stored_bytes": 76,
+    "stored_sha256": "b94ec120ff0d072dfa374bd31a5a40195d601b69738031d97b87b14c6bcbabb7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/unchanged-python-check-reuse.json",
+    "path": "native-main-integration/private-ledger-cursor-inventory-final/unchanged-python-check-reuse.json",
+    "source_bytes": 1211,
+    "source_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "stored_bytes": 1211,
+    "stored_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/HANDOFF.md",
+    "path": "native-main-integration/private-ledger-cursor-repair/HANDOFF.md",
+    "source_bytes": 4961,
+    "source_sha256": "b1a605ff3c95ffc3e351d2d1888a71385ec9248d51d1b5dd33dcca77147c2c23",
+    "stored_bytes": 4961,
+    "stored_sha256": "b1a605ff3c95ffc3e351d2d1888a71385ec9248d51d1b5dd33dcca77147c2c23",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/artifact-manifest.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/artifact-manifest.json",
+    "source_bytes": 3854,
+    "source_sha256": "6db343cded4cc70ec5f270fbf18e08b739b4886ccd876555bb8ea21291d1456f",
+    "stored_bytes": 3854,
+    "stored_sha256": "6db343cded4cc70ec5f270fbf18e08b739b4886ccd876555bb8ea21291d1456f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/changed-paths.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/changed-paths.json",
+    "source_bytes": 162,
+    "source_sha256": "97dbb2e9cb0a334b5970698162ffef0966ec15eac3cb8a8fbb68e507b09488da",
+    "stored_bytes": 162,
+    "stored_sha256": "97dbb2e9cb0a334b5970698162ffef0966ec15eac3cb8a8fbb68e507b09488da",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/grant-original.md",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/grant-original.md",
+    "source_bytes": 4670,
+    "source_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+    "stored_bytes": 4670,
+    "stored_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/identity.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/identity.json",
+    "source_bytes": 1309,
+    "source_sha256": "55696888154b1ceda36f36d26fff8e149839595bea7bd9d2fdcea6230b05dc7f",
+    "stored_bytes": 1309,
+    "stored_sha256": "55696888154b1ceda36f36d26fff8e149839595bea7bd9d2fdcea6230b05dc7f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/index-after.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/index-after.json",
+    "source_bytes": 184,
+    "source_sha256": "41e11f3f10734f9c73fbe70cca153a17d0af33141c12334328ea6f2e8b85ec3a",
+    "stored_bytes": 184,
+    "stored_sha256": "41e11f3f10734f9c73fbe70cca153a17d0af33141c12334328ea6f2e8b85ec3a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/index-binding.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/index-binding.json",
+    "source_bytes": 573,
+    "source_sha256": "120774c03cca2692389cf39ea3d1fcb88fdb9cfe55e36747ced16a765f926475",
+    "stored_bytes": 573,
+    "stored_sha256": "120774c03cca2692389cf39ea3d1fcb88fdb9cfe55e36747ced16a765f926475",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/command.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/command.json",
+    "source_bytes": 2004,
+    "source_sha256": "aca9b696174d99acf7ba7ccdbfbf0985f631b5fad1779fab6f27d3094f318701",
+    "stored_bytes": 2004,
+    "stored_sha256": "aca9b696174d99acf7ba7ccdbfbf0985f631b5fad1779fab6f27d3094f318701",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/environment.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/environment.json",
+    "source_bytes": 10770,
+    "source_sha256": "9858e44aa6fd9eab6ad236a3c32462fe6e891c8e85629e11a17ad4c3e1a7088e",
+    "stored_bytes": 10770,
+    "stored_sha256": "9858e44aa6fd9eab6ad236a3c32462fe6e891c8e85629e11a17ad4c3e1a7088e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/process.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/process.json",
+    "source_bytes": 148,
+    "source_sha256": "93a9e0f36dfc5bc475b7c698c220bba2f511894f4deefe5726805cd52680c9cd",
+    "stored_bytes": 148,
+    "stored_sha256": "93a9e0f36dfc5bc475b7c698c220bba2f511894f4deefe5726805cd52680c9cd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/result.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/result.json",
+    "source_bytes": 10570,
+    "source_sha256": "b3a81b28b920cd3fb1622ddd540534d3b0aaa9ab73710501be348e62a14092d9",
+    "stored_bytes": 10570,
+    "stored_sha256": "b3a81b28b920cd3fb1622ddd540534d3b0aaa9ab73710501be348e62a14092d9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/run.log",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/run.log.gz",
+    "source_bytes": 6443,
+    "source_sha256": "f696b4f453dafa46d2f931be16f502be35b5cf28dd8b82f436c3ce10c08f3b32",
+    "stored_bytes": 646,
+    "stored_sha256": "f2358aedf335481b74279f1181e44f2f8bf6ff894feb5f8f436549a513b89ef5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/source-after.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/source-after.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "stored_bytes": 464231,
+    "stored_sha256": "9a651fe565aff265f9d7da60b12878f84ee66634a49e7aa69d70d428ab3e1fd6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/source-before.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/source-before.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "stored_bytes": 464232,
+    "stored_sha256": "0bfa7a0c5b265c7e309a2844211a4bce8ca2b58dfe5b9e72c12b2118d158c518",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/tmpdir-preflight.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/normal-mvcc-ledger-cursor/tmpdir-preflight.json",
+    "source_bytes": 265,
+    "source_sha256": "00aac68f0552b95c4580be44ff4779715dd69fe3f5eda8a2ecefaacf679bb29f",
+    "stored_bytes": 265,
+    "stored_sha256": "00aac68f0552b95c4580be44ff4779715dd69fe3f5eda8a2ecefaacf679bb29f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/command.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/command.json",
+    "source_bytes": 2010,
+    "source_sha256": "ced5c9a655d94956665438ad14b4d9210805f607a3d94c982d1e419b3076862f",
+    "stored_bytes": 2010,
+    "stored_sha256": "ced5c9a655d94956665438ad14b4d9210805f607a3d94c982d1e419b3076862f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/environment.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/environment.json",
+    "source_bytes": 10766,
+    "source_sha256": "8fd7c97581b93579cd34c7f21cd0f73511f8580b99c6acc658edf0bd02be88de",
+    "stored_bytes": 10766,
+    "stored_sha256": "8fd7c97581b93579cd34c7f21cd0f73511f8580b99c6acc658edf0bd02be88de",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/process.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/process.json",
+    "source_bytes": 148,
+    "source_sha256": "bfc7c7af8600d45a89c48da9bc2f15d9fffae4d8e9c552126def26b0a3b0d83c",
+    "stored_bytes": 148,
+    "stored_sha256": "bfc7c7af8600d45a89c48da9bc2f15d9fffae4d8e9c552126def26b0a3b0d83c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/result.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/result.json",
+    "source_bytes": 10867,
+    "source_sha256": "56acecdf4bc17bbf79bcb9afd596996f9ca0d748167ca5d42af7035682e002ef",
+    "stored_bytes": 10867,
+    "stored_sha256": "56acecdf4bc17bbf79bcb9afd596996f9ca0d748167ca5d42af7035682e002ef",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/run.log",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/run.log.gz",
+    "source_bytes": 6443,
+    "source_sha256": "972da2624946d1d3c53517e19202d1b875d295389f5857fee212e3d51cfea327",
+    "stored_bytes": 647,
+    "stored_sha256": "95df658a271ef5fbd073e35723facd25ca33be54b41446e2ea2596e2ea434d60",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/source-after.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/source-after.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "stored_bytes": 464231,
+    "stored_sha256": "9a651fe565aff265f9d7da60b12878f84ee66634a49e7aa69d70d428ab3e1fd6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/source-before.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/source-before.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "stored_bytes": 464232,
+    "stored_sha256": "0bfa7a0c5b265c7e309a2844211a4bce8ca2b58dfe5b9e72c12b2118d158c518",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/tmpdir-preflight.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/race-mvcc-ledger-cursor/tmpdir-preflight.json",
+    "source_bytes": 263,
+    "source_sha256": "2450a32e37d6e54d4dfede6176970a5695cb961ff0141a2225e245ed6639700c",
+    "stored_bytes": 263,
+    "stored_sha256": "2450a32e37d6e54d4dfede6176970a5695cb961ff0141a2225e245ed6639700c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/required-child-tests.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/required-child-tests.json",
+    "source_bytes": 1189,
+    "source_sha256": "0de4a3fc85657a8e378e7d0922684357089d2990f9448ef62bfa2ddfd6b17931",
+    "stored_bytes": 1189,
+    "stored_sha256": "0de4a3fc85657a8e378e7d0922684357089d2990f9448ef62bfa2ddfd6b17931",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/selection.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/selection.json",
+    "source_bytes": 5337,
+    "source_sha256": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+    "stored_bytes": 5337,
+    "stored_sha256": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/controls/summary.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/controls/summary.json",
+    "source_bytes": 965,
+    "source_sha256": "b32b6f0c77c788fb84ff02fc9c24359d7beea4a9e83eb8b09fc9693ab325d5e0",
+    "stored_bytes": 965,
+    "stored_sha256": "b32b6f0c77c788fb84ff02fc9c24359d7beea4a9e83eb8b09fc9693ab325d5e0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/final-receipt.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/final-receipt.json",
+    "source_bytes": 2381,
+    "source_sha256": "a1dea6381f35703997c20824f39eb834daf951a8901a579e0dd870100e6d5cab",
+    "stored_bytes": 2381,
+    "stored_sha256": "a1dea6381f35703997c20824f39eb834daf951a8901a579e0dd870100e6d5cab",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/freeze-receipt.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/freeze-receipt.json",
+    "source_bytes": 1160,
+    "source_sha256": "ab92ab57974f5028b8662aa5c5e486d24d8843d9d74d08629070bfe9f46c5d95",
+    "stored_bytes": 1160,
+    "stored_sha256": "ab92ab57974f5028b8662aa5c5e486d24d8843d9d74d08629070bfe9f46c5d95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/original/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "path": "native-main-integration/private-ledger-cursor-repair/original/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "source_bytes": 23042,
+    "source_sha256": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+    "stored_bytes": 23042,
+    "stored_sha256": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/original/TreeDB/mvcc/native_selected_ledger_test.go",
+    "path": "native-main-integration/private-ledger-cursor-repair/original/TreeDB/mvcc/native_selected_ledger_test.go",
+    "source_bytes": 17401,
+    "source_sha256": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+    "stored_bytes": 17401,
+    "stored_sha256": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/proposed-commands.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/proposed-commands.json",
+    "source_bytes": 5337,
+    "source_sha256": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+    "stored_bytes": 5337,
+    "stored_sha256": "13f11e804b38b2707c443157acdc1bad39b27a7a0e80788d62c71f9e1904396a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/run-controls.py",
+    "path": "native-main-integration/private-ledger-cursor-repair/run-controls.py",
+    "source_bytes": 13424,
+    "source_sha256": "1ff4294d4bc4280c04f8d3676b67008cb5b78a500636817f8a08ecb3943fe47a",
+    "stored_bytes": 13424,
+    "stored_sha256": "1ff4294d4bc4280c04f8d3676b67008cb5b78a500636817f8a08ecb3943fe47a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/runner.log",
+    "path": "native-main-integration/private-ledger-cursor-repair/runner.log.gz",
+    "source_bytes": 1446,
+    "source_sha256": "bee1176ec1b4dda5f8becf33ea0de86bf3d1d07bd5bc492f495a544abe1275f5",
+    "stored_bytes": 588,
+    "stored_sha256": "21d93da9436447a97ad9c790d1950be157d0093591e167849fdf15f1f7ff4984",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/source-delta.patch",
+    "path": "native-main-integration/private-ledger-cursor-repair/source-delta.patch.gz",
+    "source_bytes": 13456,
+    "source_sha256": "18fe64f36561e4437bb7a2cc17466e1c4ef9ab7f3376f79951035eb3fdd04b2a",
+    "stored_bytes": 3772,
+    "stored_sha256": "fc611193b2134756ab879b0f694bde0d7300005e5dd457901c23662c825c8a8e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/source-frozen.json",
+    "path": "native-main-integration/private-ledger-cursor-repair/source-frozen.json.gz",
+    "source_bytes": 1590645,
+    "source_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+    "stored_bytes": 464232,
+    "stored_sha256": "a075bebf59d389f64a777769db5e5bc8343629ca27674407e124a31d8e25f38e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-source-root-verification.json",
+    "path": "native-main-integration/private-ledger-cursor-source-root-verification.json",
+    "source_bytes": 613,
+    "source_sha256": "33ec3dc3255d22db9cf1a00f02ea67593b745e9565fbfe78bf6e6a69ae8cf3c9",
+    "stored_bytes": 613,
+    "stored_sha256": "33ec3dc3255d22db9cf1a00f02ea67593b745e9565fbfe78bf6e6a69ae8cf3c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-actual33-complete-ledger.py",
+    "path": "native-main-integration/verify-actual33-complete-ledger.py",
+    "source_bytes": 10527,
+    "source_sha256": "7bd97d88a85334eeba3b4cd572b9039eded65728813e10b8bb0d8d12caf2a74e",
+    "stored_bytes": 10527,
+    "stored_sha256": "7bd97d88a85334eeba3b4cd572b9039eded65728813e10b8bb0d8d12caf2a74e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-private-ledger-cursor-controls.py",
+    "path": "native-main-integration/verify-private-ledger-cursor-controls.py",
+    "source_bytes": 6553,
+    "source_sha256": "e17b2b00217277f955e4ba31aa41539db6c9613b14c7a357f7a6ffbd8c4a0c5d",
+    "stored_bytes": 6553,
+    "stored_sha256": "e17b2b00217277f955e4ba31aa41539db6c9613b14c7a357f7a6ffbd8c4a0c5d",
+    "encoding": "identity"
+  }
+]

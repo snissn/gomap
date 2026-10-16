@@ -1,0 +1,32 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/evidence.tar.gz",
+    "bytes": 953395,
+    "sha256": "dd1fa65e7a2331758a45f490df85516e1cc975d787ff1c2e5f741970e0e5e806",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+    "bytes": 181443002,
+    "sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/changed-source.tar.gz",
+    "bytes": 11595,
+    "sha256": "b97f1aabccf493fcdede87266387223e8ab71b210c029f294524c7cb9f28ca55",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/evidence.tar.gz",
+    "bytes": 2373887,
+    "sha256": "c4973e32d4132b9a9d733c16ef437093532172a5cc86d50d5fc2b264ce189c8b",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/source-frozen.tar.gz",
+    "bytes": 156090733,
+    "sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  }
+]

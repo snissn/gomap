@@ -1,0 +1,53 @@
+{
+  "actual33_executed": false,
+  "at_utc": "2026-10-16T06:02:34.125922+00:00",
+  "child_PASS_per_mode": 36,
+  "commands_executed": 2,
+  "compiler_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "controls_summary_sha256": "b32b6f0c77c788fb84ff02fc9c24359d7beea4a9e83eb8b09fc9693ab325d5e0",
+  "delta_sha256": "18fe64f36561e4437bb7a2cc17466e1c4ef9ab7f3376f79951035eb3fdd04b2a",
+  "freeze_receipt_sha256": "ab92ab57974f5028b8662aa5c5e486d24d8843d9d74d08629070bfe9f46c5d95",
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "handoff_sha256": "b1a605ff3c95ffc3e351d2d1888a71385ec9248d51d1b5dd33dcca77147c2c23",
+  "index_after_sha256": "41e11f3f10734f9c73fbe70cca153a17d0af33141c12334328ea6f2e8b85ec3a",
+  "modified_paths": [
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/mvcc/native_selected_ledger_test.go"
+  ],
+  "native_publication_executed": false,
+  "pricing_entry_bytes_pinned_amd64": 80,
+  "pricing_entry_records": 1,
+  "prior_evidence_applicability": "All files outside two modified mvcc test files exact baseline8f3a; historical package controls retained, not rerun. Current selected3tops normal/race freshly run.",
+  "production_and_other_source_unchanged": true,
+  "public_limits_unchanged": true,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "elapsed_seconds": 4.0242685582488775,
+      "group_and_children_empty": true,
+      "id": "normal-mvcc-ledger-cursor",
+      "pgid": 1123424,
+      "pid": 1123424,
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "top_level_pass_count": 3
+    },
+    {
+      "elapsed_seconds": 6.328855678904802,
+      "group_and_children_empty": true,
+      "id": "race-mvcc-ledger-cursor",
+      "pgid": 1123498,
+      "pid": 1123498,
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "top_level_pass_count": 3
+    }
+  ],
+  "runner_log_sha256": "bee1176ec1b4dda5f8becf33ea0de86bf3d1d07bd5bc492f495a544abe1275f5",
+  "runner_sha256": "1ff4294d4bc4280c04f8d3676b67008cb5b78a500636817f8a08ecb3943fe47a",
+  "source_and_runtime_leases": "RELEASED",
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "source_files": 10389,
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "status": "PASS"
+}

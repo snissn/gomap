@@ -1,0 +1,139 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/tmp-normal"
+      },
+      "executed": false,
+      "id": "normal-mvcc-ledger-cursor",
+      "name": "normal-mvcc-ledger-cursor",
+      "outer_timeout_seconds": 240,
+      "race": false,
+      "selector": "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+      "top_level_tests": [
+        "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+        "TestNativeSelectedSetLedgerCombinationsV6",
+        "TestNativeSelectedLedgerObservationAdmissionV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-repair/tmp-race"
+      },
+      "executed": false,
+      "id": "race-mvcc-ledger-cursor",
+      "name": "race-mvcc-ledger-cursor",
+      "outer_timeout_seconds": 240,
+      "race": true,
+      "selector": "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6|TestNativeSelectedLedgerObservationAdmissionV6)$",
+      "top_level_tests": [
+        "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+        "TestNativeSelectedSetLedgerCombinationsV6",
+        "TestNativeSelectedLedgerObservationAdmissionV6"
+      ]
+    }
+  ],
+  "grant_sha256": "3f167cf883b9a87ed3ec4e10c450c3f9890c3a80f05dc6f1ec734c59a8943e19",
+  "required_child_tests": {
+    "TestNativeSelectedLedgerObservationAdmissionV6": [
+      "zero",
+      "record-short",
+      "byte-short",
+      "exact",
+      "nil-work",
+      "nil_cursor",
+      "cursor_operands",
+      "fixed_comparisons",
+      "initial_basis",
+      "incomplete_row"
+    ],
+    "TestNativeSelectedSetLedgerCombinationsV6": [
+      "kind-backing",
+      "kind-backing/missing-proof",
+      "kind-backing/unexpected-prep",
+      "kind-backing/opaque",
+      "kind-backing/no-owner",
+      "kind-backing/no-live",
+      "kind-backing/missing-backing",
+      "kind-backing/unavailable-row",
+      "kind-backing/unavailable-pair",
+      "kind-backing/metadata-contradiction",
+      "kind-backing/unequal-shared-charge",
+      "kind-backing/transfer-incomplete",
+      "kind-backing/overflow",
+      "empty-backing",
+      "empty-backing/missing-proof",
+      "empty-backing/unexpected-prep",
+      "empty-backing/opaque",
+      "empty-backing/no-owner",
+      "empty-backing/no-live",
+      "empty-backing/missing-backing",
+      "empty-backing/unavailable-row",
+      "empty-backing/unavailable-pair",
+      "empty-backing/metadata-contradiction",
+      "empty-backing/unequal-shared-charge",
+      "empty-backing/transfer-incomplete",
+      "empty-backing/overflow"
+    ]
+  },
+  "selected_test_files": {
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a"
+  },
+  "source_archive_sha256": "1128938f01a20b9fd825e3ad8810242ee105ad2be81f840ba9962db076e4ddb4",
+  "source_manifest_sha256": "bc2ebe15cd6e1dff56574993b83ffd84319822e2d214078a7218996cbfea0d18",
+  "source_tree": "d63bc97e893e518c87687831a6e0a01a357268f2"
+}

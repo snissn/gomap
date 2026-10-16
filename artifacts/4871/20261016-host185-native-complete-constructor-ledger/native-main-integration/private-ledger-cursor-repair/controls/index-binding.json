@@ -1,0 +1,8 @@
+{
+  "binding_method": "Read-only root staged-tree/check receipts plus unchanged live index hash; two worktree test edits bound separately; no Git command executed",
+  "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256_before": "6f304fc6cef240c5f470215e29a2d10e9b8ffbfe7396795077e31a9cf406d654",
+  "root_receipt_sha256": "24d243711e54ff9d2547a3f3fa628baac9d32c1aaec86d74e6fc048b52e0a73c",
+  "root_recorded_baseline_tree": "d63bc97e893e518c87687831a6e0a01a357268f2",
+  "source_delta_is_unstaged": true
+}
