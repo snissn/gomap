@@ -27,6 +27,16 @@ func TestDurablePagerCandidateWriteLockContract(t *testing.T) {
 	}
 
 	write := parseGoFunctionForContract(t, filepath.Join(treeDBDir, "pager", "pager.go"), "Write")
+	if !contractCallsSelector(write, "p", "WriteWithWork") {
+		t.Fatal("Pager.Write no longer delegates to the admitted write bridge")
+	}
+	for _, hop := range []struct{ from, to string }{{"WriteWithWork", "WriteViewWithWork"}, {"WriteViewWithWork", "writeViewWithWork"}} {
+		function := parseGoFunctionForContract(t, filepath.Join(treeDBDir, "pager", "write_work.go"), hop.from)
+		if !contractCallsSelector(function, "p", hop.to) {
+			t.Fatalf("pager write bridge %s no longer delegates to %s", hop.from, hop.to)
+		}
+	}
+	write = parseGoFunctionForContract(t, filepath.Join(treeDBDir, "pager", "write_work.go"), "writeViewWithWork")
 	lockPos := contractSelectorCallPosition(write, "p.mu", "Lock", false)
 	deferredUnlockPos := contractSelectorCallPosition(write, "p.mu", "Unlock", true)
 	copyPos := contractBuiltinCallPosition(write, "copy")

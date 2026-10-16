@@ -19,7 +19,9 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -45,6 +47,9 @@ const (
 
 // File represents a value-log segment on disk.
 type File struct {
+	nativeClose        nativeMVCCFileCloseState
+	nativeTerminal     nativeMVCCFileTerminalState
+	nativeCallbacks    atomic.Bool
 	ID                 uint32
 	Path               string
 	File               *os.File
@@ -107,9 +112,29 @@ type File struct {
 
 	closed atomic.Bool
 	// Close completion and physical deletion are cold-path operations.
-	closeMu         sync.Mutex
-	deleteMu        sync.Mutex
-	deleteCompleted bool // protected by deleteMu; never recheck a retired inode
+	closeMu                     sync.Mutex
+	closeErr                    error
+	closeReceipt                FileCleanupFailure
+	terminalParent              *os.File
+	constructionParents         [2]*os.File
+	constructionParentAttempted [2]bool
+	constructionParentErrors    [2]error
+	terminalParentAttempted     bool
+	terminalParentErr           error
+	producerMetadata            *retainedalloc.Owner
+	producerCharge              uint64
+	terminalNext                *File
+	terminalMu                  sync.Mutex
+	terminalAttempted           bool
+	terminalErr                 error
+	failureNext                 *File
+	failureRegistered           bool
+	closeAttempted              bool
+	terminalWalk                atomic.Bool
+	producerDetached            atomic.Bool
+	producerDeleteGuards        atomic.Int64
+	deleteMu                    sync.Mutex
+	deleteCompleted             bool // protected by deleteMu; never recheck a retired inode
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
 	mmapData         atomic.Value // stores []byte (may be nil slice)
@@ -118,8 +143,13 @@ type File struct {
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
+	// Queued/running asynchronous remap borrows this original containing File.
+	// closeMu serializes admission with Close; Close joins outside all locks.
+	remapWorkers sync.WaitGroup
 
-	deadMappings           [][]byte
+	currentMappingV6       ownedMmapV6
+	legacyMappingV6        bool
+	deadMappings           []ownedMmapV6
 	deadMappedBytes        atomic.Uint64
 	remapCount             atomic.Uint64
 	deadMappingsCount      atomic.Uint64
@@ -145,6 +175,15 @@ type File struct {
 }
 
 // IsCurrentWritable reports whether this segment may still receive appends.
+// RegisteredParentIdentity is the immutable physical parent captured by the
+// original checked file registration, not a newly opened namespace authority.
+func (f *File) RegisteredParentIdentity() rootpublication.StableIdentity {
+	if f == nil {
+		return rootpublication.StableIdentity{}
+	}
+	return f.registeredParentIdentity
+}
+
 func (f *File) IsCurrentWritable() bool {
 	return f != nil && !f.IsZombie.Load() && f.currentWritable.Load()
 }
@@ -167,32 +206,13 @@ func (f *File) appendMaybeDecodeLeafLogPayload(dst, payload []byte) ([]byte, err
 	return appendMaybeDecodeLeafLogPayloadAllowed(f.allowsCompactLeafPayload(), dst, payload)
 }
 
-func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
-	parent, parentIdentity, err := openRegisteredSegmentParent(path)
-	if err != nil && !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
-		return nil, err
-	}
-	if parent != nil {
-		defer parent.Close()
-	}
-	f, err := openSegmentReadHandle(path)
-	if err != nil {
-		return nil, err
-	}
-	if parent != nil {
-		if err := validateRegisteredSegmentParent(path, f, parent, parentIdentity); err != nil {
-			return nil, errors.Join(err, f.Close())
-		}
-	}
+func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (result *File, retErr error) {
+	// registerSegmentLocked admitted this exact original File and both bounded
+	// parent operands before invoking the constructor. Standalone legacy users
+	// retain the same payload through its actual error receipt.
 	vf := &File{
-		registeredParentIdentity:     parentIdentity,
-		ID:                           id,
-		Path:                         path,
-		File:                         f,
-		dictLookup:                   dictLookup,
-		templateLookup:               templateLookup,
-		templateDecodeOpts:           templateOpts,
-		templateDefCache:             templateCache,
+		ID: id, Path: path, dictLookup: dictLookup, templateLookup: templateLookup,
+		templateDecodeOpts: templateOpts, templateDefCache: templateCache,
 		compactLeafPayloadAllowed:    allowsCompactLeafLogPayload(id, path),
 		compactLeafPayloadAllowedSet: true,
 		groupedFrameCacheEntries:     defaultGroupedFrameCacheEntries,
@@ -200,7 +220,39 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		groupedFrameCacheMaxBytes:    defaultGroupedFrameCacheMaxBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
-	if info, err := f.Stat(); err == nil {
+	defer func() {
+		var parentErr error
+		for i := range vf.constructionParents {
+			parentErr = errors.Join(parentErr, vf.closeConstructionParent(i))
+		}
+		retErr = errors.Join(retErr, parentErr)
+		if retErr != nil {
+			actual := vf.Close()
+			if actual != nil {
+				result = vf
+				retErr = errors.Join(retErr, actual)
+			} else {
+				result = nil
+			}
+		}
+	}()
+	parent, parentIdentity, err := openRegisteredSegmentParent(path)
+	vf.constructionParents[0] = parent
+	vf.registeredParentIdentity = parentIdentity
+	if err != nil && !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+		return nil, err
+	}
+	supportedParent := err == nil && parent != nil
+	vf.File, err = openSegmentReadHandle(path)
+	if err != nil {
+		return nil, err
+	}
+	if supportedParent {
+		if err := validateRegisteredSegmentParent(path, vf, parent, parentIdentity); err != nil {
+			return nil, err
+		}
+	}
+	if info, err := vf.File.Stat(); err == nil {
 		vf.noteVerifiedFileSize(info.Size())
 	}
 	return vf, nil
@@ -556,59 +608,13 @@ func (f *File) groupedFrameCacheAllowsRaw(rawLen int) bool {
 }
 
 func (f *File) Close() error {
-	if f == nil || f.File == nil {
-		return nil
+	work := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+	for {
+		done, err := f.closeOriginalStep(false, &work)
+		if err != nil || done {
+			return err
+		}
 	}
-	// The early closed flag excludes new work; the mutex joins all actual
-	// cleanup before another Close caller can proceed to physical deletion.
-	f.closeMu.Lock()
-	defer f.closeMu.Unlock()
-	var scratch []byte
-	if !f.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-	f.cacheMu.Lock()
-	f.cacheK = 0
-	f.cacheFlags = 0
-	f.cacheLen = 0
-	f.setCacheRawLocked(nil, false)
-	f.cacheStart.Store(0)
-	f.cacheMu.Unlock()
-	f.scratchMu.Lock()
-	scratch = f.decodeScratch
-	f.decodeScratch = nil
-	scratchSpare := f.decodeScratchSpare
-	f.decodeScratchSpare = nil
-	f.scratchMu.Unlock()
-	f.groupedMu.Lock()
-	cache := f.groupedFrameCache.Load()
-	f.groupedFrameCache.Store(nil)
-	f.groupedMu.Unlock()
-	if cache != nil {
-		cache.clear()
-	}
-	if scratch != nil {
-		putDecodeScratch(scratch)
-	}
-	for _, buf := range scratchSpare {
-		putDecodeScratch(buf)
-	}
-
-	f.remapMu.Lock()
-	data, _ := f.mmapData.Load().([]byte)
-	if data != nil {
-		_ = munmap(data)
-	}
-	for _, b := range f.deadMappings {
-		_ = munmap(b)
-	}
-	f.deadMappings = nil
-	f.deadMappingsCount.Store(0)
-	f.deadMappedBytes.Store(0)
-	f.mmapData.Store([]byte(nil))
-	f.remapMu.Unlock()
-
-	return f.File.Close()
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -1266,6 +1272,11 @@ func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]b
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.
 type Set struct {
+	// Frozen during the original producer walk. Native file17 captures need no
+	// allocated map iterator or replay; ordinary larger Sets keep their domain.
+	nativeFiles         [17]*File
+	releaseMu           sync.Mutex
+	nativeRelease       nativeMVCCSetReleaseState
 	retentionShape      SetRetentionSizes
 	retentionKnown      bool
 	Files               map[uint32]*File
@@ -1420,11 +1431,19 @@ type Manager struct {
 	// Retry and synchronous deletion admission share mu and this join with Close.
 	// Channels are lazy so
 	// ordinary reads and writes acquire no extra allocation or routing cost.
-	retryStop    chan struct{}
-	retryWorkers sync.WaitGroup
-	closing      bool
-	closeDone    chan struct{}
-	closeErr     error
+	retryStop            chan struct{}
+	retryWorkers         sync.WaitGroup
+	closing              bool
+	closeDone            chan struct{}
+	closeErr             error
+	closeRunning         bool
+	closeReceipt         ManagerCleanupFailure
+	failedFiles          *File
+	producerMetadata     *retainedalloc.Owner
+	producerCharge       uint64
+	wrapperNativeCleanup bool
+	wrapperBorrows       atomic.Int64 // original Snapshot containing aliases
+	fileAliases          atomic.Int64 // original File.manager containing aliases
 	// currentWritableByLane tracks segments that may still grow and therefore are
 	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
 	// single current writer keyed by lane id; lanes listed in
@@ -1587,7 +1606,15 @@ func NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(dir strin
 }
 
 func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry, recoverStableDeletes, refresh bool) (*Manager, error) {
-	m := &Manager{
+	metadata := registry.MetadataOwner()
+	charge := uint64(0)
+	if metadata != nil {
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Manager{})))
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	m := &Manager{producerMetadata: metadata, producerCharge: charge,
 		dir:                         dir,
 		files:                       make(map[uint32]*File),
 		currentWritableByLane:       make(map[uint32]uint32),
@@ -1854,37 +1881,37 @@ func (m *Manager) Close() error {
 		return err
 	}
 	m.closeDone = make(chan struct{})
-	m.closing = true
+	m.closing, m.closeRunning = true, true
 	if m.retryStop != nil {
 		close(m.retryStop)
 	}
 	m.mu.Unlock()
-	// Retry workers and synchronous deletion admissions take mu while completing
-	// ownership. Join them before closing handles, without holding that mutex.
 	m.retryWorkers.Wait()
 	m.mu.Lock()
-	var err error
-	var parents []*os.File
+	var terminal *File
 	for _, f := range m.files {
-		if parent := releaseRetirementParent(f); parent != nil {
-			parents = append(parents, parent)
-		}
-		if e := m.unobserveStableFileLocked(f); e != nil {
-			err = errors.Join(err, e)
-		}
-		if e := f.Close(); e != nil {
-			err = errors.Join(err, e)
-		}
+		f.terminalWalk.Store(true)
+		f.terminalNext = terminal
+		terminal = f
 	}
-	m.files = nil
-	m.retiredCount = 0
 	m.mu.Unlock()
-	for _, parent := range parents {
-		err = errors.Join(err, parent.Close())
+	// Terminal exclusion prevents all new registration/destructive admissions.
+	// Original read cuts retain their files until the actual last Set release.
+	// No user-held cut is synchronously awaited by DB.Close.
+	for terminal != nil {
+		f := terminal
+		terminal, f.terminalNext = f.terminalNext, nil
+		if f.RefCount.Load() == 0 {
+			_ = m.finishTerminalFile(f)
+		}
+		f.terminalWalk.Store(false)
+		f.refundProducerMetadata()
 	}
 	m.mu.Lock()
-	m.closeErr = err
+	m.closeRunning = false
+	m.refundTerminalMetadataLocked()
 	close(m.closeDone)
+	err := m.closeErr
 	m.mu.Unlock()
 	return err
 }
@@ -1984,13 +2011,18 @@ func (m *Manager) Refresh() error {
 				continue
 			}
 			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
+				cleanupRefused := m.closeErr != nil
+				m.mu.Unlock()
+				// Error traversal can consult the same original Manager receipt.
+				// A physical cleanup refusal is terminal even when its causes also
+				// include the benign discovery-race sentinel.
+				if !cleanupRefused && errors.Is(err, os.ErrNotExist) {
 					// Online rewrite/GC can delete a segment after listSegments() sees it
 					// but before we open it. Treat that as a benign refresh race and
 					// keep scanning the remaining segments.
+					m.mu.Lock()
 					continue
 				}
-				m.mu.Unlock()
 				return err
 			}
 		}
@@ -2089,22 +2121,81 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 		}
 		return nil
 	}
-	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
-	if err != nil {
-		return err
-	}
-	if err := validateRegisteredSegmentAuthority(f); err != nil {
-		if m.stableResourcePins != nil || !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
-			return errors.Join(err, f.Close())
+	metadata := m.producerMetadata
+	charge := uint64(0)
+	if metadata != nil {
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(File{}))) +
+			retainedalloc.AllocationCharge(2*uint64(len(path))+128+3*retirementParentRetentionEnvelope)
+		if err := metadata.AddPending(charge); err != nil {
+			return err
 		}
 	}
+	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
+	if err != nil {
+		if f == nil {
+			if metadata != nil {
+				metadata.RemovePending(charge)
+			}
+			return err
+		}
+		m.fileAliases.Add(1)
+		f.producerMetadata, f.producerCharge, f.manager = metadata, charge, m
+		// A partial original callback may return its payload before complete
+		// disposal. Consume each still-unattempted constituent once.
+		actual := f.Close()
+		for i := range f.constructionParents {
+			actual = errors.Join(actual, f.closeConstructionParent(i))
+		}
+		if actual != nil {
+			f.terminalAttempted, f.terminalErr = true, errors.Join(err, actual)
+			m.retainOriginalFileFailureLocked(f)
+			return m.closeErr
+		}
+		f.producerDetached.Store(true)
+		f.refundProducerMetadata()
+		return err
+	}
+	// Both constructor-only parents were actually consumed and scrubbed. Their
+	// temporary overlap contribution ends here; the enlarged File header stays.
+	if metadata != nil && f.constructionParents == ([2]*os.File{}) {
+		temporary := 2 * retirementParentRetentionEnvelope
+		charge -= temporary
+		metadata.RemovePending(temporary)
+	}
+	f.producerMetadata, f.producerCharge = metadata, charge
+	if err := validateRegisteredSegmentAuthority(f); err != nil {
+		if m.stableResourcePins != nil || !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+			closeErr := f.Close()
+			if closeErr == nil {
+				f.producerDetached.Store(true)
+				f.refundProducerMetadata()
+			}
+			if closeErr != nil {
+				m.fileAliases.Add(1)
+				f.manager, f.terminalAttempted, f.terminalErr = m, true, errors.Join(err, closeErr)
+				m.retainOriginalFileFailureLocked(f)
+				return m.closeErr
+			}
+			return err
+		}
+	}
+	m.fileAliases.Add(1)
 	f.manager = m
 	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
 	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	if err := m.observeStableFileLocked(f); err != nil {
-		_ = f.Close()
+		closeErr := f.Close()
+		if closeErr == nil {
+			f.producerDetached.Store(true)
+			f.refundProducerMetadata()
+		}
+		if closeErr != nil {
+			f.terminalAttempted, f.terminalErr = true, errors.Join(err, closeErr)
+			m.retainOriginalFileFailureLocked(f)
+			return m.closeErr
+		}
 		return err
 	}
 	m.files[id] = f
@@ -2296,6 +2387,28 @@ func (m *Manager) CurrentSetNoRefreshWithMaxFiles(maxFiles int) (*Set, error) {
 	return m.currentSetLocked(), nil
 }
 
+// CurrentSetNoRefreshForPublication captures the same exact live file edges as
+// CurrentSetNoRefresh. An absent physical closure is represented by nil instead
+// of an empty owned Set. Limit validation, emptiness and acquisition all observe
+// the same locked registry; no file can be registered between those decisions.
+// Exported snapshot callers retain the nonnil CurrentSet contract.
+func (m *Manager) CurrentSetNoRefreshForPublication(maxFiles *int) (*Set, error) {
+	if maxFiles != nil && *maxFiles < 0 {
+		return nil, fmt.Errorf("value log snapshot: negative file limit %d", *maxFiles)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if maxFiles != nil && len(m.files) > *maxFiles {
+		return nil, fmt.Errorf("value log snapshot: %d registered files exceed limit %d", len(m.files), *maxFiles)
+	}
+	for _, f := range m.files {
+		if !m.closing && !f.IsZombie.Load() && !f.closed.Load() {
+			return m.currentSetLocked(), nil
+		}
+	}
+	return nil, nil
+}
+
 // CurrentSubsetNoRefresh pins only registered, non-zombie files named by ids.
 // Unrelated registrations cannot enlarge this snapshot. The caller releases it
 // through Release, just like CurrentSetNoRefresh.
@@ -2304,14 +2417,18 @@ func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
 	defer m.mu.RUnlock()
 	files := make(map[uint32]*File, len(ids))
 	shape := setRetentionSizes(len(ids))
+	var frontier [17]*File
 	for id := range ids {
-		if f := m.files[id]; f != nil && !f.IsZombie.Load() {
+		if f := m.files[id]; !m.closing && f != nil && !f.IsZombie.Load() && !f.closed.Load() {
 			files[id] = f
 			shape.addFile(f)
+			if shape.FileCount <= len(frontier) {
+				frontier[shape.FileCount-1] = f
+			}
 			f.RefCount.Add(1)
 		}
 	}
-	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
+	set := &Set{nativeFiles: frontier, Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
 	set.retentionShape = shape
 	set.RefCount.Store(1)
 	return set
@@ -2324,7 +2441,7 @@ func (m *Manager) RegisteredFileRetentionSizes(id uint32) (SetRetentionSizes, bo
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	f := m.files[id]
-	if f == nil || f.IsZombie.Load() {
+	if m.closing || f == nil || f.IsZombie.Load() || f.closed.Load() {
 		return SetRetentionSizes{}, false
 	}
 	s := setRetentionSizes(1)
@@ -2337,15 +2454,20 @@ func (m *Manager) RegisteredFileRetentionSizes(id uint32) (SetRetentionSizes, bo
 func (m *Manager) currentSetLocked() *Set {
 	files := make(map[uint32]*File, len(m.files))
 	shape := setRetentionSizes(len(m.files))
+	var frontier [17]*File
 	for id, f := range m.files {
-		if f.IsZombie.Load() {
+		if m.closing || f.IsZombie.Load() || f.closed.Load() {
 			continue
 		}
 		files[id] = f
 		shape.addFile(f)
+		if shape.FileCount <= len(frontier) {
+			frontier[shape.FileCount-1] = f
+		}
 		f.RefCount.Add(1)
 	}
 	s := &Set{
+		nativeFiles:         frontier,
 		Files:               files,
 		disableReadChecksum: m.disableReadChecksum,
 	}
@@ -2481,19 +2603,56 @@ func (m *Manager) Release(set *Set) error {
 	if set == nil {
 		return nil
 	}
-	if set.RefCount.Add(-1) > 0 {
-		return nil
-	}
-
-	var err error
-	for _, f := range set.Files {
-		newRef := f.RefCount.Add(-1)
-		if newRef == 0 && f.IsZombie.Load() {
-			if e := m.deleteZombieFile(f); e != nil {
-				err = errors.Join(err, e)
+	// Production Sets within the maintained native cap use exactly the same
+	// embedded continuation as native callers, with the ordinary unlimited policy.
+	if set.retentionKnown && set.retentionShape.FileCount <= len(set.nativeFiles) {
+		for {
+			ready, err := m.releaseNativeMVCCSetStep(set, false, nil)
+			if ready || err != nil {
+				return err
 			}
 		}
 	}
+	// Original manually constructed/larger Set domain is preserved. The actual
+	// per-File physical cleanup below still runs the SAME staged operations.
+	if set.RefCount.Add(-1) > 0 {
+		return nil
+	}
+	var err error
+	for _, f := range set.Files {
+		err = errors.Join(err, m.releaseOriginalFileBorrow(f))
+	}
+	return err
+}
+
+// Both Set release and transient exact-handle capture consume the SAME
+// original File reference through its existing terminal/deletion completion.
+func (m *Manager) releaseOriginalFileBorrow(f *File) error {
+	if f == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	m.mu.Lock()
+	refs := f.RefCount.Add(-1)
+	closing := m.closing
+	m.mu.Unlock()
+	if refs < 0 {
+		return rootpublication.ErrResourceOwnership
+	}
+	if refs != 0 {
+		return nil
+	}
+	var err error
+	if closing {
+		err = m.finishTerminalFile(f)
+	} else if f.IsZombie.Load() {
+		err = m.deleteZombieFile(f)
+	}
+	// This method itself checks actual physical completion and live operands;
+	// consumption of a reference is not a successful last physical Close.
+	f.refundProducerMetadata()
+	m.mu.Lock()
+	m.refundTerminalMetadataLocked()
+	m.mu.Unlock()
 	return err
 }
 
@@ -2503,7 +2662,7 @@ func (m *Manager) startZombieRetry(f *File) {
 		return
 	}
 	m.mu.Lock()
-	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
+	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || f.nativeCallbacks.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
 		m.mu.Unlock()
 		return
 	}
@@ -2575,6 +2734,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 		}
 
 		f.deletionAdmissions++
+		f.producerDeleteGuards.Add(1)
 		m.mu.Unlock()
 		if m.directDeleteAdmissionHook != nil {
 			m.directDeleteAdmissionHook()
@@ -2593,7 +2753,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 			}
 			m.mu.Unlock()
 			m.finishDeletionAdmission(f)
-			if finishErr := errors.Join(removeErr, syncErr, unobserveErr, closeRetirementParent(parent)); finishErr != nil {
+			if finishErr := m.finishOriginalDeletion(f, errors.Join(removeErr, syncErr, unobserveErr), parent); finishErr != nil {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
 			}
 			return
@@ -2685,14 +2845,11 @@ func (m *Manager) EvictSegment(id uint32) error {
 		return &filePinnedError{id: id, op: "evict"}
 	}
 	m.retryWorkers.Add(1)
-	defer m.retryWorkers.Done()
-	m.detachSegmentLocked(f)
-	unobserveErr := m.unobserveStableFileLocked(f)
+	// Exclude new Sets without removing original failed-cleanup discovery.
+	f.closed.Store(true)
 	m.mu.Unlock()
-	// Keep the parent borrowable until the real Close joins an external closer.
-	closeErr := f.Close()
-	parent := releaseRetirementParent(f)
-	return errors.Join(unobserveErr, closeErr, closeRetirementParent(parent))
+	defer m.retryWorkers.Done()
+	return m.finishTerminalFile(f)
 }
 
 // RemapStats reports aggregate remap executions and tracked dead mappings.

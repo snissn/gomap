@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,25 +158,35 @@ func TestC3CapturedCutMaterializesOutsideFloorAdmission(t *testing.T) {
 				case <-time.After(c3COWCallBound):
 					t.Fatal("cut materialization not reached")
 				}
+				var maintenanceStage atomic.Uint32
 				writes := h.start("same-ts/history/floor/maintenance", func() c3COWOutcome {
+					maintenanceStage.Store(1) // CommitGroup
+
 					// Replace the same timestamp and insert late historical data after capture.
 					err := store.CommitGroupAt([]CommitGroup{{Timestamp: 10, Mutations: []Mutation{{Key: key, Value: []byte("replacement")}}}, {Timestamp: 5, Mutations: []Mutation{{Key: key, Value: []byte("late")}}}, {Timestamp: 20, Mutations: []Mutation{{Key: key, Delete: true}}}, {Timestamp: 30, Mutations: []Mutation{{Key: []byte("ab"), Value: []byte{}}}}}, CommitRelaxed)
 					if err == nil {
+						maintenanceStage.Store(2)
 						err = store.AdvanceDiscardFloor(50, CommitRelaxed)
 					}
 					if err == nil && pointers {
+						maintenanceStage.Store(3)
 						err = db.Checkpoint()
 					}
 					if err == nil && pointers {
+						maintenanceStage.Store(4)
 						_, err = db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{BatchSize: 1, SyncEachBatch: true})
 					}
 					if err == nil && pointers {
+						maintenanceStage.Store(5)
 						_, err = db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{})
 					}
 					return c3COWOutcome{err: err}
 				})
 				if !writes.join(c3COWCallBound) {
-					t.Fatal("floor/maintenance retained materialization admission")
+					stages := [...]string{"not-started", "CommitGroup", "AdvanceDiscardFloor", "Checkpoint", "ValueLogRewriteOnline", "ValueLogGC"}
+					stacks := make([]byte, 1<<20)
+					n := runtime.Stack(stacks, true)
+					t.Fatalf("floor/maintenance retained materialization admission: stage=%s bound=%s\n%s", stages[maintenanceStage.Load()], c3COWCallBound, stacks[:n])
 				}
 				h.require(writes)
 				release()

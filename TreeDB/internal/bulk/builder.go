@@ -406,15 +406,9 @@ func buildSingleLeafLogRoot(alloc Allocator, p *pager.Pager, key []byte, ptr pag
 	return rootID, nil
 }
 
+func leafBuilderOptions(opts BuildOptions) node.BuilderOptions {
+	return node.BuilderOptions{LeafPrefixCompression: opts.LeafPrefixCompression, LeafColumnar: opts.LeafColumnar, InternalBaseDelta: opts.InternalBaseDelta, PackedValuePtr: opts.PackedValuePtr, EntryRevisions: opts.EntryRevisions}
+}
 func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
-	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta || opts.PackedValuePtr || opts.EntryRevisions {
-		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: opts.LeafPrefixCompression,
-			LeafColumnar:          opts.LeafColumnar,
-			InternalBaseDelta:     opts.InternalBaseDelta,
-			PackedValuePtr:        opts.PackedValuePtr,
-			EntryRevisions:        opts.EntryRevisions,
-		})
-	}
-	return node.NewBuilder(buf, page.PageTypeLeaf)
+	return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, leafBuilderOptions(opts))
 }

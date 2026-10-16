@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -25,6 +26,7 @@ var ErrReadDefinitionIdentity = errors.New("dictdb: dictionary read identity mis
 type DictionaryReadAllocationSizes struct {
 	Owner, Callback, Definition, Payload, Pin uint64
 	Snapshot                                  db.SnapshotAllocationSizes
+	CaptureMetadata                           **retainedalloc.Enrollment
 }
 
 // DictionaryReadDefinition owns immutable validated bytes and the optional
@@ -36,6 +38,7 @@ type DictionaryReadAllocationSizes struct {
 type DictionaryReadDefinition struct {
 	Bytes                                       []byte
 	snapshot                                    *db.Snapshot
+	metadata                                    *retainedalloc.Enrollment
 	pin                                         *rootpublication.IdentityPin
 	releaseOwner, releaseSnapshot, releaseBytes func()
 	keyScratch                                  [page.PageSize]byte
@@ -75,6 +78,10 @@ func (d *DictionaryReadDefinition) ReleaseCapture() {
 		if d.snapshot != nil {
 			_ = d.snapshot.Close()
 			d.snapshot = nil
+		}
+		if d.metadata != nil {
+			d.metadata.Close()
+			d.metadata = nil
 		}
 		if d.releaseSnapshot != nil {
 			d.releaseSnapshot()
@@ -117,7 +124,7 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		if sizes.ValueLog.MapHint > maxResources || sizes.ValueLog.FileCount > maxResources {
 			return ErrReadDefinitionCapacity
 		}
-		release, err := admit(DictionaryReadAllocationSizes{Snapshot: sizes})
+		release, err := admit(DictionaryReadAllocationSizes{Snapshot: sizes, CaptureMetadata: &d.metadata})
 		if err == nil {
 			d.releaseSnapshot = release
 		}
@@ -126,6 +133,10 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 	if err != nil {
 		return failDictionaryReadDefinition(d, err, deferred)
 	}
+	if err = d.snapshot.AdoptPrimaryMetadataEnrollment(d.metadata); err != nil {
+		return failDictionaryReadDefinition(d, err, deferred)
+	}
+	d.metadata = nil
 	copy(d.key[:], "bytes/")
 	binary.BigEndian.PutUint64(d.key[len("bytes/"):], id)
 	entry, err := d.snapshot.GetEntryExactWithFixedScratch(d.key[:], d.keyScratch[:], d.leafScratch[:], nil)

@@ -29,6 +29,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -579,11 +580,11 @@ func rewriteLeafDictBytes(cfg compression.TrainConfig) int {
 
 var errRewriteLeafDictEnoughSamples = errors.New("vlog-rewrite: enough leaf dict samples")
 
-func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression.TrainConfig) ([]byte, error) {
-	if d == nil || state == nil || d.valueLogManager == nil {
+func trainRewriteLeafDictFromLiveLeafRefs(p *pager.Pager, state *DBState, cfg compression.TrainConfig) ([]byte, error) {
+	if p == nil || state == nil || state.ValueLogSet == nil {
 		return nil, nil
 	}
-	maintenanceRoots, err := collectMaintenanceRoots(d.Pager(), newValueReader(state.ValueLogSet), state)
+	maintenanceRoots, err := collectMaintenanceRoots(p, newValueReader(state.ValueLogSet), state)
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +607,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 			return nil
 		}
 		seen[valuePtr] = struct{}{}
-		leafPage, usedScratch, err := d.valueLogManager.ReadUnsafeTo(valuePtr, scratch[:0])
+		leafPage, usedScratch, err := state.ValueLogSet.ReadUnsafeTo(valuePtr, scratch[:0])
 		if err != nil {
 			return err
 		}
@@ -628,7 +629,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 		}
 		return nil
 	}
-	if err := leafrefscan.WalkRoots(context.Background(), roots, d.Pager().Get, nil, visit); err != nil && !errors.Is(err, errRewriteLeafDictEnoughSamples) {
+	if err := leafrefscan.WalkRoots(context.Background(), roots, p.Get, nil, visit); err != nil && !errors.Is(err, errRewriteLeafDictEnoughSamples) {
 		return nil, err
 	}
 	if len(samples) < minRecords {
@@ -738,8 +739,8 @@ func resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode func(context.Context,
 	return fallbackUseRawPages, nil
 }
 
-func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
-	if d == nil || state == nil {
+func prepareRewriteLeafDict(p *pager.Pager, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
+	if p == nil || state == nil {
 		return 0, nil, false, nil
 	}
 	canLookupDict := dictLookup != nil
@@ -792,7 +793,7 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 	if !canPublishDict {
 		return 0, nil, false, nil
 	}
-	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(d, state, cfg)
+	dictBytes, err := trainRewriteLeafDictFromLiveLeafRefs(p, state, cfg)
 	if err != nil || len(dictBytes) == 0 {
 		return 0, nil, false, err
 	}
@@ -811,6 +812,18 @@ func prepareRewriteLeafDict(d *DB, state *DBState, currentForClass func(context.
 		}
 	}
 	return dictID, dictBytes, false, nil
+}
+
+// prepareCurrentRewriteLeafDict retains the same state and pager for scans and
+// training, including dictionary callbacks that may themselves publish a root.
+func (db *DB) prepareCurrentRewriteLeafDict() (id uint64, data []byte, raw bool, retErr error) {
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return 0, nil, false, ErrClosed
+	}
+	defer func() { retErr = errors.Join(retErr, snap.Close()) }()
+	db.valueLogStateCaptured("dictionary", snap.state)
+	return prepareRewriteLeafDict(snap.idx.pager, snap.state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -1757,7 +1770,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	layout := resolveStorageLayout(db.dir)
-	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes, db.valueLogIdentityPins)
 	if db.indexOuterLeavesInValueLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
 	}
@@ -1784,14 +1797,12 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	if db.indexOuterLeavesInValueLog {
-		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
-			if err != nil {
-				return stats, err
-			}
-			if leafDictID != 0 && len(leafDictBytes) > 0 {
-				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
-			}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := db.prepareCurrentRewriteLeafDict()
+		if err != nil {
+			return stats, err
+		}
+		if leafDictID != 0 && len(leafDictBytes) > 0 {
+			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 	}
 	defer func() { _ = writer.Close() }()
@@ -2471,7 +2482,7 @@ func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, colle
 	}
 }
 
-func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2490,12 +2501,17 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-system", state)
 	if state == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
 	}
@@ -2533,7 +2549,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	return nil
 }
 
-func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2556,12 +2572,17 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-collection", state)
 	if state == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
 	}
@@ -2698,7 +2719,7 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 }
 
 func (db *DB) canTrackRewriteValueLogRefDelta(baseSeq uint64, outerLeavesInValueLog bool) bool {
-	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !outerLeavesInValueLog
+	return db != nil && db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq) && !outerLeavesInValueLog
 }
 
 func lookupCollectionRootDescriptorAliases(p *pager.Pager, reader tree.SlabReader, systemRootID uint64, key []byte, aliasKeys [][]byte, preferredRoot uint64) (uint64, [][]byte, bool, error) {
@@ -2761,7 +2782,7 @@ func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) b
 	return false
 }
 
-func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
+func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (committed bool, retErr error) {
 	db.writeMu.RLock()
 	writeReadLocked := true
 	idx := db.idx.Load()
@@ -2779,6 +2800,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
+	db.acquireStateValueLogSetLocked(state)
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
@@ -2788,10 +2810,8 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 			db.writeMu.RUnlock()
 		}
 	}()
-	if vlogSet != nil {
-		db.valueLogManager.Acquire(vlogSet)
-		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
-	}
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-user-optimistic", state)
 
 	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
@@ -2900,7 +2920,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	return true, nil
 }
 
-func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) error {
+func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (retErr error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -2924,14 +2944,13 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
+	db.acquireStateValueLogSetLocked(state)
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
 	defer idx.registry.Unregister(regID)
-	if vlogSet != nil {
-		db.valueLogManager.Acquire(vlogSet)
-		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
-	}
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("rewrite-user-serialized", state)
 
 	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
@@ -3115,8 +3134,7 @@ func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
 // swaps index.db to reference the new log. This is an offline operation
 // (requires exclusive lock and a clean commitlog).
-func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
-	var stats ValueLogRewriteStats
+func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr error) {
 	if opts.Dir == "" {
 		return stats, errors.New("db dir required")
 	}
@@ -3136,9 +3154,15 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err != nil {
 		return stats, err
 	}
-	defer func() { _ = lock.Close() }()
+	defer func() {
+		if !recoveryCleanupOwnsLockV6(retErr, lock) {
+			retErr = errors.Join(retErr, lock.Close())
+		}
+	}()
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	defer valueLogIdentityPins.Close()
 
-	if err := recoverIndexSwap(opts.Dir); err != nil {
+	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
 		return stats, err
 	}
 	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
@@ -3165,28 +3189,68 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		oldValueIDs[seg.fileID] = struct{}{}
 	}
 
-	d, err := openReadOnlyNoLock(opts)
+	d, err := openReadOnlyNoLockWithRegistryV6(opts, valueLogIdentityPins, lock)
 	if err != nil {
 		return stats, err
 	}
 
+	// Reuse the successful Open's original generation/receipt before any
+	// rewrite setup. Every return joins checked source disposal, and a hard
+	// refusal retains that exact source/Manager/LOCK without a new keeper.
+	source := d.idx.Load()
+	source.retainOfflineSourceV1(d, lock)
+	defer func() {
+		metadata, charge, completionErr := source.finishOfflineSourceV1(retErr)
+		source, d = nil, nil
+		retErr = completionErr
+		if metadata != nil && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
+
+	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
+	var offlineScope *indexGen
+	var offlineParent *os.File
+	if capsuleRewrite {
+		offlineScope, err = d.captureOfflinePrimaryScopeV6()
+		if err != nil {
+			return stats, err
+		}
+		offlineParent = offlineScope.stableNamespaceParent
+		defer func() {
+			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
+			offlineScope, offlineParent = nil, nil
+			retErr = errors.Join(retErr, cleanupErr)
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}()
+	}
+
 	state := d.State()
 	if state == nil {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: missing db state")
 	}
-	if state.ValueLogSet != nil {
-		d.valueLogManager.Acquire(state.ValueLogSet)
-		defer d.valueLogManager.Release(state.ValueLogSet)
+	acquiredValueLogManager := d.valueLogManager
+	acquiredValueLogSet := state.ValueLogSet
+	if acquiredValueLogSet != nil {
+		d.valueLogManager.Acquire(acquiredValueLogSet)
+		defer func() {
+			if acquiredValueLogSet != nil {
+				original := acquiredValueLogSet
+				acquiredValueLogSet = nil
+				cleanupErr := acquiredValueLogManager.Release(original)
+				d.retainOriginalCleanupError(cleanupErr)
+				retErr = errors.Join(retErr, cleanupErr)
+			}
+		}()
 	}
 	if state.ValueLogSet == nil || len(state.ValueLogSet.Files) == 0 {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: no value-log segments found")
 	}
 
 	beforeSegs, beforeBytes, err := valueLogSegmentStats(opts.Dir)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	stats.SegmentsBefore = beforeSegs
@@ -3195,12 +3259,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	reader := newValueReader(state.ValueLogSet)
 	collectionRootDescriptors, err := vacuumCollectCollectionRootDescriptors(d.Pager(), reader, state.SystemRootPageID)
 	if err != nil {
-		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: collect collection root descriptors: %w", err)
 	}
 	collectionRootLeafLogUsage, _, err := valueLogRewriteCollectionRootLeafLogUsageFromDescriptors(d.Pager(), collectionRootDescriptors)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	rewriteUsesLeafLog := opts.IndexOuterLeavesInValueLog
@@ -3213,7 +3275,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	nextRID, err := rewriteRIDStartScanner(segments)
 	if err != nil {
-		_ = d.Close()
 		return stats, err
 	}
 	maxBytes := opts.WALMaxSegmentBytes
@@ -3231,7 +3292,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 	layout := resolveStorageLayout(opts.Dir)
-	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes)
+	writer := newRewriteWriter(layout.valueVLogDir, lane, startSeq, maxBytes, d.valueLogIdentityPins)
+	writerCleanupAttempted := false
+	defer func() {
+		if !writerCleanupAttempted {
+			writerCleanupAttempted = true
+			cleanupErr := writer.Close()
+			d.retainOriginalCleanupError(cleanupErr)
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 	if rewriteUsesLeafLog {
 		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
 	}
@@ -3248,56 +3318,79 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, rewriteUsesLeafLog)
 	if err := writer.ensureWriter(); err != nil {
-		_ = d.Close()
 		return stats, err
 	}
-	defer func() { _ = writer.Close() }()
 
 	indexPath := filepath.Join(opts.Dir, indexFileName)
 	newPath := filepath.Join(opts.Dir, indexNewFileName)
 	bakPath := filepath.Join(opts.Dir, indexBakFileName)
 	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
 
-	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
-		return stats, err
-	}
-	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
-		return stats, err
+	var pair *indexGen
+	var newPager *pager.Pager
+	if capsuleRewrite {
+		pair, err = d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
+		if err != nil {
+			return stats, err
+		}
+		newPager = pair.pager
+	} else {
+		if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+			return stats, err
+		}
+		if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+			return stats, err
+		}
+
+		_, newStatErr := os.Stat(newPath)
+		newCreated := os.IsNotExist(newStatErr)
+		newPager, err = pager.Open(newPath, opts.ChunkSize)
+		if err != nil {
+			return stats, err
+		}
+		if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+			_ = newPager.Close()
+			return stats, err
+		}
+		if _, err := newPager.Alloc(2); err != nil {
+			_ = newPager.Close()
+			return stats, err
+		}
+
 	}
 
-	_, newStatErr := os.Stat(newPath)
-	newCreated := os.IsNotExist(newStatErr)
-	newPager, err := pager.Open(newPath, opts.ChunkSize)
-	if err != nil {
-		_ = d.Close()
-		return stats, err
+	closeReplacement := func() error {
+		if pair != nil {
+			return pair.close()
+		}
+		return newPager.Close()
 	}
-	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
-	}
-	if _, err := newPager.Alloc(2); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
+	offlineFinishOwnsCleanup := false
+	if pair != nil {
+		staging, identityErr := primaryJointDecisionForV6(offlineParent, pair, durableRootSelectionV1{})
+		if identityErr != nil {
+			return stats, errors.Join(identityErr, pair.close())
+		}
+		defer func() {
+			closeErr := pair.close()
+			retErr = errors.Join(retErr, closeErr)
+			if !offlineFinishOwnsCleanup && closeErr == nil {
+				retErr = errors.Join(retErr, cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, indexNewFileName, staging.Data), cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, primaryNewFileName, staging.Primary))
+			}
+		}()
 	}
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
 	preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 	if writer.blockCompression && rewriteUsesLeafLog {
-		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d.Pager(), state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
+			_ = closeReplacement()
 			return stats, err
 		}
 		if leafDictID != 0 && len(leafDictBytes) > 0 {
@@ -3317,7 +3410,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 		if !rewriter.Valid() {
 			if err := rewriter.Error(); err != nil {
-				_ = rewriter.Close()
+				closeErr := rewriter.Close()
+				if capsuleRewrite {
+					err = errors.Join(err, closeErr)
+				}
 				return 0, err
 			}
 		}
@@ -3331,7 +3427,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
-		_ = rewriter.Close()
+		closeErr := rewriter.Close()
+		if capsuleRewrite {
+			err = errors.Join(err, closeErr)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -3379,10 +3478,94 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return buildTree(root, useLeafLog)
 	}
 
+	if source := d.idx.Load(); source != nil && source.primary != nil && source.primary.CapsuleFormatV6() {
+		roots, captureErr := d.CaptureRecoverableRootSetForInspection(context.Background())
+		if captureErr != nil {
+			_ = closeReplacement()
+			return stats, captureErr
+		}
+		defer func() { retErr = errors.Join(retErr, d.retainResourceCleanupError(roots.ReleaseWithError())) }()
+
+		produce := func(root RecoverableRoot) (rebuilt rebuiltDurableRootV1, err error) {
+			snapshot := roots.AcquireSnapshotForRoot(root)
+			if snapshot == nil {
+				return rebuiltDurableRootV1{}, ErrRecoverableRootSetStale
+			}
+			defer func() {
+				if closeErr := snapshot.Close(); closeErr != nil {
+					original := rebuilt.resources
+					rebuilt = rebuiltDurableRootV1{}
+					err = errors.Join(err, closeErr, d.releaseCapturedRootResources(original))
+					d.retainOriginalCleanupError(closeErr)
+				}
+			}()
+			descriptors, e := vacuumCollectCollectionRootDescriptors(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			replacements, e := valueLogRewriteCollectionRootsFromDescriptors(descriptors, buildCollectionTree)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			var system iteratorWithEntry = tree.New(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			if len(replacements) != 0 {
+				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
+			}
+			systemRoot, e := buildTreeFromIterator(system, rewriteUsesLeafLog)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			meta := page.MetaPageBody{CommitSeq: root.CommitSeq, UserRootPageID: userRoot, SystemRootPageID: systemRoot, TotalPages: newPager.PageCount(), AppliedCommandLSN: root.AppliedCommandLSN, MaxEntryRevision: root.MaxEntryRevision}
+			if e = writer.Sync(); e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			registered, e := captureOfflineRewriteDurableResourcesV1(d, writer)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			if e = d.releaseCapturedRootResources(registered); e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			sourceResources, _, _, _ := roots.resourcesForRootExact(root)
+			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)
+			return rebuiltDurableRootV1{meta: meta, resources: resources}, e
+		}
+		offlineFinishOwnsCleanup = true
+		err = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, true, func() error {
+			writerCleanupAttempted = true
+			closeErr := writer.Close()
+			d.retainOriginalCleanupError(closeErr)
+			if acquiredValueLogSet != nil {
+				original := acquiredValueLogSet
+				acquiredValueLogSet = nil
+				cleanupErr := acquiredValueLogManager.Release(original)
+				d.retainOriginalCleanupError(cleanupErr)
+				closeErr = errors.Join(closeErr, cleanupErr)
+			}
+			return closeErr
+		})
+		if err != nil {
+			return stats, err
+		}
+		// All selected/alternate/proof pointers now name the committed pair's
+		// new segments. Only this completed decision authorizes old deletion.
+		if err = removeOldValueLogSegments(segments); err != nil {
+			return stats, err
+		}
+		if err = updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs, nil); err != nil && opts.NotifyError != nil {
+			opts.NotifyError(fmt.Errorf("value-log health update after rewrite: %w", err))
+		}
+		stats.SegmentsAfter, stats.BytesAfter, err = valueLogSegmentStats(opts.Dir)
+		return stats, err
+	}
+
 	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 
@@ -3396,15 +3579,13 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 
 	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 
@@ -3416,37 +3597,58 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	meta.TotalPages = newPager.PageCount()
 
 	if err := writer.Sync(); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 	durableResources, err := captureOfflineRewriteDurableResourcesV1(d, writer)
 	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
-	defer durableResources.Release()
+	defer func() {
+		if durableResources != nil {
+			original := durableResources
+			durableResources = nil
+			retErr = errors.Join(retErr, d.releaseCapturedRootResources(original))
+		}
+	}()
 	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
+		_ = closeReplacement()
 		return stats, err
 	}
 	if runtime.GOOS != "windows" {
 		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
-			_ = newPager.Close()
-			_ = d.Close()
+			_ = closeReplacement()
 			return stats, err
 		}
 	}
 	if err := newPager.Close(); err != nil {
-		_ = d.Close()
 		return stats, err
+	}
+	// Finish the original temporary durable-resource edge before source Close
+	// or canonical replacement; a failed last action cannot become late debt
+	// hidden behind a previously successful DB.Close.
+	originalResources := durableResources
+	durableResources = nil
+	cleanupErr := d.releaseCapturedRootResources(originalResources)
+	originalResources = nil
+	writerCleanupAttempted = true
+	writerErr := writer.Close()
+	d.retainOriginalCleanupError(writerErr)
+	cleanupErr = errors.Join(cleanupErr, writerErr)
+	if acquiredValueLogSet != nil {
+		original := acquiredValueLogSet
+		acquiredValueLogSet = nil
+		setErr := acquiredValueLogManager.Release(original)
+		d.retainOriginalCleanupError(setErr)
+		cleanupErr = errors.Join(cleanupErr, setErr)
+	}
+	if cleanupErr != nil {
+		return stats, cleanupErr
 	}
 	if err := d.Close(); err != nil {
 		return stats, err
@@ -3573,6 +3775,7 @@ type rewriteWriter struct {
 	leafCurrentPath                  string
 	leafCurrentFileID                uint32
 	stableResourcePins               *rootpublication.IdentityPinRegistry
+	stableResourceMetadata           *retainedalloc.Owner
 	stableRegistryErr                error
 	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
 	leafStaging                      bool
@@ -3647,8 +3850,12 @@ const (
 	rewriteTemplateClassOuterLeaf
 )
 
-func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
+func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64, originalRegistry ...*rootpublication.IdentityPinRegistry) *rewriteWriter {
+	var registry *rootpublication.IdentityPinRegistry
+	if len(originalRegistry) != 0 {
+		registry = originalRegistry[0]
+	}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize, stableResourcePins: registry}
 }
 
 const rewriteLeafLogLaneID uint32 = valuelog.ReservedLeafLogLaneID
@@ -3688,6 +3895,17 @@ func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider func() Sta
 		return fmt.Errorf("%w: stable dictionary provider resolver installed after writer open", rootpublication.ErrUnresolvedResource)
 	}
 	w.stableDictionaryResourceProvider = provider
+	return nil
+}
+
+func (w *rewriteWriter) bindStableResourceMetadata(owner *retainedalloc.Owner) error {
+	if w == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	if w.leafW != nil && w.stableResourceMetadata != owner {
+		return rootpublication.ErrResourceOwnership
+	}
+	w.stableResourceMetadata = owner
 	return nil
 }
 
@@ -3745,6 +3963,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
 	clone.stableResourcePins = w.stableResourcePins
+	clone.stableResourceMetadata = w.stableResourceMetadata
 	clone.stableDictionaryResourceProvider = w.stableDictionaryResourceProvider
 	clone.stableRegistryErr = w.stableRegistryErr
 	clone.blockCompression = w.blockCompression
@@ -3979,7 +4198,7 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 	}
 	rid, err := w.nextRecordRID()
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	ptr, err := w.appendLeafPageWithRIDCapture(rid, leafPage, capture)
@@ -3987,12 +4206,12 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 		err = capture.captureCurrent()
 	}
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	resources, err := capture.freeze([]page.LeafLogPtr{ptr})
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
 	return ptr, resources, nil
@@ -4025,7 +4244,7 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 	}
 	startRID, err := w.reserveRecordRIDs(len(leafPages))
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	ptrs, err := w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, capture)
@@ -4033,12 +4252,12 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 		err = capture.captureCurrent()
 	}
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	resources, err := capture.freeze(ptrs)
 	if err != nil {
-		capture.abandon()
+		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
 	return ptrs, resources, nil
@@ -4495,7 +4714,7 @@ func (w *rewriteWriter) rotate() error {
 	}
 	path := filepath.Join(w.walDir, fmt.Sprintf("value-l%d-%06d.log", w.lane, nextSeq))
 	if w.w == nil {
-		writer, err := valuelog.NewWriter(path, fileID)
+		writer, err := valuelog.NewWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		if err != nil {
 			return err
 		}
@@ -4504,9 +4723,11 @@ func (w *rewriteWriter) rotate() error {
 		w.w = writer
 		w.seq = nextSeq
 		if err := w.noteCreatedSegment(path, fileID, w.w); err != nil {
-			_ = w.w.Close()
-			w.w = nil
-			return err
+			cleanupErr := w.w.Close()
+			if cleanupErr == nil {
+				w.w = nil
+			}
+			return joinOriginalWriterCleanup(err, cleanupErr)
 		}
 		w.currentPath = path
 		w.currentFileID = fileID
@@ -4628,11 +4849,11 @@ func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCapture
 			if capture != nil {
 				return fmt.Errorf("%w: staging leaf writer cannot certify raw outer-leaf authority", rootpublication.ErrUnresolvedResource)
 			}
-			writer, err = valuelog.NewStagingWriter(path, fileID)
+			writer, err = valuelog.NewStagingWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		} else if w.stableResourcePins != nil {
 			writer, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, w.stableResourcePins)
 		} else {
-			writer, err = valuelog.NewWriter(path, fileID)
+			writer, err = valuelog.NewWriterWithMetadata(path, fileID, w.stableResourcePins.MetadataOwner())
 		}
 		if err != nil {
 			return err
@@ -4646,9 +4867,11 @@ func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCapture
 		w.leafW = writer
 		w.leafSeq = nextSeq
 		if err := w.noteCreatedSegment(path, fileID, w.leafW); err != nil {
-			_ = w.leafW.Close()
-			w.leafW = nil
-			return err
+			cleanupErr := w.leafW.Close()
+			if cleanupErr == nil {
+				w.leafW = nil
+			}
+			return joinOriginalWriterCleanup(err, cleanupErr)
 		}
 		w.leafCurrentPath = path
 		w.leafCurrentFileID = fileID
@@ -5150,14 +5373,18 @@ func (w *rewriteWriter) Close() error {
 	}
 	var err error
 	if w.w != nil {
-		valueWriter := w.w
-		w.w = nil
-		err = errors.Join(err, valueWriter.Close())
+		actual := w.w.Close()
+		if actual == nil {
+			w.w = nil
+		}
+		err = joinOriginalWriterCleanup(err, actual)
 	}
 	if w.leafW != nil {
-		leafWriter := w.leafW
-		w.leafW = nil
-		err = errors.Join(err, leafWriter.Close())
+		actual := w.leafW.Close()
+		if actual == nil {
+			w.leafW = nil
+		}
+		err = joinOriginalWriterCleanup(err, actual)
 	}
 	return err
 }
@@ -5971,4 +6198,24 @@ func removeOldValueLogSegments(segments []logSegment) error {
 		}
 	}
 	return nil
+}
+
+// Reuse an original physical-cleanup receipt so its containing payload and
+// sibling errors remain reachable through ordinary caller wrapping.
+func joinOriginalWriterCleanup(prior, actual error) error {
+	if actual == nil {
+		return prior
+	}
+	if prior == nil {
+		return actual
+	}
+	if original, ok := actual.(interface{ LinkPriorCleanupError(error) }); ok {
+		original.LinkPriorCleanupError(prior)
+		return actual
+	}
+	if original, ok := prior.(interface{ LinkPriorCleanupError(error) }); ok {
+		original.LinkPriorCleanupError(actual)
+		return prior
+	}
+	return errors.Join(prior, actual)
 }

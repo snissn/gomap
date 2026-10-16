@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"time"
 )
 
@@ -14,6 +15,7 @@ const (
 var errCommitCombinerClosed = errors.New("treedb: commit combiner closed")
 
 type commitCombineReq struct {
+	input  mvccadmission.Input
 	key    []byte
 	value  []byte
 	del    bool
@@ -60,6 +62,9 @@ func (db *DB) stopCommitCombiner() {
 }
 
 func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, error) {
+	return db.writeViaCommitCombinerWithMVCCInput(key, value, del, sync, mvccadmission.Input{})
+}
+func (db *DB) writeViaCommitCombinerWithMVCCInput(key, value []byte, del, sync bool, input mvccadmission.Input) (bool, error) {
 	if db == nil {
 		return true, errors.New("missing db")
 	}
@@ -90,11 +95,13 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 	}
 
 	req := &commitCombineReq{
+		input:  input,
 		key:    append([]byte(nil), key...),
 		del:    del,
 		sync:   sync,
 		result: make(chan error, 1),
 	}
+	req.input = input.BindOwnedKey(key, req.key)
 	if !del {
 		req.value = append([]byte(nil), value...)
 	}
@@ -117,12 +124,15 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 }
 
 func (db *DB) writeSingleKV(key, value []byte, del, sync bool) error {
+	return db.writeSingleKVWithMVCCInput(key, value, del, sync, mvccadmission.Input{})
+}
+func (db *DB) writeSingleKVWithMVCCInput(key, value []byte, del, sync bool, input mvccadmission.Input) error {
 	b := db.NewBatch().(*Batch)
 	var err error
 	if del {
 		err = b.batch.Delete(key)
 	} else {
-		err = b.batch.Set(key, value)
+		err = b.batch.SetWithMVCCInput(key, value, input)
 	}
 	if err == nil {
 		if sync {
@@ -152,7 +162,7 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 			err = b.DeleteView(req.key)
 		} else {
 			// request key/value slices are combiner-owned copies, safe for SetView.
-			err = b.SetView(req.key, req.value)
+			err = b.batch.SetViewWithMVCCInput(req.key, req.value, req.input)
 		}
 		if err != nil {
 			_ = b.Close()

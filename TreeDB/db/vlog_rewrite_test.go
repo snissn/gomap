@@ -29,6 +29,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	templ "github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -6601,7 +6602,7 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 	var putCalls int
 	var gotPutDict []byte
 	var setCurrentCalls int
-	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(db, state, nil, nil, nil, func(_ context.Context, dict []byte) (uint64, error) {
+	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(db.Pager(), state, nil, nil, nil, func(_ context.Context, dict []byte) (uint64, error) {
 		putCalls++
 		gotPutDict = append([]byte(nil), dict...)
 		return 55123, nil
@@ -6665,7 +6666,7 @@ func TestPrepareRewriteLeafDict_LiveLeafRefBootstrapBestEffort(t *testing.T) {
 func TestPrepareRewriteLeafDict_NoUsableCallbacksSkipsWork(t *testing.T) {
 	calledCurrent := false
 	dictID, dictBytes, useRawPages, err := prepareRewriteLeafDict(
-		&DB{},
+		&pager.Pager{},
 		&DBState{ValueLogSet: &valuelog.Set{}},
 		func(context.Context, string) (uint64, error) {
 			calledCurrent = true
@@ -6693,7 +6694,7 @@ func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
 	state := &DBState{ValueLogSet: &valuelog.Set{}}
 	dictBytes := []byte("compact-leaf-dict")
 	dictID, gotDict, useRawPages, err := prepareRewriteLeafDict(
-		&DB{},
+		&pager.Pager{},
 		state,
 		func(_ context.Context, class string) (uint64, error) {
 			if class != "outer_leaf" {
@@ -6734,7 +6735,7 @@ func TestPrepareRewriteLeafDict_CurrentClassCompactModePreserved(t *testing.T) {
 
 func TestPrepareRewriteLeafDict_CurrentClassMissingModeDefaultsCompact(t *testing.T) {
 	dictID, _, useRawPages, err := prepareRewriteLeafDict(
-		&DB{},
+		&pager.Pager{},
 		&DBState{ValueLogSet: &valuelog.Set{}},
 		func(_ context.Context, class string) (uint64, error) {
 			if class != "outer_leaf" {

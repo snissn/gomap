@@ -27,6 +27,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -522,12 +523,45 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		t.Fatalf("close db: %v", err)
 	}
 
-	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	images := func() map[string][]byte {
+		result := make(map[string][]byte)
+		if e := filepath.WalkDir(opts.Dir, func(path string, entry os.DirEntry, e error) error {
+			if e != nil {
+				return e
+			}
+			if entry.IsDir() || entry.Name() == "LOCK" {
+				return nil
+			}
+			image, e := os.ReadFile(path)
+			if e != nil {
+				return e
+			}
+			result[path] = image
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		return result
 	}
-	if rewriteStats.RecordsCopied == 0 {
-		t.Fatalf("expected offline rewrite to copy collection leaf records, stats=%+v", rewriteStats)
+	var before map[string][]byte
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before = images()
+	}
+	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
+	if before != nil {
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("unsupported offline rewrite: %v", err)
+		}
+		if !reflect.DeepEqual(before, images()) {
+			t.Fatal("unsupported offline rewrite changed persistent inputs")
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("ValueLogRewriteOffline: %v", err)
+		}
+		if rewriteStats.RecordsCopied == 0 {
+			t.Fatalf("expected offline rewrite to copy collection leaf records, stats=%+v", rewriteStats)
+		}
 	}
 
 	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -687,6 +721,11 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
+	oldCut := d.AcquireSnapshot()
+	if oldCut == nil {
+		t.Fatal("acquire pre-pack cut")
+	}
+	defer oldCut.Close()
 
 	packCtx, packCancel := collectionMaintenanceTestContext(t)
 	packStats, err := d.LeafGenerationPackFromPlan(packCtx, backenddb.LeafGenerationPackFromPlanOptions{
@@ -709,12 +748,37 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
-	// The pre-pack durable slot remains independently recovery-selectable until
-	// a later root publication overwrites it. Checkpoint alone does not advance
-	// CommitSeq, so recommit the packed root without publishing a new cached
-	// leaf-log dependency before asserting physical reclamation.
-	if err := d.ForceCommit(d.State().RootPageID); err != nil {
-		t.Fatalf("commit packed durable-slot successor: %v", err)
+	// Both PRIMARY slots and their embedded parents remain independently
+	// recovery-selectable. Advance all four horizons using real publications of
+	// the packed root, without creating a new cached leaf-log dependency.
+	packedSequence := d.State().CommitSeq
+	for successor := 0; successor < 3; successor++ {
+		if err := d.ForceCommit(d.State().RootPageID); err != nil {
+			t.Fatalf("commit packed durable-slot successor %d: %v", successor, err)
+		}
+	}
+	roots, err := d.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatalf("capture packed recovery horizons: %v", err)
+	}
+	for _, root := range roots.Roots() {
+		if root.CommitSeq < packedSequence {
+			roots.Release()
+			t.Fatalf("pre-pack root remains recovery-selectable: %+v, packed commit=%d", root, packedSequence)
+		}
+	}
+	roots.Release()
+	heldCtx, heldCancel := collectionMaintenanceTestContext(t)
+	heldStats, err := d.LeafGenerationGC(heldCtx, backenddb.LeafGenerationGCOptions{})
+	heldCancel()
+	if err != nil {
+		t.Fatalf("LeafGenerationGC with held pre-pack cut: %v", err)
+	}
+	if heldStats.FilesDeleted != 0 || heldStats.BytesDeleted != 0 {
+		t.Fatalf("held pre-pack cut lost source generations: %+v", heldStats)
+	}
+	if err := oldCut.Close(); err != nil {
+		t.Fatalf("close pre-pack cut: %v", err)
 	}
 
 	gcCtx, gcCancel := collectionMaintenanceTestContext(t)

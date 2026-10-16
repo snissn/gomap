@@ -616,18 +616,24 @@ func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
+	beforeScans := d.valueLogManager.RefreshScanCount()
 	// Inline write should publish a new state without refreshing value-log files.
 	if err := d.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set inline: %v", err)
 	}
 	st := d.State()
-	if st == nil || st.ValueLogSet == nil {
-		t.Fatalf("state missing value-log set")
+	if st == nil {
+		t.Fatal("state missing after inline commit")
 	}
-	if _, ok := st.ValueLogSet.Files[fileID]; ok {
-		t.Fatalf("inline commit unexpectedly refreshed value-log set with segment %d", fileID)
+	// A true empty physical closure may be nil. No inline publication may
+	// discover the unregistered file or add any value-log resource edge.
+	if st.ValueLogSet != nil && len(st.ValueLogSet.Files) != 0 {
+		t.Fatalf("inline commit unexpectedly discovered value-log files: %v", st.ValueLogSet.Files)
 	}
 
+	if after := d.valueLogManager.RefreshScanCount(); after != beforeScans {
+		t.Fatalf("inline publication scanned value-log namespace: %d -> %d", beforeScans, after)
+	}
 	// Explicit refresh should discover the new segment.
 	if err := d.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)

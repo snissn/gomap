@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestOptionsFor_ProfileSetsDir(t *testing.T) {
@@ -184,10 +186,10 @@ func TestOpen_PersistedProfileCannotChangeContracts(t *testing.T) {
 	if err := cleanup(); err != nil {
 		t.Fatalf("OpenBackend cleanup: %v", err)
 	}
-	if err := VacuumIndexOffline(Options{Dir: dir}); err != nil {
+	if err := VacuumIndexOffline(Options{Dir: dir}); err != nil && (rootpublication.StableRelativeNamespaceSupported() || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported)) {
 		t.Fatalf("implicit-profile offline vacuum: %v", err)
 	}
-	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil {
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil && (rootpublication.StableRelativeNamespaceSupported() || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported)) {
 		t.Fatalf("implicit-profile offline rewrite: %v", err)
 	}
 

@@ -10,13 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -53,8 +56,7 @@ func openLogFile(path string) (*os.File, bool, error) {
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), filepath.Dir(path), "", path); observeErr != nil {
-			_ = created.Close()
-			return nil, false, observeErr
+			return created, true, observeErr
 		}
 		return created, true, nil
 	}
@@ -86,11 +88,23 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
+	metadata               *retainedalloc.Owner
+	metadataCharge         uint64
+	fileMetadataCharge     uint64
+	parentMetadataCharge   uint64
+	closeMu                sync.Mutex
+	closeAttempted         bool
+	parentCloseAttempted   bool
+	closeErr               error
+	cleanupFailure         WriterCleanupFailure
+	cleanupTokens          [2]*rootpublication.StableResourceToken
+	failedPredecessor      writerPredecessor
 	producedFrameObserver  ProducedFrameObserver
 	f                      *os.File
 	stableParent           *os.File
 	stableParentErr        error
 	creationProof          *rootpublication.StableNamespaceCreationProof
+	creationProofCustody   *rootpublication.OriginalCleanupCustody
 	creationUnsupported    bool
 	creationUncertified    bool
 	pendingStableSuccessor *pendingValueLogSuccessor
@@ -150,7 +164,7 @@ type Writer struct {
 }
 
 func (w *Writer) stableRotationFailStopError() error {
-	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
+	if w != nil && (w.closeAttempted || w.failedPredecessor.failed || (w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop)) {
 		return fmt.Errorf("%w: value-log writer stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
 	}
 	return nil
@@ -661,60 +675,82 @@ func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
 	return newFileWriter(path, fileID, false, syncStagingFileData, nil)
 }
 
-func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
-	f, created, err := openLogFile(path)
+// NewWriterWithMetadata uses the existing containing DB's metadata owner without
+// enrolling staging or ordinary value segments as namespace authority.
+func NewWriterWithMetadata(path string, fileID uint32, owner *retainedalloc.Owner) (*Writer, error) {
+	return newFileWriter(path, fileID, true, func(f *os.File) error { return f.Sync() }, nil, owner)
+}
+func NewStagingWriterWithMetadata(path string, fileID uint32, owner *retainedalloc.Owner) (*Writer, error) {
+	return newFileWriter(path, fileID, false, syncStagingFileData, nil, owner)
+}
+func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry, explicitOwner ...*retainedalloc.Owner) (result *Writer, resultErr error) {
+	var owner *retainedalloc.Owner
+	if registry != nil {
+		owner = registry.MetadataOwner()
+	}
+	if len(explicitOwner) != 0 {
+		owner = explicitOwner[0]
+	}
+	fileCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(path)))
 	if err != nil {
 		return nil, err
 	}
-	w := &Writer{
-		f:      f,
-		syncFn: syncFn,
+	parentCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(filepath.Dir(path))))
+	if err != nil {
+		return nil, err
+	}
+	const prefixCapacity = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Writer{}))) + fileCharge + parentCharge + retainedalloc.AllocationCharge(uint64(prefixCapacity))
+	if owner != nil {
+		if err = owner.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	w := &Writer{metadata: owner, metadataCharge: charge, fileMetadataCharge: fileCharge, parentMetadataCharge: parentCharge, syncFn: syncFn}
+	w.cleanupFailure.writer = w
+	defer func() {
+		if resultErr != nil {
+			if cleanupErr := w.Close(); cleanupErr != nil {
+				w.cleanupFailure.LinkPriorCleanupError(resultErr)
+				resultErr = cleanupErr
+			}
+		}
+	}()
+	f, created, err := openLogFile(path)
+	w.f = f
+	if err != nil {
+		return nil, err
 	}
 	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
-	if err := w.observeStableResourceFile(f, registry); err != nil {
-		_ = f.Close()
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-			w.stableParent = nil
+	if w.stableParentErr != nil && w.stableParent != nil {
+		w.parentCloseAttempted = true
+		if closeErr := w.stableParent.Close(); closeErr != nil {
+			w.closeMu.Lock()
+			w.addCleanupFailureLocked(closeErr)
+			w.closeMu.Unlock()
+			return nil, w.stableParentErr
 		}
+		w.stableParent = nil
+	}
+	if err = w.observeStableResourceFile(f, registry); err != nil {
 		return nil, err
 	}
-	proof, unsupported, uncertified, proofErr := w.prepareStableCreationProof(w.stableParent, f, path, created, syncDirectory, registry != nil)
-	if proofErr != nil {
-		if proof != nil {
-			proof.Release()
-		}
-		_ = f.Close()
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-		}
-		return nil, errors.Join(proofErr, w.releaseStableResourceObservation())
-	}
+	proof, unsupported, uncertified, err := w.prepareStableCreationProof(w.stableParent, f, path, created, syncDirectory, registry != nil)
 	w.creationProof = proof
-	w.creationUnsupported = unsupported
-	w.creationUncertified = uncertified
+	if err != nil {
+		return nil, err
+	}
+	w.creationUnsupported, w.creationUncertified = unsupported, uncertified
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-		}
-		if w.creationProof != nil {
-			w.creationProof.Release()
-			w.creationProof = nil
-		}
-		return nil, errors.Join(err, w.releaseStableResourceObservation())
+		return nil, err
 	}
-	w.f = f
-	// File-backed writers use direct writes and append buffers; bufio is only
-	// needed for sink-backed writers (tests/benchmarks).
-	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendMax = defaultBufferSize
 	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes
 	w.rawWritevMinBatchRecs = defaultRawWritevMinBatchRecords
-	w.prefixBuf = make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4))
+	w.prefixBuf = make([]byte, 0, prefixCapacity)
 	w.dictFrameEncodeLevel = zstd.SpeedFastest
 	w.blockCodec = BlockCodecSnappy
 	w.clock = RealClock{}
@@ -1011,191 +1047,117 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	if w == nil {
 		return errors.New("valuelog: nil writer")
 	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return err
+	}
 	if w.pendingStableSuccessor != nil {
 		return fmt.Errorf("%w: resolve pending stable value-log successor before ordinary rotation", rootpublication.ErrResourceOwnership)
 	}
-
-	if w.f == nil {
-		if w.bw != nil {
-			// Preserve sink semantics for tests before switching to file-backed.
-			if err := w.flushNoTrim(); err != nil {
-				return err
-			}
-		}
-		f, created, err := openLogFile(path)
-		if err != nil {
-			return err
-		}
-		stableParent, stableParentErr := captureStableValueLogParent(path, f)
-		newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
-		if err != nil {
-			_ = f.Close()
-			if stableParent != nil {
-				_ = stableParent.Close()
-			}
-			return err
-		}
-		newObserved := w.stableResourcePins != nil
-		newCreationProof, newCreationUnsupported, newCreationUncertified, err := w.prepareStableCreationProof(stableParent, f, path, created, syncCurrent, w.stableResourcePins != nil)
-		if err != nil {
-			if newObserved {
-				_ = w.stableResourcePins.Unobserve(newIdentity)
-			}
-			if newCreationProof != nil {
-				newCreationProof.Release()
-			}
-			_ = f.Close()
-			if stableParent != nil {
-				_ = stableParent.Close()
-			}
-			return err
-		}
-		info, err := f.Stat()
-		if err != nil {
-			if newObserved {
-				_ = w.stableResourcePins.Unobserve(newIdentity)
-			}
-			if newCreationProof != nil {
-				newCreationProof.Release()
-			}
-			_ = f.Close()
-			if stableParent != nil {
-				_ = stableParent.Close()
-			}
-			return err
-		}
-		oldStableParent := w.stableParent
-		oldCreationProof := w.creationProof
-		oldObserveErr := w.releaseStableResourceObservation()
-		w.f = f
-		w.stableParent = stableParent
-		w.stableParentErr = stableParentErr
-		w.creationProof = newCreationProof
-		w.creationUnsupported = newCreationUnsupported
-		w.creationUncertified = newCreationUncertified
-		// File-backed writers do not use bufio; drop any sink buffer.
-		w.bw = nil
-		w.size = info.Size()
-		w.fileID = fileID
-		w.appendMax = defaultBufferSize
-		w.appendBuf = w.appendBuf[:0]
-		w.trimTransientScratchBuffers()
-		if newObserved {
-			w.stableResourceIdentity = newIdentity
-			w.stableResourceObserved = true
-		}
-		if oldCreationProof != nil {
-			oldCreationProof.Release()
-		}
-		if oldStableParent != nil {
-			if err := w.closeRotatedResource(oldStableParent); err != nil {
-				return rotationInstalledError{err: errors.Join(oldObserveErr, err)}
-			}
-		}
-		if oldObserveErr != nil {
-			return rotationInstalledError{err: oldObserveErr}
-		}
-		return nil
-	}
-
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if syncCurrent {
+	if syncCurrent && w.f != nil {
 		if err := w.syncFile(); err != nil {
 			return err
 		}
 	}
-
+	// Use the original pending-successor owner for the complete private operand.
+	pending, err := newPendingStableSuccessor(nil, path, fileID, StableResourceRegistration{MetadataOwner: w.metadata, PinRegistry: w.stableResourcePins})
+	if err != nil {
+		return err
+	}
+	pending.parentOwned = true
+	parentCharge, err := rootpublication.StableFileMetadataCharge(uint64(len(filepath.Dir(path))))
+	if err != nil {
+		pending.disposeMetadata()
+		return err
+	}
+	if pending.metadata != nil {
+		if err = pending.metadata.AddPending(parentCharge); err != nil {
+			pending.disposeMetadata()
+			return err
+		}
+		pending.metadataCharge += parentCharge
+	}
+	pending.fileMetadataCharge, err = rootpublication.StableFileMetadataCharge(uint64(len(path)))
+	if err != nil {
+		pending.disposeMetadata()
+		return err
+	}
+	pending.parentMetadataCharge = parentCharge
+	w.pendingStableSuccessor = pending
+	rollback := func(cause error) error {
+		w.closeMu.Lock()
+		actual := w.disposePendingSuccessorLocked()
+		w.closeMu.Unlock()
+		if actual != nil {
+			w.cleanupFailure.LinkPriorCleanupError(cause)
+			return actual
+		}
+		return cause
+	}
 	f, created, err := openLogFile(path)
+	pending.file = f
 	if err != nil {
-		return err
+		return rollback(err)
 	}
-	stableParent, stableParentErr := captureStableValueLogParent(path, f)
-	newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
-	if err != nil {
-		_ = f.Close()
-		if stableParent != nil {
-			_ = stableParent.Close()
+	pending.parent, w.stableParentErr = captureStableValueLogParent(path, f)
+	if w.stableParentErr != nil && pending.parent != nil {
+		pending.parentCloseAttempted = true
+		if closeErr := pending.parent.Close(); closeErr != nil {
+			w.closeMu.Lock()
+			pending.failure.add(closeErr)
+			w.addCleanupFailureLocked(closeErr)
+			w.closeMu.Unlock()
+			return rollback(w.stableParentErr)
 		}
-		return err
+		pending.parent = nil
 	}
-	newObserved := w.stableResourcePins != nil
-	newCreationProof, newCreationUnsupported, newCreationUncertified, err := w.prepareStableCreationProof(stableParent, f, path, created, syncCurrent, w.stableResourcePins != nil)
+	pending.stableIdentity, err = observeStableWriterFile(f, w.stableResourcePins)
 	if err != nil {
-		if newObserved {
-			_ = w.stableResourcePins.Unobserve(newIdentity)
-		}
-		if newCreationProof != nil {
-			newCreationProof.Release()
-		}
-		_ = f.Close()
-		if stableParent != nil {
-			_ = stableParent.Close()
-		}
-		return err
+		return rollback(err)
+	}
+	pending.stableObserved = w.stableResourcePins != nil
+	proof, unsupported, uncertified, err := w.prepareStableCreationProof(pending.parent, f, path, created, syncCurrent, w.stableResourcePins != nil)
+	pending.creationProof = proof
+	if err != nil {
+		return rollback(err)
 	}
 	info, err := f.Stat()
 	if err != nil {
-		if newObserved {
-			_ = w.stableResourcePins.Unobserve(newIdentity)
-		}
-		if newCreationProof != nil {
-			newCreationProof.Release()
-		}
-		_ = f.Close()
-		if stableParent != nil {
-			_ = stableParent.Close()
-		}
-		return err
+		return rollback(err)
 	}
-	old := w.f
-	oldStableParent := w.stableParent
-	oldCreationProof := w.creationProof
-	if w.bw != nil {
-		if err := w.bw.Flush(); err != nil {
-			if newObserved {
-				_ = w.stableResourcePins.Unobserve(newIdentity)
-			}
-			if newCreationProof != nil {
-				newCreationProof.Release()
-			}
-			_ = f.Close()
-			if stableParent != nil {
-				_ = stableParent.Close()
-			}
-			return err
-		}
+	// Move the original old operand into the preborn bounded predecessor fields
+	// before replacing the writer's discovery aliases.
+	w.failedPredecessor = writerPredecessor{file: w.f, parent: w.stableParent, proof: w.creationProof, custody: w.creationProofCustody, identity: w.stableResourceIdentity, observed: w.stableResourceObserved, fileCharge: w.fileMetadataCharge, parentCharge: w.parentMetadataCharge}
+	w.f, w.stableParent, w.creationProof = f, pending.parent, pending.creationProof
+	w.parentCloseAttempted = false
+	w.creationProofCustody = nil
+	w.creationUnsupported, w.creationUncertified = unsupported, uncertified
+	w.stableResourceIdentity, w.stableResourceObserved = pending.stableIdentity, pending.stableObserved
+	w.fileMetadataCharge, w.parentMetadataCharge = pending.fileMetadataCharge, pending.parentMetadataCharge
+	transferredCharge := pending.fileMetadataCharge + pending.parentMetadataCharge
+	// Both allocations were admitted to the same producer; transfer contributions
+	// without refunding a live successor file or its original parent.
+	w.metadataCharge += transferredCharge
+	if pending.metadata != nil {
+		pending.metadataCharge -= transferredCharge
 	}
-	w.f = f
-	w.stableParent = stableParent
-	w.stableParentErr = stableParentErr
-	w.creationProof = newCreationProof
-	w.creationUnsupported = newCreationUnsupported
-	w.creationUncertified = newCreationUncertified
-	// File-backed writers do not use bufio. Drop any leftover sink buffer
-	// rather than retargeting it across rotations.
+	pending.file, pending.parent, pending.creationProof = nil, nil, nil
+	pending.stableObserved = false
+	pending.disposeMetadata()
+	w.pendingStableSuccessor = nil
 	w.bw = nil
-	w.size = info.Size()
-	w.fileID = fileID
+	w.size, w.fileID = info.Size(), fileID
+	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]
-	closeErr := w.closeRotatedResource(old)
-	observeErr := w.releaseStableResourceObservation()
-	if newObserved {
-		w.stableResourceIdentity = newIdentity
-		w.stableResourceObserved = true
-	}
-	var closeParentErr error
-	if oldStableParent != nil {
-		closeParentErr = w.closeRotatedResource(oldStableParent)
-	}
-	if oldCreationProof != nil {
-		oldCreationProof.Release()
-	}
-	w.trimTransientScratchBuffers()
-	if err := errors.Join(closeErr, closeParentErr, observeErr); err != nil {
+	w.closeMu.Lock()
+	err = w.disposePredecessorLocked()
+	w.closeMu.Unlock()
+	if err != nil {
 		return rotationInstalledError{err: err}
 	}
+	w.trimTransientScratchBuffers()
 	return nil
 }
 
@@ -2738,44 +2700,57 @@ func (w *Writer) Sync() error {
 	return nil
 }
 
-func (w *Writer) Close() (retErr error) {
+func (w *Writer) Close() error {
 	if w == nil {
 		return nil
 	}
-	defer func() { retErr = errors.Join(retErr, w.releaseStableResourceObservation()) }()
-	defer w.releaseDictEncoder()
-	defer w.releaseAppendBuf()
-	defer w.releaseTransientScratchBuffers()
-	var closeErrs []error
-	if err := w.flushNoTrim(); err != nil {
-		closeErrs = append(closeErrs, err)
+	w.closeMu.Lock()
+	defer w.closeMu.Unlock()
+	if w.closeAttempted {
+		return w.closeErr
 	}
-	if pending := w.pendingStableSuccessor; pending != nil {
-		if pending.creationProof != nil {
-			pending.creationProof.Release()
-			pending.creationProof = nil
-		}
-		if pending.file != nil {
-			closeErrs = append(closeErrs, pending.file.Close())
-			pending.file = nil
-		}
-		if pending.stableObserved && w.stableResourcePins != nil {
-			closeErrs = append(closeErrs, w.stableResourcePins.Unobserve(pending.stableIdentity))
-			pending.stableObserved = false
-		}
-		w.pendingStableSuccessor = nil
-	}
+	w.closeAttempted = true
+	w.addCleanupFailureLocked(w.flushNoTrim())
+	w.disposePendingSuccessorLocked()
+	w.disposePredecessorLocked()
 	if w.f != nil {
-		closeErrs = append(closeErrs, w.f.Close())
-		w.f = nil
+		if err := w.f.Close(); err != nil {
+			w.addCleanupFailureLocked(err)
+		} else {
+			w.f = nil
+		}
 	}
-	if w.stableParent != nil {
-		closeErrs = append(closeErrs, w.stableParent.Close())
-		w.stableParent = nil
+	if w.stableParent != nil && !w.parentCloseAttempted {
+		w.parentCloseAttempted = true
+		if err := w.stableParent.Close(); err != nil {
+			w.addCleanupFailureLocked(err)
+		} else {
+			w.stableParent = nil
+		}
 	}
 	if w.creationProof != nil {
-		w.creationProof.Release()
-		w.creationProof = nil
+		if err := releaseStableCreationProof(w.creationProof, w.creationProofCustody); err != nil {
+			w.addCleanupFailureLocked(err)
+		} else {
+			w.creationProof, w.creationProofCustody = nil, nil
+		}
 	}
-	return errors.Join(closeErrs...)
+	w.addCleanupFailureLocked(w.releaseStableResourceObservation())
+	if w.closeErr != nil {
+		return w.closeErr
+	}
+	w.releaseDictEncoder()
+	w.releaseAppendBuf()
+	w.releaseTransientScratchBuffers()
+	clear(w.prefixBuf[:cap(w.prefixBuf)])
+	w.prefixBuf = nil
+	w.bw = nil
+	w.stableResourcePins = nil
+	owner, charge := w.metadata, w.metadataCharge
+	w.metadata, w.metadataCharge = nil, 0
+	w.fileMetadataCharge, w.parentMetadataCharge = 0, 0
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+	return nil
 }

@@ -186,7 +186,7 @@ func (db *DB) flushCOWBackground(syncFlush bool) bool {
 // closeCOWFrontier consumes Close's writeMu fence and returns with it unlocked.
 // closing already denies new admissions. All retirement, storage IO and read
 // teardown exclusion occur after that fence is released.
-func (db *DB) closeCOWFrontier() error {
+func (db *DB) closeCOWFrontier() (closeErr error) {
 	c := db.cow
 	c.writerMu.Lock()
 	p, err := c.prepareRollover()
@@ -200,7 +200,7 @@ func (db *DB) closeCOWFrontier() error {
 	}
 	db.writeMu.Unlock()
 	p.drain()
-	defer c.close()
+	defer func() { closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false)) }()
 	if err != nil {
 		return err
 	}

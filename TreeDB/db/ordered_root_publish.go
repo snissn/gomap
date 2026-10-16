@@ -539,10 +539,18 @@ func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts order
 	if alloc == nil {
 		return nil, errors.New("missing allocator")
 	}
-	if db != nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) && !opts.rejectDictionaryReads {
+	if db != nil && idx.primary == nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) && !opts.rejectDictionaryReads {
 		return idx.zipper, nil
 	}
 	z := idx.zipper.CloneWithAllocator(alloc)
+	// Ordered roots include system and collection DATA trees. Only an actual
+	// directory input selects the primary route; the ordinary main user-root
+	// preference must not wrap every unrelated DATA root.
+	z.SetPrimaryDirectory(false)
+	if _, bank := alloc.(*primaryDependencyAllocatorV5); bank {
+		z.SetPrimaryArena(nil)
+		z.SetPrimaryDirectory(false)
+	}
 	z.SetOuterLeavesInValueLog(opts.outerLeavesInValueLog)
 	z.SetIndexInternalBaseDelta(opts.internalBaseDelta && !opts.outerLeavesInValueLog)
 	if opts.outerLeavesInValueLog {
@@ -1913,7 +1921,14 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		err = errors.New("missing index")
 		return
 	}
+	db.rootReuseMu.RLock()
+	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
+	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { err = errors.Join(err, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("ordered-root", state)
 	if state == nil {
 		err = errors.New("missing backend state")
 		return
@@ -1929,7 +1944,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
 		return
 	}
-	trackValueLogRefs = trackValueLogRefs && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(db.currentCommitSeq()) && !opts.outerLeavesInValueLog
+	trackValueLogRefs = trackValueLogRefs && db.valueLogRefTracker != nil && db.canTrackValueLogRefs(db.currentCommitSeq()) && !opts.outerLeavesInValueLog
 	if baseRoot != 0 {
 		rootTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), baseRoot)
 		collectBasePageIDs := func() ([]uint64, error) {

@@ -1,6 +1,8 @@
 package db
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"os"
 	"testing"
 	"time"
 
@@ -146,5 +148,74 @@ func BenchmarkCommandWALDependencyDebtAddEmpty(b *testing.B) {
 		if err := debt.add(uint64(i+1), nil); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestCommandWALDependencyDebtOwnedTelemetryDetaches(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	file, err := os.CreateTemp(t.TempDir(), "debt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err = file.Write([]byte("12345678")); err != nil {
+		t.Fatal(err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	defer registry.Close()
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Unobserve(identity)
+	makeSet := func(bytes uint64) *rootpublication.StableResourceSet {
+		token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+			MetadataOwner: &owner, PinRegistry: registry, Kind: rootpublication.ResourceIndex, LogicalLane: "debt", ResourceID: "debt-file", DiagnosticPath: "debt-file", Generation: 1, File: file, Frontier: rootpublication.DurableFrontier{Bytes: bytes}, Reachability: rootpublication.ReachabilityIndexFile,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(&owner)
+		if err != nil {
+			token.Release()
+			t.Fatal(err)
+		}
+		defer builder.Abandon()
+		if err = builder.Add(token); err != nil {
+			token.Release()
+			t.Fatal(err)
+		}
+		result, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first, second := makeSet(4), makeSet(8)
+	defer first.Release()
+	defer second.Release()
+	debt := CommandWALDependencyDebt{entries: []commandWALDependencyDebtEntry{
+		{firstLSN: 1, lastLSN: 1, createdAt: time.Now(), resources: []*rootpublication.StableResourceSet{first}},
+		{firstLSN: 2, lastLSN: 2, createdAt: time.Now(), resources: []*rootpublication.StableResourceSet{second}},
+	}}
+	before := owner.Bytes()
+	stats := debt.stats(time.Now())
+	if len(stats.byKind) != 1 || stats.byKind[0].PendingCount != 1 || stats.byKind[0].PendingBytes != 8 || stats.byKind[0].Kind != rootpublication.ResourceIndex {
+		t.Fatalf("actual debt stats=%+v", stats)
+	}
+	if owner.Bytes() != before {
+		t.Fatal("telemetry retained scratch")
+	}
+	first.Release()
+	second.Release()
+	if owner.Bytes() != 0 {
+		t.Fatal("metadata leak")
+	}
+	if stats.byKind[0].PendingBytes != 8 || stats.byKind[0].Kind != rootpublication.ResourceIndex {
+		t.Fatal("detached telemetry lost kind")
 	}
 }

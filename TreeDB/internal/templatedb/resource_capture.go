@@ -3,12 +3,14 @@ package templatedb
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/template"
 )
@@ -58,10 +60,28 @@ type StablePhysicalCapturer interface {
 	AcquireStableTemplateSnapshot() (StablePhysicalSnapshot, error)
 }
 
+// StablePhysicalMetadataCapturer receives the request owner before any new
+// selected wrapper/capture effect. Generic physical capturers remain supported.
+type StablePhysicalMetadataCapturer interface {
+	AcquireStableTemplateSnapshotWithMetadata(*retainedalloc.Owner) (StablePhysicalSnapshot, error)
+}
+
 // CaptureTemplateResources returns the exact durable resources required to
 // decode templateID. The returned set owns the stable snapshot and deletion
 // pins until Release.
 func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64) (*rootpublication.StableResourceSet, error) {
+	return s.captureTemplateResources(ctx, templateID, nil)
+}
+
+// CaptureTemplateResourcesWithMetadata admits new descriptor/callback storage
+// against the supplied parent owner while preserving the child physical owner.
+func (s *Store) CaptureTemplateResourcesWithMetadata(ctx context.Context, templateID uint64, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+	if metadata == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	return s.captureTemplateResources(ctx, templateID, metadata)
+}
+func (s *Store) captureTemplateResources(ctx context.Context, templateID uint64, metadata *retainedalloc.Owner) (_ *rootpublication.StableResourceSet, retErr error) {
 	if s == nil || s.kv == nil {
 		return nil, errStoreUnavailable
 	}
@@ -82,7 +102,17 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snapshot, err := provider.AcquireStableTemplateSnapshot()
+	var snapshot StablePhysicalSnapshot
+	var err error
+	if metadata == nil {
+		snapshot, err = provider.AcquireStableTemplateSnapshot()
+	} else {
+		admitted, ok := s.kv.(StablePhysicalMetadataCapturer)
+		if !ok {
+			return nil, rootpublication.ErrResourceOwnership
+		}
+		snapshot, err = admitted.AcquireStableTemplateSnapshotWithMetadata(metadata)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("templatedb: establish stable template snapshot: %w", err)
 	}
@@ -93,7 +123,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	snapshotOwned := false
 	defer func() {
 		if !snapshotOwned {
-			_ = snapshot.Close()
+			retErr = errors.Join(retErr, snapshot.Close())
 		}
 	}()
 
@@ -123,15 +153,24 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		Reachability: rootpublication.ReachabilityTemplateGeneration,
 		Digest:       definitionDigest,
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
-	defer builder.Abandon()
+	var builder *rootpublication.StableResourceSetBuilder
+	if metadata == nil {
+		builder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
+	} else {
+		builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata, rootpublication.ReachabilityTemplateGeneration)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
-		Kind:         rootpublication.ResourceTemplate,
-		LogicalLane:  "templatedb/index",
-		ResourceID:   "index",
-		Digest:       templateIndexPhysicalDigest,
-		Reachability: rootpublication.ReachabilityTemplateGeneration,
+		MetadataOwner: metadata,
+		Kind:          rootpublication.ResourceTemplate,
+		LogicalLane:   "templatedb/index",
+		ResourceID:    "index",
+		Digest:        templateIndexPhysicalDigest,
+		Reachability:  rootpublication.ReachabilityTemplateGeneration,
 		LogicalObligations: []rootpublication.StableLogicalObligation{
 			logical,
 		},
@@ -144,7 +183,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	// later builder/value-log operation fails.
 	snapshotOwned = true
 	if err := addTemplateStableResourceToken(builder, indexToken, templateStableIndexRole); err != nil {
-		indexToken.Release()
+		err = errors.Join(err, indexToken.ReleaseWithError())
 		return nil, fmt.Errorf("templatedb: add template %d index: %w", templateID, err)
 	}
 
@@ -162,6 +201,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 			return nil, fmt.Errorf("%w: templatedb template %d has invalid value-log path", rootpublication.ErrUnresolvedResource, templateID)
 		}
 		valueLogToken, err := snapshot.NewStableValueLogResourceToken(entry.FileID, rootpublication.StableResourceSpec{
+			MetadataOwner:  metadata,
 			Kind:           rootpublication.ResourceTemplate,
 			LogicalLane:    "templatedb/value-log",
 			ResourceID:     "value-log/" + strconv.FormatUint(uint64(entry.FileID), 10),
@@ -179,7 +219,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 			return nil, fmt.Errorf("templatedb: capture template %d value-log: %w", templateID, err)
 		}
 		if err := addTemplateStableResourceToken(builder, valueLogToken, templateStableValueLogRole); err != nil {
-			valueLogToken.Release()
+			err = errors.Join(err, valueLogToken.ReleaseWithError())
 			return nil, fmt.Errorf("templatedb: add template %d value-log: %w", templateID, err)
 		}
 	}
@@ -189,18 +229,23 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		return nil, fmt.Errorf("templatedb: freeze template %d resources: %w", templateID, err)
 	}
 	if err := validateCapturedTemplatePhysicalClosure(resources, entry.Pointer); err != nil {
-		resources.Release()
+		err = errors.Join(err, resources.ReleaseWithError())
 		return nil, fmt.Errorf("templatedb: validate template %d physical closure: %w", templateID, err)
 	}
 	return resources, nil
 }
 
-func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) (retErr error) {
 	if resources == nil {
 		return fmt.Errorf("%w: template capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
 	var index, valueLog bool
-	for _, descriptor := range resources.PhysicalDescriptors() {
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return captureErr
+	}
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
+	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceTemplate {
 			return fmt.Errorf("%w: template closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)
 		}

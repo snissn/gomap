@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -763,8 +764,11 @@ func TestStableValueLogOldCloseFailureIsFailStop(t *testing.T) {
 	appendStablePendingValue(t, writer, 1)
 	closed, active := stablePendingRegistrations(1, 2)
 	injected := errors.New("injected value-log old close failure")
+	originalFile := writer.f
+	closeCalls := 0
 	writer.closeRotateFn = func(file *os.File) error {
 		writer.closeRotateFn = nil
+		closeCalls++
 		return errors.Join(file.Close(), injected)
 	}
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
@@ -795,14 +799,34 @@ func TestStableValueLogOldCloseFailureIsFailStop(t *testing.T) {
 	if !errors.Is(err, rootpublication.ErrResourceOwnership) {
 		t.Fatalf("stable retry after fail-stop error=%v want ErrResourceOwnership", err)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+	first := writer.closeErr
+	firstFailureCount := writer.cleanupFailure.count
+	if first == nil || !errors.Is(first, injected) || closeCalls != 1 {
+		t.Fatalf("first cleanup outcome=%v calls=%d", first, closeCalls)
+	}
+	if p := &writer.failedPredecessor; p.file != originalFile || !p.attempted || !p.failed || p.fileCharge == 0 {
+		t.Fatalf("original failed predecessor custody=%+v", p)
+	}
+	if writer.metadata != registry.MetadataOwner() || writer.metadataCharge == 0 {
+		t.Fatal("failed Writer containing admission was lost")
+	}
+	if err := writer.Close(); err != first || !errors.Is(err, injected) {
+		t.Fatalf("first close=%v want original cleanup outcome %v", err, first)
+	}
+	retainedCharge := writer.metadataCharge
+	if retainedCharge == 0 || writer.failedPredecessor.file != originalFile {
+		t.Fatal("first close discarded original failed predecessor or charge")
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
 		t.Fatalf("fail-stop close retained %d identities", got)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("second close: %v", err)
+	if err := writer.Close(); err != first || !errors.Is(err, injected) {
+		t.Fatalf("second close=%v want original cleanup outcome %v", err, first)
+	}
+	if closeCalls != 1 || writer.cleanupFailure.count != firstFailureCount || writer.metadataCharge != retainedCharge ||
+		writer.failedPredecessor.file != originalFile || !writer.failedPredecessor.attempted || !writer.failedPredecessor.failed {
+		t.Fatalf("repeated close replayed/discarded failed custody: calls=%d failures=%d charge=%d predecessor=%+v",
+			closeCalls, writer.cleanupFailure.count, writer.metadataCharge, writer.failedPredecessor)
 	}
 	if _, err := os.Stat(secondPath); err != nil {
 		t.Fatalf("fail-stop close removed created successor: %v", err)
@@ -857,5 +881,63 @@ func TestStableValueLogRetryDescriptorPlateau(t *testing.T) {
 	}
 	if writer.FileID() != 65 {
 		t.Fatalf("final file id=%d want 65", writer.FileID())
+	}
+}
+
+func TestSelectedStableRotationRetainsPendingAndContainerMetadata(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	appendStablePendingValue(t, writer, 1)
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	closed, active := stablePendingRegistrations(1, 2)
+	closed.MetadataOwner, active.MetadataOwner = &owner, &owner
+	generation, err := writer.StableNamespaceParentGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.ParentGeneration, active.ParentGeneration = generation, generation
+	injected := errors.New("selected pending observation failure")
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource == durabilitycut.ResourceValueLog && e.Namespace == durabilitycut.NamespaceCreate {
+			return injected
+		}
+		return nil
+	})
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false, closed, active)
+	restore()
+	if rotation != nil || !errors.Is(err, injected) {
+		t.Fatalf("pending failure=%v %v", rotation, err)
+	}
+	if owner.Bytes() == 0 {
+		t.Fatal("exact pending registration and successor metadata escaped admission")
+	}
+	rotation, err = writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false, closed, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotation.TakeClosed().Release()
+	rotation.TakeActive().Release()
+	if owner.Bytes() == 0 {
+		t.Fatal("live rotation container escaped admission")
+	}
+	beforeContainer := owner.Bytes()
+	rotation.Release()
+	if owner.Bytes() >= beforeContainer {
+		t.Fatal("rotation did not dispose its actual container")
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != 0 {
+		t.Fatalf("successful writer/proof/container disposal retained %d", owner.Bytes())
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 2 {
+		t.Fatalf("creation proof reuse syncs=%d want2", got)
 	}
 }

@@ -65,6 +65,42 @@ func walkRootsCommon(ctx context.Context, rootIDs []uint64, get GetFunc, verify 
 		}
 
 		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			directory, err := node.DecodePrimaryDirectory(data)
+			if err != nil {
+				return err
+			}
+			base, _ := directory.Base()
+			baseImage, err := get(base.Ref.Page)
+			if err != nil {
+				return err
+			}
+			if !node.VerifyPrimaryOperand(base, baseImage) {
+				return fmt.Errorf("primary directory %d base %d digest: %w", pageID, base.Ref.Page, node.ErrPrimaryDirectory)
+			}
+			baseNode := node.NewNodeView(baseImage)
+			baseType := baseNode.Type()
+			if baseType != page.PageTypeLeaf && baseType != page.PageTypeInternal {
+				return node.ErrPrimaryDirectory
+			}
+			stack = append(stack, base.Ref.Page)
+			for i := 0; i < directory.Count(); i++ {
+				entry, _ := directory.Entry(i)
+				if entry.InlineAbsence() {
+					continue
+				}
+				if entry.Operand.Ref.Kind != page.ChildRefPage {
+					return node.ErrPrimaryDirectory
+				}
+				image, err := get(entry.Operand.Ref.Page)
+				if err != nil {
+					return err
+				}
+				if err = node.ValidatePrimaryComponent(entry, image); err != nil {
+					return err
+				}
+				stack = append(stack, entry.Operand.Ref.Page)
+			}
 		case page.PageTypeLeaf:
 			// no children
 		case page.PageTypeInternal:

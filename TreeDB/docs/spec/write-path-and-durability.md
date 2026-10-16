@@ -12,6 +12,13 @@ live reference retires. The marker grants no new logical asset authority and
 never substitutes for reference integrity or exact GC pins. See the
 [typed storage layout](storage-format.md) for the record and rotation rules.
 
+In public command-WAL COW mode, a checkpoint with no dirty cached entries may
+still republish the backend fallback root. That publication runs inside the
+existing cache maintenance fence: admitted writers drain, the backend publishes,
+and the cache captures the exact successor backend basis before writers resume.
+Previously captured immutable cuts retain their original basis and values. The
+same ordering applies to the final public checkpoint during `Close`.
+
 ## 0. Frozen Publication Contract
 
 This section is normative for every production durability profile. It freezes
@@ -421,12 +428,22 @@ explicit sync releases writer/admission ownership before sealed-root Checkpoint.
 Unsupported surfaces and capacity refusal stop before acceptance. Post-append
 ambiguity/poison/reopen rules are unchanged.
 
+For public command-WAL stores in this mode, the main physical backend uses the
+existing PRIMARY capsule constructor and promotion. Foreground acknowledgement
+installs the prepared C1 cut against its existing backend snapshot; it does not
+checkpoint PRIMARY on acknowledgement. Dictionary and template stores keep their
+independent format policy. A newly acquired cut after checkpoint binds the exact
+successor backend StateToken, while held cuts retain their original basis and values.
+
 Checkpoint flushes one captured prefix against its captured backend basis,
 streams bounded private chunks through one backend publication group and removes
 only the proved-covered prefix at handoff. It retains the acceptance receipt
 even if later waiting/cleanup reports an error. A permitted retry completes
 handoff rather than reapplying the accepted prefix. Existing Applied-LSN,
 dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
+For selected PRIMARY V6 capsules, fallback refresh uses the same root transaction
+and verifies identical complete directory operands across the two distinct fixed
+slot addresses; matching command coverage alone does not authorize cleanup.
 See [COW publication and lock ordering](cow-cache-publication.md).
 
 ## 4. Backend Commit Model
@@ -720,3 +737,58 @@ its active frame state. No durable progress or recovery coverage is invented.
 The [production and benchmark profile audit](no-wal-fast-audit.md) records public KV and
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
+
+### Selected V6 ordinary constructor and promotion ownership
+
+Selected V6 ordinary writes construct their independently immutable logical
+directory under the existing durable-root transaction. Relaxed visibility and
+later durable promotion use that same transaction. Relaxed ACK may still precede
+durable slot selection. Explicit Checkpoint and a successful clean Close wait
+for the complete sealed root. With command WAL enabled, WriteSync/Sync may
+establish the durable command-prefix boundary before the sealed capsule frontier
+advances; they do not promise a per-write Checkpoint or full memtable flush.
+
+Promotion freshly selects the alternate capsule and actual current parent.
+The slot acquires the original immutable logical root and independently owns
+the dependency closure and capsule image charge. It does not enlarge any
+already-admitted reader root's closure. Capture and physical-cut enumeration
+include both slot closures and their parent-proof closures; overwrite and
+terminal disposal consume each original edge once.
+DATA and external/PRIMARY dependency obligations remain durable before capsule
+installation, followed by the PRIMARY fence. Constructor reuse does not make
+those syncs redundant. Post-install uncertainty preserves actual prior custody,
+poisons publication, and refuses later writes until recovery. Durable report
+finishes the ordinary transaction synchronously; this ordinary callback path is
+not bounded native Accepted/Finish qualification.
+
+## Capsule-format joint vacuum durability
+
+Vacuum rebuilds private DATA/PRIMARY files, both eligible roots and their finite
+parent closures against one genuine DATA generation. Each actual external
+resource, DATA pages, PRIMARY banks and staging namespace are fenced before
+installing/fencing the two complete capsules. COMMIT file and parent are then
+synced before canonical replacement. DATA replacement, PRIMARY replacement
+and COMMIT deletion each have a separate actual parent-directory barrier.
+
+Replacement runtime and closures are prepared before COMMIT. Writer exclusion
+spans canonical rebind, deletion/barrier and in-memory installation.
+Post-COMMIT observer, cancellation, rename or barrier error retains custody
+and poisons mutation; recovery rolls forward exact identities without rollback.
+
+This maintenance protocol adds no fsync to ordinary relaxed no-WAL ACKs.
+Command-WAL WriteSync may acknowledge the durable command before sealed capsule
+frontier advances; explicit Checkpoint establishes the complete root boundary.
+Vacuum preserves each slot's actual `AppliedCommandLSN` and revision frontier.
+Ordinary maintenance is not a bounded native prune accounting witness.
+
+### Typed floor input preserves ordinary ACK
+
+The Store's exact floor metadata operation uses ordinary batch Write or WriteSync
+with typed producer input. Ordinary command-WAL DURABLE ACK retains grouped
+WAL/value-log prefix synchronization plus atomic memtable publication, without
+forcing Checkpoint. Command-WAL RELAXED ACK retains kernel-drained WAL buffers
+plus atomic memtable publication without fsync; it is not a userspace-only or
+memtable-only ACK. NoWALFast retains its later Checkpoint/safe-Close durability
+boundary. Neither floor metadata nor an ordinary ACK
+certifies a completed maintenance source cut. Protected-floor issuance and
+bounded native retirement are deferred from this ordinary prerequisite.

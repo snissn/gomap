@@ -41,7 +41,7 @@ func newCOWGenerationResources(budget *memtable.COWBudget) (*cowGenerationResour
 	}
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowGenerationResources{}))) +
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
-		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
 	lease, err := budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
@@ -115,13 +115,17 @@ func (c *cowCache) admitDictionaryRead(s dictdb.DictionaryReadAllocationSizes) (
 	}
 	bytes := memtable.COWAllocationCharge(s.Owner) + memtable.COWAllocationCharge(s.Callback) +
 		memtable.COWAllocationCharge(s.Definition) + memtable.COWAllocationCharge(s.Payload) + memtable.COWAllocationCharge(s.Pin) +
-		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0)))) +
+		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0)))) +
 		cowSnapshotRetentionCharge(s.Snapshot)
-	lease, err := c.budget.AcquireExternal(bytes)
+	lease, metadata, err := admitCOWSnapshotRetention(c.budget, bytes, s.Snapshot)
 	if err != nil {
 		return nil, err
 	}
-	return lease.Close, nil
+	if metadata != nil && s.CaptureMetadata != nil {
+		*s.CaptureMetadata = metadata
+		metadata = nil // provider transfers this exact enrollment to Snapshot
+	}
+	return func() { metadata.Close(); lease.Close() }, nil
 }
 
 func prepareCOWEmptyRoot(w *memtable.COWWriter, budget *memtable.COWBudget) (*memtable.COWRoot, *cowGenerationResources, error) {

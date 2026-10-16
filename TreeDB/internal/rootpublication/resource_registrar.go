@@ -92,7 +92,7 @@ func stableChildIDForField(child *StableResourceSet, field ReachabilityField) (s
 	var id string
 	var bindErr error
 	child.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
-		if _, covered := entry.reachability[field]; !covered {
+		if !entry.reachability.hasReachable(field) {
 			return true
 		}
 		if id == "" {

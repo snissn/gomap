@@ -1,0 +1,4 @@
+=== RUN   TestPowerLossCertificationStaleBuildBasePublicReopen
+    power_loss_certification_stale_build_test.go:214: recovered rejected-stale counterexample at commit 4
+--- PASS: TestPowerLossCertificationStaleBuildBasePublicReopen (0.18s)
+PASS

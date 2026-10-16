@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -390,6 +389,34 @@ func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions
 func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
 	opts.DryRun = false
 	return db.compactStorage(ctx, opts)
+}
+
+// SettleCompactStorageAfterReadBasisRefresh retries leaf retirement held by a
+// cached caller's previous read basis. The caller keeps its writer fence across
+// the original compaction, basis refresh, and this settle operation. Ordinary
+// root, recoverable-slot/parent, and independent reader protections still apply.
+// No checkpoint or root publication is needed merely to retire those read pins.
+func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) error {
+	if stats == nil || stats.LeafGenerationGC.GenerationsRetiring == 0 {
+		return nil
+	}
+	opts = normalizeCompactStorageOptions(opts)
+	if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-read-basis-refresh", func() error {
+		roots, systems := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{ProtectedRootIDs: roots, ProtectedSystemRootIDs: systems})
+		stats.LeafGenerationGC = gc
+		return err
+	}); err != nil {
+		return err
+	}
+	final, err := db.CompactStoragePlan(ctx, opts)
+	if err != nil {
+		return err
+	}
+	addCompactStorageAuditStats(&stats.Audit, final.Audit)
+	stats.After, stats.RemainingDebt = final.After, final.RemainingDebt
+	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = final.FullyCompacted, final.PolicyFullyCompacted, final.ByteMinimized
+	return nil
 }
 
 func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (stats CompactStorageStats, err error) {
@@ -1226,15 +1253,23 @@ func (state *compactStorageLeafPackPlanState) resetFromPlan(plan LeafGenerationP
 
 func (db *DB) compactStorageLeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOptions, carry *compactStorageLeafPackPlanState) (LeafGenerationPlan, error) {
 	if carry != nil && carry.valid {
-		published := db.state.Load()
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			return LeafGenerationPlan{}, ErrClosed
+		}
+		published := snap.state
+		db.valueLogStateCaptured("compact-carry-plan", published)
 		key, ok := leafGenerationPlanStateKey(published, opts)
 		if ok && key == carry.key && published.LeafGenerations != nil && published.LeafGenerations.sourceManifest != nil {
 			plan := db.leafGenerationPlanFromLiveStats(opts, published, published.LeafGenerations.sourceManifest, carry.live)
 			plan.stateKey = key
 			plan.liveStats = cloneLeafGenerationLiveScanStats(carry.live)
-			return plan, nil
+			return plan, snap.Close()
 		}
 		carry.invalidate()
+		if err := snap.Close(); err != nil {
+			return LeafGenerationPlan{}, err
+		}
 	}
 	plan, err := db.LeafGenerationPlan(ctx, opts)
 	if err != nil {
@@ -1244,17 +1279,33 @@ func (db *DB) compactStorageLeafGenerationPlan(ctx context.Context, opts LeafGen
 	return plan, nil
 }
 
-func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGenerationPackStats, result leafGenerationPackCarryResult) {
+func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGenerationPackStats, result leafGenerationPackCarryResult) (retErr error) {
 	if state == nil || !state.valid || db == nil || pack.CopyAborts != 0 || result.publishedState == nil || result.protectedRootsOverlapSourceMaintenance {
 		state.invalidate()
-		return
+		return nil
 	}
 	sourceKey := result.sourceStateKey
 	sourceKey.protectedRoots = state.key.protectedRoots
 	if sourceKey != state.key || result.publishedState.LeafGenerations == nil {
 		state.invalidate()
-		return
+		return nil
 	}
+
+	// The carry result is borrowed scalar/immutable topology only. File sizing
+	// uses the SAME live captured publication, never its retired Set alias.
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		state.invalidate()
+		return ErrClosed
+	}
+	defer func() { retErr = errors.Join(retErr, snap.Close()) }()
+	publishedKey, publishedOK := leafGenerationLiveStatsKeyForState(result.publishedState)
+	capturedKey, capturedOK := leafGenerationLiveStatsKeyForState(snap.state)
+	if !publishedOK || !capturedOK || publishedKey != capturedKey {
+		state.invalidate()
+		return nil
+	}
+	db.valueLogStateCaptured("compact-carry-advance", snap.state)
 
 	live := cloneLeafGenerationLiveScanStats(state.live)
 	if result.trackSourceLiveMoved {
@@ -1277,7 +1328,7 @@ func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGeneratio
 	}
 
 	createdGenerations := make(map[uint64]struct{})
-	view := result.publishedState.LeafGenerations
+	view := snap.state.LeafGenerations
 	for _, rawFileID := range pack.CreatedFileIDs {
 		if generationID := view.FileToGeneration[rawFileID]; generationID != 0 {
 			createdGenerations[generationID] = struct{}{}
@@ -1287,7 +1338,7 @@ func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGeneratio
 		generation := view.Generations[generationID]
 		var bytesTotal int64
 		for _, rawFileID := range generation.FileIDs {
-			bytesTotal += leafGenerationRawFilePhysicalSize(db.dir, result.publishedState.ValueLogSet, rawFileID)
+			bytesTotal += leafGenerationRawFilePhysicalSize(db.dir, snap.state.ValueLogSet, rawFileID)
 		}
 		live.Generations[generationID] = leafGenerationLiveTotals{
 			LivePages: max(1, len(generation.FileIDs)),
@@ -1298,12 +1349,13 @@ func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGeneratio
 	key, ok := leafGenerationLiveStatsKeyForState(result.publishedState)
 	if !ok {
 		state.invalidate()
-		return
+		return nil
 	}
 	key.protectedRoots = state.key.protectedRoots
 	state.key = key
 	state.live = live
 	state.valid = true
+	return nil
 }
 
 func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts LeafGenerationPackFromPlanOptions, lockMaintenance bool, ignoredRawFileIDs map[uint32]struct{}, carry *compactStorageLeafPackPlanState) (LeafGenerationPackRunOnceStats, error) {
@@ -1332,8 +1384,7 @@ func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts 
 	}
 	stats.Pack = packStats
 	stats.Ran = true
-	carry.advance(db, packStats, carryResult)
-	return stats, nil
+	return stats, carry.advance(db, packStats, carryResult)
 }
 
 func compactStorageFilterIgnoredLeafPackPlan(plan LeafGenerationPlan, opts LeafGenerationPackFromPlanOptions, ignoredRawFileIDs map[uint32]struct{}) LeafGenerationPlan {
@@ -2207,7 +2258,7 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 		return nil, nil, err
 	}
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
-	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0)
+	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0, db.valueLogIdentityPins)
 	writer.ConfigureLeafLog(LeafLogDirPath(db.dir), rewriteLeafLogLaneID, leafStartSeq)
 	nextRID := uint64(0)
 	if opts.ReserveRIDs == nil {
@@ -2222,15 +2273,12 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	if writer.blockCompression {
-		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
-			if err != nil {
-				_ = writer.Close()
-				return nil, nil, err
-			}
-			if leafDictID != 0 && len(leafDictBytes) > 0 {
-				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
-			}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err := db.prepareCurrentRewriteLeafDict()
+		if err != nil {
+			return nil, nil, errors.Join(err, writer.Close())
+		}
+		if leafDictID != 0 && len(leafDictBytes) > 0 {
+			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 	}
 	db.SetLeafPageLog(writer)

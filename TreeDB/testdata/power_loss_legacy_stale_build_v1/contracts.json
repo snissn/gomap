@@ -1,0 +1,1274 @@
+{
+  "schema_version": "treedb-power-loss-witness-contracts/v4",
+  "issue": 3684,
+  "required_pull_requests": [
+    3706,
+    3720,
+    3722,
+    3725,
+    3745,
+    3742,
+    3746,
+    3747,
+    3749,
+    3750,
+    3751,
+    3753,
+    3762,
+    3764,
+    3766,
+    3767,
+    3768,
+    3769,
+    3770,
+    3772,
+    3773,
+    3774,
+    3775,
+    3794,
+    3811,
+    3825,
+    3832,
+    3835,
+    3844,
+    3851,
+    3856,
+    3859,
+    3865,
+    3893,
+    3920,
+    3926,
+    3927,
+    3930,
+    3932,
+    3934,
+    3936,
+    3938,
+    3940,
+    3949,
+    3950
+  ],
+  "cases": [
+    {
+      "id": "durable-ordinary-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationOrdinaryWriteAndBatchPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "ordinary_write_and_batch",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "command frame -> durable WAL barrier -> index root publication",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "commit 3 and applied command LSN 3 are dependency-closed",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=3",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-ack-ordinary-write-batch-stable-image/after-meta-sync/000",
+      "variant_id": "public-ack-ordinary-write-batch-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 3
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled stable image"
+    },
+    {
+      "id": "explicit-sync-forced-pointers",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationAllExplicitSyncFormsPublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "all_explicit_sync_forms",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "forced value-log resources -> index pointers -> root publication",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "all explicit sync forms publish commit 6 with pointer resources closed",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
+        "freelist_generation": "generation=12",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=6",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-ack-all-explicit-sync-forms-stable-image/after-meta-sync/000",
+      "variant_id": "public-ack-all-explicit-sync-forms-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 6,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled stable image"
+    },
+    {
+      "id": "empty-sync-rotated-wal",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationEmptyExplicitSyncPublicReopen",
+      "profile": "command_wal_relaxed",
+      "acknowledgement_shape": "empty_explicit_sync",
+      "data_resource_shapes": [
+        "command_wal_rotation"
+      ],
+      "dependency_graph": "old WAL segment sync -> new segment namespace sync -> root publication",
+      "storage_boundaries": [
+        "wal_old_segment_sync",
+        "new_segment_namespace_sync",
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "empty sync closes the rotated WAL prefix through applied LSN 2",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_relaxed applied_lsn=2",
+        "durable_lsn": "durable_wal_lsn=2 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-ack-empty-explicit-sync-stable-image/after-dependency-file-sync/001",
+      "variant_id": "public-ack-empty-explicit-sync-stable-image",
+      "cut_point": "after-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 2
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled stable image"
+    },
+    {
+      "id": "clean-close-publication",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationCleanClosePublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "clean_close",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "cached inline mutation -> clean close checkpoint -> root publication",
+      "storage_boundaries": [
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "clean close publishes commit 3",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-ack-clean-close-stable-image/after-meta-sync/000",
+      "variant_id": "public-ack-clean-close-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled stable image"
+    },
+    {
+      "id": "retryable-pre-meta",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationPublicationFailureClassPublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "index dependency sync -> target meta publication",
+      "storage_boundaries": [
+        "index_sync_excluding_meta"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "retryable_pre_meta_failure"
+      ],
+      "expected_durable_horizon": "pre-meta cut retains commit 2 and leaves the live handle retryable",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-retryable-pre-meta-failure-stable-image/before-meta-write/000",
+      "variant_id": "public-retryable-pre-meta-failure-stable-image",
+      "cut_point": "before-meta-write",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen plus live-handle retry classification"
+    },
+    {
+      "id": "poisoned-post-meta",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationPublicationFailureClassPublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "index dependency sync -> target meta write -> public handle poison",
+      "storage_boundaries": [
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "ambiguous_post_meta_poison"
+      ],
+      "expected_durable_horizon": "post-meta failure reopens commit 2 while the original handle fails closed",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-post-meta-poison-stable-image/after-meta-write/000",
+      "variant_id": "public-post-meta-poison-stable-image",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen plus live-handle poison classification"
+    },
+    {
+      "id": "durable-prefix-rid-hole",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationDurablePrefixHolePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "open_recovery",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "durable command frame RID -> required value-log segment and namespace",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "parent_namespace_create_rename_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "corrupt_durable_prefix_hole"
+      ],
+      "expected_durable_horizon": "durable prefix is intentionally missing its referenced value-log segment",
+      "expected_outcome": "rejected:missing-value-log-rid",
+      "expected_typed_error": "*fmt.wrapError",
+      "state": {
+        "root_meta_generation": "unavailable: public open rejected before state selection",
+        "freelist_generation": "unavailable: public open rejected before state selection",
+        "external_resource_ids_frontiers": "unavailable: public open rejected before state selection",
+        "namespace_generations": "unavailable: public open rejected before state selection",
+        "wal_lineage": "unavailable: public open rejected before state selection",
+        "durable_lsn": "unavailable: public open rejected before state selection",
+        "cleanup_maintenance_pins": "unavailable: public open rejected before state selection"
+      },
+      "negative_control_id": "durable-prefix-dependency-hole",
+      "seed": 3674,
+      "cut_id": "cut/public-durable-prefix-hole-stable-image/after-deletion-directory-sync/000",
+      "variant_id": "public-durable-prefix-hole-stable-image",
+      "cut_point": "after-deletion-directory-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": true,
+        "error_type": "*fmt.wrapError",
+        "commit_seq": 0,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write Open must reject the modeled durable-prefix hole"
+    },
+    {
+      "id": "maintenance-unlink",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationMaintenanceUnlinkPublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "delete_reuse"
+      ],
+      "dependency_graph": "maintenance unlink -> parent directory sync -> cleanup capability",
+      "storage_boundaries": [
+        "maintenance_unlink"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "stale_maintenance_cleanup_capability"
+      ],
+      "expected_durable_horizon": "pre-directory-sync stable image retains the old zero-byte segment name",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-maintenance-unlink-stable-image/before-deletion-directory-sync/000",
+      "variant_id": "public-maintenance-unlink-stable-image",
+      "cut_point": "before-deletion-directory-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the pre-directory-sync maintenance image"
+    },
+    {
+      "id": "wal-cleanup-unlink",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationCommandWALUnlinkPublicReopen",
+      "profile": "command_wal_relaxed",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "command_wal_rotation"
+      ],
+      "dependency_graph": "covered WAL segment -> unlink -> parent directory sync",
+      "storage_boundaries": [
+        "wal_unlink"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "stale_maintenance_cleanup_capability"
+      ],
+      "expected_durable_horizon": "pre-directory-sync stable image retains a covered WAL segment name",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_relaxed applied_lsn=3",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-command-wal-unlink-stable-image/before-deletion-directory-sync/000",
+      "variant_id": "public-command-wal-unlink-stable-image",
+      "cut_point": "before-deletion-directory-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 3
+      },
+      "claim_boundary": "normal public read-only reopen of the pre-directory-sync WAL cleanup image"
+    },
+    {
+      "id": "older-live-page-reuse",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationRecoverablePageReusePublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "ordinary_write_and_batch",
+      "data_resource_shapes": [
+        "delete_reuse"
+      ],
+      "dependency_graph": "older root page references -> freelist reuse -> pre-index-sync dirty page",
+      "storage_boundaries": [
+        "page_resource_reuse"
+      ],
+      "writeback_variant": "old_live_page_reuse",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "reused dirty page cannot displace the retained commit 6 root",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
+        "freelist_generation": "generation=12",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=6",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+      },
+      "counterexample_id": "older-meta-live-page-reused",
+      "negative_control_id": "old-live-page-reuse",
+      "seed": 6916576305815329643,
+      "cut_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001",
+      "variant_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page",
+      "cut_point": "before-index-data-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 6,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled reused-page image"
+    },
+    {
+      "id": "authoritative-resource-closure",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationAuthoritativeResourcesPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "flush",
+      "data_resource_shapes": [
+        "outer_leaves",
+        "combined_nested_roots",
+        "dictionaries_templates",
+        "column_vector_text_auxiliary_assets"
+      ],
+      "dependency_graph": "collection resources and namespaces -> nested roots -> outer root publication",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "parent_namespace_create_rename_sync",
+        "cow_index_freelist_root_record_write"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "behaviorally queried collection and side-store resources select commit 14 and applied command LSN 19",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_commit_seq=14 fallback_commit_seq=13",
+        "freelist_generation": "generation=persisted",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=9",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=19",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_commit_seq=14",
+        "cleanup_maintenance_pins": "selected_commit_seq=14 fallback_commit_seq=13"
+      },
+      "state_comparison": "logical_horizon",
+      "seed": 3674,
+      "cut_id": "cut/public-authoritative-resources-stable-image/after-meta-sync/000",
+      "variant_id": "public-authoritative-resources-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "replay_window": "public-authoritative-resources-stable-image",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 14,
+        "applied_lsn": 19
+      },
+      "claim_boundary": "normal public read-only reopen behaviorally queries primary, secondary, text, physical column, vector, TemplateV1, and maindb dictionary-compressed value-log resources; live templatedb value-log compression is not claimed"
+    },
+    {
+      "id": "retained-new-meta-index",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "target meta -> changed index pages -> pointer resources",
+      "storage_boundaries": [
+        "target_meta_write_sync",
+        "cow_index_freelist_root_record_write"
+      ],
+      "writeback_variant": "target_metadata_alone",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "target meta without index closure falls back to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=0 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=0 slot1_commit_seq=2"
+      },
+      "counterexample_id": "new-meta-before-index-closure",
+      "negative_control_id": "target-meta-without-dependency-closure",
+      "seed": 277424048364008000,
+      "cut_id": "cut/checkpoint-generation-2/after-meta-write/000",
+      "variant_id": "cut/checkpoint-generation-2/after-meta-write/000/variant/target-meta-only/index%2Ftarget-meta-generation-2",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled selective-writeback image"
+    },
+    {
+      "id": "retained-new-meta-vlog",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "target meta and index -> missing value-log dependency",
+      "storage_boundaries": [
+        "target_meta_write_sync",
+        "resource_create_write_sync"
+      ],
+      "writeback_variant": "all_but_one_dependency",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "missing value-log dependency forces fallback to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=0 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=0 slot1_commit_seq=2"
+      },
+      "counterexample_id": "new-meta-before-value-log-closure",
+      "seed": 17671886602236829340,
+      "cut_id": "cut/checkpoint-generation-2/after-meta-write/000",
+      "variant_id": "cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled selective-writeback image"
+    },
+    {
+      "id": "retained-new-meta-outer",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "outer_leaves",
+        "combined_nested_roots"
+      ],
+      "dependency_graph": "target meta and index -> missing outer-leaf dependency",
+      "storage_boundaries": [
+        "target_meta_write_sync",
+        "cow_index_freelist_root_record_write"
+      ],
+      "writeback_variant": "all_but_one_dependency",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "missing outer-leaf dependency forces fallback to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=0 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=0 slot1_commit_seq=2"
+      },
+      "counterexample_id": "new-meta-before-outer-leaf-closure",
+      "seed": 6420121261523381470,
+      "cut_id": "cut/checkpoint-generation-2/after-meta-write/000",
+      "variant_id": "cut/checkpoint-generation-2/after-meta-write/000/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled selective-writeback image"
+    },
+    {
+      "id": "retained-new-file-data-only",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleAdversarialNewFileNamespaceMismatch",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "new value-log bytes -> parent namespace durability -> pointer publication",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "parent_namespace_create_rename_sync"
+      ],
+      "writeback_variant": "data_without_required_name",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "data without durable namespace falls back to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "counterexample_id": "new-file-bytes-before-namespace",
+      "negative_control_id": "data-without-namespace",
+      "seed": 13292462572921652909,
+      "cut_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/000",
+      "variant_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/000/variant/data-without-namespace/value-log%2Fnew-asset-generation-2",
+      "cut_point": "after-new-file-directory-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled namespace-mismatch image"
+    },
+    {
+      "id": "new-file-name-only-control",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleAdversarialNewFileNamespaceMismatch",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "open_recovery",
+      "data_resource_shapes": [
+        "forced_value_log_pointers"
+      ],
+      "dependency_graph": "new value-log namespace -> required file data -> pointer publication",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "parent_namespace_create_rename_sync"
+      ],
+      "writeback_variant": "name_without_required_data",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "namespace without required data falls back to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "negative_control_id": "namespace-without-data",
+      "seed": 16889545712983323299,
+      "cut_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/000",
+      "variant_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/000/variant/namespace-without-data/value-log%2Fnew-asset-generation-2",
+      "cut_point": "after-new-file-directory-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen of the modeled namespace-mismatch image"
+    },
+    {
+      "id": "retained-torn-meta",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "dependency-closed resources -> bounded target-meta format tear",
+      "storage_boundaries": [
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "bounded_format_tear",
+      "failure_classes": [
+        "fallback_older_complete_root"
+      ],
+      "expected_durable_horizon": "bounded torn target meta falls back to commit 2",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=0 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=0 slot1_commit_seq=2"
+      },
+      "counterexample_id": "torn-target-meta",
+      "negative_control_id": "bounded-torn-target-meta",
+      "seed": 15803375181617112748,
+      "cut_id": "cut/checkpoint-generation-2/after-meta-write/000",
+      "variant_id": "cut/checkpoint-generation-2/after-meta-write/000/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled bounded-tear image"
+    },
+    {
+      "id": "retained-relaxed-rid-suffix",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID",
+      "profile": "command_wal_relaxed",
+      "acknowledgement_shape": "ordinary_write_and_batch",
+      "data_resource_shapes": [
+        "forced_value_log_pointers",
+        "command_wal_rotation"
+      ],
+      "dependency_graph": "relaxed command frame -> external RID -> discardable suffix",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync",
+        "resource_create_write_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "discardable_relaxed_suffix"
+      ],
+      "expected_durable_horizon": "relaxed frame missing its RID is discarded behind commit 1",
+      "expected_outcome": "accepted:suffix-discarded",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=1 slot0=1 slot1=0",
+        "freelist_generation": "generation=2",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_relaxed applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=1",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
+      },
+      "counterexample_id": "relaxed-command-frame-before-rid",
+      "seed": 10753201851261556021,
+      "cut_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/000",
+      "variant_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/000/variant/full-writeback",
+      "cut_point": "after-userspace-flush",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 1,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled relaxed suffix image"
+    },
+    {
+      "id": "retained-chunked-root",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "chunked index sync -> intermediate target meta -> dependency-closed root",
+      "storage_boundaries": [
+        "cow_index_freelist_root_record_write",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "target_metadata_alone",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "intermediate chunked root is a valid dependency-closed commit 3",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "counterexample_id": "chunked-sync-intermediate-root",
+      "seed": 12432755234492424782,
+      "cut_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/000",
+      "variant_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/000/variant/target-meta-only/index%2Fchunked-intermediate-root",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled chunked intermediate root"
+    },
+    {
+      "id": "full-dirty-open-recovery",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "open_recovery",
+      "data_resource_shapes": [
+        "forced_value_log_pointers",
+        "outer_leaves"
+      ],
+      "dependency_graph": "all dirty dependency resources and target meta -> public recovery",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "cow_index_freelist_root_record_write",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "full modeled writeback selects dependency-closed commit 3",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 15947516725309267809,
+      "cut_id": "cut/checkpoint-generation-2/after-meta-write/000",
+      "variant_id": "cut/checkpoint-generation-2/after-meta-write/000/variant/full-writeback",
+      "cut_point": "after-meta-write",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-write reopen of the modeled full-dirty writeback image"
+    },
+    {
+      "id": "grouped-multi-waiter-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAcknowledgementsPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_multi_waiter",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four waiters -> mutation frames -> one durable-prefix barrier -> public command-WAL replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the shared barrier through LSN 5 replays all four acknowledgements as commit 6",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
+        "freelist_generation": "generation=7",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=5",
+        "durable_lsn": "durable_wal_lsn=5 durable_root_seq=6",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-acknowledgements-stable-image/after-dependency-file-sync/000",
+      "variant_id": "public-grouped-acknowledgements-stable-image",
+      "cut_point": "after-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 6,
+        "applied_lsn": 5
+      },
+      "claim_boundary": "normal public read-write reopen replays one deterministic four-waiter acknowledged group"
+    },
+    {
+      "id": "grouped-dependency-failure-no-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedDependencyFailurePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_dependency_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "forming group -> dependency-sync failure -> no waiter acknowledgement -> prior stable root",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "group_dependency_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the failed group advances neither the stable command prefix nor commit 1",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=1 slot0=1 slot1=0",
+        "freelist_generation": "generation=2",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=1",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-dependency-failure-stable-image/before-dependency-file-sync/000",
+      "variant_id": "public-grouped-dependency-failure-stable-image",
+      "cut_point": "before-dependency-file-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 1,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen proves all four failed waiters remain absent"
+    },
+    {
+      "id": "grouped-ambiguous-failure-no-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_ambiguous_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> prior stable root",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "group_ambiguous_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the pre-sync ambiguous group advances neither the stable command prefix nor commit 1",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=1 slot0=1 slot1=0",
+        "freelist_generation": "generation=2",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=1",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-ambiguous-failure-stable-image/after-dependency-append/004",
+      "variant_id": "public-grouped-ambiguous-failure-stable-image",
+      "cut_point": "after-dependency-append",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 1,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen proves a fully appended but unsynced four-waiter group receives no partial acknowledgement"
+    },
+    {
+      "id": "grouped-dependency-failure-dirty-atomic",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_dependency_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "forming group -> dependency-sync failure -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "group_dependency_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the complete dirty command-WAL prefix through LSN 4 replays all four unacknowledged mutations atomically as commit 5",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=4",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
+      },
+      "seed": 15425837517959215427,
+      "cut_id": "cut/public-grouped-dependency-failure-dirty-wal/before-dependency-file-sync/000",
+      "variant_id": "cut/public-grouped-dependency-failure-dirty-wal/before-dependency-file-sync/000/variant/full-writeback",
+      "cut_point": "before-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 5,
+        "applied_lsn": 4
+      },
+      "claim_boundary": "all source waiters fail and the source handle poisons; a crash image containing every dirty command-WAL byte may expose the group only as one complete replayed prefix"
+    },
+    {
+      "id": "grouped-ambiguous-failure-dirty-atomic",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_ambiguous_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "group_ambiguous_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the complete dirty command-WAL prefix through LSN 4 replays all four unacknowledged mutations atomically as commit 5",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=4",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
+      },
+      "seed": 7257721757473077420,
+      "cut_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004",
+      "variant_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004/variant/full-writeback",
+      "cut_point": "after-dependency-append",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 5,
+        "applied_lsn": 4
+      },
+      "claim_boundary": "all source waiters fail and the source handle poisons; a crash image containing every dirty command-WAL byte may expose the group only as one complete replayed prefix"
+    },
+    {
+      "id": "grouped-rotation-external-closure",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedRotationExternalPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_rotation_external",
+      "data_resource_shapes": [
+        "forced_value_log_pointers",
+        "command_wal_rotation"
+      ],
+      "dependency_graph": "external value resources -> grouped dependency barrier -> rotated and active command-WAL segments -> public replay",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "wal_old_segment_sync",
+        "new_segment_namespace_sync",
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the external dependency barrier and both WAL segment syncs replay commit 3 through LSN 2",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=2",
+        "durable_lsn": "durable_wal_lsn=2 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/002",
+      "variant_id": "public-grouped-rotation-external-stable-image",
+      "cut_point": "after-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 2
+      },
+      "claim_boundary": "normal public read-write reopen after the external barrier and both rotated command-WAL segment syncs"
+    },
+    {
+      "id": "grouped-low-traffic-lifecycle",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedLifecyclePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_lifecycle",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "low-traffic timeout -> singleton group barrier -> checkpoint -> close lifecycle",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the timeout-triggered singleton reaches checkpointed commit 2 with applied LSN 2",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=2",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-lifecycle-stable-image/after-meta-sync/000",
+      "variant_id": "public-grouped-lifecycle-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 2
+      },
+      "claim_boundary": "normal public read-only reopen after deterministic low-traffic timeout, checkpoint, and close progress"
+    },
+    {
+      "id": "retained-stale-build-base-retry",
+      "package": "./TreeDB/db",
+      "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "combined_nested_roots"
+      ],
+      "dependency_graph": "predecessor root publication -> successor built on stale base -> rejection before acknowledgement -> retry -> checkpoint",
+      "storage_boundaries": [
+        "cow_index_freelist_root_record_write",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "stale_build_base_rejected_retry"
+      ],
+      "expected_durable_horizon": "the rejected stale successor is absent and its retry joins the predecessor at selected commit 4",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4",
+        "freelist_generation": "generation=8",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=4",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=4"
+      },
+      "counterexample_id": "stale-build-base-root-publication",
+      "seed": 12505447533306515078,
+      "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
+      "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 4,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen after a private deterministic publication rendezvous reproduces #3865 and behaviorally verifies the accepted predecessor and retry"
+    }
+  ]
+}

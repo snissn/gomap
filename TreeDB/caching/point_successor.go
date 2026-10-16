@@ -203,7 +203,8 @@ func (db *DB) seekGE(start, end []byte, mvccOwned bool) (key, value []byte, foun
 			return nil, nil, false, err
 		}
 		defer s.Close()
-		return s.cowSeekGE(start, end)
+		key, value, found, err := s.cowSeekGE(start, end)
+		return key, value, found, joinCOWCleanupError(err, s.Close())
 	}
 	db.pointSuccessorCallsTotal.Add(1)
 	debugTiming := pointSuccessorDebugEnabled.Load()

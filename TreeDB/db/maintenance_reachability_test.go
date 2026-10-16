@@ -470,7 +470,9 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			if err != nil {
 				b.Fatalf("acquireCompactStorageAuditInput: %v", err)
 			}
-			_, err = db.scanCompactStorageAudit(ctx, in)
+			raw, scanErr := db.scanCompactStorageAudit(ctx, in)
+			raw.countRecords.close()
+			err = scanErr
 			in.close()
 			if err != nil {
 				b.Fatalf("scanCompactStorageAudit: %v", err)

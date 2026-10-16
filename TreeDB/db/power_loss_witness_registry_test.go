@@ -11,7 +11,7 @@ import (
 
 const (
 	powerLossWitnessPageReuseTest  = "TestPowerLossOracleCounterexampleRecoverablePageReuse"
-	powerLossWitnessStaleBuildTest = "TestPowerLossCertificationStaleBuildBasePublicReopen"
+	powerLossWitnessStaleBuildTest = "TestPowerLossCertificationStaleBuildBaseSavedPrimaryV5PublicReopen"
 )
 
 // This anchor deliberately lives outside the witness file so a test rename or
@@ -29,7 +29,7 @@ func TestPowerLossCounterexampleWitnessRegistryAnchors(t *testing.T) {
 	registered := make(map[powerLossWitnessTestKey]bool)
 	for _, witness := range powerlossoracle.CounterexampleWitnesses {
 		if witness.Package == "./TreeDB/db" {
-			if witness.TestName == powerLossWitnessStaleBuildTest {
+			if witness.TestName == powerLossWitnessStaleBuildTest || witness.TestName == "TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6" {
 				// Anchored by the external db_test registry, which can name the
 				// package-external certification function directly.
 				continue

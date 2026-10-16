@@ -420,12 +420,22 @@ TreeDB maintains commit-time reference counters per value-log segment.
 - `ValueLogGC` may use these counters as a fast path instead of full-tree scans.
 - A compact metadata snapshot (`vlog_ref_counts.meta`) is stored in the DB dir.
 
+The V6 cache binds CommitSeq to the exact DATA stable identity and, on PRIMARY
+routes, the PRIMARY stable identity and UUID. Counts and this pair are captured
+from the SAME original Snapshot generation. DATA-only caches use an explicit
+unpaired form. Reopen requires that complete physical tuple; V5 metadata misses
+and rebuilds. During one DB lifetime, the original generation scalar also guards
+cache eligibility and ordinary deltas. Incremental deltas carry the captured
+pair without per-commit filesystem discovery; physical cutover captures its new
+pair before publication. A delayed same-sequence scan or persistence completion
+cannot replace or mark clean another physical incarnation.
+
 If counters are unavailable, stale, or corrupt, TreeDB rebuilds by scanning trees
 and rewrites metadata.
 
 A durable-root fallback scan may also supply exact counters for its candidate.
-These counts remain private and are bound to the candidate index, sequence, and
-user/system roots until that matching candidate activates. Publication then
+These counts remain private and are bound to the candidate index, captured
+physical pair, sequence, and user/system roots until that matching candidate activates. Publication then
 installs the already computed counts without applying its commit delta twice.
 Aborted or mismatched candidates cannot repair the live tracker. This reuses the
 required scan; it does not add a scan or change the reachability authority for GC.
@@ -659,13 +669,27 @@ time, copy attempts, `B/op`, and `allocs/op`.
 
 Offline rewrite rewrites live pointer records into fresh segments and swaps index.
 
+The already-admitted read-only source generation retains the actual source DB,
+Manager and exclusive LOCK through all setup refusals and cleanup. Checked
+source completion joins physical Close failures with the operation error; a
+hard physical refusal preserves that original fatal receipt and LOCK without
+replaying cleanup. Successful no-segment or setup refusal drains the source
+normally. Writer and acquired Set cleanup outcomes are checked and retained
+through the same original error graph before source teardown. A late checked
+namespace-parent Close refusal after successful source DB.Close is still a
+physical cleanup failure: the outer completion preserves the same generation,
+fatal receipt, original parent, charge and LOCK. A semantic operation error
+alone does not create cleanup debt when all physical cleanup succeeds.
+Completed temporary generation Close-call borrows drain independently of
+retained failed Snapshot or maintenance-source edges.
+
 #### Preconditions
 
 - exclusive DB lock,
 - clean commit log (no pending `commit-*.log`),
 - readable existing value-log segments.
 
-#### Procedure
+#### Legacy DATA-only procedure
 
 1. Open DB read-only under exclusive lock.
 2. Build new value-log segments by iterating current trees and copying referenced records.
@@ -674,6 +698,27 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 5. Atomically swap `index.db.new` into `index.db`.
 6. Remove obsolete value-log segments.
 7. Report before/after size and segment counts.
+
+#### Selected V6 pair procedure
+
+Both eligible slots and their distinct embedded one-hop proofs are rebuilt
+into the same new DATA/PRIMARY pair. Every pointer closure uses the rewrite
+producer; capsule materialization cannot fall back to an unrevised old pointer
+root. The pair preserves logical commit sequences and ACK frontiers while
+replacing physical identities and sealing a genuine new DATA generation.
+Producer Snapshots, iterators, writers, resource sets and original/private pair
+owners must complete cleanup before publishing joint COMMIT. An uncertain
+COMMIT retains staging and requires recovery; old segments remain protected.
+The optional refcount cache is removed before the staging namespace barrier,
+so either predecision old-pair reopen or committed new-pair recovery rescans
+actual pointers even though logical sequence is unchanged.
+
+Owned-file pair construction and identity-checked relative stage cleanup do
+not establish whole-operation namespace safety by themselves. Initial value
+and leaf writer creation, path-only manager registration, and old-segment
+retirement remain distinct consumers requiring exact captured authority and
+truthful cleanup outcomes. The pair's component tests do not qualify those
+pending consumers or Windows offline replacement.
 
 #### Safety properties
 
@@ -765,7 +810,7 @@ its mandatory CRC prefixes. Genuine dead physical records, active/protected
 segment eligibility and retained-root GC debt follow the existing policies.
 Audit results are published to the incremental
 reference tracker only after the protected basis brackets two exact backend-state
-checks; one invalidation is retried and a second returns
+checks, including the captured physical pair and original generation; one invalidation is retried and a second returns
 `ErrCompactStorageAuditStale`. Later settle/final audits perform zero new walks
 when they reuse structural reachability on an exact complete-basis match. File
 sizes, pins, and zero-byte debt are recomputed on every audit.
@@ -859,3 +904,60 @@ current-segment reporting, pending-pointer protection, root resource closures,
 and segment retirement still use their existing owners. Standalone rewrite
 writers retain their complete created-file history for publication and cleanup.
 This bookkeeping bound does not establish a whole-database physical-space bound.
+
+## Published Set and current-root lifetime
+
+A published DBState owns one reference to its exact value-log Set. Final Set
+cleanup clears its mutable file map and native backing; a later Acquire cannot
+revive that storage. Every consumer using the Set after state-selection locks
+are released must acquire the SAME Set before unlocking and retain it through
+the last tree, iterator, zipper, dictionary or file-metadata use. Its actual
+release result participates in the original operation's completion.
+
+Every replacing publisher excludes in-flight Snapshot capture with the existing
+`rootReuseMu` then `db.mu` order. Initial unpublished state construction and
+exclusively owned offline sources have their own exclusion. Helpers already
+inside that publication fence do not recursively acquire it. Online dictionary
+and compact carry scans use a live Snapshot's state and pager together; a failed
+capture never falls back to shallow `DB.State()` metadata.
+
+A topology-only DBState replacement carries the SAME `primaryRoot` descriptor
+unchanged. This transfers the existing single current-root edge; it acquires no
+new edge and drops none. Logical-root replacement continues through the original
+activation, old-root withdrawal and post-work protocol. Snapshot admission and
+last-iterator cleanup therefore retain the original PRIMARY metadata/physical
+owner even after slots and parents advance.
+
+## Constructor-owned mappings and parent handles
+
+Files retain constructor-owned mapping descriptors alongside their immutable read views.
+The descriptor records the genuine mapping address, extent and remaining owned range;
+ad-hoc slices retain the legacy whole-mapping validation path. Ordinary remap and Close
+release only the exact owned mappings, after the existing File reader edges permit it.
+
+The manager's existing stable-parent pool uses fixed bucket heads and intrusive entries.
+Each File retains its actual physical parent; exact removal does not rebuild a global
+parent map. Physical aliases share identity, borrowers retain the parent handle, and
+value/outer-leaf/foreign parents remain supported. This ordinary lifetime path does not
+qualify bounded native Set or Snapshot retirement.
+
+## Index vacuum and outer-leaf closure
+
+When rebuilding PRIMARY roots with outer leaves enabled, vacuum uses the
+existing outer-leaf writer and completes its flush and registration before
+sealing the replacement leaf manifest. Both recoverable durable slots and their
+embedded proof roots contribute to that final closure. No retained slot or proof
+root may reference a segment outside the manifest's captured frontier.
+
+Joint DATA/PRIMARY replacement retains the original admitted namespace parent
+handles across COMMIT, canonical roll-forward and decision-marker removal.
+Canonical rebinding checks the retained parent before retiring the old proof,
+then creates the new proof on that same parent. A hard cleanup refusal preserves
+the original proof/handle payload, first error and charge rather than replaying a
+physical action or refunding unresolved custody. Persistent leaf references
+remain protected by the original reader and deletion authorities.
+
+Snapshot allocation admission runs inside that capture fence. Admission callbacks
+may reserve charges for selected owners, but must not synchronously publish,
+refresh, or close the same DB. A competing publisher waits until capture either
+pins the selected state or refuses without acquiring a reader/Set reference.

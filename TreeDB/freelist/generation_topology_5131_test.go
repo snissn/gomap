@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -229,6 +231,39 @@ func TestGenerationTopology5131SnapshotDirectLeafClassification(t *testing.T) {
 			}
 			if err := g.Validate(); err != nil || !g.Allocatable(2) {
 				t.Fatalf("classification changed generation: %v", err)
+			}
+		})
+	}
+}
+
+// Direct-leaf routing may inspect its already admitted node summary, but must
+// admit the chunk before inspecting any chunk fields or free/retired operands.
+func TestGenerationTopology5131SnapshotDirectLeafWorkAdmission(t *testing.T) {
+	g := MustNewFreelistGenerationV1(1, 1024, []uint64{2}, nil)
+	nodeBytes := 2*uint64(unsafe.Sizeof(FreelistGenerationV1{})) + uint64(unsafe.Sizeof(stateNode{}))
+	chunkBytes := uint64(unsafe.Sizeof(stateChunk{}))
+	for _, tc := range []struct {
+		name                   string
+		id, records, bytes     uint64
+		unused, ready          bool
+		wantRecords, wantBytes uint64
+	}{
+		{name: "wrong-key-uses-node-summary", id: 300, records: 2, bytes: nodeBytes, ready: true, wantRecords: 2, wantBytes: nodeBytes},
+		{name: "matching-key-record-underadmission", id: 2, records: 2, bytes: nodeBytes + chunkBytes, wantRecords: 2, wantBytes: nodeBytes},
+		{name: "matching-key-byte-underadmission", id: 2, records: 3, bytes: nodeBytes + chunkBytes - 1, wantRecords: 2, wantBytes: nodeBytes},
+		{name: "matching-key-exact", id: 2, records: 3, bytes: nodeBytes + chunkBytes, unused: true, ready: true, wantRecords: 3, wantBytes: nodeBytes + chunkBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := iterator.OrdinalScanWork{RecordLimit: tc.records, ByteLimit: tc.bytes}
+			unused, ready, err := g.SnapshotPageUnusedWithWorkV1(tc.id, 1, &work)
+			if err != nil || unused != tc.unused || ready != tc.ready {
+				t.Fatalf("classification=(%t,%t,%v), want (%t,%t,nil)", unused, ready, err, tc.unused, tc.ready)
+			}
+			if work.Records != tc.wantRecords || work.Bytes != tc.wantBytes {
+				t.Fatalf("work=(%d,%d), want (%d,%d)", work.Records, work.Bytes, tc.wantRecords, tc.wantBytes)
+			}
+			if err := g.Validate(); err != nil || !g.Allocatable(2) {
+				t.Fatalf("read classification changed generation: %v", err)
 			}
 		})
 	}

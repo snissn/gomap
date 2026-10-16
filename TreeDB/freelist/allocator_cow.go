@@ -37,6 +37,10 @@ type allocatorCOWStateV1 struct {
 // It is a snapshot, not an admission limit: callers must also account for
 // retirements, pruning, and pages produced after the census.
 type COWPrepareProfileV1 struct {
+	// RequiresGeneration is issued by the live transaction's actual mutators.
+	// ChangedChunks also includes inherited successor bookkeeping, which alone
+	// does not require a new DATA generation for a PRIMARY-only publication.
+	RequiresGeneration       bool
 	Valid                    bool
 	HighWater                uint64
 	RetiredPages             uint64
@@ -89,6 +93,7 @@ func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
 	}
 	transaction, base := a.cow.txn, a.cow.generation
 	profile.Valid = true
+	profile.RequiresGeneration = transaction.requiresGeneration || transaction.consumed || transaction.base != base
 	profile.HighWater = transaction.highWater
 	profile.RetiredPages = transaction.root.retiredCount
 	profile.AllocatedPages = uint64(len(transaction.allocated))

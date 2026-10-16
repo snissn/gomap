@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
@@ -54,6 +57,7 @@ func normalizeFlushApplyConcurrency(workers int) int {
 }
 
 type DBState struct {
+	primaryRoot                *primaryStateRootV5
 	CommitSeq                  uint64
 	RootPageID                 uint64
 	SystemRootPageID           uint64
@@ -87,6 +91,7 @@ type snapshotView struct {
 }
 
 type DB struct {
+	mvccAdmission                  mvccadmission.Authority
 	valueLogManager                *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	snapshotViewRO                 atomic.Pointer[snapshotView]
@@ -257,10 +262,11 @@ type DB struct {
 	readRetryRefreshFollowerCount atomic.Uint64
 	readRetryRefreshSkippedEpoch  atomic.Uint64
 
-	notifyError  func(error)
-	bgErrMu      sync.Mutex
-	bgErr        error
-	closeHooksMu sync.Mutex
+	notifyError   func(error)
+	bgErrMu       sync.Mutex
+	bgErr         error
+	bgErrRevision uint64 // original graph publication revision; protected by bgErrMu
+	closeHooksMu  sync.Mutex
 	// closeHooksBefore run before ordinary closeHooks. Use this for hooks that
 	// must drain buffered writes before lower-level resource cleanup hooks run.
 	closeHooksBefore []func() error
@@ -282,6 +288,8 @@ type DB struct {
 	closeTeardownOnce  sync.Once
 	closeTeardownErr   error
 
+	ownedFinishCallerV6 uint64
+
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
 	internalTeardownHooksClosed bool
@@ -289,8 +297,12 @@ type DB struct {
 	// teardownMu read lease. Close drains them only after acquiring teardownMu
 	// exclusively, so a recovery callback cannot race its admitted producer.
 	captureTeardownHooksMu     sync.Mutex
-	captureTeardownHooks       []func() error
+	captureTeardownHooks       []captureTeardownHook
 	captureTeardownHooksClosed bool
+	captureTeardownHooksOwner  *retainedalloc.Owner
+	captureTeardownHooksCharge uint64
+	captureTeardownFailure     captureTeardownFailure
+	captureTeardownErrorCharge uint64
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -546,6 +558,7 @@ type DB struct {
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
+	testValueLogStateCapturedHook func(string, *valuelog.Set, uint64)
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
@@ -1317,6 +1330,9 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
+	// IndexPrimaryDirectory enables the pre-alpha complete base-and-delta primary.
+	IndexPrimaryDirectory bool
+
 	// IndexOuterLeavesInValueLog stores B+Tree leaf pages (the pages containing
 	// key/value entries) in the persistent value log instead of index.db.
 	//
@@ -1560,10 +1576,23 @@ type Options struct {
 // the pointer and any later method call remains invalid even after subsequent
 // snapshots are acquired.
 type Snapshot struct {
+	nativeMVCC nativeMVCCSnapshotStateV6
+	// A failed historical rebind retains both exact original root operands.
+	primaryRebindRoot      primaryStateRootV5
+	primaryRebindErr       error
+	primaryRoot            *primaryStateRootV5
+	primaryOwner           *primaryArenaOwnerV5
+	primaryFailedNext      *Snapshot
+	generationFailedNext   *Snapshot
+	indexWrapperBorrowed   bool
+	primaryFailure         primaryCleanupFailureV5
+	primaryMetadata        *retainedalloc.Enrollment
+	primaryRelease         primaryarena.ReleaseQueue
 	db                     *DB
 	idx                    *indexGen
 	state                  *DBState
 	vlogManager            *valuelog.Manager
+	vlogWrapperBorrowed    bool
 	vlogPinned             bool
 	systemRootPublishEpoch uint64
 	leafGenerationIDs      []uint64
@@ -1577,23 +1606,35 @@ type Snapshot struct {
 	reader                  valueReader
 	tree                    tree.Tree
 	rootTreesMu             sync.Mutex
-	rootTrees               []snapshotRootTree
-	closed                  atomic.Bool
-	generation              atomic.Uint64
-	finalized               atomic.Bool
-	readState               atomic.Uint64
-	iteratorMu              sync.Mutex
-	iterators               map[*snapshotBoundIterator]struct{}
-	foregroundReadMarked    bool
-	foregroundReadEnd       func()
-	treePager               *pager.Pager
-	treeRoot                uint64
+	// The first alternate root shares this Snapshot's lifetime and admission.
+	// Independently retained exported handles remain single-use; only overflow
+	// roots need separate cache backing storage.
+	rootTreeFirst        [1]snapshotRootTree
+	rootTrees            []snapshotRootTree
+	closed               atomic.Bool
+	generation           atomic.Uint64
+	finalized            atomic.Bool
+	readState            atomic.Uint64
+	iteratorMu           sync.Mutex
+	iterators            map[*snapshotBoundIterator]struct{}
+	foregroundReadMarked bool
+	foregroundReadEnd    func()
+	treePager            *pager.Pager
+	treeRoot             uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint             int
 	stableIndexCapture            bool
 	stableIndexCaptureTransferred bool
 	stableIndexCaptureCounter     *atomic.Int64
+	// The one transferred capture callback shares this actual finalizer; nil
+	// Close does not imply its retained state or metadata can be disposed.
+	stablePagerCompletion *stablePagerOwnedOperations
+	// The original finalizer owns this private consumer through actual cleanup.
+	cleanupCompletion        SnapshotCleanupCompletion
+	cleanupCompletionAdopted bool
+	cleanupFinished          bool
+	cleanupErr               error
 }
 
 type snapshotRootTree struct {
@@ -1673,10 +1714,23 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 
 // SnapshotAllocationSizes reports raw allocation capacities. Round each field
 // independently; PinRef is the raw size of one existing retained counter.
+// PrimaryMetadata and RegistryMetadata identify already-rounded shared owners.
+// They enroll/adopt as one fixed pair against the SAME governing budget; neither
+// may be added as a scalar allocation charge. Producer custody and temporary
+// capture borrowing retain their distinct actual cleanup lifetimes.
 type SnapshotAllocationSizes struct {
-	Wrapper, PinSet, Refs, IDs, PinRef uint64
-	PinRefCount                        int
-	ValueLog                           valuelog.SetRetentionSizes
+	Wrapper, PrimaryRoot, PinSet, Refs, IDs, PinRef uint64
+	PinRefCount                                     int
+	ValueLog                                        valuelog.SetRetentionSizes
+	// PrimaryMetadata is the actual shared producer owner. The admission caller
+	// must enroll its governing budget and keep the returned handle through the
+	// snapshot's real cleanup. It is not an uncharged metadata exemption.
+	PrimaryMetadata *retainedalloc.Owner
+	// RegistryMetadata is the distinct physical identity/namespace authority
+	// owner. PRIMARY capture must enroll both in the same governing budget.
+	RegistryMetadata *retainedalloc.Owner
+	// IdentityRegistry is the SAME original cleanup authority, never a new registry.
+	IdentityRegistry *rootpublication.IdentityPinRegistry
 }
 
 // ErrSnapshotCapacity reports fixed reader cohort or manual leaf-pin refusal.
@@ -1689,6 +1743,8 @@ var ErrSnapshotCapacity = errors.New("bounded snapshot capacity exhausted")
 // allocation and pin acquisition; the caller owns its charge through Close.
 // Fixed registry storage admits at most FastReaderShardCount distinct sequence
 // cohorts; snapshots of the same sequence share a cohort.
+// admit runs inside the capture fence and must not synchronously publish,
+// refresh, or close this DB. It may reserve charges for the selected owners.
 func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocationSizes) error) (*Snapshot, error) {
 	if db == nil {
 		return nil, ErrClosed
@@ -1704,23 +1760,43 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
 // Ordinary snapshots keep the established fast capture path. Bounded COW
 // captures below use their separate admission and fixed-registry policy.
 func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
+	return db.captureSnapshotForReadWithValueLogPublicationLockHeld(snap, false)
+}
+
+// Private one-shot reads cannot mint a later stable resource capture. Only
+// their immutable empty Sets can omit the original containing Manager borrow.
+func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapshot, oneShot bool) bool {
+	var rollbackManager *valuelog.Manager
+	var acqShard int
+	acquisitionStarted := false
 	db.rootReuseMu.RLock()
-	defer db.rootReuseMu.RUnlock()
+	// One capture-exit defer keeps the ordinary read on Go's open-coded path.
+	// Nested cleanup preserves the original rollback, acquisition, unlock order
+	// even when an original Manager cleanup panics.
+	defer func() {
+		defer db.rootReuseMu.RUnlock()
+		if acquisitionStarted {
+			defer func() {
+				// Publish completion before dropping the in-flight count so a
+				// minimum-reader scan cannot miss a just-registered snapshot.
+				db.snapshotAcquireEpoch.Add(1)
+				db.snapshotAcquireRO[acqShard].Add(-1)
+			}()
+		}
+		if rollbackManager != nil {
+			snap.nativeMVCC.managerRelease.ReleaseOriginal(rollbackManager)
+		}
+	}()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return false
 	}
 	if snap.registryShardHint == snapshotShardHintUnset {
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
-	acqShard := snapshotAcquireShard()
+	acqShard = snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
 	db.snapshotAcquireEpoch.Add(1)
-	defer func() {
-		// Publish the completion epoch before dropping the in-flight count so
-		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
-		db.snapshotAcquireEpoch.Add(1)
-		db.snapshotAcquireRO[acqShard].Add(-1)
-	}()
+	acquisitionStarted = true
 	if db.closing.Load() {
 		return false
 	}
@@ -1733,7 +1809,21 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 	state := view.state
 	vm := view.vlogManager
 	vlogSet := state.ValueLogSet
-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	vlogNeedsPin := vlogSet != nil
+	if oneShot && vlogSet != nil {
+		if sizes, known := vlogSet.RetentionSizes(); known && sizes.FileCount == 0 {
+			vlogNeedsPin = false
+		}
+	}
+	if oneShot && !vlogNeedsPin {
+		vm = nil
+	}
+	if vm != nil {
+		if !vm.RetainSnapshotWrapper() {
+			return false
+		}
+		rollbackManager = vm
+	}
 	if vlogNeedsPin {
 		if vm == nil {
 			return false
@@ -1749,7 +1839,18 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 			}
 			return false
 		}
-		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+	}
+	if state.primaryRoot != nil {
+		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
+			if registryID != 0 {
+				idx.registry.Unregister(registryID)
+			}
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			return false
+		}
 	}
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
@@ -1777,13 +1878,24 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		snap.leafGenerationPinSet = nil
 	}
 
+	idx.retainWrapperBorrow()
+	snap.indexWrapperBorrowed = true
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
 	snap.vlogManager = vm
+	snap.vlogWrapperBorrowed = vm != nil
+	rollbackManager = nil
 	snap.vlogPinned = vlogNeedsPin
 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
-	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+	if oneShot && !vlogNeedsPin {
+		// The reader must not access the empty Set after publication releases it.
+		// state still retains the legacy DBState/empty wrapper until putRead;
+		// it supplies scalar root state, not value-log reads or a Manager edge.
+		snap.reader.reconfigure(nil, db.leafPageReadCache)
+	} else {
+		snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
+	}
 	for i := range snap.rootTrees {
 		snap.rootTrees[i].root = 0
 		snap.rootTrees[i].tree.Reset(nil, nil, 0)
@@ -1810,10 +1922,16 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		}
 	}
 	snap.tree.SetNegativeFilter(view.negativeFilter)
-	snap.iteratorMu.Lock()
+	// The private synchronous reader cannot publish an iterator or Snapshot
+	// alias. Exported captures still serialize initialization with Close.
+	if !oneShot {
+		snap.iteratorMu.Lock()
+	}
 	snap.closed.Store(false)
 	snap.readState.Store(0)
-	snap.iteratorMu.Unlock()
+	if !oneShot {
+		snap.iteratorMu.Unlock()
+	}
 	return true
 }
 
@@ -1843,6 +1961,7 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	idx := view.idx
 	state := view.state
 	vm := view.vlogManager
+	managerBorrowAdopted := false
 
 	if bounded && state.LeafGenerations != nil && len(state.LeafGenerations.GenerationOrder) != 0 && state.LeafGenerations.PinSet == nil {
 		// The manual-view fallback creates tracker/ref arrays during capture. COW
@@ -1851,6 +1970,12 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	}
 	if admit != nil {
 		sizes := SnapshotAllocationSizes{Wrapper: uint64(unsafe.Sizeof(Snapshot{}))}
+		sizes.RegistryMetadata = db.valueLogIdentityPins.MetadataOwner()
+		sizes.IdentityRegistry = db.valueLogIdentityPins
+		if state.primaryRoot != nil {
+			sizes.PrimaryRoot = uint64(unsafe.Sizeof(primaryStateRootV5{}))
+			sizes.PrimaryMetadata = state.primaryRoot.arena.MetadataOwner()
+		}
 		if state.LeafGenerations != nil && state.LeafGenerations.PinSet != nil {
 			sizes.PinSet = uint64(unsafe.Sizeof(leafGenerationPinSet{}))
 			sizes.Refs = uint64(cap(state.LeafGenerations.PinSet.refs)) * uint64(unsafe.Sizeof((*leafGenerationPinRef)(nil)))
@@ -1875,35 +2000,74 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
 	vlogSet := state.ValueLogSet
-	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	vlogNeedsPin := vlogSet != nil
 	if vlogNeedsPin {
 		if vm == nil {
 			return nil, ErrClosed
 		}
-		vm.Acquire(vlogSet)
 	}
 
+	// Revalidate and acquire original references under the existing state lock,
+	// after external admission and before any capture reference effects. Every
+	// replacing publisher also excludes this capture through rootReuseMu.
+	// This is the same rootReuseMu -> db.mu order as original build groups.
+	db.mu.RLock()
+	if db.closing.Load() {
+		db.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	if db.snapshotViewRO.Load() != view {
+		db.mu.RUnlock()
+		return nil, ErrSnapshotCapacity
+	}
 	var registryID int64
 	if idx != nil {
 		if idx.registry == nil {
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
+			db.mu.RUnlock()
 			return nil, ErrClosed
 		}
 
 		if bounded {
-			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.CommitSeq, snap.registryShardHint)
+			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
 		} else {
-			registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+			registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
 		}
 		if registryID == 0 {
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
+			db.mu.RUnlock()
 			return nil, ErrSnapshotCapacity
 		}
 	}
+	if vm != nil {
+		if !vm.RetainSnapshotWrapper() {
+			if registryID != 0 {
+				idx.registry.Unregister(registryID)
+			}
+			db.mu.RUnlock()
+			return nil, ErrClosed
+		}
+		defer func() {
+			if !managerBorrowAdopted {
+				snap.nativeMVCC.managerRelease.ReleaseOriginal(vm)
+			}
+		}()
+	}
+	if state.primaryRoot != nil {
+		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
+			if registryID != 0 {
+				idx.registry.Unregister(registryID)
+			}
+			db.mu.RUnlock()
+			return nil, e
+		}
+	}
+	// Existing state and root-reuse read locks retain this exact view.
+	// Acquire VLog only after fallible reader-floor and PRIMARY admission;
+	// refusal has no last-file cleanup to discard or retry. From here onward
+	// capture performs only the already-admitted original reference setup.
+	if vlogNeedsPin {
+		vm.Acquire(vlogSet)
+	}
+	db.mu.RUnlock() // no leaf materialization or consumer callback under state lock
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
 		if state.LeafGenerations.PinSet != nil {
@@ -1930,10 +2094,14 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		snap.leafGenerationPinSet = nil
 	}
 
+	idx.retainWrapperBorrow()
+	snap.indexWrapperBorrowed = true
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
 	snap.vlogManager = vm
+	snap.vlogWrapperBorrowed = vm != nil
+	managerBorrowAdopted = true
 	snap.vlogPinned = vlogNeedsPin
 	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
 	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
@@ -2067,34 +2235,104 @@ func (s *Snapshot) DetachForegroundRead() {
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	return s.closeRead(false)
+}
+
+// The private branch is used only by oneShotRead, which exposes no Snapshot,
+// iterator or completion callback. Both branches drain the same finalizer.
+func (s *Snapshot) closeRead(oneShot bool) error {
 	if s == nil {
 		return nil
 	}
-	s.iteratorMu.Lock()
+	if s.nativeMVCC.workOwned {
+		return ErrNativeMVCCSnapshotWork
+	}
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
 	if !s.closed.CompareAndSwap(false, true) {
-		s.iteratorMu.Unlock()
+		if !oneShot {
+			s.iteratorMu.Unlock()
+		}
 		return nil
 	}
 	s.readState.Or(snapshotReadClosedBit)
-	s.invalidateBoundIteratorsLocked()
-	s.iteratorMu.Unlock()
-	return s.finalizeCloseIfUnreferenced()
+	if !oneShot {
+		s.invalidateBoundIteratorsLocked()
+		s.iteratorMu.Unlock()
+	}
+	return s.finalizeCloseRead(oneShot)
 }
 
 func (s *Snapshot) finalizeCloseIfUnreferenced() error {
-	s.iteratorMu.Lock()
-	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
-		s.iteratorMu.Unlock()
+	return s.finalizeCloseRead(false)
+}
+
+func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
+	if s.nativeMVCC.workOwned {
 		return nil
 	}
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
+	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+		if !oneShot {
+			s.iteratorMu.Unlock()
+		}
+		return nil
+	}
+	originalIndex, originalDB := s.idx, s.db
+	originalManager, managerBorrowed := s.vlogManager, s.vlogWrapperBorrowed
+	indexBorrowed := s.indexWrapperBorrowed
+	s.indexWrapperBorrowed = false
+	pagerCompletion := s.stablePagerCompletion
+	s.stablePagerCompletion = nil
 	endForegroundRead := s.foregroundReadEnd
 	s.foregroundReadEnd = nil
 	s.foregroundReadMarked = false
-	s.iteratorMu.Unlock()
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
 	var err error
+	primaryCleanupErr := s.primaryRebindErr
+	if s.primaryRoot != nil && primaryCleanupErr == nil {
+		arena := s.primaryRoot.arena
+		if s.primaryMetadata == nil {
+			_, primaryCleanupErr = arena.Drop(s.primaryRoot.ref, nil)
+		} else {
+			_, primaryCleanupErr = arena.DropToReleaseQueue(s.primaryRoot.ref, &s.primaryRelease, nil)
+			if primaryCleanupErr == nil {
+				for {
+					ready, progress, e := arena.ReleaseQueueStep(&s.primaryRelease, nil)
+					if e != nil || !ready {
+						primaryCleanupErr = errors.Join(e, rootpublication.ErrResourceOwnership)
+						break
+					}
+					if !progress {
+						break
+					}
+				}
+			}
+			if primaryCleanupErr != nil {
+				primaryCleanupErr = errors.Join(primaryCleanupErr, arena.PreserveOrdinaryReleaseQueue(&s.primaryRelease))
+			}
+		}
+		err = errors.Join(err, primaryCleanupErr)
+		if primaryCleanupErr == nil {
+			s.primaryRoot = nil
+		}
+	}
+	err = errors.Join(err, primaryCleanupErr)
 	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
-			err = relErr
+			err = errors.Join(err, relErr)
+			// DB discovery may already be withdrawn. Retain the SAME original
+			// Manager receipt before this last borrower can lose its aliases,
+			// including DATA-only snapshots without a PRIMARY physical owner.
+			// Release has finished its Manager/File locks before entering DB.
+			if s.db != nil {
+				s.db.retainOriginalCleanupError(s.vlogManager.CleanupError())
+			}
 		}
 	}
 	if s.idx != nil {
@@ -2118,8 +2356,66 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	if endForegroundRead != nil {
 		endForegroundRead()
 	}
-	if s.db != nil {
-		s.db.snapPool.Put(s)
+	if owner := s.primaryOwner; owner != nil {
+		if err != nil {
+			// Failed original cleanup keeps this existing physical edge and exact
+			// Snapshot payload on the same owner; a Close request is not disposal.
+			owner.retainFailedSnapshot(s, err)
+		} else {
+			consumed, debt, releaseErr := owner.releaseWithOutcome(nil)
+			if consumed {
+				s.primaryOwner = nil
+			}
+			err = releaseErr
+			if !consumed || debt {
+				owner.retainFailedSnapshot(s, releaseErr)
+			}
+		}
+	}
+	// The original pager callback can perform the actual last physical action.
+	// Keep this SAME enrollment live through that outcome and alias scrub.
+	metadata := s.primaryMetadata
+	s.primaryMetadata = nil
+	s.primaryRelease = primaryarena.ReleaseQueue{}
+	// Success includes actual exported-handle scrub, not just claiming the
+	// finalizer. Failed cleanup retains the exact wrapper with its debt owner.
+	if err == nil && s.db != nil {
+		s.db.snapPool.putRead(s, oneShot)
+	}
+	if pagerCompletion != nil {
+		err = pagerCompletion.snapshotFinalized(err)
+	}
+	if err == nil && managerBorrowed {
+		s.vlogManager = nil
+		s.vlogWrapperBorrowed = false
+		s.nativeMVCC.managerRelease.ReleaseOriginal(originalManager)
+	}
+	metadata.CloseAfterCleanup(err)
+	if indexBorrowed {
+		generationMetadata, generationCharge, generationErr := originalIndex.releaseWrapperBorrowCompletionV6(s, err)
+		if generationErr != nil && originalDB != nil {
+			originalDB.retainOriginalCleanupError(&originalIndex.closeFailure)
+		}
+		err = errors.Join(err, generationErr)
+		originalIndex = nil
+		if generationCharge != 0 {
+			generationMetadata.RemovePending(generationCharge)
+		}
+	}
+	// Publish actual completion after alias scrub and every original callback's
+	// available final action. Private postcapture refusal can adopt while this
+	// same finalizer is running, or consume its retained exact outcome afterward.
+	if !oneShot {
+		s.iteratorMu.Lock()
+	}
+	s.cleanupFinished, s.cleanupErr = true, err
+	completion := s.cleanupCompletion
+	s.cleanupCompletion = nil
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
+	if completion != nil {
+		completion.SnapshotCleanupCompleted(err)
 	}
 	return err
 }
@@ -2248,14 +2544,10 @@ func Open(opts Options) (*DB, error) {
 	}
 	db, err := openWithLock(opts, lock)
 	if err != nil {
-		_ = lock.Close()
-		return nil, err
-	}
-	if testDBOpenHook != nil {
-		if err := testDBOpenHook(db); err != nil {
-			_ = db.Close()
-			return nil, err
+		if !recoveryCleanupOwnsLockV6(err, lock) {
+			err = errors.Join(err, lock.Close())
 		}
+		return nil, err
 	}
 	return db, nil
 }
@@ -2392,7 +2684,14 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 	return adaptiveCtrl, inlineThreshold
 }
 
-func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	registryTransferred := false
+	defer func() {
+		if !registryTransferred {
+			valueLogIdentityPins.Close()
+		}
+	}()
 	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
 	if err != nil {
 		return nil, err
@@ -2400,12 +2699,35 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if opts.ReadOnly {
 		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
-	if err := recoverIndexSwap(opts.Dir); err != nil {
+	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
 		return nil, err
 	}
 	if err := cleanupLeafGenerationPackStagingDirs(resolveStorageLayout(opts.Dir).leafVLogDir); err != nil {
 		return nil, err
 	}
+
+	db := &DB{dir: opts.Dir, lock: lock, valueLogIdentityPins: valueLogIdentityPins}
+	gen, err := newStartupIndexGeneration(db, lock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if result != nil && retErr == nil {
+			gen.finishStartupSuccess()
+		} else {
+			metadata, charge, err := gen.finishStartupFailure(retErr, true)
+			gen = nil
+			retErr = err
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}
+	}()
+	ghostManager, err := newIndexGhostManager(valueLogIdentityPins.MetadataOwner())
+	if err != nil {
+		return nil, err
+	}
+	db.ghostManager = ghostManager
 
 	idxPath := filepath.Join(opts.Dir, "index.db")
 	p, err := pager.OpenWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
@@ -2415,21 +2737,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	gen.pager = p
 	if opts.PagerSyncConcurrency > 0 {
 		p.SetSyncConcurrency(opts.PagerSyncConcurrency)
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	vm, err := valuelog.NewManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
-		p.Close()
 		return nil, err
 	}
+	gen.startupManager, db.valueLogManager = vm, vm
 	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
-		_ = vm.Close()
-		p.Close()
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
@@ -2444,7 +2764,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	z := zipper.New(p, alloc)
 
-	gen := newIndexGen(1, p, alloc, z)
+	gen.allocator, gen.zipper = alloc, z
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	flushApplyConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
@@ -2453,13 +2773,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		flushApplyWorkerPool = zipper.NewApplyWorkerPool(flushApplyConcurrency)
 	}
 
-	db := &DB{
+	*db = DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,
-		valueLogRefTracker:             newValueLogRefTrackerForOptions(opts),
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
 		keepRecent:                     opts.KeepRecent,
@@ -2514,9 +2833,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		idxNext: gen.id + 1,
 
 		snapPool:     NewSnapshotPool(),
-		ghostManager: &indexGhostManager{},
+		ghostManager: ghostManager,
 		notifyError:  opts.NotifyError,
 	}
+	registryTransferred = true
 	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
 		return db.syncDeletionNamespaceDirectoryOrPoison(
 			dir,
@@ -2525,8 +2845,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		)
 	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
-	db.ghostManager.start()
+	db.ghostManager.start(db)
 	db.idx.Store(gen)
+	gen.startupConstructed = true
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
 		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
 	}
@@ -2540,6 +2861,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetPrimaryDirectory(opts.IndexPrimaryDirectory)
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		return nil, err
+	}
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
@@ -2547,24 +2872,40 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	db.seedEntryRevisionFloor()
 
+	// PRIMARY replay must use the original constructed transaction and PRIMARY
+	// seal. Keep its SAME coordinator synchronous until post-replay readiness;
+	// the DATA-only pre-coordinator publisher cannot encode a PRIMARY parent.
+	if gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		if opts.IndexOuterLeavesInValueLog {
+			manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
+			if err == nil && !selectedExact {
+				manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
+			}
+			if err != nil {
+				return nil, err
+			}
+			db.leafGenerationManifest = manifest
+		}
+		db.initializeRecoveredSnapshotV1(gen, vm)
+		if err := db.initializeRootPublicationRuntimeModeV1(gen, true); err != nil {
+			return nil, err
+		}
+	}
+
 	segments, err := listRecoverySegments(opts.Dir)
 	if err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
 	if err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	if needsCommandWALFormat {
 		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		// Persist the required feature gate before running typed recovery so that
@@ -2572,7 +2913,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// the next open uses typed recovery rather than the legacy path.
 		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		// Use the raw writer here because ValidateCommandWALActivationClean was
@@ -2580,13 +2920,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// activation depend on the transient post-recovery WAL directory shape
 		// instead of the explicit activation boundary.
 		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 	}
 	if opts.CommandWAL {
 		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		// Re-list segments after replay because V2 recovery may repair or remove
@@ -2599,18 +2937,15 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
 		commandSegmentSeq = activeSeqByLane[0]
 		if commandSegmentSeq == ^uint64(0) {
-			_ = db.Close()
 			return nil, fmt.Errorf("%w: dir=%s lane=0 active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
 		}
 		hasTerminalTail, err := commandWALLaneActiveHasTerminalTail(journalSegments, 0, opts.WALMaxSegmentBytes)
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		if commandSegmentSeq != 0 && !hasTerminalTail {
@@ -2629,7 +2964,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			CaptureStableResources:          true,
 		})
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		db.commandJournal = journal
@@ -2642,7 +2976,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		if !db.readOnly {
 			if err := db.CleanupCommandWALCoveredSegments(true); err != nil &&
 				!errors.Is(err, errDurableWALCleanupProofUnavailable) {
-				_ = db.Close()
 				return nil, err
 			}
 		}
@@ -2652,16 +2985,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// enabled, fail closed before legacy replay can misinterpret typed frames.
 		// Frames already covered by AppliedCommandLSN are filtered below.
 		if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		legacySegments, hasLegacyRedoJournal, err := legacyCachedRedoJournalReplaySegments(db, segments, opts.WALMaxSegmentBytes)
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		if hasLegacyRedoJournal && !opts.AllowLegacyCachedRedoJournalReplay {
-			_ = db.Close()
 			return nil, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes)
 		}
 		// The explicit compatibility escape hatch also classifies incomplete-only
@@ -2670,7 +3000,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// rediscovered on every reopen.
 		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal || opts.AllowLegacyCachedRedoJournalReplay {
 			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-				_ = db.Close()
 				return nil, err
 			}
 		}
@@ -2697,7 +3026,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		err = releaseErr
 	}
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 	if opts.IndexOuterLeavesInValueLog {
@@ -2706,43 +3034,30 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
 		}
 		if err != nil {
-			db.Close()
 			return nil, err
 		}
 		db.leafGenerationManifest = manifest
 	}
 
-	// Initialize State after recovery so log cleanup can proceed without pinning.
-	initialState := &DBState{
-		CommitSeq:                  db.meta.CommitSeq,
-		RootPageID:                 db.meta.UserRootPageID,
-		SystemRootPageID:           db.meta.SystemRootPageID,
-		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
-		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
-		ValueLogSet:                vm.CurrentSetNoRefresh(),
-		LeafGenerations:            db.currentLeafGenerationView(),
-		LeafGenerationStateVersion: db.leafGenerationStateVersion,
-	}
-	oldInitialState := db.state.Swap(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
-	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
-		_ = vm.Release(oldInitialState.ValueLogSet)
-	}
+	// Replay may already have installed visible states through the SAME
+	// synchronous PRIMARY coordinator; publish the final selected state here.
+	db.initializeRecoveredSnapshotV1(gen, vm)
 	if err := db.initValueLogRefTracker(); err != nil {
-		db.Close()
 		return nil, err
 	}
 	if opts.CommandWAL {
 		if err := db.installCommandWALValueLogAppender(); err != nil {
-			db.Close()
 			return nil, err
 		}
 	}
 	// Recovery, replay, the visible snapshot, reachability tracking, and any
 	// command-WAL appender must all name the same root before asynchronous root
 	// publication can admit its first builder.
-	if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
-		db.Close()
+	if db.rootPublication == nil {
+		if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
+			return nil, err
+		}
+	} else if err := db.rootPublication.coordinator.CompleteStartup(); err != nil {
 		return nil, err
 	}
 	// Replay handlers may restore derived state that must become durable before
@@ -2752,7 +3067,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// foreground persistence. A later checkpoint can then fence and clean both
 	// the replayed document command and this derived-state publication.
 	if err := db.runCommandWALReplayFinalizers(); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("treedb: finalize command WAL replay: %w", err)
 	}
 
@@ -2770,7 +3084,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// the intended on-disk layout without requiring callers to re-specify flags.
 	if err := saveOpenFormatConfig(opts); err != nil {
 		if opts.ResolvedProfile != "" {
-			_ = db.Close()
 			return nil, fmt.Errorf("treedb: persist durability profile manifest: %w", err)
 		}
 		if opts.NotifyError != nil {
@@ -2778,7 +3091,33 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 
+	if testDBOpenHook != nil {
+		if err := testDBOpenHook(db); err != nil {
+			return nil, err
+		}
+	}
 	return db, nil
+}
+
+// initializeRecoveredSnapshotV1 publishes the exact selected startup frontier.
+// The existing state owner releases its prior Set only after the new view is visible.
+func (db *DB) initializeRecoveredSnapshotV1(gen *indexGen, vm *valuelog.Manager) {
+	initialState := &DBState{
+		primaryRoot:                db.primaryCurrentRootV5(),
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
+		ValueLogSet:                vm.CurrentSetNoRefresh(),
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+	}
+	oldInitialState := db.state.Swap(initialState)
+	db.publishSnapshotView(gen, initialState, vm)
+	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
+		_ = vm.Release(oldInitialState.ValueLogSet)
+	}
 }
 
 func (db *DB) acceptingCloseHooksLocked() bool {
@@ -3010,14 +3349,20 @@ func (db *DB) tryRegisterCaptureTeardownHook(hook func() error) (func(), bool) {
 		return func() {}, false
 	}
 	idx := len(db.captureTeardownHooks)
-	db.captureTeardownHooks = append(db.captureTeardownHooks, hook)
+	var metadata *retainedalloc.Owner
+	if db.valueLogIdentityPins != nil {
+		metadata = db.valueLogIdentityPins.MetadataOwner()
+	}
+	if err := db.appendCaptureTeardownHookLocked(captureTeardownHook{hook: hook}, metadata); err != nil {
+		return func() {}, false
+	}
 
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			db.captureTeardownHooksMu.Lock()
-			if idx >= 0 && idx < len(db.captureTeardownHooks) && db.captureTeardownHooks[idx] != nil {
-				db.captureTeardownHooks[idx] = nil
+			if !db.captureTeardownHooksClosed && idx >= 0 && idx < len(db.captureTeardownHooks) && db.captureTeardownHooks[idx].hook != nil {
+				db.captureTeardownHooks[idx] = captureTeardownHook{}
 			}
 			db.captureTeardownHooksMu.Unlock()
 		})
@@ -3031,29 +3376,79 @@ func (db *DB) runCaptureTeardownHooksLocked() error {
 	db.captureTeardownHooksMu.Lock()
 	if db.captureTeardownHooksClosed {
 		db.captureTeardownHooksMu.Unlock()
+		if len(db.captureTeardownFailure.causes) != 0 {
+			return &db.captureTeardownFailure
+		}
 		return nil
 	}
-	db.captureTeardownHooksClosed = true
-	hooks := append([]func() error(nil), db.captureTeardownHooks...)
-	clear(db.captureTeardownHooks)
-	db.captureTeardownHooks = nil
-	db.captureTeardownHooksMu.Unlock()
-
+	metadata := db.captureTeardownHooksOwner
+	hooks, charge := db.captureTeardownHooks, db.captureTeardownHooksCharge
+	errorCharge := retainedalloc.AllocationCharge(uint64(len(hooks)) * uint64(unsafe.Sizeof(error(nil))))
+	if metadata != nil && len(hooks) != 0 {
+		if err := metadata.AddPending(errorCharge); err != nil {
+			db.captureTeardownHooksMu.Unlock()
+			return err
+		}
+	}
 	var errs []error
-	for _, hook := range hooks {
+	if len(hooks) != 0 {
+		errs = make([]error, 0, len(hooks))
+	}
+	// Transfer the original backing. All producers are excluded by teardownMu.
+	db.captureTeardownHooksClosed = true
+	db.captureTeardownHooks = nil
+	db.captureTeardownHooksCharge = 0
+	db.captureTeardownHooksMu.Unlock()
+	for i := range hooks {
+		hook := hooks[i].hook
 		if hook == nil {
 			continue
 		}
-		if err := hook(); err != nil {
+		err := hook()
+		// Clear the local method value before consuming containing/control charge.
+		hook = nil
+		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		hooks[i].hook = nil
+		completionOwner, completionCharge := hooks[i].completionOwner, hooks[i].completionCharge
+		hooks[i].completionOwner, hooks[i].completionCharge = nil, 0
+		if completionOwner != nil && completionCharge != 0 {
+			completionOwner.RemovePending(completionCharge)
 		}
 	}
-	return errors.Join(errs...)
+	if len(errs) != 0 {
+		// Keep the SAME backing: each failed method value still retains its exact
+		// original authority and admitted completion charge. Never retry callbacks.
+		db.captureTeardownHooks = hooks
+		db.captureTeardownHooksCharge = charge
+		db.captureTeardownFailure.causes = errs
+		db.captureTeardownErrorCharge = errorCharge
+		return &db.captureTeardownFailure
+	}
+	clear(hooks)
+	hooks = nil
+	if metadata != nil && charge != 0 {
+		metadata.RemovePending(charge)
+	}
+
+	errs = nil
+	if metadata != nil && errorCharge != 0 && charge != 0 {
+		metadata.RemovePending(errorCharge)
+	}
+	return nil
 }
 
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
+	}
+	db.closeHooksMu.Lock()
+	finishCaller := db.ownedFinishCallerV6
+	db.closeHooksMu.Unlock()
+	if finishCaller != 0 && currentGoroutineID() == finishCaller {
+		return errPublicationCallbackCloseV6
 	}
 	db.closeHooksMu.Lock()
 	closeHooksRunning := db.closeHooksRunning
@@ -3100,6 +3495,10 @@ func (db *DB) closeAfterHooksOnce() error {
 }
 
 func (db *DB) closeAfterHooks() error {
+	startupGen := db.idx.Load()
+	if startupGen != nil && startupGen.startupDB != db {
+		startupGen = nil
+	}
 	var errs []error
 
 	// User callbacks have flushed their higher-level buffers. First pass through
@@ -3108,6 +3507,7 @@ func (db *DB) closeAfterHooks() error {
 	// admission gate: stable root publication must never run while it is held.
 	db.maintenanceMu.Lock()
 	db.closing.Store(true)
+	db.mvccAdmission.Close()
 	db.maintenanceMu.Unlock()
 	// Wait for every already-admitted writer to finish constructing and handing
 	// off its immutable root candidate.
@@ -3189,13 +3589,18 @@ func (db *DB) closeAfterHooks() error {
 			errs = append(errs, err)
 		}
 	}
+	if err := db.valueLogRefTracker.close(); err != nil {
+		db.retainOriginalCleanupError(err)
+		errs = append(errs, err)
+	}
 	if db.ghostManager != nil {
-		db.ghostManager.stop()
+		db.closeGhostManagerCompletionV6(true)
 	}
 
 	db.mu.Lock()
 	db.clearSnapshotView()
 	vm := db.valueLogManager
+	terminalState := db.state.Load()
 	db.valueLogManager = nil
 	commandJournal := db.commandJournal
 	db.commandJournal = nil
@@ -3213,7 +3618,19 @@ func (db *DB) closeAfterHooks() error {
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
-	db.releaseDurableRootResourcesV1()
+	if rootRuntime != nil {
+		// Current/slot/parent roots still carry the cached proof allowance here.
+		// Terminal root withdrawal must not leave a runtime alias after refund.
+		rootRuntime.mu.Lock()
+		rootRuntime.primaryDataCertificateV6 = nil
+		rootRuntime.mu.Unlock()
+		if testHookPrimaryDataCertificateV6 != nil {
+			testHookPrimaryDataCertificateV6("terminal-detached", rootRuntime, nil)
+		}
+	}
+	if err := db.releaseDurableRootResourcesV1(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
@@ -3224,7 +3641,22 @@ func (db *DB) closeAfterHooks() error {
 	}
 	db.commandWALDebt.releaseAll()
 	if vm != nil {
-		if err := vm.Close(); err != nil {
+		// Consume the original DB-held Set edge once. Held Snapshots retain
+		// their independent references to this immutable shared state; never
+		// mutate ValueLogSet or infer final physical disposal from terminal Close.
+		if terminalState != nil {
+			if err := vm.Release(terminalState.ValueLogSet); err != nil {
+				db.retainOriginalCleanupError(vm.CleanupError())
+				errs = append(errs, err)
+			}
+		}
+		var err error
+		if startupGen != nil {
+			err = startupGen.closeStartupManager()
+		} else {
+			err = vm.Close()
+		}
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -3237,16 +3669,24 @@ func (db *DB) closeAfterHooks() error {
 	// resource and index shutdown. Only now may the live-runtime clones and the
 	// coordinator's exact recovery handoff be released.
 	if rootRuntime != nil {
-		rootRuntime.release()
+		if err := rootRuntime.release(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if rootHandoff != nil {
-		rootHandoff.Release()
+		if err := rootHandoff.ReleaseWithError(); err != nil {
+			db.retainOriginalCleanupError(err)
+			errs = append(errs, err)
+		}
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
 	// publication closures retain exact handles independently and remain usable
 	// after shutdown, while a later DB instance establishes fresh evidence.
-	db.valueLogIdentityPins.ClearStableNamespaceLinks()
-	if lock != nil {
+	db.valueLogIdentityPins.Close()
+	if err := db.valueLogIdentityPins.CleanupError(); err != nil {
+		errs = append(errs, err)
+	}
+	if lock != nil && startupGen == nil {
 		if err := lock.Close(); err != nil {
 			errs = append(errs, err)
 		}
@@ -3281,18 +3721,124 @@ func currentGoroutineID() uint64 {
 	return id
 }
 
+// The first physical outcome lives in the SAME pre-admitted original object.
+// Its embedded error links earlier background failures without allocating a
+// failure-time keeper, and keeps that original payload reachable after return.
+type originalDBCleanupFailure struct {
+	payload any
+	mu      sync.Mutex
+	causes  [4]error
+}
+
+func (f *originalDBCleanupFailure) Error() string { return "original DB physical cleanup failed" }
+
+// Snapshot the fixed original receipt before traversing arbitrary error methods.
+// A live multi-Unwrap slice would expose late original completion writes.
+func (f *originalDBCleanupFailure) Is(target error) bool {
+	f.mu.Lock()
+	causes := f.causes
+	f.mu.Unlock()
+	for _, cause := range causes {
+		if cause != nil && errors.Is(cause, target) {
+			return true
+		}
+	}
+	return false
+}
+func (f *originalDBCleanupFailure) As(target any) bool {
+	f.mu.Lock()
+	causes := f.causes
+	f.mu.Unlock()
+	for _, cause := range causes {
+		if cause != nil && errors.As(cause, target) {
+			return true
+		}
+	}
+	return false
+}
+func (f *originalDBCleanupFailure) retainCause(index int, cause error) {
+	if cause == nil || cause == f || errors.Is(cause, f) {
+		// The prior original receipt may already be in this cause's chain.
+		// Payload links preserve custody; error links must remain acyclic.
+		return
+	}
+	f.mu.Lock()
+	if f.causes[index] == nil {
+		f.causes[index] = cause
+	}
+	f.mu.Unlock()
+}
+func (f *originalDBCleanupFailure) LinkPriorCleanupError(prior error) {
+	if prior == nil || prior == f || errors.Is(prior, f) {
+		return
+	}
+	f.TryLinkPriorCleanupError(prior)
+}
+func (f *originalDBCleanupFailure) OriginalCleanupPriorAvailable() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.causes[3] == nil
+}
+func (f *originalDBCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.causes[3] != nil || prior == nil || prior == f {
+		return false
+	}
+	f.causes[3] = prior
+	return true
+}
+
+func (db *DB) retainOriginalCleanupError(err error) {
+	if err == nil {
+		return
+	}
+	for {
+		db.bgErrMu.Lock()
+		prior, revision := db.bgErr, db.bgErrRevision
+		if prior == nil {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Error methods may read DB state or report another original failure.
+		// No original edge is consumed until the unchanged root is locked again.
+		if errors.Is(prior, err) {
+			return
+		}
+		containsPrior := errors.Is(err, prior)
+		var original rootpublication.OriginalCleanupPriorBinder
+		if !containsPrior {
+			original = rootpublication.SelectOriginalCleanupPrior(err, prior)
+		}
+		db.bgErrMu.Lock()
+		if db.bgErrRevision != revision {
+			db.bgErrMu.Unlock()
+			continue
+		}
+		if containsPrior || (original != nil && original.TryLinkPriorCleanupError(prior)) {
+			db.bgErr, db.bgErrRevision = err, revision+1
+			db.bgErrMu.Unlock()
+			return
+		}
+		db.bgErrMu.Unlock()
+		// Existing ordinary errors keep first-error semantics. Actual cleanup
+		// receipts provide the preborn edge needed to retain original custody.
+		if original == nil {
+			return
+		}
+	}
+}
 func (db *DB) reportError(err error) {
 	if err == nil {
 		return
 	}
+	// Retain BEFORE user notification, including any reentrant Close.
+	db.retainOriginalCleanupError(err)
 	if db.notifyError != nil {
 		db.notifyError(err)
 	}
-	db.bgErrMu.Lock()
-	if db.bgErr == nil {
-		db.bgErr = err
-	}
-	db.bgErrMu.Unlock()
 }
 
 func (db *DB) backgroundError() error {
@@ -3327,9 +3873,15 @@ func (db *DB) recover() error {
 		if db.readOnly {
 			return errors.New("read-only open requires an existing index with meta pages")
 		}
+		if idx.primary != nil {
+			return db.initializeDurablePrimaryV5(idx)
+		}
 		return db.initializeDurableRootV1(idx)
 	}
 
+	if idx.primary != nil {
+		return db.recoverDurablePrimaryV5(idx)
+	}
 	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(idx))
 	if err != nil {
 		return err
@@ -3377,7 +3929,7 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		}
 	}
 	switch n.Type() {
-	case page.PageTypeLeaf, page.PageTypeInternal:
+	case page.PageTypeLeaf, page.PageTypeInternal, page.PageTypePrimaryDirectory:
 		return true
 	default:
 		return false
@@ -3444,6 +3996,7 @@ type finalizeCommitPost struct {
 	vlogRefDelta                      *valueLogRefDelta
 	vlogRefTrackerAdvanced            bool
 	commitSeq                         uint64
+	vlogRefIndexID                    uint64
 	kickPrune                         bool
 	doPrune                           bool
 	debug                             bool
@@ -3773,6 +4326,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
+	post.vlogRefIndexID = idx.id
 	post.vlogRefDelta = vlogRefDelta
 	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
 		post.drainLeafGenerationPending = true
@@ -3789,7 +4343,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// and can make a sequence-current tracker carry counts from an older root.
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
-			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
+			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefIndexID, post.vlogRefDelta); err != nil {
 				db.valueLogRefTracker.invalidate()
 				db.reportError(err)
 			}
@@ -3826,7 +4380,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	}
 	if db.valueLogRefTracker != nil && !post.vlogRefTrackerAdvanced {
 		if post.vlogRefDelta != nil {
-			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
+			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefIndexID, post.vlogRefDelta); err != nil {
 				db.valueLogRefTracker.invalidate()
 				db.reportError(err)
 			}
@@ -3847,6 +4401,12 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	}
 
 	if post.oldState != nil {
+		if post.oldState.primaryRoot != nil {
+			_, e := post.oldState.primaryRoot.arena.Drop(post.oldState.primaryRoot.ref, nil)
+			if e != nil {
+				db.reportError(e)
+			}
+		}
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
 	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
@@ -4437,12 +4997,21 @@ func (db *DB) Prune() {
 	if db.readOnly {
 		return
 	}
-	idx := db.idx.Load()
+	idx := db.acquireIndexWithWrapperBorrow()
 	if idx == nil {
 		return
 	}
-	idx.acquire()
-	defer db.releaseIndex(idx)
+	defer func() {
+		db.releaseIndex(idx)
+		metadata, charge, err := idx.releaseWrapperBorrowCompletionV6(nil, nil)
+		if err != nil {
+			db.retainOriginalCleanupError(&idx.closeFailure)
+		}
+		idx = nil
+		if charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
 
 	min := db.MinPinnedSnapshotCommitSeq()
 	state := db.state.Load()
@@ -4616,6 +5185,9 @@ func (db *DB) InlineThresholdForKey(key []byte) int {
 	return ResolveInlineThresholdForKey(db.InlineThreshold(), key, db.valueLogDomainThresholds)
 }
 
+// State returns a shallow metadata observation, without retaining its Set or
+// index generation. Pointer-bearing reads require a live Snapshot; copying this
+// result does not extend the lifetime of ValueLogSet or its mutable backing.
 func (db *DB) State() *DBState {
 	if db == nil {
 		return nil
@@ -4793,6 +5365,9 @@ func (db *DB) RefreshValueLogSet() error {
 	if err := db.publicationPoisonedError(); err != nil {
 		return err
 	}
+	// Capture pins the selected Set while holding the reader side of this gate.
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -4808,6 +5383,7 @@ func (db *DB) RefreshValueLogSet() error {
 	}
 
 	newState := &DBState{
+		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
@@ -4831,6 +5407,9 @@ func (db *DB) RefreshValueLogSet() error {
 // publishValueLogSetNoRefresh publishes a new DBState using the currently
 // registered value-log set, avoiding a filesystem scan when possible.
 func (db *DB) publishValueLogSetNoRefresh() error {
+	// Capture pins the selected Set while holding the reader side of this gate.
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -4855,6 +5434,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 	}
 
 	newState := &DBState{
+		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
@@ -4913,7 +5493,7 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 // This improves Full Scan performance by restoring physical locality.
 // Note: This operation causes file growth as old pages are not immediately reclaimed
 // (they are leaked to the freelist but not reused during this append-only build).
-func (db *DB) CompactIndex() error {
+func (db *DB) CompactIndex() (retErr error) {
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
 	db.writeMu.Lock()
@@ -4935,14 +5515,19 @@ func (db *DB) CompactIndex() error {
 		return errors.New("missing index")
 	}
 
-	// Acquire Snapshot
+	// Pin the exact selected Set before releasing publication exclusion.
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	state := db.state.Load()
+	db.acquireStateValueLogSetLocked(state)
 	reader := newValueReader(state.ValueLogSet)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
+	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
+	db.valueLogStateCaptured("compact-index", state)
 
 	// Collect pages in the old tree so they can be retired after the swap.
 	retired, err := tr.CollectPageIDs()

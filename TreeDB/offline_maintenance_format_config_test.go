@@ -12,6 +12,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -103,11 +104,34 @@ func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+	indexPath := filepath.Join(dir, "index.db")
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = treedb.VacuumIndexOffline(treedb.Options{Dir: dir})
+	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
+		after, readErr := os.ReadFile(indexPath)
+		if readErr != nil || !bytes.Equal(before, after) {
+			t.Fatalf("unsupported vacuum changed index: %v", readErr)
+		}
+	} else if err != nil {
 		t.Fatalf("VacuumIndexOffline: %v", err)
 	}
 
-	flags := leafFlagsInIndex(t, filepath.Join(dir, "index.db"))
+	reopened, err := treedb.Open(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for i := 0; i < 256; i++ {
+		got, readErr := reopened.Get([]byte(fmt.Sprintf("k%04d", i)))
+		if readErr != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 16)) {
+			t.Fatalf("reopened value %d: %x %v", i, got, readErr)
+		}
+	}
+
+	flags := leafFlagsInIndex(t, indexPath)
 	if flags&leafPrefixCompressedFlag == 0 {
 		t.Fatalf("expected vacuum to preserve leaf prefix compression (flags=%#x)", flags)
 	}
@@ -142,12 +166,33 @@ func TestValueLogRewriteOffline_LoadsPersistedFormatConfig(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	indexPath := filepath.Join(dir, "index.db")
+	before, err := os.ReadFile(indexPath)
 	if err != nil {
-		t.Fatalf("ValueLogRewriteOffline: %v", err)
+		t.Fatal(err)
 	}
-	if stats.RecordsCopied == 0 {
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	if errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !rootpublication.StableRelativeNamespaceSupported() {
+		after, readErr := os.ReadFile(indexPath)
+		if readErr != nil || !bytes.Equal(before, after) {
+			t.Fatalf("unsupported rewrite changed index: %v", readErr)
+		}
+	} else if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	} else if stats.RecordsCopied == 0 {
 		t.Fatalf("expected offline rewrite to copy records, stats=%+v", stats)
+	}
+
+	reopened, err := treedb.Open(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for i := 0; i < 128; i++ {
+		got, readErr := reopened.Get([]byte(fmt.Sprintf("p%04d", i)))
+		if readErr != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 64)) {
+			t.Fatalf("reopened pointer %d: %x %v", i, got, readErr)
+		}
 	}
 
 	flags := leafFlagsInIndex(t, filepath.Join(dir, "index.db"))

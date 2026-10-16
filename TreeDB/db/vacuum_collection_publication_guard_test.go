@@ -66,7 +66,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		"idx.Store": {
 			publicationGuardDBMethodID("closeAllIndexes"),
 			publicationGuardPackageFuncID("openReadOnly"),
-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
+			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
 			publicationGuardPackageFuncID("openWithLock"),
 			publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
 		},
@@ -78,7 +78,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardDBMethodID("RefreshValueLogSet"),
 			publicationGuardDBMethodID("finalizeCommitLockedWithOptions"),
 			publicationGuardPackageFuncID("openReadOnly"),
-			publicationGuardPackageFuncID("openReadOnlyNoLock"),
+			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
 			publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
 			publicationGuardDBMethodID("publishLeafGenerationState"),
 			publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
@@ -86,7 +86,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
 		},
 		"state.CompareAndSwap": {publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView")},
-		"state.Swap":           {publicationGuardPackageFuncID("openWithLock")},
+		"state.Swap":           {publicationGuardDBMethodID("initializeRecoveredSnapshotV1")},
 	}
 
 	gotAtomicCallers := make(map[string]map[string]struct{})
@@ -153,8 +153,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView"):      false,
 		publicationGuardDBMethodID("finalizeCommitLockedWithOptions"):           true,
 		publicationGuardPackageFuncID("openReadOnly"):                           false,
-		publicationGuardPackageFuncID("openReadOnlyNoLock"):                     false,
-		publicationGuardPackageFuncID("openWithLock"):                           false,
+		publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"):       false,
+		publicationGuardDBMethodID("initializeRecoveredSnapshotV1"):             false,
 		publicationGuardDBMethodID("publishCompactStorageValueLogSet"):          false,
 		publicationGuardDBMethodID("publishLeafGenerationState"):                false,
 		publicationGuardDBMethodID("publishValueLogSetNoRefresh"):               false,
@@ -265,6 +265,19 @@ func (db *DB) bypass(next uint64) {
 	holder := stateHolder{state: db.state.Load()}
 	holder.state.SystemRootPageID = next
 }`,
+		"assigned struct field alias": `type assignedStateHolder struct { state *DBState }
+func (db *DB) bypass(next uint64) {
+	holder := assignedStateHolder{}
+	holder.state = db.state.Load()
+	holder.state.SystemRootPageID = next
+}`,
+		"assigned container external escape": `type externalStateHolder struct { state *DBState }
+func unknownStateHolder(*externalStateHolder)
+func (db *DB) bypass(next uint64) {
+	holder := externalStateHolder{}
+	holder.state = db.state.Load()
+	unknownStateHolder(&holder)
+}`,
 		"closure returned": `func (db *DB) bypass(next uint64) {
 	state := db.state.Load()
 	load := func() *DBState { return state }
@@ -302,6 +315,22 @@ func (db *DB) bypass(next uint64) {
 				t.Fatal("typed guard accepted published DBState mutation")
 			}
 		})
+	}
+}
+
+func TestPublicationSourceGuardKeepsFieldAliasesSeparateFromContainer(t *testing.T) {
+	source := loadPublicationGuardFixture(t, `type holderWithState struct { state *DBState; diagnostic uint64 }
+func (holder *holderWithState) diagnosticValue() uint64 { return holder.diagnostic }
+func (db *DB) safe(next uint64) {
+	holder := holderWithState{}
+	holder.state = db.state.Load()
+	published := holder.state
+	_ = published.RootPageID
+	db.systemRootPublishEpoch.Add(holder.diagnosticValue())
+}`)
+	analysis := analyzePublicationGuard(t, source)
+	if len(analysis.stateWrites) != 0 {
+		t.Fatalf("typed guard confused a retained state field with its unrelated container: %+v", analysis.stateWrites)
 	}
 }
 
@@ -508,6 +537,7 @@ const (
 	publicationGuardTaintSnapshotView
 	publicationGuardTaintStateSlot
 	publicationGuardTaintSnapshotViewSlot
+	publicationGuardTaintContainer
 )
 
 type publicationGuardTaintAnalysis struct {
@@ -582,7 +612,7 @@ func publicationGuardFindStateWrites(t *testing.T, source *publicationGuardSourc
 					break
 				}
 				for _, arg := range n.Args {
-					if ta.expr(arg)&publicationGuardTaintState != 0 {
+					if ta.expr(arg)&(publicationGuardTaintState|publicationGuardTaintContainer) != 0 {
 						writes = append(writes, publicationGuardStateWrite{caller: caller, pos: arg.Pos(), detail: "published DBState escapes to a call without an analyzed body"})
 					}
 				}
@@ -663,7 +693,9 @@ func (ta *publicationGuardTaintAnalysis) propagateAssignment(lhs, rhs ast.Expr) 
 			return ta.addExprObjectTaint(sel.X, publicationGuardTaintSnapshotView) || changed
 		}
 	}
-	return ta.addExprObjectTaint(sel.X, kind) || changed
+	// A retained field makes the container an escape risk, not a DBState
+	// pointer. Keep unrelated fields/method results separate from that alias.
+	return ta.addExprObjectTaint(sel.X, publicationGuardTaintContainer) || changed
 }
 
 func (ta *publicationGuardTaintAnalysis) propagateCall(call *ast.CallExpr) bool {
@@ -722,7 +754,7 @@ func (ta *publicationGuardTaintAnalysis) expr(expr ast.Expr) publicationGuardTai
 		if kind := ta.objectTaint[selection.Obj()]; kind != 0 {
 			return kind
 		}
-		if ta.expr(expr.X)&publicationGuardTaintState != 0 && publicationGuardIsPointerTo(expr, ta.source.info, ta.dbStateType) {
+		if ta.expr(expr.X)&(publicationGuardTaintState|publicationGuardTaintContainer) != 0 && publicationGuardIsPointerTo(expr, ta.source.info, ta.dbStateType) {
 			return publicationGuardTaintState
 		}
 		return 0
@@ -786,7 +818,11 @@ func (ta *publicationGuardTaintAnalysis) compositeTaint(lit *ast.CompositeLit) p
 	if ptr, ok := types.Unalias(typ).(*types.Pointer); ok {
 		typ = ptr.Elem()
 	}
-	want := publicationGuardTaintState
+	want := publicationGuardTaintContainer
+	switch types.Unalias(typ).Underlying().(type) {
+	case *types.Slice, *types.Array, *types.Map:
+		want = publicationGuardTaintState
+	}
 	switch {
 	case types.Identical(types.Unalias(typ), types.Unalias(ta.snapshotType)):
 		want = publicationGuardTaintSnapshot
@@ -843,8 +879,10 @@ func (ta *publicationGuardTaintAnalysis) addExprObjectTaint(expr ast.Expr, kind 
 		if selection == nil {
 			return false
 		}
-		changed := ta.addObjectTaint(selection.Obj(), kind)
-		return ta.addExprObjectTaint(expr.X, kind) || changed
+		// Track this field without treating every other field of its enclosing
+		// object as the same pointer/container. Selector lookup retains this
+		// exact field's taint, including nested holders passed to unknown calls.
+		return ta.addObjectTaint(selection.Obj(), kind)
 	default:
 		return false
 	}

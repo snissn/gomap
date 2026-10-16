@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 )
 
@@ -60,10 +61,21 @@ func (db *DB) releaseIndex(gen *indexGen) {
 	db.idxMu.Unlock()
 
 	// Ghost instead of immediate close
+	var metadata *retainedalloc.Owner
+	var charge uint64
+	var err error
 	if db.ghostManager != nil {
-		db.ghostManager.add(gen)
+		metadata, charge, err = db.ghostManager.add(gen)
 	} else {
-		_ = gen.close()
+		metadata, charge, err = gen.closeWithCompletionV6()
+	}
+	if err != nil {
+		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+		db.quiesceFailedRetiredGeneration(gen)
+	}
+	gen = nil
+	if charge != 0 {
+		metadata.RemovePending(charge)
 	}
 }
 
@@ -98,10 +110,38 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	delete(db.idxAll, gen.id)
 	db.idxMu.Unlock()
 
+	var metadata *retainedalloc.Owner
+	var charge uint64
+	var err error
 	if db.ghostManager != nil {
-		db.ghostManager.add(gen)
+		metadata, charge, err = db.ghostManager.add(gen)
 	} else {
-		_ = gen.close()
+		metadata, charge, err = gen.closeWithCompletionV6()
+	}
+	if err != nil {
+		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+		db.quiesceFailedRetiredGeneration(gen)
+	}
+	gen = nil
+	if charge != 0 {
+		metadata.RemovePending(charge)
+	}
+}
+
+// Quiescence is separate from physical disposal. A retired failed generation
+// cannot regain write admission; a PRIMARY still shared by the actual current
+// generation remains eligible and is quiesced only at terminal DB withdrawal.
+func (db *DB) quiesceFailedRetiredGeneration(gen *indexGen) {
+	if gen == nil || gen.primary == nil {
+		return
+	}
+	db.idxMu.Lock()
+	current := db.idx.Load()
+	eligible := current == gen || (current != nil && current.primary == gen.primary)
+	physicalPager := gen.primary.Pager()
+	db.idxMu.Unlock()
+	if !eligible {
+		physicalPager.QuiesceBackgroundGrowth()
 	}
 }
 
@@ -116,10 +156,32 @@ func (db *DB) closeAllIndexes() error {
 	db.idxMu.Unlock()
 
 	var errs []error
-	for _, g := range gens {
-		if err := g.close(); err != nil {
+	for i, g := range gens {
+		// Current publication is already nil and writers have drained. Stop
+		// growth without consuming any physical owner or failed debt.
+		db.quiesceFailedRetiredGeneration(g)
+		metadata, charge, err := g.closeWithCompletionV6()
+		if err != nil {
+			db.retainOriginalCleanupError(g.originalCloseFailure(err))
 			errs = append(errs, err)
+		}
+		gens[i], g = nil, nil
+		if charge != 0 {
+			metadata.RemovePending(charge)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Prune borrows original wrapper aliases before terminal discovery withdrawal.
+// Physical refs retain their existing retirement meaning.
+func (db *DB) acquireIndexWithWrapperBorrow() *indexGen {
+	db.idxMu.Lock()
+	defer db.idxMu.Unlock()
+	idx := db.idx.Load()
+	if idx != nil {
+		idx.retainWrapperBorrow()
+		idx.acquire()
+	}
+	return idx
 }

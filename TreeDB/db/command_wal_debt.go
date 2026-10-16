@@ -390,9 +390,9 @@ func (debt *CommandWALDependencyDebt) stats(now time.Time) commandWALDependencyD
 		}
 	}
 	debt.mu.Unlock()
-	view, err := rootpublication.UnionStableResourceSets(sets...)
-	if err == nil && view != nil {
-		stats.byKind = view.Stats(now)
+	kindStats, err := rootpublication.StableResourceTelemetryStats(now, false, sets...)
+	if err == nil {
+		stats.byKind = kindStats
 	}
 	rotationFiles, rotationErr := debt.rotationFileViewThrough(^uint64(0))
 	if rotationErr == nil {
@@ -427,7 +427,9 @@ func stabilizeCommandWALResourceNamespaces(resources *rootpublication.StableReso
 	if resources == nil {
 		return nil
 	}
-	tokens := resources.Tokens()
+	return resources.WithScopedTokens(stabilizeCommandWALTokenNamespaces)
+}
+func stabilizeCommandWALTokenNamespaces(tokens []*rootpublication.StableResourceToken) error {
 	sort.Slice(tokens, func(i, j int) bool {
 		if tokens[i].Kind() != tokens[j].Kind() {
 			return tokens[i].Kind() < tokens[j].Kind()

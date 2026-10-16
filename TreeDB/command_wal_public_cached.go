@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -759,6 +760,13 @@ func (b *commandWALPublicBatch) SetViewWithReplayBytes(key, value []byte) (keyVi
 }
 
 func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, useInnerView bool) (keyView, valueView []byte, err error) {
+	return b.setViewWithMVCCInput(key, value, retainReplayViews, useInnerView, mvccadmission.Input{})
+}
+func (b *commandWALPublicBatch) SetWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	_, _, err := b.setViewWithMVCCInput(key, value, false, false, input)
+	return err
+}
+func (b *commandWALPublicBatch) setViewWithMVCCInput(key, value []byte, retainReplayViews, useInnerView bool, input mvccadmission.Input) (keyView, valueView []byte, err error) {
 	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
 		return nil, nil, b.cowState.batchError
 	}
@@ -772,7 +780,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if !retainReplayViews && useInnerView {
-		err = b.innerSetView(key, value)
+		err = b.innerSetViewWithMVCCInput(key, value, input)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -784,9 +792,19 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 	}
 	if b.isCOW() || b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
 		if useInnerView {
-			err = b.innerSetView(key, value)
+			err = b.innerSetViewWithMVCCInput(key, value, input)
 		} else {
-			err = b.inner.Set(key, value)
+			if input.Present() {
+				if qualified, ok := b.inner.(interface {
+					SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+				}); ok {
+					err = qualified.SetWithMVCCInput(key, value, input)
+				} else {
+					err = b.inner.Set(key, value)
+				}
+			} else {
+				err = b.inner.Set(key, value)
+			}
 		}
 		if err != nil {
 			return nil, nil, err
@@ -819,7 +837,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.innerSetView(keyView, valueView); err != nil {
+	if err := b.innerSetViewWithMVCCInput(keyView, valueView, input); err != nil {
 		b.payload.Truncate(oldLen, oldCount)
 		return nil, nil, err
 	}
@@ -1550,4 +1568,22 @@ func (b *commandWALPublicBatch) GetByteSize() (int, error) {
 		return 0, nil
 	}
 	return b.inner.GetByteSize()
+}
+
+// The ordinary payload construction remains authoritative. Qualified inputs
+// follow its owned byte views into the same inner logical publication.
+func (b *commandWALPublicBatch) innerSetViewWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	if input.Present() {
+		if qualified, ok := b.inner.(interface {
+			SetViewWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		}); ok {
+			return qualified.SetViewWithMVCCInput(key, value, input)
+		}
+		if qualified, ok := b.inner.(interface {
+			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		}); ok {
+			return qualified.SetWithMVCCInput(key, value, input)
+		}
+	}
+	return b.innerSetView(key, value)
 }

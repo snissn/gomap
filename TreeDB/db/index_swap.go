@@ -7,6 +7,8 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -41,8 +43,18 @@ var syncDirFn = func(dir string) (err error) {
 // It prevents Open from accidentally creating an empty new DB when a previous
 // vacuum crashed after moving index.db aside.
 func recoverIndexSwap(dir string) error {
+	registry := rootpublication.NewIdentityPinRegistry()
+	defer registry.Close()
+	return recoverIndexSwapWithRegistryV6(dir, registry, nil)
+}
+
+func recoverIndexSwapWithRegistryV6(dir string, registry *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) error {
 	if dir == "" {
 		return fmt.Errorf("recover index swap: empty dir")
+	}
+
+	if handled, err := recoverPrimaryJointSwapWithRegistryV6(dir, false, registry, lock); handled || err != nil {
+		return err
 	}
 
 	indexPath := filepath.Join(dir, indexFileName)
@@ -73,6 +85,13 @@ func recoverIndexSwap(dir string) error {
 			}
 			namespaceChanged = namespaceChanged || removed
 		}
+		// No joint decision exists: the old canonical pair still owns publication.
+		// A pre-COMMIT private companion is never an eligible root.
+		removedPrimary, err := removePersistentFileBestEffortResult(dir, filepath.Join(dir, primaryNewFileName), durabilitycut.ResourceIndex)
+		if err != nil {
+			return err
+		}
+		namespaceChanged = namespaceChanged || removedPrimary
 		if readyExists {
 			removed, err := removePersistentFileBestEffortResult(dir, readyPath, durabilitycut.ResourceIndex)
 			if err != nil {

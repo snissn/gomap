@@ -5,6 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
+	"os"
 	"strconv"
 	"testing"
 )
@@ -227,4 +231,95 @@ func openFragmentationTriggerFixture(tb testing.TB) *DB {
 		}
 	}
 	return d
+}
+
+func TestPrimaryFragmentationCensusKeepsPhysicalDomainsDistinct(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, key := range []string{"a", "b", "c"} {
+		if err := d.SetSync([]byte(key), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := d.AcquireSnapshot()
+	defer snap.Close()
+	var dataPages, dataMin, dataMax, primaryPages, readRoots uint64
+	if err := snap.tree.WalkPages(func(id uint64, _ node.Node) error {
+		if id >= page.PrimaryBankNamespace {
+			local := id - page.PrimaryBankNamespace
+			if local >= pager.PrimaryReadRootLocalBaseV6 {
+				readRoots++
+			} else {
+				primaryPages++
+			}
+			return nil
+		}
+		if dataPages == 0 {
+			dataMin, dataMax = id, id
+		}
+		if id < dataMin {
+			dataMin = id
+		}
+		if id > dataMax {
+			dataMax = id
+		}
+		dataPages++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if dataPages == 0 || primaryPages == 0 || readRoots == 0 {
+		t.Fatalf("fixture must traverse DATA, physical PRIMARY and private root: data=%d primary=%d roots=%d", dataPages, primaryPages, readRoots)
+	}
+	report, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.UserPages != dataPages || report.UserMinPageID != dataMin || report.UserMaxPageID != dataMax || report.UserSpan != dataMax-dataMin+1 || report.TotalPages != snap.idx.pager.PageCount() {
+		t.Fatalf("DATA debt mixed domains: %+v; expected pages=%d bounds=[%d,%d]", report, dataPages, dataMin, dataMax)
+	}
+	full, err := d.FragmentationReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateFragmentationReport(full); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]uint64{"treedb.user.primary.pages": primaryPages, "treedb.user.primary.read_roots": readRoots, "treedb.primary.pages.total": snap.idx.pager.PrimaryBankPageCount()} {
+		if full[key] != strconv.FormatUint(want, 10) {
+			t.Fatalf("%s=%q expected %d", key, full[key], want)
+		}
+	}
+	for key, p := range map[string]*pager.Pager{"treedb.index.file.bytes": snap.idx.pager, "treedb.primary.file.bytes": snap.idx.primary.Pager()} {
+		if err := p.WithStableResourceFile(func(file *os.File) error {
+			info, err := file.Stat()
+			if err != nil {
+				return err
+			}
+			if full[key] != strconv.FormatInt(info.Size(), 10) {
+				t.Errorf("%s=%q expected actual original file bytes%d", key, full[key], info.Size())
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compareTriggerToFullFragmentationReport(t, d, "mixed physical domains")
+}
+
+func TestFragmentationSpanRatioRejectsInvalidAndPreservesWideArithmetic(t *testing.T) {
+	if value, err := fragmentationSpanRatio(^uint64(0), 1_000_000); err != nil || value != ^uint64(0) {
+		t.Fatalf("wide ratio=%d err=%v", value, err)
+	}
+	for _, pair := range [][2]uint64{{1, 0}, {1, 2}, {^uint64(0), 1}} {
+		if _, err := fragmentationSpanRatio(pair[0], pair[1]); err == nil {
+			t.Fatalf("invalid ratio accepted: %v", pair)
+		}
+	}
+	if value, err := fragmentationSpanRatio(0, 0); err != nil || value != 0 {
+		t.Fatalf("empty ratio=%d err=%v", value, err)
+	}
 }

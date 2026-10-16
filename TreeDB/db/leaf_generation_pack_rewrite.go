@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -63,6 +65,9 @@ func (a *leafGenerationPackStagingAllocator) Pages() []uint64 {
 // retires the unpublished pages rather than shrinking the pager behind the
 // allocator's logical high-water.
 type leafGenerationPackPublishAllocator struct {
+	primary         *primaryarena.Arena
+	zipper          *zipper.Zipper
+	primaryRoots    []uint64
 	pager           *pager.Pager
 	allocator       *freelist.Allocator
 	retireCommitSeq uint64
@@ -74,7 +79,7 @@ func newLeafGenerationPackPublishAllocator(idx *indexGen, retireCommitSeq uint64
 		return &leafGenerationPackPublishAllocator{retireCommitSeq: retireCommitSeq}
 	}
 	return &leafGenerationPackPublishAllocator{
-		pager: idx.pager, allocator: idx.allocator, retireCommitSeq: retireCommitSeq,
+		pager: idx.pager, allocator: idx.allocator, retireCommitSeq: retireCommitSeq, primary: idx.primary, zipper: idx.zipper,
 	}
 }
 
@@ -101,7 +106,18 @@ func (a *leafGenerationPackPublishAllocator) Pages() []uint64 {
 }
 
 func (a *leafGenerationPackPublishAllocator) Rollback() error {
-	if a == nil || len(a.pages) == 0 {
+	if a == nil {
+		return nil
+	}
+	var bankErr error
+	for _, id := range a.primaryRoots {
+		bankErr = errors.Join(bankErr, a.primary.ReleaseUntakenOrdinaryBundle(id))
+	}
+	a.primaryRoots = nil
+	if bankErr != nil {
+		return bankErr
+	}
+	if len(a.pages) == 0 {
 		return nil
 	}
 	if a.allocator == nil || a.retireCommitSeq == 0 {
@@ -806,6 +822,61 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		}
 	}
 	switch n.Type() {
+	case page.PageTypePrimaryDirectory:
+		directory, err := node.DecodePrimaryDirectory(data)
+		if err != nil {
+			return id, false, err
+		}
+		base, seq := directory.Base()
+		baseImage, err := c.pager.Get(base.Ref.Page)
+		if err != nil {
+			return id, false, err
+		}
+		if !node.VerifyPrimaryOperand(base, baseImage) {
+			return id, false, node.ErrPrimaryDirectory
+		}
+		entries := make([]node.PrimaryDirectoryEntry, directory.Count())
+		for i := range entries {
+			entries[i], _ = directory.Entry(i)
+			if entries[i].InlineAbsence() {
+				continue
+			}
+			if entries[i].Operand.Ref.Kind != page.ChildRefPage {
+				return id, false, node.ErrPrimaryDirectory
+			}
+			image, err := c.pager.Get(entries[i].Operand.Ref.Page)
+			if err != nil {
+				return id, false, err
+			}
+			if err = node.ValidatePrimaryComponent(entries[i], image); err != nil {
+				return id, false, err
+			}
+		}
+		newBase, changed, err := c.rewriteNode(base.Ref.Page)
+		if err != nil || !changed {
+			return id, false, err
+		}
+		baseImage, err = c.pager.Get(newBase)
+		if err != nil {
+			return id, false, err
+		}
+		base = node.PrimaryOperand{Ref: page.PageChildRef(newBase), Digest: sha256.Sum256(baseImage)}
+		newID, err := c.alloc.Alloc(id)
+		if err != nil {
+			return id, false, err
+		}
+		image, err := c.pager.GetForWrite(newID)
+		if err != nil {
+			return id, false, err
+		}
+		if err = node.EncodePrimaryDirectory(image, newID, seq+1, base, entries); err != nil {
+			return id, false, err
+		}
+		if !primaryarena.IsPage(id) {
+			c.retired = append(c.retired, id)
+		}
+		c.storeInternalRemap(id, newID)
+		return newID, true, nil
 	case page.PageTypeInternal:
 		c.internalVisited++
 		count := n.Count()
@@ -1106,6 +1177,37 @@ func cloneLeafGenerationPackStagedNode(staged *pager.Pager, id uint64, alloc *le
 	if !n.VerifyChecksum() {
 		return 0, fmt.Errorf("leaf generation pack: staged page %d checksum mismatch", id)
 	}
+	if n.Type() == page.PageTypePrimaryDirectory {
+		if alloc.primary == nil || alloc.zipper == nil {
+			return 0, errors.New("leaf generation pack: primary directory lacks bank owner")
+		}
+		directory, err := node.DecodePrimaryDirectory(data)
+		if err != nil {
+			return 0, err
+		}
+		base, sequence := directory.Base()
+		baseID, err := cloneLeafGenerationPackStagedNode(staged, base.Ref.Page, alloc, remap)
+		if err != nil {
+			return 0, err
+		}
+		entries := make([]node.PrimaryDirectoryEntry, directory.Count())
+		for i := range entries {
+			entries[i], err = directory.Entry(i)
+			if err != nil {
+				return 0, err
+			}
+			if !entries[i].InlineAbsence() && !primaryarena.IsPage(entries[i].Operand.Ref.Page) {
+				return 0, errors.Join(err, node.ErrPrimaryDirectory)
+			}
+		}
+		root, err := alloc.zipper.RebasePrimaryRoot(baseID, sequence, entries)
+		if err != nil {
+			return 0, err
+		}
+		alloc.primaryRoots = append(alloc.primaryRoots, root)
+		remap[id] = root
+		return root, nil
+	}
 	if n.Type() != page.PageTypeInternal {
 		return 0, fmt.Errorf("leaf generation pack: staged page %d has unexpected type %d", id, n.Type())
 	}
@@ -1174,7 +1276,7 @@ func rebaseLeafGenerationPackCollectionReplacements(staged *pager.Pager, replace
 func leafGenerationPackCommittedRetired(ids []uint64) []uint64 {
 	out := make([]uint64, 0, len(ids))
 	for _, id := range ids {
-		if id != 0 && id < leafGenerationPackPrivatePageIDBase {
+		if id != 0 && id < leafGenerationPackPrivatePageIDBase && !primaryarena.IsPage(id) {
 			out = append(out, id)
 		}
 	}
@@ -1214,8 +1316,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: prepare packed promotion authority: %w", err)
 	}
 	if err := authority.captureDictionary(ctx, writer.leafDictID, writer.leafDict); err != nil {
-		_ = authority.release()
-		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed dictionary authority: %w", err)
+		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed dictionary authority: %w", errors.Join(err, authority.release()))
 	}
 	defer func() {
 		if !authority.retainedForRecovery {
@@ -1337,6 +1438,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}()
 	leafCtx.zipper = idx.zipper.CloneWithPagerAllocator(stagingPager, tracker)
+	// This zipper applies collection descriptors to SYSTEM only. The user
+	// PRIMARY directory is rewritten separately above its real operands; never
+	// wrap a materialized SYSTEM delta in the inherited user-root preference.
+	leafCtx.zipper.SetPrimaryDirectory(false)
 	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 	leafCtx.zipper.SetLeafPageReader(leafCtx)
 	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
@@ -1481,19 +1586,31 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		durableResources *rootpublication.StableResourceSet
 		manifestClosure  *LeafGenerationManifestStablePreparedClosure
 	)
+	defer func() {
+		if manifestClosure != nil {
+			err = errors.Join(err, manifestClosure.ReleaseWithError())
+		}
+	}()
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if publishAlloc != nil {
 			baseErr = errors.Join(baseErr, publishAlloc.Rollback())
 		}
 		if durableResources != nil {
-			durableResources.Release()
+			if releaseErr := durableResources.ReleaseWithError(); releaseErr != nil {
+				// Keep the exact refused Set/descendants in original error custody.
+				// Destructive segment cleanup cannot follow failed pin disposal.
+				db.retainOriginalCleanupError(releaseErr)
+				return 0, 0, errors.Join(baseErr, releaseErr)
+			}
 			durableResources = nil
 		}
 		// Release the candidate set and capture pins before asking the manager's
 		// deletion owner to acquire an exact-identity delete lease.
-		if releaseErr := authority.release(); releaseErr != nil {
-			baseErr = errors.Join(baseErr, releaseErr)
+		if releaseErr := authority.releaseCaptured(); releaseErr != nil {
+			return 0, 0, errors.Join(baseErr, authority.retainCleanupFailure(releaseErr))
 		}
+		// createdSegments borrows authority.promoted. Keep that original backing
+		// intact until the manager has consumed every actual deletion request.
 		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
 		if cleanupErr != nil {
 			baseErr = errors.Join(baseErr, cleanupErr)
@@ -1501,10 +1618,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if len(createdSegments) > 0 {
 			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
 			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
-				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+				baseErr = errors.Join(baseErr, cleanupErr)
 			}
 		}
-		return 0, 0, baseErr
+		if cleanupErr != nil {
+			return 0, 0, errors.Join(baseErr, authority.retainCleanupFailure(cleanupErr))
+		}
+		return 0, 0, errors.Join(baseErr, authority.release())
 	}
 	abandonManifest := func(baseErr error) error {
 		if manifestClosure == nil {
@@ -1638,29 +1759,45 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	manifestResources, manifestErr := manifestClosure.TakeStableResources()
 	if manifestErr != nil {
-		manifestClosure.Release()
+		manifestErr = errors.Join(manifestErr, manifestClosure.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
 	}
 	packedResources, resourceErr := authority.takeStableResources()
 	if resourceErr != nil {
-		manifestResources.Release()
+		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact packed resources: %w", resourceErr))
 	}
-	resourceBuilder := rootpublication.NewStableResourceSetBuilder()
+	// The prepared manifest and packed closure share the DB's original
+	// metadata owner. Import preserves the packed producer's exact physical
+	// authority while admitting the retained descriptor before construction.
+	metadata := db.valueLogIdentityPins.MetadataOwner()
+	admittedPacked, resourceErr := rootpublication.ImportStableResourceSetMetadata(metadata, packedResources)
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit exact packed resources: %w", resourceErr))
+	}
+	resourceErr = packedResources.ReleaseWithError()
+	packedResources = admittedPacked
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: release imported packed descriptor: %w", resourceErr))
+	}
+	resourceBuilder, resourceErr := rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+	if resourceErr != nil {
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit packed resource builder: %w", resourceErr))
+	}
 	if resourceErr = resourceBuilder.Merge(packedResources); resourceErr != nil {
-		packedResources.Release()
-		manifestResources.Release()
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact packed resources: %w", resourceErr))
 	}
 	if resourceErr = resourceBuilder.Merge(manifestResources); resourceErr != nil {
-		manifestResources.Release()
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact manifest resource: %w", resourceErr))
 	}
 	durableResources, resourceErr = resourceBuilder.Freeze()
 	if resourceErr != nil {
-		resourceBuilder.Abandon()
+		resourceErr = errors.Join(resourceErr, resourceBuilder.AbandonWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: freeze packed durable resources: %w", resourceErr))
 	}
 
@@ -1735,6 +1872,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			alloc:      publishAlloc,
 		}
 		publishCtx.zipper = idx.zipper.CloneWithPagerAllocator(idx.pager, publishAlloc)
+		publishCtx.zipper.SetPrimaryDirectory(false)
 		publishCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 		publishCtx.zipper.SetLeafPageReader(db.valueLogManager)
 		publishCtx.zipper.SetLeafPageLog(db.leafPageLog)
@@ -1828,11 +1966,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			// The alternate meta page was written and its durability outcome is
 			// ambiguous. Retain every candidate resource and fail closed until reopen.
 			db.publicationPoisoned.Store(true)
-			authority.retainForRecovery()
+			retentionErr := authority.retainForRecovery()
 			unlockPublish()
 			return 0, 0, errors.Join(
 				fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr),
-				db.commandWALPoisonedError(),
+				db.commandWALPoisonedError(), retentionErr,
 			)
 		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))

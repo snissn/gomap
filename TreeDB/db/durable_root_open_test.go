@@ -627,8 +627,16 @@ func testDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T, dir
 		_ = database.Close()
 	}()
 
-	if err := database.SetSync([]byte("seed"), []byte("seed-value")); err != nil {
-		t.Fatalf("seed SetSync: %v", err)
+	// Seed an actual producer-registered pointer: this test observes Set
+	// ownership transfer, and inline-only roots have an empty physical closure.
+	_, seedPtr := writeValueLogRecord(t, dir, 0, 1, []byte("seed-value"), 1)
+	seed := database.NewBatch().(*Batch)
+	defer seed.Close()
+	if err := seed.SetPointer([]byte("seed"), seedPtr); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.WriteSync(); err != nil {
+		t.Fatalf("seed pointer WriteSync: %v", err)
 	}
 	oldState := database.state.Load()
 	if oldState == nil || oldState.ValueLogSet == nil {

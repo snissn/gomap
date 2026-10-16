@@ -328,7 +328,8 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	coordinatorScratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(coordinatorScratch)
 
-	spanCount := len(prepared.LeafSpans)
+	leafSpans := prepared.LeafSpans
+	spanCount := len(leafSpans)
 	if workers <= 0 {
 		workers = 1
 	}
@@ -434,7 +435,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			workerApplyCfg.oldEntriesRemoved = &rangeOldEntriesRemoved[job]
 		}
 		for i := workerRange.FirstSpan; i < end; i++ {
-			span := prepared.LeafSpans[i]
+			span := leafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, workerApplyCfg)
 			if err != nil {
 				recordFailedRange()

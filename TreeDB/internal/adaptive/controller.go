@@ -19,6 +19,14 @@ const (
 
 // Metrics represents the telemetry gathered during a single commit.
 type Metrics struct {
+	PrimaryDirectoryPagesRead    uint64
+	PrimaryDirectoryPagesWritten uint64
+	PrimaryComponentPagesWritten uint64
+	PrimaryConsolidatedCells     uint64
+	PrimaryBytesWritten          uint64
+	PrimaryBankRecords           uint64
+	PrimaryBankWorkBytes         uint64
+
 	LeafFill        float64 // 0..1
 	Splits          int
 	IndexWriteBytes int

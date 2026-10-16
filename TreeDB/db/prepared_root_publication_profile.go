@@ -72,9 +72,9 @@ func (db *DB) currentValueLogSetForPublication(limits *PreparedRootPublicationLi
 		return nil, nil
 	}
 	if limits == nil {
-		return db.valueLogManager.CurrentSetNoRefresh(), nil
+		return db.valueLogManager.CurrentSetNoRefreshForPublication(nil)
 	}
-	return db.valueLogManager.CurrentSetNoRefreshWithMaxFiles(limits.MaxRegisteredValueLogFiles)
+	return db.valueLogManager.CurrentSetNoRefreshForPublication(&limits.MaxRegisteredValueLogFiles)
 }
 
 func preparedProfileAdd(a, b uint64) uint64 {
@@ -136,7 +136,7 @@ func (db *DB) PreparedRootPublicationBaseProfile() PreparedRootPublicationBasePr
 	if runtime := db.rootPublication; runtime != nil {
 		runtime.mu.Lock()
 		profile.VisibleResources = uint64(runtime.visibleResources.Len())
-		profile.VisibleMembers = uint64(len(runtime.visibleMembers))
+		profile.VisibleMembers = uint64(len(runtime.visibleMembers) - runtime.visibleHead)
 		profile.AllocatorDebt = uint64(len(runtime.debt))
 		profile.Seals = uint64(len(runtime.seals))
 		for _, seal := range runtime.seals {

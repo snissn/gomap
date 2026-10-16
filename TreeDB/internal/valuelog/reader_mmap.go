@@ -292,7 +292,11 @@ func (f *File) retirePersistentMmapToDeadLocked() bool {
 		// dead-mapping list to grow without bound.
 		return false
 	}
-	f.deadMappings = append(f.deadMappings, data)
+	owner := f.detachMmapOwnerV6Locked(data)
+	if !owner.constructor {
+		f.legacyMappingV6 = true
+	}
+	f.deadMappings = append(f.deadMappings, owner)
 	f.deadMappingsCount.Add(1)
 	f.deadMappedBytes.Add(uint64(len(data)))
 	f.mmapData.Store([]byte(nil))
@@ -300,24 +304,35 @@ func (f *File) retirePersistentMmapToDeadLocked() bool {
 }
 
 func (f *File) maybeScheduleRemap() {
-	if f == nil || f.closed.Load() || !f.usesPersistentMmap() {
+	if f == nil || f.closed.Load() {
+		return
+	}
+	// Admission belongs to the original File before launch. Close gates it
+	// under this same lock, then joins outside both closeMu and Manager.mu.
+	f.closeMu.Lock()
+	defer f.closeMu.Unlock()
+	if f.closed.Load() || f.File == nil || !f.usesPersistentMmap() {
 		return
 	}
 	data, _ := f.mmapData.Load().([]byte)
-	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
-		// If we have already exhausted our dead-mapping budget, we will not be
-		// able to remap again without risking use-after-unmap for callers holding
-		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
-		if data != nil {
-			return
-		}
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		return
 	}
 	if !f.remapRequested.CompareAndSwap(false, true) {
 		return
 	}
+	f.remapWorkers.Add(1)
+	manager, file := f.manager, f.File
 	go func() {
-		defer f.remapRequested.Store(false)
-		f.remapToFileSizePersistentOnly()
+		defer func() {
+			// No worker access to original aliases remains after this scope. The
+			// same closeMu excludes containing refund until the original join ends.
+			f.closeMu.Lock()
+			f.remapRequested.Store(false)
+			f.remapWorkers.Done()
+			f.closeMu.Unlock()
+		}()
+		f.remapToFileSizeWithAliases(true, manager, file)
 	}()
 }
 
@@ -371,9 +386,24 @@ func (f *File) remapToFileSize() bool {
 }
 
 func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
-	if f == nil || f.closed.Load() || f.File == nil {
+	if f == nil {
 		return false
 	}
+	// Capture aliases under their actual retirement lock. The async caller's
+	// original worker join (or a synchronous reader's File borrow) retains them.
+	f.closeMu.Lock()
+	if f.closed.Load() || f.File == nil {
+		f.closeMu.Unlock()
+		return false
+	}
+	m, file := f.manager, f.File
+	f.closeMu.Unlock()
+	return f.remapToFileSizeWithAliases(requirePersistent, m, file)
+}
+
+// Aliases are captured by the original reader borrow or async worker admission.
+// The original containing File remains live until that actual operation exits.
+func (f *File) remapToFileSizeWithAliases(requirePersistent bool, m *Manager, file *os.File) bool {
 	// Cheap conservative bailouts precede the manager lock. Authoritative
 	// policy, cap and budget checks below serialize admission with publication.
 	data, _ := f.mmapData.Load().([]byte)
@@ -386,7 +416,6 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 			return false
 		}
 	}
-	m := f.manager
 	if m != nil {
 		// Match demotion and Manager.Close lock order. Current files also
 		// take this lock because they may become sealed while awaiting remap.
@@ -398,7 +427,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 	}
 	f.remapMu.Lock()
 	defer f.remapMu.Unlock()
-	if f.closed.Load() || f.File == nil {
+	if f.closed.Load() {
 		return false
 	}
 	if requirePersistent && !f.usesPersistentMmap() {
@@ -418,7 +447,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 		}
 	}
 
-	info, err := f.File.Stat()
+	info, err := file.Stat()
 	if err != nil {
 		return false
 	}
@@ -464,17 +493,22 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) bool {
 		f.sealedLazyMmapDeniedCountCap.Store(0)
 		f.sealedLazyMmapDeniedBytesCap.Store(0)
 	}
-	b, err := mmapReadOnly(f.File, int(mapSize))
+	mapping, err := mapOwnedReadOnlyV6(file, int(mapSize))
 	if err != nil {
 		return false
 	}
 	// Keep the old live mapping and unsafe views unchanged on mmap failure.
 	if data != nil {
-		f.deadMappings = append(f.deadMappings, data)
+		owner := f.detachMmapOwnerV6Locked(data)
+		if !owner.constructor {
+			f.legacyMappingV6 = true
+		}
+		f.deadMappings = append(f.deadMappings, owner)
 		f.deadMappingsCount.Add(1)
 		f.deadMappedBytes.Add(uint64(len(data)))
 	}
-	f.mmapData.Store(b)
+	f.currentMappingV6 = mapping
+	f.mmapData.Store(mapping.data)
 	f.remapCount.Add(1)
 	return true
 }

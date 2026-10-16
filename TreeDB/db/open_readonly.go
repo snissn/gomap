@@ -22,7 +22,7 @@ func wrapReadOnlyValueLogRecoveryError(err error) error {
 	return err
 }
 
-func openReadOnly(opts Options) (*DB, error) {
+func openReadOnly(opts Options) (result *DB, retErr error) {
 	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -49,34 +49,59 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	registryTransferred := false
+	defer func() {
+		if !registryTransferred {
+			valueLogIdentityPins.Close()
+		}
+	}()
+	if handled, err := recoverPrimaryJointSwapWithRegistryV6(opts.Dir, true, valueLogIdentityPins, lock); handled || err != nil {
+		if !recoveryCleanupOwnsLockV6(err, lock) {
+			err = errors.Join(err, lock.Close())
+		}
+		return nil, errors.Join(err, ErrRecoveryRequired)
+	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
 		_ = lock.Close()
 		return nil, err
 	}
 
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	gen, err := newStartupIndexGeneration(db, lock)
+	if err != nil {
+		return nil, errors.Join(err, lock.Close())
+	}
+	defer func() {
+		if result != nil && retErr == nil {
+			gen.finishStartupSuccess()
+		} else {
+			metadata, charge, err := gen.finishStartupFailure(retErr, true)
+			gen = nil
+			retErr = err
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}
+	}()
 	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
 		MmapPopulate:   opts.PagerMmapPopulate,
 		PrefetchOnRead: opts.PagerPrefetchOnRead,
 	})
 	if err != nil {
-		_ = lock.Close()
 		return nil, err
 	}
+	gen.pager = p
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	vm, err := valuelog.NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
-		_ = p.Close()
-		_ = lock.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
+	gen.startupManager, db.valueLogManager = vm, vm
 	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
-		_ = vm.Close()
-		_ = p.Close()
-		_ = lock.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
@@ -90,10 +115,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	z := zipper.New(p, alloc)
-	gen := newIndexGen(1, p, alloc, z)
+	gen.allocator, gen.zipper = alloc, z
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
-	db := &DB{
+	*db = DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
@@ -147,8 +172,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	registryTransferred = true
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.idx.Store(gen)
+	gen.startupConstructed = true
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -157,17 +184,17 @@ func openReadOnly(opts Options) (*DB, error) {
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		return nil, err
+	}
 	if err := db.recover(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	if err := requireNoLegacyCachedRedoJournalReplay(opts.Dir, db, opts.WALMaxSegmentBytes); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	if db.commandWAL {
@@ -179,13 +206,13 @@ func openReadOnly(opts Options) (*DB, error) {
 			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
 		}
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		db.leafGenerationManifest = manifest
 	}
 
 	initialState := &DBState{
+		primaryRoot:                db.primaryCurrentRootV5(),
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
@@ -204,9 +231,22 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
+	return openReadOnlyNoLockWithRegistryV6(opts, nil, nil)
+}
+func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (result *DB, retErr error) {
 	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
 		return nil, err
 	}
+	if valueLogIdentityPins == nil {
+		valueLogIdentityPins = rootpublication.NewIdentityPinRegistry()
+	}
+	registryTransferred := false
+	defer func() {
+		if !registryTransferred {
+			valueLogIdentityPins.Close()
+		}
+	}()
+
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
@@ -221,11 +261,31 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
 		return nil, err
 	}
+	if handled, err := recoverPrimaryJointSwapWithRegistryV6(opts.Dir, true, valueLogIdentityPins, lock); handled || err != nil {
+		return nil, errors.Join(err, ErrRecoveryRequired)
+	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
 	if _, err := os.Stat(idxPath); err != nil {
 		return nil, err
 	}
 
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	gen, err := newStartupIndexGeneration(db, lock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if result != nil && retErr == nil {
+			gen.finishStartupSuccess()
+		} else {
+			metadata, charge, err := gen.finishStartupFailure(retErr, false)
+			gen = nil
+			retErr = err
+			if metadata != nil && charge != 0 {
+				metadata.RemovePending(charge)
+			}
+		}
+	}()
 	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
 		MmapPopulate:   opts.PagerMmapPopulate,
 		PrefetchOnRead: opts.PagerPrefetchOnRead,
@@ -233,18 +293,16 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	gen.pager = p
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	vm, err := valuelog.NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
-		_ = p.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
+	gen.startupManager, db.valueLogManager = vm, vm
 	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
-		_ = vm.Close()
-		_ = p.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
@@ -258,10 +316,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	z := zipper.New(p, alloc)
-	gen := newIndexGen(1, p, alloc, z)
+	gen.allocator, gen.zipper = alloc, z
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
-	db := &DB{
+	*db = DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
@@ -314,8 +372,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	registryTransferred = true
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.idx.Store(gen)
+	gen.startupConstructed = true
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -324,17 +384,17 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		return nil, err
+	}
 	if err := db.recover(); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	if err := requireNoLegacyCachedRedoJournalReplay(opts.Dir, db, opts.WALMaxSegmentBytes); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 	if db.commandWAL {
@@ -346,13 +406,13 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
 		}
 		if err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 		db.leafGenerationManifest = manifest
 	}
 
 	initialState := &DBState{
+		primaryRoot:                db.primaryCurrentRootV5(),
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,

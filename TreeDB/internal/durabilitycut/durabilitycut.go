@@ -175,6 +175,16 @@ func EmitStablePath(point Point, resource Resource, root, path string, stable *o
 	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, StablePath: stable})
 }
 
+// EmitStableRange identifies the exact physical write through its retained
+// file handle. Diagnostic paths never supply the persistence authority.
+func EmitStableRange(point Point, resource Resource, root, path string, stable *os.File, offset, length int64) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, StablePath: stable, Offset: offset, Length: length})
+}
+
 // EmitCreatedDirectoryPath records the physical persistence handle together
 // with the newly-created directory entry whose parent link it stabilizes.
 // Platforms that persist creation by syncing the parent should keep using

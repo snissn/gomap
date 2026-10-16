@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
 // This deliberately exhausts generation slots retained by real public cuts.
@@ -32,6 +34,21 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				opts.DisableBackgroundPrune = true
 			})
 			cache := database.cached
+			var originalPrimary, originalRegistry *retainedalloc.Owner
+			captureRefusal := errors.New("test-local metadata owner capture refusal")
+			captureMetadataOwners := func() (*retainedalloc.Owner, *retainedalloc.Owner) {
+				t.Helper()
+				var primary, registry *retainedalloc.Owner
+				snapshot, err := database.backend.AcquireSnapshotWithAllocationAdmission(func(sizes backenddb.SnapshotAllocationSizes) error {
+					primary, registry = sizes.PrimaryMetadata, sizes.RegistryMetadata
+					return captureRefusal
+				})
+				if snapshot != nil || err != captureRefusal {
+					t.Fatalf("owner-only refusal snapshot=%p err=%v", snapshot, err)
+				}
+				return primary, registry
+			}
+
 			keys := [][]byte{[]byte("a"), []byte("d")}
 			value := func(n uint64) []byte {
 				result := bytes.Repeat([]byte{0x4a}, 512)
@@ -63,6 +80,12 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				}
 				if err := cowPublicContractComplete(t, blocked, "retained-cut checkpoint", database.Checkpoint); err != nil {
 					t.Fatal(err)
+				}
+				if stage == 0 && profile == ProfileNoWALFast {
+					originalPrimary, originalRegistry = captureMetadataOwners()
+					if originalPrimary == nil || originalRegistry == nil {
+						t.Fatal("selected producer has no original owner pair")
+					}
 				}
 				for i, key := range keys {
 					current[i] = value(uint64(stage + 1))
@@ -155,6 +178,12 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			}
 			resumed := cache.COWMemoryStats()
 			cowPublicRetentionBound(t, resumed, limits)
+			if profile == ProfileNoWALFast {
+				primary, registry := captureMetadataOwners()
+				if primary != originalPrimary || registry != originalRegistry {
+					t.Fatal("original producer owner pair changed before Close")
+				}
+			}
 			if err := cowPublicContractComplete(t, blocked, "public close after drain", database.Close); err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +191,14 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			zero := closed
 			zero.PeakBytes = 0
 			if zero != (memtable.COWStats{}) {
+				if profile == ProfileNoWALFast {
+					registry := database.backend.ValueLogIdentityPinRegistry()
+					t.Fatalf("closed integration retained charges: %+v; original primary Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
+				}
 				t.Fatalf("closed integration retained charges: %+v", closed)
+			}
+			if profile == ProfileNoWALFast {
+				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
 			}
 			reopened, err := Open(opts)
 			if err != nil {

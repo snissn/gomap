@@ -1,0 +1,378 @@
+package valuelog
+
+import (
+	"encoding/binary"
+	"math/bits"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	templ "github.com/snissn/gomap/TreeDB/template"
+)
+
+// COWTemplateContinuation is the original native template wire grammar with
+// scalar suspended progress. Definition and ID must be borrowed from the SAME
+// existing immutable template-generation owner, with the whole containing
+// definition admitted; ID alone never establishes custody. Complete definition
+// CRC and all anchor/mask/position bounds are validated before derived spans or
+// output effects. No parsed-definition cache, allocation, or lookup is added.
+type COWTemplateContinuation struct {
+	Owner                                                        any
+	ID                                                           uint64
+	Definition                                                   []byte
+	payload, output, base, mask                                  []byte
+	phase                                                        uint8
+	active, full, positions, complete                            bool
+	crc                                                          uint32
+	crcAt, defAt, defEnd, anchorCount, anchorAt                  int
+	baseLen, maskLen, varCount, posAt, posStart, previousPos     int
+	payloadAt, outAt, copyAt, copyEnd, varsAt, maskAt, maskCount int
+	err                                                          error
+}
+
+func (c *COWTemplateContinuation) Begin(payload, output []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	if c.active && !c.complete {
+		return false, ErrCOWReadPending
+	}
+	if c.Owner == nil || c.ID == 0 || len(c.Definition) < 6 || cowBuffersOverlap(payload, output) || cowBuffersOverlap(c.Definition, output) {
+		return false, ErrCOWReadCapacity
+	}
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))+14) {
+		return false, nil
+	}
+	id, err := templ.EncodedPayloadTemplateID(payload)
+	if err != nil || id != c.ID {
+		return false, templ.ErrMissingTemplate
+	}
+	_, n := binary.Uvarint(payload[4:])
+	owner, id, definition := c.Owner, c.ID, c.Definition
+	*c = COWTemplateContinuation{Owner: owner, ID: id, Definition: definition}
+	c.payload, c.output = payload, output
+	c.payloadAt = 4 + n
+	c.defEnd = len(c.Definition) - 4
+	c.active = true
+	c.previousPos = -1
+	return true, nil
+}
+func (c *COWTemplateContinuation) Step(w *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if c.err != nil {
+		return nil, false, c.err
+	}
+	if !c.active {
+		return nil, false, ErrCOWReadPending
+	}
+	out, done, err := c.step(w)
+	if err != nil {
+		c.err = err
+	}
+	return out, done, err
+}
+func (c *COWTemplateContinuation) step(w *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if w == nil || w.Records >= w.RecordLimit || w.Bytes >= w.ByteLimit {
+		return nil, false, nil
+	}
+	for {
+		switch c.phase {
+		case 0:
+			if c.crcAt < c.defEnd {
+				n := cowContinuationChunk(w, c.defEnd-c.crcAt, 1)
+				if n == 0 || !w.Reserve(1, uint64(n)) {
+					return nil, false, nil
+				}
+				c.crc = crc.Update(c.crc, c.Definition[c.crcAt:c.crcAt+n])
+				c.crcAt += n
+				continue
+			}
+			if !w.Reserve(1, 4) {
+				return nil, false, nil
+			}
+			if c.crc != binary.LittleEndian.Uint32(c.Definition[c.defEnd:]) {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.phase = 1
+		case 1:
+			if !w.Reserve(1, 32) {
+				return nil, false, nil
+			}
+			if c.Definition[0] == 1 {
+				x, n := binary.Uvarint(c.Definition[1:c.defEnd])
+				if n <= 0 || x == 0 || x > 1<<20 {
+					return nil, false, templ.ErrCorruptTemplateDef
+				}
+				c.anchorCount = int(x)
+				c.defAt = 1 + n
+				c.phase = 2
+				continue
+			}
+			if (c.Definition[0] != 2 && c.Definition[0] != 3) || c.Definition[1] != byte(templ.TemplateMask) {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.defAt = 2
+			c.phase = 3
+		case 2:
+			if c.anchorAt == c.anchorCount {
+				if c.defAt != c.defEnd || c.payload[3]&2 != 0 {
+					return nil, false, templ.ErrCorruptTemplateDef
+				}
+				if !w.Reserve(1, 10) {
+					return nil, false, nil
+				}
+				c.defAt = 1
+				_, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+				c.defAt += n
+				c.anchorAt = 0
+				c.phase = 10
+				continue
+			}
+			if !w.Reserve(1, 10) {
+				return nil, false, nil
+			}
+			x, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+			if n <= 0 || x == 0 || x > uint64(c.defEnd-c.defAt-n) {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.defAt += n + int(x)
+			c.anchorAt++
+		case 3:
+			if !w.Reserve(1, 30) {
+				return nil, false, nil
+			}
+			x, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+			if n <= 0 || x == 0 || x > uint64(len(c.output)) {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.baseLen = int(x)
+			c.defAt += n
+			x, n = binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+			if n <= 0 || x != uint64((c.baseLen+7)/8) || x > uint64(c.defEnd-c.defAt-n) {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.maskLen = int(x)
+			c.defAt += n
+			if c.Definition[0] == 3 {
+				x, n = binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+				if n <= 0 || x > uint64(c.baseLen) {
+					return nil, false, templ.ErrCorruptTemplateDef
+				}
+				c.varCount = int(x)
+				c.defAt += n
+			}
+			if c.maskLen > c.defEnd-c.defAt {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.mask = c.Definition[c.defAt : c.defAt+c.maskLen]
+			c.defAt += c.maskLen
+			c.posStart = c.defAt
+			c.phase = 4
+		case 4:
+			if c.posAt < c.varCount {
+				if !w.Reserve(1, 11) {
+					return nil, false, nil
+				}
+				x, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+				if n <= 0 || x > 65535 || x >= uint64(c.baseLen) || int(x) <= c.previousPos || c.mask[x/8]&(1<<uint(x%8)) == 0 {
+					return nil, false, templ.ErrCorruptTemplateDef
+				}
+				c.previousPos = int(x)
+				c.defAt += n
+				c.posAt++
+				continue
+			}
+			if !w.Reserve(1, 32) {
+				return nil, false, nil
+			}
+			if c.baseLen != c.defEnd-c.defAt || c.payload[3]&2 == 0 {
+				return nil, false, templ.ErrCorruptTemplateDef
+			}
+			c.maskAt = 0
+			c.phase = 15
+		case 15:
+			if c.maskAt < c.maskLen {
+				if !w.Reserve(1, 1) {
+					return nil, false, nil
+				}
+				v := c.mask[c.maskAt]
+				if c.maskAt == c.maskLen-1 && c.baseLen%8 != 0 && v>>uint(c.baseLen%8) != 0 {
+					return nil, false, templ.ErrCorruptTemplateDef
+				}
+				c.maskAt++
+				continue
+			}
+			if !w.Reserve(1, 48) {
+				return nil, false, nil
+			}
+			c.base = c.Definition[c.defAt:c.defEnd]
+			c.full = c.payload[3]&4 != 0
+			c.positions = !c.full && c.varCount > 0
+			if c.full {
+				if c.maskLen > len(c.payload)-c.payloadAt {
+					return nil, false, templ.ErrCorrupt
+				}
+				c.mask = c.payload[c.payloadAt : c.payloadAt+c.maskLen]
+				c.payloadAt += c.maskLen
+			}
+			c.varsAt = c.payloadAt
+			c.maskAt = 0
+			c.maskCount = 0
+			c.phase = 5
+		case 5:
+			if c.maskAt < c.maskLen {
+				if !w.Reserve(1, 1) {
+					return nil, false, nil
+				}
+				v := c.mask[c.maskAt]
+				if c.maskAt == c.maskLen-1 && c.baseLen%8 != 0 && v>>uint(c.baseLen%8) != 0 {
+					return nil, false, templ.ErrCorrupt
+				}
+				c.maskCount += bits.OnesCount8(v)
+				c.maskAt++
+				continue
+			}
+			count := c.maskCount
+			if c.positions {
+				count = c.varCount
+			}
+			if !w.Reserve(1, 16) {
+				return nil, false, nil
+			}
+			if len(c.payload)-c.varsAt != count {
+				return nil, false, templ.ErrCorrupt
+			}
+			c.phase = 6
+			c.copyAt = 0
+		case 6:
+			if c.copyAt == c.baseLen {
+				c.copyAt = 0
+				c.posAt = 0
+				c.defAt = c.posStart
+				c.phase = 7
+				continue
+			}
+			n := cowContinuationChunk(w, c.baseLen-c.copyAt, 2)
+			if n == 0 || !w.Reserve(1, uint64(2*n)) {
+				return nil, false, nil
+			}
+			copy(c.output[c.copyAt:c.copyAt+n], c.base[c.copyAt:c.copyAt+n])
+			c.copyAt += n
+		case 7:
+			if c.positions {
+				if c.posAt == c.varCount {
+					c.outAt = c.baseLen
+					c.phase = 14
+					continue
+				}
+				if !w.Reserve(1, 12) {
+					return nil, false, nil
+				}
+				x, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+				c.defAt += n
+				c.output[int(x)] = c.payload[c.varsAt+c.posAt]
+				c.posAt++
+				continue
+			}
+			if c.copyAt == c.baseLen {
+				c.outAt = c.baseLen
+				c.phase = 14
+				continue
+			}
+			if !w.Reserve(1, 3) {
+				return nil, false, nil
+			}
+			if c.mask[c.copyAt/8]&(1<<uint(c.copyAt%8)) != 0 {
+				c.output[c.copyAt] = c.payload[c.varsAt]
+				c.varsAt++
+			}
+			c.copyAt++
+		case 10:
+			if !w.Reserve(1, 10) {
+				return nil, false, nil
+			}
+			x, n := binary.Uvarint(c.payload[c.payloadAt:])
+			if n <= 0 || x != uint64(c.anchorCount+1) {
+				return nil, false, templ.ErrCorrupt
+			}
+			c.payloadAt += n
+			c.phase = 11
+		case 11:
+			if !w.Reserve(1, 10) {
+				return nil, false, nil
+			}
+			x, n := binary.Uvarint(c.payload[c.payloadAt:])
+			if n <= 0 || x > uint64(len(c.payload)-c.payloadAt-n) || x > uint64(len(c.output)-c.outAt) {
+				return nil, false, templ.ErrCorrupt
+			}
+			c.payloadAt += n
+			c.copyAt = 0
+			c.copyEnd = int(x)
+			c.phase = 12
+		case 12:
+			if c.copyAt < c.copyEnd {
+				n := cowContinuationChunk(w, c.copyEnd-c.copyAt, 2)
+				if n == 0 || !w.Reserve(1, uint64(2*n)) {
+					return nil, false, nil
+				}
+				copy(c.output[c.outAt:c.outAt+n], c.payload[c.payloadAt:c.payloadAt+n])
+				c.payloadAt += n
+				c.outAt += n
+				c.copyAt += n
+				continue
+			}
+			if c.anchorAt == c.anchorCount {
+				if c.payloadAt != len(c.payload) {
+					return nil, false, templ.ErrCorrupt
+				}
+				c.phase = 14
+				continue
+			}
+			if !w.Reserve(1, 10) {
+				return nil, false, nil
+			}
+			x, n := binary.Uvarint(c.Definition[c.defAt:c.defEnd])
+			if x > uint64(len(c.output)-c.outAt) {
+				return nil, false, templ.ErrCorrupt
+			}
+			c.defAt += n
+			c.copyAt = 0
+			c.copyEnd = int(x)
+			c.phase = 13
+		case 13:
+			if c.copyAt < c.copyEnd {
+				n := cowContinuationChunk(w, c.copyEnd-c.copyAt, 2)
+				if n == 0 || !w.Reserve(1, uint64(2*n)) {
+					return nil, false, nil
+				}
+				copy(c.output[c.outAt:c.outAt+n], c.Definition[c.defAt:c.defAt+n])
+				c.defAt += n
+				c.outAt += n
+				c.copyAt += n
+				continue
+			}
+			c.anchorAt++
+			c.phase = 11
+		case 14:
+			if !w.Reserve(1, 24) {
+				return nil, false, nil
+			}
+			c.complete = true
+			return c.output[:c.outAt], true, nil
+		}
+	}
+}
+func (c *COWTemplateContinuation) Cancel(w *iterator.OrdinalScanWork) bool {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) {
+		return false
+	}
+	*c = COWTemplateContinuation{}
+	return true
+}
+
+// detach removes old payload/output views before their caller reuses storage;
+// the original immutable definition and its existing owner remain bound.
+func (c *COWTemplateContinuation) detach(w *iterator.OrdinalScanWork) bool {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) {
+		return false
+	}
+	owner, id, definition := c.Owner, c.ID, c.Definition
+	*c = COWTemplateContinuation{Owner: owner, ID: id, Definition: definition}
+	return true
+}

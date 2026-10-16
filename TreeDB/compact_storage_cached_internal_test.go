@@ -547,7 +547,8 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	// The rewrite publishes replacement pointers, but the immediately previous
 	// durable slot may still retain the source segments. Reopen before publishing
 	// an inline-only successor so the cached writer also starts from the rewritten
-	// leaf-log generation. Both durable slots have then crossed the rewrite before
+	// leaf-log generation. The subsequent compact operation must rebuild the
+	// complete recoverable closure, including both embedded parent proofs, before
 	// CompactStorage is required to report zero physical GC debt.
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
@@ -578,8 +579,13 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if compact.FullyCompacted || compact.PolicyFullyCompacted || compact.ByteMinimized || compact.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retained leaf generation overstated completion: %+v", compact)
+	if !compact.RemainingDebt.Empty() || !compact.FullyCompacted || !compact.PolicyFullyCompacted || compact.ByteMinimized {
+		t.Fatalf("full policy compaction did not drain debt, or asserted exhaustive byte minimization: %+v", compact)
+	}
+	for _, segment := range source {
+		if _, err := os.Stat(segment.path); !os.IsNotExist(err) {
+			t.Fatalf("rewritten original source survived completed compaction: %s %v", segment.path, err)
+		}
 	}
 	if err := compactor.Close(); err != nil {
 		t.Fatalf("close compactor: %v", err)

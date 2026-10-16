@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -221,13 +223,23 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
 				t.Fatalf("rewrite changed logical revision: got=%d want=%d error=%v", revision, entry.Revision, err)
 			}
 			current.Close()
-			_, err = database.CompactStorage(context.Background(), CompactStorageOptions{})
-			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
-				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-					t.Fatalf("unsupported leaf-pack promotion: %v", err)
+			report, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
+			packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
+			if err != nil {
+				if packSupported || !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || len(report.Phases) == 0 || !strings.HasPrefix(report.Phases[len(report.Phases)-1].Name, "leaf-generation-pack-") {
+					t.Fatalf("ordinary compaction after selected rewrite: %v (phases=%+v)", err, report.Phases)
 				}
-			} else if err != nil {
-				t.Fatalf("ordinary compaction after selected rewrite: %v", err)
+			} else if !packSupported {
+				// The public planner may have no eligible pack work. Unsupported
+				// promotion is required only when a real pack is selected.
+				if len(report.LeafGenerationPacks) == 0 {
+					t.Fatal("compaction omitted leaf-pack planning")
+				}
+				for _, pack := range report.LeafGenerationPacks {
+					if pack.Ran || pack.SkipReason == "" || len(pack.Selection.GenerationIDs) != 0 {
+						t.Fatalf("unsupported promotion reported applied/selected pack: %+v", pack)
+					}
+				}
 			}
 			if err := database.Set([]byte("a"), []byte("late")); err != nil {
 				t.Fatal(err)
@@ -267,18 +279,39 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 			if err := database.Set([]byte("a"), value); err != nil {
 				t.Fatal(err)
 			}
+			// A tiny PRIMARY directory can stay inline and never open a lazy
+			// outer-leaf writer. Build genuine ordinary leaf output before asking
+			// the existing maintenance fence to rotate those actual lanes.
+			for i := 0; i < 1024; i++ {
+				if err := database.Set([]byte(fmt.Sprintf("leaf-seed-%08d", i)), value); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := database.Checkpoint(); err != nil {
 				t.Fatal(err)
+			}
+			stats := database.Stats()
+			for _, key := range []string{"treedb.cache.flush_apply.leaf_log_append_records_total", "treedb.cache.flush_apply.leaf_log_append_frames_total"} {
+				count, err := strconv.ParseUint(stats[key], 10, 64)
+				if err != nil || count == 0 {
+					t.Fatalf("no genuine outer-leaf output: %s=%q (%v)", key, stats[key], err)
+				}
+				t.Logf("original outer-leaf dispatch %s=%d", key, count)
 			}
 			old := database.AcquireSnapshot()
 			if old == nil {
 				t.Fatal("missing old cut")
 			}
 			defer old.Close()
+			cowPublicContractSnapshotValue(t, old, "leaf-seed-00000000", value, true)
+			cowPublicContractSnapshotValue(t, old, "leaf-seed-00001023", value, true)
 			leafPattern := filepath.Join(opts.Dir, "maindb", "leaf_vlog", "value-l*.log")
 			initialFiles, err := filepath.Glob(leafPattern)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(initialFiles) == 0 {
+				t.Fatal("actual outer-leaf output has no physical segment")
 			}
 			initial := make(map[string]bool, len(initialFiles))
 			for _, path := range initialFiles {
@@ -313,6 +346,17 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 				}
 			}
 			compaction, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
+			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+					t.Fatalf("leaf pack platform refusal: %v", err)
+				}
+				cowPublicContractSnapshotValue(t, old, "a", value, true)
+				if _, statErr := os.Stat(unusedLeaf); statErr != nil {
+					t.Fatalf("refused pack changed unused leaf: %v", statErr)
+				}
+				t.Log("exact-parent pack unavailable; verified typed refusal and retained old cut, reclamation remains unqualified")
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

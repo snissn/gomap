@@ -1,0 +1,17 @@
+/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test: go1.26.4
+	path	github.com/snissn/gomap/TreeDB/db.test
+	mod	github.com/snissn/gomap	v0.0.0-20261008204231-19ba9fdbca4c	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=19ba9fdbca4ca85afc544a8b342d66aad32f01b2
+	build	vcs.time=2026-10-08T20:42:31Z
+	build	vcs.modified=false

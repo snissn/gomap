@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -278,7 +277,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	// Exercise the real target filesystem install before publishing a value-log
 	// set or creating a staging directory, writer, or private pager. A true
 	// no-op needs no namespace capability.
-	if err := leafGenerationPackPromotionTargetPreflight(layout.leafVLogDir); err != nil {
+	if err := db.leafGenerationPackPromotionTargetPreflight(layout.leafVLogDir); err != nil {
 		return stats, err
 	}
 	if err := db.publishValueLogSetNoRefresh(); err != nil {
@@ -314,11 +313,9 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	var leafDictBytes []byte
 	var leafDictUseRawPages bool
 	if blockCompression {
-		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err = prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
-			if err != nil {
-				return stats, err
-			}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err = db.prepareCurrentRewriteLeafDict()
+		if err != nil {
+			return stats, err
 		}
 	}
 
@@ -344,7 +341,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			_ = removeLeafGenerationPackStagingDirFn(stagingDir)
 			return stats, err
 		}
-		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
+		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0, db.valueLogIdentityPins)
 		writer.ConfigureLeafLog(privateLeafDir, rewriteLeafLogLaneID, leafStartSeq)
 		writer.configureLeafStaging(stagingDir)
 		writer.setLeafPageLogSeqAllocator(seqAlloc)

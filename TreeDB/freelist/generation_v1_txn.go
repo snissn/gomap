@@ -194,6 +194,12 @@ type FreelistTxn struct {
 	allocated        []allocatedPage
 	abandonedAppends []ReservationExtentV1
 	consumed         bool
+	// requiresGeneration records actual edits after BeginCandidate's inherited
+	// pending-metadata retirement. Those inherited edits can remain deferred while
+	// a PRIMARY-only publication retains the exact immutable DATA generation.
+	// Every allocation/reuse/retirement/prune below sets this before it can be
+	// observed by the original allocator publication producer.
+	requiresGeneration bool
 	// Granted only after detaching pre-existing dirty aliases. New dirty
 	// nodes remain exclusively owned until clone or materialization revokes it.
 	privatePreparation bool
@@ -262,6 +268,9 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 		t.replacedMetadata[id] = struct{}{}
 	}
 	t.retireMany(base.record.pendingMetadata())
+	// Begin applies inherited metadata bookkeeping before any actual allocations.
+	// Later mutations retain their generation obligation through every clone.
+	t.requiresGeneration = false
 	return t, nil
 }
 
@@ -311,6 +320,7 @@ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
 }
 
 func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
+	t.requiresGeneration = true
 	t.markReplacedPath(chunkNo)
 	if t.privatePreparation {
 		t.root = mutatePrivateChunkWithStats(t.root, chunkNo, 0, f, &t.stats)
@@ -364,10 +374,17 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	if id > start {
 		t.abandonedAppends = appendReservationRange(t.abandonedAppends, start, id-start, ReservationAbandonedAppend, 0)
 	}
+	t.installAppend(id)
+	return id, nil
+}
+
+// installAppend records an already selected append in the SAME transaction.
+// Work-bearing callers prove capacity and guard the original ledger first.
+func (t *FreelistTxn) installAppend(id uint64) {
+	t.requiresGeneration = true
 	t.highWater = id + 1
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
 	t.stats.AppendAllocations++
-	return id, nil
 }
 
 // allocateContiguousRange first tries a bounded reusable extent, then appends.
@@ -414,6 +431,7 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 			ids[i] = candidate + uint64(i)
 			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
 		}
+		t.requiresGeneration = true
 		t.highWater = candidate + width
 		t.stats.AppendAllocations += width
 		return ids, nil

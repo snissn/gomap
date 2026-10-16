@@ -33,7 +33,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	var entry *stableResourceEntry
 	if source.kindViews != nil {
-		view, ok := source.kindViews[selector.Kind]
+		view, ok := source.kindViews.lookup(selector.Kind)
 		if ok {
 			entry = findStableResourceLogical(view.logical, key)
 		}
@@ -64,7 +64,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	selected := *entry
 	selected.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{selector.Obligation})
-	selected.reachability = map[ReachabilityField]struct{}{selector.Obligation.Reachability: {}}
+	selected.reachability = newGenericResourceReachability(selector.Obligation.Reachability)
 	selected.dependencyManifestV1 = nil
 
 	builder := NewStableResourceSetBuilder()
@@ -90,6 +90,25 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 func CloneStableResourceSetSelectingPhysicalKind(source *StableResourceSet, kind ResourceKind, selected []StableIdentity, excluded ...ResourceKind) (*StableResourceSet, error) {
 	if kind == "" || source == nil || source.physicalOnly {
 		return nil, ErrResourceOwnership
+	}
+	if source.hasSelectedMetadata() {
+		// Preserve genuine source-governed metadata and original operation custody;
+		// generic producer storage must never be fed into a selected Merge.
+		for i, identity := range selected {
+			if !identity.valid() || identity.Generation == 0 {
+				return nil, ErrUnresolvedResource
+			}
+			for j := 0; j < i; j++ {
+				if selected[j] == identity {
+					return nil, ErrResourceConflict
+				}
+			}
+		}
+		if resourceKindExcluded(kind, excluded) {
+			return nil, ErrResourceConflict
+		}
+		result, _, err := cloneSelectedResourceFilteredWithPhysicalSelection(source, StableLogicalObligationRequirements{}, nil, excluded, StableResourceClosureWork{CloneOperations: 1}, kind, selected)
+		return result, err
 	}
 	wanted := make(map[StableIdentity]bool, len(selected))
 	for _, identity := range selected {

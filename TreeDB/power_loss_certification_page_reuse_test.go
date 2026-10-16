@@ -70,16 +70,15 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 	cutErr := errors.New("power-loss-certification: stop before reused-page index sync")
 	var snapshot *powerlossoracle.Model
 	var indexPath string
-	beforeIndexSyncs := 0
+	armed := false
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point != durabilitycut.BeforeIndexDataSync {
-			return nil
-		}
-		if beforeIndexSyncs == 0 {
-			beforeIndexSyncs++
+		// PRIMARY V6 syncs both the DATA dependency and PRIMARY closure. Arm
+		// only after the first post-horizon publication, and cut the actual
+		// DATA operand whose reused pages this witness observes.
+		if !armed || event.Point != durabilitycut.BeforeIndexDataSync || filepath.Base(event.Path) != "index.db" {
 			return nil
 		}
 		snapshot = model.Clone()
@@ -96,6 +95,7 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 	}
 	stableState = backend.State()
 	beforeReuse := certificationStatUint64(t, backend.Stats(), "treedb.freelist.reuse_alloc_pages_total")
+	armed = true
 	err = writeGeneration('f')
 	restore()
 	if !errors.Is(err, cutErr) || snapshot == nil || indexPath == "" {

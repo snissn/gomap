@@ -172,10 +172,15 @@ func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
 }
 
 func (db *DB) refreshOnValueLogFileNotFound(err error) bool {
-	if db == nil || db.valueLogManager == nil {
+	if db == nil || !errors.Is(err, valuelog.ErrFileNotFound) {
 		return false
 	}
-	return errors.Is(err, valuelog.ErrFileNotFound)
+	// Close detaches the Manager under mu. Successful reads need no retry
+	// eligibility lookup; the exceptional retry joins that same ownership lock.
+	db.mu.RLock()
+	available := db.valueLogManager != nil
+	db.mu.RUnlock()
+	return available
 }
 
 func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {

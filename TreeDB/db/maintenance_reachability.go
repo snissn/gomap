@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -24,7 +25,8 @@ func (c maintenanceReachabilityCollectors) has(want maintenanceReachabilityColle
 }
 
 type maintenanceReachabilityScanOptions struct {
-	Collectors maintenanceReachabilityCollectors
+	Collectors    maintenanceReachabilityCollectors
+	CountMetadata *retainedalloc.Owner
 	// ExplicitRootIDs limits the scan to this already-discovered root frontier.
 	// A non-nil slice bypasses descriptor discovery so durable-root publication
 	// can register primary-root value-log dependencies before decoding any
@@ -38,6 +40,7 @@ type maintenanceReachabilityScanOptions struct {
 
 type maintenanceReachabilityResult struct {
 	valueLogRefCounts          map[uint32]uint64
+	countRecords               valueLogRefCounts
 	valueLogReferencedSegments map[uint32]struct{}
 	valueLogLiveBytesBySegment map[uint32]int64
 	leafGenerationLive         leafGenerationLiveScanStats
@@ -99,8 +102,12 @@ func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protected
 	return roots, valueLogRootCount, nil
 }
 
-func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, opts maintenanceReachabilityScanOptions) (maintenanceReachabilityResult, error) {
-	var result maintenanceReachabilityResult
+func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, opts maintenanceReachabilityScanOptions) (result maintenanceReachabilityResult, scanErr error) {
+	defer func() {
+		if scanErr != nil {
+			result.countRecords.close()
+		}
+	}()
 	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
 		return result, fmt.Errorf("maintenance reachability: missing snapshot state")
 	}
@@ -114,7 +121,11 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	collectLeaf := collectLeafTotals || collectLeafFiles
 	collectValueLog := collectRefs || collectLive
 	if collectRefs {
-		result.valueLogRefCounts = make(map[uint32]uint64)
+		if opts.CountMetadata == nil {
+			result.valueLogRefCounts = make(map[uint32]uint64)
+		} else {
+			result.countRecords.metadata = opts.CountMetadata
+		}
 		result.valueLogReferencedSegments = make(map[uint32]struct{})
 	}
 	if collectLive {
@@ -130,6 +141,38 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		return result, nil
 	}
 
+	// Global reference accumulation uses exactly one collector representation.
+	// Per-page memo evidence remains transient and supplies multiplicity when an
+	// ordinary root appears in more than one maintenance projection.
+	addCount := func(fileID uint32, n uint64) error {
+		if !collectRefs || n == 0 {
+			return nil
+		}
+		if opts.CountMetadata == nil {
+			cur := result.valueLogRefCounts[fileID]
+			if n > ^uint64(0)-cur {
+				return fmt.Errorf("maintenance ref count overflow: file %d", fileID)
+			}
+			result.valueLogRefCounts[fileID] = cur + n
+		} else {
+			if fileID == 0 || snap.state.ValueLogSet == nil {
+				return fmt.Errorf("%w: counted value-log file %d absent from captured set", valuelog.ErrFileNotFound, fileID)
+			}
+			file := snap.state.ValueLogSet.Files[fileID]
+			if file == nil || file.File == nil || file.IsZombie.Load() {
+				return fmt.Errorf("%w: counted value-log file %d is unavailable in captured set", valuelog.ErrFileNotFound, fileID)
+			}
+			cur := result.countRecords.get(fileID)
+			if n > ^uint64(0)-cur {
+				return fmt.Errorf("maintenance ref count overflow: file %d", fileID)
+			}
+			if err := result.countRecords.set(fileID, cur+n); err != nil {
+				return err
+			}
+		}
+		result.valueLogReferencedSegments[fileID] = struct{}{}
+		return nil
+	}
 	var leafScan *leafGenerationScanContext
 	var err error
 	if collectLeafTotals {
@@ -181,7 +224,10 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		valueLogComplete bool
 	}
 
-	segmentTallies := make(map[uint32]valueLogSegmentTally)
+	var segmentTallies map[uint32]valueLogSegmentTally
+	if collectLive {
+		segmentTallies = make(map[uint32]valueLogSegmentTally)
+	}
 	var directGroupedRecordStarts map[uint32]map[uint64]struct{}
 	var groupedRecordLengths map[uint32]map[uint64]int64
 	if collectLive {
@@ -222,8 +268,8 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 			if directValueLogProjection {
 				result.counters.PointerProjections++
 				tally := segmentTallies[ptr.FileID]
-				if collectRefs {
-					tally.references++
+				if err := addCount(ptr.FileID, 1); err != nil {
+					return err
 				}
 				if collectLive {
 					if page.ValuePtrIsGrouped(ptr) {
@@ -255,7 +301,9 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 					// Pointer lengths begin after the CRC; file sizes include it.
 					tally.liveBytes += int64(recordLen) + 4
 				}
-				segmentTallies[ptr.FileID] = tally
+				if collectLive {
+					segmentTallies[ptr.FileID] = tally
+				}
 				continue
 			}
 
@@ -396,6 +444,48 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 
 		entry := memoEntry{valueLogComplete: valueLogProjection}
 		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			directory, err := node.DecodePrimaryDirectory(data)
+			if err != nil {
+				return nil, err
+			}
+			base, _ := directory.Base()
+			baseImage, err := snap.idx.pager.Get(base.Ref.Page)
+			if err != nil {
+				return nil, err
+			}
+			if !node.VerifyPrimaryOperand(base, baseImage) {
+				return nil, fmt.Errorf("maintenance primary %d base %d: %w", pageID, base.Ref.Page, node.ErrPrimaryDirectory)
+			}
+			entry.children = append(entry.children, base.Ref.Page)
+			for i := 0; i < directory.Count(); i++ {
+				component, _ := directory.Entry(i)
+				if component.InlineAbsence() {
+					continue
+				}
+				if component.Operand.Ref.Kind != page.ChildRefPage {
+					return nil, node.ErrPrimaryDirectory
+				}
+				image, err := snap.idx.pager.Get(component.Operand.Ref.Page)
+				if err != nil {
+					return nil, err
+				}
+				result.counters.PagesVisited++
+				result.counters.PhysicalBytesRead += uint64(len(image))
+				if err = node.ValidatePrimaryComponent(component, image); err != nil {
+					return nil, fmt.Errorf("maintenance primary %d component %d key %q: %w", pageID, component.Operand.Ref.Page, component.Key, err)
+				}
+				entry.children = append(entry.children, component.Operand.Ref.Page)
+			}
+			result.counters.PagesVisited++
+			result.counters.PhysicalBytesRead += uint64(len(baseImage))
+			for _, child := range entry.children {
+				totals, err := walk(child, depth+1, valueLogProjection)
+				if err != nil {
+					return nil, err
+				}
+				entry.leafTotals = mergeLeafGenerationTotals(entry.leafTotals, totals)
+			}
 		case page.PageTypeLeaf:
 			if valueLogProjection {
 				if err := scanLeafValues(n, &entry); err != nil {
@@ -489,10 +579,14 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		}
 		for fileID, local := range entry.valueLogTallies {
 			tally := segmentTallies[fileID]
-			tally.references += local.references
-			tally.liveBytes += local.liveBytes
-			tally.pointers += local.pointers
-			segmentTallies[fileID] = tally
+			if err := addCount(fileID, local.references); err != nil {
+				return err
+			}
+			if collectLive {
+				tally.liveBytes += local.liveBytes
+				tally.pointers += local.pointers
+				segmentTallies[fileID] = tally
+			}
 			result.counters.PointerProjections += local.pointers
 		}
 		if collectLive {
@@ -538,10 +632,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		}
 	}
 	for fileID, tally := range segmentTallies {
-		if collectRefs && tally.references != 0 {
-			result.valueLogRefCounts[fileID] = tally.references
-			result.valueLogReferencedSegments[fileID] = struct{}{}
-		}
+
 		if collectLive {
 			result.valueLogLiveBytesBySegment[fileID] = tally.liveBytes
 		}

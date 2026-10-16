@@ -22,7 +22,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
-	github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
+	github.com/snissn/compress v1.18.2-snissn.0.0.20261014112447-88a027b09341
 	github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7

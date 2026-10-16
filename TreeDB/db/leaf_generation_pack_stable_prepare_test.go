@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,11 +185,20 @@ func TestPrepareLeafGenerationPackStableClosureCloseAdmission(t *testing.T) {
 			_ = result.closure.Release()
 			t.Fatalf("post-Close packed closure observations=%+v want complete producer evidence", observed)
 		}
+		if result.closure.cleanupChildCapacity == 0 || result.closure.metadataCharge < result.closure.cleanupChildCapacity {
+			t.Fatal("retained packed closure lacks pre-admitted cleanup handle capacity")
+		}
 		if err := result.closure.Release(); err != nil {
-			t.Fatalf("release retained packed closure after DB close: %v", err)
+			t.Fatalf("release retained packed closure after DB close: %v; original causes=%v; resources retained=%t; cleanup child retained=%t; parent close attempted=%t; parent close err=%v", err, result.closure.failure.causes, result.closure.resources != nil, result.closure.cleanupChild != nil, result.closure.parentCloseAttempted, result.closure.parentCloseErr)
 		}
 		if got := registry.Stats(); got != (rootpublication.IdentityPinRegistryStats{}) {
 			t.Fatalf("packed registry after retained closure release=%+v want zero", got)
+		}
+		if result.closure.metadata != nil || result.closure.metadataCharge != 0 || result.closure.cleanupChild != nil {
+			t.Fatal("packed containing completion retained metadata or cleanup handle after release")
+		}
+		if err := result.closure.Release(); err != nil {
+			t.Fatalf("repeated retained packed closure release: %v", err)
 		}
 
 		lateClosure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), leafPages)
@@ -283,10 +293,15 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 		closure.Release()
 		t.Fatalf("TakeStableResources: %v", err)
 	}
-	descriptors := make(map[uint64]rootpublication.StableResourceDescriptor, len(segments))
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
-		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack {
-			descriptors[descriptor.Generation()] = descriptor
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostics.Close()
+	descriptors := make(map[uint64]rootpublication.StableResourcePhysicalDescriptor, len(segments))
+	for _, descriptor := range diagnostics.Physical() {
+		if descriptor.Kind == rootpublication.ResourceOuterLeafPack {
+			descriptors[descriptor.Generation] = descriptor
 		}
 	}
 	if len(descriptors) != len(segments) {
@@ -314,6 +329,9 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 	if _, err := closure.TakeStableResources(); !errors.Is(err, ErrLeafGenerationPackStablePreparedClosureConsumed) {
 		resources.Release()
 		t.Fatalf("second TakeStableResources error=%v want consumed", err)
+	}
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 	closure.Release()
 	closure.Abandon()
@@ -468,7 +486,7 @@ func TestLeafGenerationPackStablePrepareValidationFailureCleansPromotedChildren(
 	}
 }
 
-func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsAndRetries(t *testing.T) {
+func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsFirstOutcome(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
 		t.Skip("stable packed promotion requires exact relative cross-parent namespace support")
 	}
@@ -483,7 +501,13 @@ func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsAndRetr
 	cleanupCut := errors.New("injected deletion-directory sync cut")
 	restoreValidation := setLeafGenerationPackStableClosureValidationTestHook(func() error { return validationErr })
 	defer restoreValidation()
-	cutCalls := 0
+	cutCalls, physicalSyncs := 0, 0
+	originalSync := leafGenerationPackAuthoritySyncDirectory
+	leafGenerationPackAuthoritySyncDirectory = func(file *os.File) error {
+		physicalSyncs++
+		return originalSync(file)
+	}
+	defer func() { leafGenerationPackAuthoritySyncDirectory = originalSync }()
 	restoreCut := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Point == durabilitycut.BeforeDeletionDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf && cutCalls == 0 {
 			cutCalls++
@@ -527,26 +551,37 @@ func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsAndRetr
 		_ = database.Close()
 		t.Fatalf("retained stable-prepare staging roots=%v want one exact recovery root", stagingRoots)
 	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("Close retrying exact promoted cleanup: %v", err)
+	if physicalSyncs != 0 {
+		t.Fatalf("physical deletion syncs=%d want unstarted edge", physicalSyncs)
 	}
-	if got := registry.Stats(); got != baseline {
-		t.Fatalf("stable registry after teardown cleanup retry=%+v want baseline %+v", got, baseline)
+	closeErr := database.Close()
+	if !errors.Is(closeErr, cleanupCut) || !errors.Is(closeErr, ErrRecoveryRequired) {
+		t.Fatalf("Close first cleanup outcome=%v want original hard refusal", closeErr)
+	}
+	var firstReceipt, repeatedReceipt *originalDBCleanupFailure
+	if again := database.Close(); !errors.Is(again, cleanupCut) || !errors.As(closeErr, &firstReceipt) || !errors.As(again, &repeatedReceipt) || firstReceipt != repeatedReceipt {
+		t.Fatalf("repeat Close lost original first receipt: first=%v again=%v", closeErr, again)
+	}
+	if cutCalls != 1 || physicalSyncs != 0 {
+		t.Fatalf("cleanup replay: cuts=%d physical_syncs=%d", cutCalls, physicalSyncs)
+	}
+	if got := registry.Stats(); got.ActivePins < retained.ActivePins {
+		t.Fatalf("terminal authority custody=%+v want retained %+v", got, retained)
+	}
+	assertLeafGenerationPackOriginalTerminalProof(t, database)
+	if owner := registry.MetadataOwner(); owner.Bytes() == 0 || owner.PhysicalClosed() {
+		t.Fatalf("failed original authority lost charged metadata: bytes=%d closed=%t", owner.Bytes(), owner.PhysicalClosed())
 	}
 	stagingRoots, globErr = filepath.Glob(stagingPattern)
-	if globErr != nil {
-		t.Fatalf("Glob(%q): %v", stagingPattern, globErr)
+	if globErr != nil || len(stagingRoots) != 1 {
+		t.Fatalf("exact staging custody=%v err=%v", stagingRoots, globErr)
 	}
-	if len(stagingRoots) != 0 {
-		t.Fatalf("teardown cleanup retry left stable-prepare staging roots: %v", stagingRoots)
-	}
+	// Unlink was actually authorized before the hard pre-Sync refusal. The
+	// retained positive proof/debt records this partial disposition truthfully.
 	for _, pattern := range []string{"*.vlog", "*.log"} {
 		matches, globErr := filepath.Glob(filepath.Join(leafDir, pattern))
-		if globErr != nil {
-			t.Fatalf("Glob(%q): %v", pattern, globErr)
-		}
-		if len(matches) != 0 {
-			t.Fatalf("teardown cleanup retry left final children for %q: %v", pattern, matches)
+		if globErr != nil || len(matches) != 0 {
+			t.Fatalf("authorized unlink paths=%v err=%v", matches, globErr)
 		}
 	}
 }
@@ -573,7 +608,13 @@ func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClos
 		return validationErr
 	})
 	defer restoreValidation()
-	cleanupAttempts := 0
+	cleanupAttempts, physicalSyncs := 0, 0
+	originalSync := leafGenerationPackAuthoritySyncDirectory
+	leafGenerationPackAuthoritySyncDirectory = func(file *os.File) error {
+		physicalSyncs++
+		return originalSync(file)
+	}
+	defer func() { leafGenerationPackAuthoritySyncDirectory = originalSync }()
 	restoreCut := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Point != durabilitycut.BeforeDeletionDirectorySync || event.Resource != durabilitycut.ResourceOuterLeaf {
 			return nil
@@ -619,26 +660,35 @@ func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClos
 	}
 	select {
 	case closeErr := <-closed:
-		if closeErr != nil {
-			t.Fatalf("Close draining retained packed cleanup: %v", closeErr)
+		if !errors.Is(closeErr, cleanupCut) || !errors.Is(closeErr, ErrRecoveryRequired) {
+			t.Fatalf("Close retained first packed cleanup outcome: %v", closeErr)
+		}
+		var firstReceipt, repeatedReceipt *originalDBCleanupFailure
+		if again := database.Close(); !errors.Is(again, cleanupCut) || !errors.As(closeErr, &firstReceipt) || !errors.As(again, &repeatedReceipt) || firstReceipt != repeatedReceipt {
+			t.Fatalf("repeat terminal Close lost original first receipt: %v then %v", closeErr, again)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Close did not drain retained packed cleanup after capture release")
 	}
-	if cleanupAttempts < 2 {
-		t.Fatalf("deletion-directory sync attempts=%d want initial failure plus teardown retry", cleanupAttempts)
+	if cleanupAttempts != 1 || physicalSyncs != 0 {
+		t.Fatalf("cleanup attempts=%d physical_syncs=%d want one hard refusal and no replay", cleanupAttempts, physicalSyncs)
 	}
-	if got := registry.Stats(); got != baseline {
-		t.Fatalf("stable registry after concurrent Close cleanup=%+v want baseline %+v", got, baseline)
+	if got := registry.Stats(); got.ActivePins <= baseline.ActivePins {
+		t.Fatalf("same original terminal custody=%+v want above baseline %+v", got, baseline)
+	}
+	assertLeafGenerationPackOriginalTerminalProof(t, database)
+	if owner := registry.MetadataOwner(); owner.Bytes() == 0 || owner.PhysicalClosed() {
+		t.Fatalf("failed authority metadata bytes=%d closed=%t", owner.Bytes(), owner.PhysicalClosed())
 	}
 	leafDir := resolveStorageLayout(dir).leafVLogDir
-	for _, pattern := range []string{"*.vlog", "*.log", ".leaf-pack-stable-prepare-*"} {
+	staging, err := filepath.Glob(filepath.Join(leafDir, ".leaf-pack-stable-prepare-*"))
+	if err != nil || len(staging) != 1 {
+		t.Fatalf("original staging custody=%v err=%v", staging, err)
+	}
+	for _, pattern := range []string{"*.vlog", "*.log"} {
 		matches, globErr := filepath.Glob(filepath.Join(leafDir, pattern))
-		if globErr != nil {
-			t.Fatalf("Glob(%q): %v", pattern, globErr)
-		}
-		if len(matches) != 0 {
-			t.Fatalf("concurrent Close cleanup left paths for %q: %v", pattern, matches)
+		if globErr != nil || len(matches) != 0 {
+			t.Fatalf("authorized unlink paths=%v err=%v", matches, globErr)
 		}
 	}
 }
@@ -664,5 +714,116 @@ func TestLeafGenerationPackStablePrepareUnsupportedFailsBeforeVisibility(t *test
 	after := *database.State()
 	if after.CommitSeq != before.CommitSeq || after.SystemRootPageID != before.SystemRootPageID || after.AppliedCommandLSN != before.AppliedCommandLSN {
 		t.Fatalf("unsupported packed prepare published visibility before=%+v after=%+v", before, after)
+	}
+}
+
+// The registry terminally invalidates its DB-lifetime sync-elision cache.
+// Actual failed promotion authority owns its exact namespace tokens and parent.
+func assertLeafGenerationPackOriginalTerminalProof(t *testing.T, database *DB) {
+	t.Helper()
+	var receipt *originalDBCleanupFailure
+	if !errors.As(database.backgroundError(), &receipt) {
+		t.Fatal("original terminal receipt missing")
+	}
+	authority, ok := receipt.payload.(*leafGenerationPackPromotionAuthority)
+	if !ok || authority.destinationParent == nil || authority.stagingParent == nil || len(authority.namespaces) == 0 || len(authority.segments) == 0 {
+		t.Fatalf("original physical proof payload not retained: %T", receipt.payload)
+	}
+	parent, err := rootpublication.StableIdentityFromFile(authority.destinationParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range authority.namespaces {
+		if token == nil || !rootpublication.SamePhysicalIdentity(token.ParentIdentity(), parent) || token.ParentIdentity().Generation != authority.destinationGeneration {
+			t.Fatal("exact original namespace token/parent identity lost")
+		}
+	}
+	for _, segment := range authority.segments {
+		if segment.handle == nil || segment.pin == nil || !segment.observed || !segment.installed {
+			t.Fatal("original partially disposed segment proof lost")
+		}
+	}
+}
+
+// The existing checked-close callback still performs the original OS Close.
+// The pause exposes completion ordering on a production-prepared closure.
+func TestLeafGenerationPackPreparedCleanupConcurrentCompletion(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	for _, take := range []bool{false, true} {
+		name := "Release"
+		if take {
+			name = "Take"
+		}
+		t.Run(name, func(t *testing.T) {
+			database, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := database.Close(); err != nil {
+					t.Errorf("DB.Close: %v", err)
+				}
+			}()
+			original, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{buildLeafGenerationPackStablePage(t, 'q')})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent := original.cleanupDir
+			if parent == nil || original.metadata == nil || original.metadataCharge == 0 {
+				t.Fatal("original constructor omitted parent/admission")
+			}
+			entered, resume := make(chan struct{}), make(chan struct{})
+			priorClose := leafGenerationPackAuthorityCloseFile
+			var calls atomic.Int32
+			leafGenerationPackAuthorityCloseFile = func(file *os.File) error {
+				if file == parent {
+					calls.Add(1)
+					close(entered)
+					<-resume
+				}
+				return priorClose(file)
+			}
+			defer func() { leafGenerationPackAuthorityCloseFile = priorClose }()
+			first := make(chan error, 1)
+			var taken *rootpublication.StableResourceSet
+			go func() {
+				if take {
+					var e error
+					taken, e = original.TakeStableResources()
+					first <- e
+				} else {
+					first <- original.Release()
+				}
+			}()
+			awaitLeafGenerationPackStablePrepareSignal(t, entered, "original physical parent Close")
+			second := make(chan error, 1)
+			go func() { second <- original.Release() }()
+			var early bool
+			var secondErr error
+			select {
+			case secondErr = <-second:
+				early = true
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(resume)
+			firstErr := <-first
+			if !early {
+				secondErr = <-second
+			}
+			if taken != nil {
+				if err := taken.ReleaseWithError(); err != nil {
+					t.Errorf("transferred Set: %v", err)
+				}
+			}
+			if early || firstErr != nil || secondErr != nil {
+				t.Fatalf("physical completion early=%t first=%v second=%v", early, firstErr, secondErr)
+			}
+			if calls.Load() != 1 || original.cleanupDir != nil || original.metadata != nil || original.metadataCharge != 0 {
+				t.Fatalf("original terminal calls=%d parent=%p metadata=%p charge=%d", calls.Load(), original.cleanupDir, original.metadata, original.metadataCharge)
+			}
+			if err := original.Release(); err != nil {
+				t.Fatalf("repeat completion: %v", err)
+			}
+		})
 	}
 }

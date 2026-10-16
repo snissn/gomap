@@ -70,11 +70,68 @@ index generation, value-log files and dictionary definitions used by reads.
 Acquisition pins the existing complete cut under `cutMu`. It neither rotates
 mutable shards nor scans, copies or sorts historical records.
 
+When the backend basis uses PRIMARY, `SnapshotAllocationSizes.PrimaryRoot`
+reports the immutable root wrapper retained by that capture. Raw wrapper,
+pin-set and value-log capacities are rounded separately by the shared
+`cowSnapshotRetentionCharge`, used by startup, handoff and dictionary readers.
+`PrimaryMetadata` and `RegistryMetadata` are different: they identify the
+already-rounded producer-maintained owners of the physical arena and the
+distinct DB physical-identity/namespace registry. They are not scalar sizes to
+add to the wrapper charge. Startup, backend handoff and dictionary capture use
+one fixed arena-plus-registry pair enrolled against the SAME COW budget before
+capture effects. Partial pair refusal unwinds both handles. The same owner and
+budget share one governing lease; distinct budgets each govern that owner's
+actual closure.
+Producer growth reserves full replacement capacity before allocation, including
+old/new overlap, and refunds only storage whose actual ownership has ended.
+The existing COW limits remain the governing limits.
+
+A successful capture adopts its pair enrollment into the exact Snapshot.
+Refusal leaves both handles with the admitting caller for unwind. Actual COW
+startup/activation separately attaches producer custody before persistent
+effects; releasing a borrower cannot detach that producer governor. A temporary
+dictionary capture borrows already producer-owned storage and detaches its
+temporary governor after actual successful cleanup, allowing its budget to
+close without preventing later valid backend writes. New storage caused by
+borrowing must be admitted and transferred to an actual producer, disposed, or
+retained as cleanup debt.
+
+Snapshot Close invalidates the public wrapper; a nil Close result alone does
+not prove physical cleanup while admitted readers or finalization remain.
+The SAME original finalizer completes registry, value-log, PRIMARY and exact
+ordinary release-queue cleanup, scrubs the wrapper's actual aliases, and then
+publishes its once-only completion outcome before detaching temporary custody.
+A failed cleanup retains the exact original debt and governing charge; consumed
+physical references are never replayed. Independent adapter disposal refunds
+only its own detached metadata, not the original physical action.
+Retired generations remain governed through their last real reader and cleanup.
+Physical arena Close rejects further growth but keeps admitted runtime,
+transaction, promotion-image and callback tails until their existing owners
+clear those aliases. Cleanup may shrink a closed budget. No capture-time graph
+walk, separate publication registry or blanket generation exemption is implied.
+Existing OS mapping and backend decode/cache storage keep their own narrowly
+specified owner policies; this descriptor is not a universal RSS quota.
+
 Writers publish one complete successor cut. A reader sees the entire old or
 new command, including a command that changes multiple shards. Newer mutable
 roots and frozen sources shadow older sources and backend entries. Physical
 deletion markers suppress older entries; MVCC logical tombstones remain normal
 encoded values interpreted by the MVCC layer.
+
+The empty-backend shortcut is a proof about the captured root. It accepts an
+empty leaf directly, or a canonical PRIMARY directory with no components whose
+digest-validated base is an empty leaf. Nonempty/internal bases and any component
+(including an inline absence) retain the same-cut merge path; physical validation
+errors propagate. It never consults a newer published root to infer emptiness.
+
+For a nonempty captured backend, one-successor selection uses fixed admitted
+ancestor, key and leaf scratch on that same immutable cut. It compares one
+metadata candidate from each eligible source and materializes only the winning
+value-log pointer. PRIMARY base/component digests retain ordinary read validation.
+A physical tombstone or unsupported source returns to the existing complete
+same-cut merge so suppression and advancement remain correct. The returned key
+and value are owned copies; this changes neither publication nor durability
+authority.
 
 Point lookup, successor selection, merge traversal, pointer/checksum decoding
 and copying occur after the cut latch is released. Public values are owned
@@ -199,7 +256,14 @@ installation. All allocation/refusal points precede acceptance:
 
 Newly produced pointer bytes are flushed for live readability through the
 registered producer before publication. This visibility flush is not fsync or
-a durable acknowledgement. Read owners use the existing physical identity pin
+a durable acknowledgement. A single ordinary unsynced COW point Put with an
+external command WAL uses the existing shard-affine value-log lane when pointer
+placement is required. This applies to both no-flush placement and the relaxed
+profile's buffered visibility flush. It avoids opening unrelated cold lanes;
+multi-entry commands and durable sync reservations retain ordinary lane selection.
+Canonical preparation, registered pointer visibility and publication remain the
+same. A busy affinity lane uses the existing lane admission and Close protocol.
+Read owners use the existing physical identity pin
 registry and registered value-log subset, with one owner per newly introduced
 distinct resource rather than one per historical RID. Actual frame dictionary
 IDs select retained definitions; cut readers do not resolve through unrelated
@@ -250,6 +314,12 @@ concrete backend registration of a rotated leaf segment already transfers its
 registration and manifest identity to that backend; COW does not retain duplicate
 pending registration debt across an empty checkpoint. Unreferenced empty leaf
 segments can therefore be reclaimed without later trying to reopen them.
+After backend compaction refreshes the COW basis, the same maintenance writer
+fence covers one ordinary leaf-GC settle pass for generations held retiring by
+the old basis. Independent old cuts and every recoverable slot/parent retain
+their existing protections. The returned usage/debt audit follows that settle
+pass; errors or canceled operations do not authorize it. This pin retirement
+adds no checkpoint or durable-root publication.
 Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
@@ -276,3 +346,83 @@ retains its historical source identity. Snapshot gains alone do not establish wo
 
 The allocation bound and safe-build tradeoff are specified separately in
 [immutable memtable ownership](cow-memtable-ownership.md).
+
+Selected publisher manifests do not export `Entries()` snapshots: their strings,
+frontier storage and namespace metadata belong to admitted immutable encodings.
+`WithEntriesV1` is a synchronous read-only scope whose callback cannot retain or
+mutate any supplied metadata, or pass it to a constructor that borrows strings.
+The scope retains the same allocation edge and reserves its actual entry-array
+scratch before allocation. Refusal runs no callback. Release during a scope ends
+the publisher's edge but preserves the encoding and charge until the callback
+ends. Generic and recovery-loaded manifests keep their existing diagnostic
+getter lifetime; the recovery resolver refuses selected borrowed metadata when
+constructing independent long-lived resource tokens.
+
+### Selected immutable resource metadata
+
+Selected PRIMARY publication admits new token descriptors, namespace/handle
+backing, immutable resource entries, persistent obligation indexes, proof/rope
+nodes, manifests and constructor scratch before allocating them. Each distinct
+physical edge retains its original registry/operation/deletion authority.
+Importing a pre-existing generic provider admits independent selected metadata
+before its first visible clone; it does not relabel that provider's physical
+owner or copy an opaque callback as a completion certificate.
+
+The persistent obligation index is the canonical selected history. Same-identity
+coalescing retains exact existing nodes and adds admitted changed paths rather
+than cloning the whole history. Selected borrowing scopes cover actual decode,
+serialization and callback use. Long-lived selected diagnostics require their
+own admitted owner and explicit Close; raw selected getters refuse. Detached
+legacy telemetry copies only scalar values and canonical built-in kind names,
+retaining no selected strings or tokens. Generic diagnostics keep their existing
+post-release contract.
+
+Private manifest construction admits contiguous page images, one reusable
+canonical encoder page, bank-ref backing and child-first traversal frames. Full
+replacement backing is admitted during overlap. Pre-Open dependency leases use
+intrusive links in the existing index owner, and failed private bank cleanup
+remains in the SAME arena owner's preadmitted failure custody. These ordinary
+helpers and their synchronous cleanup are not bounded native prune evidence.
+
+The [ordinary PRIMARY allocation inventory](../design/ordinary-primary-allocation-5111.md)
+records the actual constructor/capacity/caller and last-alias boundaries. Public
+set wrapper disposal refunds its own admitted allocation while an active scope
+retains immutable descriptor and original physical closure. Same-identity
+coalescing updates the canonical selected index without mutating an older shared
+rope's frontier. Temporary captures and real producer enrollment are distinct.
+
+Snapshots retaining PRIMARY roots also retain the existing physical arena owner.
+Their original last-read finalizer drops the bank edge, settles original cleanup
+and releases that physical owner before detaching the paired governor. DB.Close
+cannot dispose the mapping needed by this finalizer. Cleanup failure retains the
+exact Snapshot at that owner; private one-shot reads cannot reuse a failed owner.
+This extends physical cleanup custody without adding a Snapshot read-after-close
+promise.
+
+
+A successor backend basis preadmits its existing wrapper, retained VLog/leaf
+capacities, pin vector and original cleanup custody before capture effects.
+Startup, handoff and maintenance use the same admission and adoption boundary.
+The original Snapshot finalizer reports actual completion after alias scrub and
+its existing pager callback's available final action. Accepting Snapshot.Close
+while a reader remains does not refund the basis. A physical cleanup failure
+retains that exact basis and its charge in the SAME identity registry, including
+DATA-only captures; repeated Close does not replay cleanup or refund failure.
+Independent surviving pager descriptors retain their own original operations,
+without extending an already scrubbed Snapshot payload's lifetime.
+
+Bounded capture performs external admission before taking the existing state
+read lock. It then revalidates the exact view under rootReuseMu followed by
+db.mu, before reader registration or PRIMARY references. Same-root topology
+refresh during admission refuses this capture; retry uses the successor view.
+The captured VLog Set is acquired after fallible reference admission while the
+state lock excludes replacement, and the lock is released before leaf setup.
+This adds no publication authority, changes no command-WAL acknowledgement,
+and does not qualify the remaining ordinary allocation, platform or cost gates.
+
+Public COW point, many, append, presence and successor reads return any available
+original completion error alongside their operation result. Successful cleanup
+preserves existing missing-key normalization and refusal sentinels. The owned
+iterator closes its bound child after excluding active moves, detaches consumed
+Snapshot aliases and only then releases its wrapper allocation; failed physical
+basis cleanup retains the original basis independently.

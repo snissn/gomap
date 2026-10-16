@@ -84,6 +84,16 @@ func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			sharedStore := freelist.NewMemoryPageStoreV1()
+			sharedRef, err := manifest.MaterializeWithScratchV1(100, sharedStore, make([]byte, page.PageSize))
+			if err != nil || sharedRef != ref || !reflect.DeepEqual(sharedStore.Pages, store.Pages) {
+				t.Fatal("shared scratch changed canonical multi-page encoding", err)
+			}
+			refusedWrites := 0
+			_, err = manifest.MaterializeWithScratchV1(100, dependencyManifestSinkFunc(func(uint64, []byte) error { refusedWrites++; return nil }), make([]byte, page.PageSize-1))
+			if !errors.Is(err, ErrDependencyManifestFormat) || refusedWrites != 0 {
+				t.Fatal("short scratch was consumed", err)
+			}
 			golden := sha256.New()
 			for id := ref.FirstPageID; id < ref.FirstPageID+uint64(ref.PageCount); id++ {
 				golden.Write(store.Pages[id])

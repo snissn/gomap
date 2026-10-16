@@ -33,6 +33,9 @@ func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 			return &s.rootTrees[i].tree, nil
 		}
 	}
+	if s.rootTrees == nil {
+		s.rootTrees = s.rootTreeFirst[:0]
+	}
 	s.rootTrees = append(s.rootTrees, snapshotRootTree{root: rootID})
 	cached := &s.rootTrees[len(s.rootTrees)-1]
 	cached.tree.Reset(s.idx.pager, &s.reader, rootID)

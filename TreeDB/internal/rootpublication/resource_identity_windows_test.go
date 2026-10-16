@@ -151,7 +151,7 @@ func TestEnsureStableChildDirectoryUsesExactParentHandleWindows(t *testing.T) {
 	}
 	registry.mu.Lock()
 	var retained stableDirectoryLinkAuthority
-	for _, authority := range registry.stableDirectoryLinks {
+	for _, authority := range registry.stableDirectoryLinks.all {
 		retained = authority
 		break
 	}

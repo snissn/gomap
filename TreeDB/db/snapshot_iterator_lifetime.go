@@ -166,8 +166,10 @@ func (it *snapshotBoundIterator) Close() error {
 	}
 	it.closed.Store(true)
 	it.closeOnce.Do(func() {
-		if it.inner != nil {
-			it.closeErr = it.inner.Close()
+		inner := it.inner
+		it.inner = nil
+		if inner != nil {
+			it.closeErr = inner.Close()
 		}
 		owner := it.owner
 		it.owner = nil

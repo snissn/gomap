@@ -16,6 +16,7 @@ type Batch struct {
 	db                                 *DB
 	batch                              *batch.Batch
 	physicalOnly                       bool
+	logicalMVCCInput                   bool
 	commandWALPublishIntent            *commandWALBatchIntent
 	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
@@ -125,6 +126,7 @@ func (b *Batch) SetCommandWALPublish(appliedLSN uint64, covered []CommandWALLSNR
 		return ErrClosed
 	}
 	if appliedLSN == 0 {
+		b.logicalMVCCInput = false
 		b.commandWALPublishIntent = nil
 		return nil
 	}
@@ -448,9 +450,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	conditionalMutation := conditionalCommitMutation{
-		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
+		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
+	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -758,9 +760,9 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	conditionalMutation := conditionalCommitMutation{
-		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
+		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
+	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -893,6 +895,7 @@ func (b *Batch) Close() error {
 	if b.batch != nil {
 		err := b.batch.Close()
 		b.batch = nil
+		b.logicalMVCCInput = false
 		b.commandWALPublishIntent = nil
 		b.conditionalTxnID = 0
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
@@ -901,6 +904,7 @@ func (b *Batch) Close() error {
 		return err
 	}
 	b.batch = nil
+	b.logicalMVCCInput = false
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
@@ -915,6 +919,7 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.batch.Reset()
+	b.logicalMVCCInput = false
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown

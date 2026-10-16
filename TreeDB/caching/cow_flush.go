@@ -8,7 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -29,36 +29,31 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 		return nil, ErrCOWUnsupported
 	}
 	// Admit the callback and both captured reservation/count cells before creation.
-	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
+	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(5*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*retainedalloc.Enrollment)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
 	if err != nil {
 		return nil, err
 	}
 	defer scratch.Close()
-	var lease *memtable.COWExternalLease
-	var count int
+	var admitted *cowBackendBasis
 	snapshot, err := bounded.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
 		if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
 			return memtable.ErrCOWCapacity
 		}
-		count = s.ValueLog.FileCount
-		var err error
-		lease, err = c.budget.AcquireExternal(cowBasisCharge(s))
-		return err
+		var e error
+		admitted, e = admitCOWBackendBasis(c.budget, s)
+		return e
 	})
+	if err == nil {
+		err = admitted.adoptSnapshot(snapshot)
+	}
 	if err != nil {
-		lease.Close()
+		cleanupErr := admitted.release()
 		if err == backenddb.ErrSnapshotCapacity {
 			err = memtable.ErrCOWCapacity
 		}
-		return nil, err
+		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	pins := make([]*rootpublication.IdentityPin, count)
-	if err = snapshot.PinValueLogReadFiles(pins); err != nil {
-		_ = snapshot.Close()
-		lease.Close()
-		return nil, err
-	}
-	return newCOWBackendBasis(snapshot, lease, pins), nil
+	return admitted, nil
 }
 
 // installCOWBasis preserves every newer mutable and frozen source. For a flush,
@@ -86,6 +81,10 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 	}
 	lease, err := c.budget.AcquireExternal(cowCutCharge(len(old.shards), len(old.frozen)-n))
 	if err != nil {
+		return nil, err
+	}
+	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
+		lease.Close()
 		return nil, err
 	}
 	next := &cowReadCut{refs: 1, cache: c, lease: lease, basis: basis, shards: make([]cowTable, len(old.shards)), frozen: make([]cowTable, len(old.frozen)-n)}
@@ -126,18 +125,18 @@ func (db *DB) completeCOWHandoff() error {
 		return err
 	}
 	old, err := c.installCOWBasis(basis, h.cut)
-	basis.release()
+	err = joinCOWCleanupError(err, basis.release())
 	if err != nil {
 		return err
 	}
 	c.handoff = nil
 	c.handoffs.Add(1)
 	if old != nil {
-		old.drain()
+		err = old.drain()
 	}
-	c.releaseCut(h.cut)
+	err = joinCOWCleanupError(err, c.releaseCut(h.cut))
 	h.lease.Close()
-	return nil
+	return err
 }
 
 // flushCOWFrozen is called with flushMu held. It streams immutable metadata
@@ -158,8 +157,7 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 		return backenddb.ErrClosed
 	}
 	if len(cut.frozen) == 0 {
-		c.releaseCut(cut)
-		return nil
+		return c.releaseCut(cut)
 	}
 	n := len(cut.frozen)
 	chunkCap := db.flushBackendMaxEntries
@@ -173,21 +171,20 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
 	lease, err := c.budget.AcquireExternal(charge)
 	if err != nil {
-		c.releaseCut(cut)
-		return err
+		return joinCOWCleanupError(err, c.releaseCut(cut))
 	}
 	h := &cowFlushHandoff{cut: cut, lease: lease}
 	backend, ok := db.backend.(interface {
 		BeginRootPublicationBuildGroupFromSnapshot(*backenddb.Snapshot) (*backenddb.RootPublicationBuildGroup, error)
 	})
 	if !ok {
-		c.releaseCut(cut)
+		err = joinCOWCleanupError(ErrCOWUnsupported, c.releaseCut(cut))
 		lease.Close()
-		return ErrCOWUnsupported
+		return err
 	}
 	group, err := backend.BeginRootPublicationBuildGroupFromSnapshot(cut.basis.snapshot)
 	if err != nil {
-		c.releaseCut(cut)
+		err = joinCOWCleanupError(err, c.releaseCut(cut))
 		lease.Close()
 		return err
 	}
@@ -242,7 +239,7 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 		}
 		return db.completeCOWHandoff()
 	}
-	c.releaseCut(cut)
+	err = joinCOWCleanupError(err, c.releaseCut(cut))
 	lease.Close()
 	return err
 }

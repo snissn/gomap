@@ -3,8 +3,10 @@ package db
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
@@ -138,4 +140,31 @@ func (db *DB) syncDeletionNamespaceDirectoryOrPoison(dir string, resource durabi
 		db.reportError(err)
 	}
 	return err
+}
+
+// The owned producer fences the exact parent retained by the retirement lease,
+// rather than reopening an alias. All normal and failure callbacks are admitted
+// before the actual barrier; error custody poisons the DB before returning.
+func (db *DB) syncOwnedDeletionParentV6(parent *os.File, path string, resource durabilitycut.Resource, w *iterator.OrdinalScanWork) (bool, error) {
+	if db == nil || parent == nil || w == nil {
+		return false, ErrRecoveryRequired
+	}
+	if !w.Reserve(4, 2*uint64(unsafe.Sizeof(DB{}))+uint64(len(path))*8+1024) {
+		return false, nil
+	}
+	dir := filepath.Dir(path)
+	e := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, resource, dir, dir)
+	if e == nil {
+		e = parent.Sync()
+	}
+	if e == nil {
+		e = durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, resource, dir, dir)
+	}
+	if e != nil {
+		e = errors.Join(ErrRecoveryRequired, e)
+		db.publicationPoisoned.Store(true)
+		db.reportError(e)
+		return false, e
+	}
+	return true, nil
 }

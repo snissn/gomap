@@ -47,7 +47,7 @@ func TestManagerSharedRetirementParentAccounting(t *testing.T) {
 				t.Fatal("capture omitted future pooled parent reservation")
 			}
 			wrappers := uint64(unsafe.Sizeof(retirementParentPool{})) + uint64(unsafe.Sizeof(retirementParentHandle{})) + uint64(unsafe.Sizeof(os.File{}))
-			// Leave 1 KiB for rounded map groups/shrink overlap and 512 bytes for os.File
+			// Leave 1 KiB for fixed directory and local unlink overhead and 512 bytes for os.File
 			// internal state/fixed diagnostic names, above the compiled wrapper sizes.
 			t.Logf("retirement parent envelope=%d File=%d pool=%d entry=%d os.File=%d physical-key=%d", retirementParentRetentionEnvelope, unsafe.Sizeof(File{}), unsafe.Sizeof(retirementParentPool{}), unsafe.Sizeof(retirementParentHandle{}), unsafe.Sizeof(os.File{}), unsafe.Sizeof(rootpublication.StableIdentity{}))
 			if wrappers+1536 > retirementParentRetentionEnvelope {
@@ -78,7 +78,7 @@ func TestManagerSharedRetirementParentAccounting(t *testing.T) {
 			if !rootpublication.SamePhysicalIdentity(want, files[0].registeredParentIdentity) {
 				t.Fatal("fixed diagnostic name changed physical authority")
 			}
-			if m.retirementParents.highWater != 2 || len(m.retirementParents.entries) != 2 {
+			if m.retirementParents.count != 2 {
 				t.Fatal("pool retained extra physical parent entries")
 			}
 		})

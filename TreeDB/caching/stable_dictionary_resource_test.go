@@ -23,8 +23,14 @@ type failingStableDictionaryStore struct {
 }
 
 func TestStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T) {
+	testStableValueLogAppendMergesReusedDictionaryClosure(t, false)
+}
+func TestStableValueLogAppendSelectedMetadataMergesLegacyDictionaryClosure(t *testing.T) {
+	testStableValueLogAppendMergesReusedDictionaryClosure(t, true)
+}
+func testStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T, selected bool) {
 	dir := t.TempDir()
-	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, IndexPrimaryDirectory: selected})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -77,16 +83,23 @@ func TestStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T) {
 		t.Fatalf("stable append ptrs=%v resources=%v", ptrs, resources)
 	}
 	defer resources.Release()
+	if selected && resources.MetadataOwner() != backend.StableResourceMetadataOwner() {
+		t.Fatal("selected append did not retain the real producer admission owner")
+	}
+
 	var hasDictionary, hasOuterLeaf bool
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
-		for _, field := range descriptor.ReachabilityFields() {
-			switch field {
+	if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		for _, token := range tokens {
+			switch token.Reachability() {
 			case rootpublication.ReachabilityDictionaryGeneration:
 				hasDictionary = true
 			case rootpublication.ReachabilityOuterLeafRawPointer:
 				hasOuterLeaf = true
 			}
 		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if !hasDictionary || !hasOuterLeaf {
 		t.Fatalf("merged stable closure dictionary=%v outer-leaf=%v", hasDictionary, hasOuterLeaf)

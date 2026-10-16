@@ -9,6 +9,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/template"
 )
@@ -240,4 +242,24 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 	}
 
 	return cleanup, dictionaryResources, nil
+}
+
+func (kv templateBackendKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {
+	charge, err := admitTemplateSnapshotMetadata(metadata)
+	if err != nil {
+		return nil, err
+	}
+	captured, err := kv.AcquireStableTemplateSnapshot()
+	if err != nil || captured == nil {
+		metadata.RemovePending(charge)
+		return captured, err
+	}
+	snapshot, ok := captured.(*templateStableSnapshot)
+	if !ok {
+		captured.Close()
+		metadata.RemovePending(charge)
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	snapshot.metadata, snapshot.metadataCharge = metadata, charge
+	return snapshot, nil
 }

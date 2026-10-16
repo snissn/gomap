@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
@@ -142,11 +143,22 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 			if err = database.Close(); err != nil {
 				t.Fatal(err)
 			}
-			lease, err := registry.BeginDelete(identity)
-			if err != nil {
-				t.Fatalf("physical pin did not drain after final cut/DB close: %v", err)
+			// Delete admission is terminal after DB authority closes. The second
+			// manager still owns its original observer edge until actual Close;
+			// post-close readonly diagnostics prove drain without reopening authority.
+			if lease, err := registry.BeginDelete(identity); !errors.Is(err, retainedalloc.ErrClosed) {
+				if lease != nil {
+					lease.Abort()
+				}
+				t.Fatalf("closed physical authority admitted deletion: %v", err)
 			}
-			lease.Abort()
+			if err := other.Close(); err != nil {
+				t.Fatal(err)
+			}
+			stats := registry.Stats()
+			if stats.ActivePins != 0 || stats.ActiveIdentities != 0 || registry.CleanupError() != nil {
+				t.Fatalf("physical custody retained after all managers/cuts close: stats=%+v cleanup=%v", stats, registry.CleanupError())
+			}
 			reopened, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)

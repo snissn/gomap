@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 type Options struct {
-	Clock     Clock
-	Publisher Publisher
+	// StartupSynchronous keeps the original scheduler dormant while startup
+	// replay drives the same owned publication attempt in the waiting caller.
+	StartupSynchronous bool
+	Clock              Clock
+	Publisher          Publisher
 	// FixedPublishDelay runs the normal coordinator contract with a fixed
 	// timer delay. Zero keeps the adaptive 20x-service-time policy. The fixed
 	// mode exists for deterministic safety-equivalent benchmark matrices.
@@ -44,14 +49,15 @@ type drainRequest struct {
 type Coordinator struct {
 	mu sync.Mutex
 
-	clock             Clock
-	publisher         Publisher
-	fixedPublishDelay time.Duration
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wake              chan struct{}
-	changed           chan struct{}
-	done              chan struct{}
+	clock              Clock
+	publisher          Publisher
+	fixedPublishDelay  time.Duration
+	startupSynchronous bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wake               chan struct{}
+	changed            chan struct{}
+	done               chan struct{}
 
 	pending         []pendingEntry
 	pendingBytes    uint64
@@ -94,6 +100,7 @@ type Coordinator struct {
 	activeAttempt          PublishAttempt
 	retryAttempt           PublishAttempt
 	reportingAttempt       bool
+	activeDispatch         uint64
 
 	resourceCoalesces    uint64
 	resourceConflicts    uint64
@@ -162,7 +169,7 @@ func New(options Options) (*Coordinator, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Coordinator{
-		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, ctx: ctx, cancel: cancel,
+		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
@@ -442,6 +449,7 @@ func activateDurableRootGroup(group durableRootGroupExtension) error {
 
 func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGeneration uint64) error {
 	for {
+		c.dispatchPublication(true)
 		c.mu.Lock()
 		if err := c.terminalErrorLocked(); err != nil {
 			c.mu.Unlock()
@@ -492,6 +500,7 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 	c.requestPublishLocked(WakeWaiter)
 	c.mu.Unlock()
 	c.signal()
+	c.dispatchPublication(true)
 	select {
 	case err := <-waiter.ch:
 		return err
@@ -547,16 +556,20 @@ func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
 // only after Publish returns. Tests may use this method to prove stale and
 // duplicate reports are rejected, but cannot manufacture state transitions.
 func (c *Coordinator) ReportPublishResult(attempt PublishAttempt, result PublishResult) error {
+	return fmt.Errorf("%w: reporting belongs to the original publication caller", ErrPublisherProtocol)
+}
+
+func (c *Coordinator) reportPublishResultOwnedV6(attempt PublishAttempt, result PublishResult) (primaryPublicationCompletionV6, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.reportingAttempt || attempt.id == 0 || attempt.id != c.activeAttempt.id ||
 		attempt.candidate != c.activeAttempt.candidate || attempt.groupSize != c.activeAttempt.groupSize {
-		return fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
+		return primaryPublicationCompletionV6{}, fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
 	}
 	c.reportingAttempt = false
-	c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
+	completion := c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
 	c.activeAttempt = PublishAttempt{}
-	return nil
+	return completion, nil
 }
 
 func (c *Coordinator) Drain(ctx context.Context) error {
@@ -576,6 +589,7 @@ func (c *Coordinator) Drain(ctx context.Context) error {
 	c.signal()
 	defer c.endDrain(request)
 	for {
+		c.dispatchPublication(true)
 		c.mu.Lock()
 		if err := c.terminalErrorLocked(); err != nil {
 			c.mu.Unlock()
@@ -651,6 +665,16 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 	select {
 	case <-c.done:
 		c.mu.Lock()
+		for c.activeDispatch != 0 {
+			changed := c.changed
+			c.mu.Unlock()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			c.mu.Lock()
+		}
 		if !c.stopped {
 			if len(c.pending) != 0 {
 				c.stopErr = ErrPublicationStopped
@@ -690,9 +714,140 @@ func (c *Coordinator) Stats() Stats {
 	}
 }
 
+// CompleteStartup switches the SAME coordinator to its normal scheduler only
+// after the caller has completed replay, visible state, tracking and appenders.
+// A failed or unfinished startup attempt cannot silently become ordinary debt.
+func (c *Coordinator) CompleteStartup() error {
+	c.mu.Lock()
+	if err := c.terminalErrorLocked(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if !c.startupSynchronous || c.publishing || c.activeDispatch != 0 || c.activeBuilders != 0 || len(c.pending) != 0 {
+		c.mu.Unlock()
+		return ErrPublisherProtocol
+	}
+	c.startupSynchronous = false
+	c.notifyLocked()
+	c.mu.Unlock()
+	c.signal()
+	return nil
+}
+
+func (c *Coordinator) StartupSynchronous() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.startupSynchronous
+}
+
+// dispatchPublication is the sole original Prepare/Publish/Report engine.
+// Startup and the normal scheduler own different execution contexts, while
+// preserving the same activeAttempt, candidate, physical owner and outcome.
+func (c *Coordinator) dispatchPublication(startup bool) bool {
+	progress, completion := c.dispatchPublicationCallV6(startup)
+	// The original Prepare/Publish/Report call has returned: callback, group,
+	// candidate and activeAttempt no longer borrow the refunded headers.
+	completePrimaryTerminalsV6(&completion.head)
+	if completion.active {
+		c.mu.Lock()
+		if completion.success {
+			c.completePublicationLockedV6(completion)
+		}
+		if c.activeDispatch == 0 {
+			panic("publication call join underflow")
+		}
+		c.activeDispatch--
+		c.notifyLocked()
+		c.mu.Unlock()
+	}
+	return progress
+}
+
+func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPublicationCompletionV6) {
+	c.mu.Lock()
+	ready := !c.stopping && c.startupSynchronous == startup && c.publishNow && !c.publishing && c.activeDispatch == 0 && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+	if !ready {
+		c.mu.Unlock()
+		return false, primaryPublicationCompletionV6{}
+	}
+	groupSize := len(c.pending)
+	group := make([]*PreparedRootCandidate, groupSize)
+	for i := range group {
+		group[i] = c.pending[i].candidate
+	}
+	candidate, coalesceErr := coalesceCandidates(group)
+	if coalesceErr != nil {
+		c.resourceConflicts++
+		c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
+		c.failWaitersLocked(c.poison)
+		c.clearPublishRequestLocked()
+		c.captureRecoveryResourcesLocked()
+		c.notifyLocked()
+		c.mu.Unlock()
+		return true, primaryPublicationCompletionV6{}
+	}
+	c.recordPublishTriggerLocked(c.wakeReason)
+	c.publishNow = false
+	c.wakeReason = WakeNone
+	c.publishing = true
+	c.activeDispatch++
+	c.publishCalls++
+	if c.lastRetryableError != nil {
+		c.retries++
+	}
+	c.nextAttemptID++
+	attempt := PublishAttempt{
+		id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
+		drains: append([]*drainRequest(nil), c.drains...), started: c.clock.Now(),
+		waiters: append([]*durabilityWaiter(nil), c.waiters...),
+	}
+	c.activeAttempt = attempt
+	preparer, prepares := c.publisher.(PublisherPreparer)
+	if prepares {
+		c.preparing = true
+	}
+	c.mu.Unlock()
+	if prepares {
+		prepareErr := preparer.Prepare(c.ctx, candidate)
+		c.mu.Lock()
+		c.preparing = false
+		c.notifyLocked()
+		c.reportingAttempt = prepareErr != nil
+		c.mu.Unlock()
+		if prepareErr != nil {
+			completion, _ := c.reportPublishResultOwnedV6(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
+			clear(group)
+			group, candidate, attempt = nil, nil, PublishAttempt{}
+			return true, completion
+		}
+	}
+	result := c.publisher.Publish(c.ctx, candidate)
+	c.mu.Lock()
+	c.reportingAttempt = true
+	c.mu.Unlock()
+	completion, _ := c.reportPublishResultOwnedV6(attempt, result)
+	if completion.detached && len(group) > 1 {
+		// Coalescing allocated this private descriptor/member backing. Original
+		// pending candidates retain any failed sibling; this call releases only
+		// its scratch aliases before accounting the consumed prefix.
+		clear(candidate.durableRootGroup().members)
+		// This private coalesced descriptor owns detached immutable observations.
+		// Consume every physical-authority alias without erasing the publication
+		// observations supplied by the original Publisher API.
+		candidate.extensions = extensionSlots{}
+		candidate.durableValidated = false
+	}
+	clear(group)
+	group, candidate, attempt = nil, nil, PublishAttempt{}
+	return true, completion
+}
+
 func (c *Coordinator) run() {
 	defer close(c.done)
 	for {
+		if c.dispatchPublication(false) {
+			continue
+		}
 		c.mu.Lock()
 		if c.stopping {
 			c.mu.Unlock()
@@ -700,66 +855,9 @@ func (c *Coordinator) run() {
 		}
 		var timerC <-chan time.Time
 		var timerGeneration uint64
-		if c.timer != nil {
+		if !c.startupSynchronous && c.timer != nil {
 			timerC = c.timer.C()
 			timerGeneration = c.timerGeneration
-		}
-		ready := c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
-		if ready {
-			groupSize := len(c.pending)
-			group := make([]*PreparedRootCandidate, groupSize)
-			for i := range group {
-				group[i] = c.pending[i].candidate
-			}
-			candidate, coalesceErr := coalesceCandidates(group)
-			if coalesceErr != nil {
-				c.resourceConflicts++
-				c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
-				c.failWaitersLocked(c.poison)
-				c.clearPublishRequestLocked()
-				c.captureRecoveryResourcesLocked()
-				c.notifyLocked()
-				c.mu.Unlock()
-				continue
-			}
-			c.recordPublishTriggerLocked(c.wakeReason)
-			c.publishNow = false
-			c.wakeReason = WakeNone
-			c.publishing = true
-			c.publishCalls++
-			if c.lastRetryableError != nil {
-				c.retries++
-			}
-			c.nextAttemptID++
-			attempt := PublishAttempt{
-				id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
-				drains: append([]*drainRequest(nil), c.drains...), started: c.clock.Now(),
-				waiters: append([]*durabilityWaiter(nil), c.waiters...),
-			}
-			c.activeAttempt = attempt
-			preparer, prepares := c.publisher.(PublisherPreparer)
-			if prepares {
-				c.preparing = true
-			}
-			c.mu.Unlock()
-			if prepares {
-				prepareErr := preparer.Prepare(c.ctx, candidate)
-				c.mu.Lock()
-				c.preparing = false
-				c.notifyLocked()
-				c.reportingAttempt = prepareErr != nil
-				c.mu.Unlock()
-				if prepareErr != nil {
-					_ = c.ReportPublishResult(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
-					continue
-				}
-			}
-			result := c.publisher.Publish(c.ctx, candidate)
-			c.mu.Lock()
-			c.reportingAttempt = true
-			c.mu.Unlock()
-			_ = c.ReportPublishResult(attempt, result)
-			continue
 		}
 		c.mu.Unlock()
 		select {
@@ -774,10 +872,11 @@ func (c *Coordinator) run() {
 	}
 }
 
-func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) {
+func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) (completion primaryPublicationCompletionV6) {
+	completion.active = true
 	c.publishing = false
 	if c.stopping {
-		return
+		return completion
 	}
 	switch result.Outcome {
 	case PublishSucceeded:
@@ -791,7 +890,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 				err = fmt.Errorf("durable sequence %d differs from candidate %d", durableSeq, candidate.frontier.commitSeq)
 			}
 			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol, err), c.activeAttempt)
-			return
+			return completion
 		}
 		oldest := result.OldestRecoverableCommitSeq
 		if oldest == 0 {
@@ -800,7 +899,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		if oldest < c.oldestRecoverable || oldest > durableSeq {
 			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol,
 				fmt.Errorf("oldest recoverable sequence %d outside monotonic range [%d,%d]", oldest, c.oldestRecoverable, durableSeq)), c.activeAttempt)
-			return
+			return completion
 		}
 		group := candidate.durableRootGroup()
 		if err := consumeDurableRootGroup(group); err != nil {
@@ -814,19 +913,64 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			c.clearPublishRequestLocked()
 			c.notifyLocked()
 			c.signal()
-			return
+			return completion
 		}
+		// A physically consumed attempt cannot keep a previous retry alias alive.
+		c.retryAttempt = PublishAttempt{}
+		completion.detached = true
 		remove := int(groupSize)
 		if remove > len(c.pending) {
 			remove = len(c.pending)
 		}
+		// Save all observations before physical Finish scrubs constructor-owned
+		// candidate/member descriptors. Their containing charge stays live until
+		// dispatchPublicationCallV6 returns.
+		completion.frontier = candidate.frontier
+		completion.frontier.commitSeq = durableSeq
+		completion.oldest = oldest
+		completion.groupSize, completion.service = groupSize, service
+		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
+			completion.lineage, completion.sequence = latest.Lineage(), latest.Sequence()
+		}
 		var removedBytes uint64
-		for _, entry := range c.pending[:remove] {
-			removedBytes = saturatingAdd(removedBytes, entry.bytes)
-			if set := entry.candidate.resourceSet(); set != nil {
-				set.adjustActivePinsByKind(c.resourceActivePins, false)
-				set.releaseFrom(ResourceOwnerCoordinator)
+		completed := 0
+		var tail *primaryTerminalCompletionV6
+		for i := 0; i < remove; i++ {
+			entry := &c.pending[i]
+			txn := entry.candidate.DurableRoot()
+			var node *primaryTerminalCompletionV6
+			var err error
+			if txn.isConstructedPrimaryV6() {
+				node, err = c.finishOrdinaryPrimaryWithScopeV6(txn)
+			} else {
+				if set := entry.candidate.resourceSet(); set != nil {
+					err = set.releaseFromWithActivePins(ResourceOwnerCoordinator, c.resourceActivePins)
+				}
+				// An absent physical closure still owns the original DATA
+				// transaction terminal and its containing metadata receipt.
+				if err == nil {
+					node, err = txn.finishOrdinaryDataMetadataV6()
+				}
 			}
+			if err != nil {
+				c.removeCompletedPendingPrefixV6(completed, removedBytes)
+				c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+				c.failWaitersLocked(c.poison)
+				c.clearPublishRequestLocked()
+				c.notifyLocked()
+				return completion
+			}
+			if node != nil {
+				if tail == nil {
+					completion.head = node
+				} else {
+					tail.next = node
+				}
+				tail = node
+			}
+			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+			*entry = pendingEntry{}
+			completed++
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
 		if removedBytes <= c.pendingBytes {
@@ -834,25 +978,17 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		} else {
 			c.pendingBytes = 0
 		}
-		c.durable = candidate.frontier
-		c.durable.commitSeq = durableSeq
-		c.oldestRecoverable = oldest
-		c.reachabilityEpoch++
-		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
-			c.durableRootLineage = latest.Lineage()
-			c.durableRootSequence = latest.Sequence()
+		// The consumed group is now the predecessor for admission. Its physical
+		// terminal accounting remains joined below before durable waiters/ACK.
+		// A late older Finish must never restore an older admission frontier.
+		if completion.sequence > c.durableRootSequence {
+			c.durableRootLineage, c.durableRootSequence = completion.lineage, completion.sequence
 		}
-		c.lastGroupSize = groupSize
-		c.lastService = service
-		if c.ewmaService == 0 {
-			c.ewmaService = service
-		} else {
-			c.ewmaService = (7*c.ewmaService + service) / 8
-		}
-		c.lastRetryableError = nil
-		c.retryAttempt = PublishAttempt{}
-		c.satisfyWaitersLocked()
-		c.recomputePublishRequestLocked(true)
+		// Keep the original attempt outstanding through actual terminal
+		// accounting. WaitThrough cannot observe a new durable frontier yet.
+		c.publishing = true
+		completion.success = true
+
 	case PublishRetryableFailure:
 		c.recordRetryableLocked(result.Err, c.activeAttempt)
 	case PublishAmbiguous:
@@ -872,6 +1008,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 	}
 	c.notifyLocked()
 	c.signal()
+	return completion
 }
 
 func consumeDurableRootGroup(group durableRootGroupExtension) error {
@@ -1136,11 +1273,10 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 			sets = append(sets, set)
 		}
 	}
-	union, err := unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
+	current, err := StableResourceTelemetryStats(c.clock.Now(), true, sets...)
 	if err != nil {
 		return nil
 	}
-	current := union.Stats(c.clock.Now())
 	byKind := make(map[ResourceKind]ResourceKindStats, len(current)+len(c.resourcePinHighWater))
 	for _, stats := range current {
 		stats.ActivePins = c.resourceActivePins[stats.Kind]
@@ -1156,6 +1292,9 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 	}
 	result := make([]ResourceKindStats, 0, len(byKind))
 	for _, stats := range byKind {
+		if kind, builtin := canonicalTelemetryKind(stats.Kind); builtin {
+			stats.Kind = kind
+		}
 		result = append(result, stats)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Kind < result[j].Kind })
@@ -1215,16 +1354,18 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 	}
 	c.pending = nil
 	c.pendingBytes = 0
-	clear(c.resourceActivePins)
 	c.firstPendingAt = time.Time{}
 }
 
 // RecoveryResourceHandoff owns pins retained after shutdown or ambiguous
 // publication. Reopen/recovery consumes the evidence and then releases it.
 type RecoveryResourceHandoff struct {
-	sets         []*StableResourceSet
-	durableRoots []*DurableRootTransaction
-	once         sync.Once
+	sets           []*StableResourceSet
+	durableRoots   []*DurableRootTransaction
+	once           sync.Once
+	failure        originalReleaseFailure
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
 }
 
 func (handoff *RecoveryResourceHandoff) Len() int {
@@ -1257,20 +1398,55 @@ func (handoff *RecoveryResourceHandoff) DurableRoots() []*DurableRootTransaction
 	return append([]*DurableRootTransaction(nil), handoff.durableRoots...)
 }
 
-func (handoff *RecoveryResourceHandoff) Release() {
+// Release is the compatibility wrapper; production disposal uses its actual
+// checked outcome. The original handoff and embedded receipt retain every
+// unresolved sibling after the first physical refusal.
+func (handoff *RecoveryResourceHandoff) Release() { _ = handoff.ReleaseWithError() }
+func (handoff *RecoveryResourceHandoff) ReleaseWithError() error {
 	if handoff == nil {
-		return
+		return nil
 	}
 	handoff.once.Do(func() {
-		for _, set := range handoff.sets {
-			set.releaseFrom(ResourceOwnerRecovery)
+		fail := func(err error) {
+			handoff.failure.original, handoff.failure.causes[0] = handoff, err
+			if handoff.metadata != nil {
+				handoff.metadata.CleanupFailed()
+			}
 		}
 		for _, transaction := range handoff.durableRoots {
-			transaction.releaseFromRecovery()
+			if err := transaction.prepareFromRecovery(); err != nil {
+				fail(err)
+				return
+			}
 		}
-		handoff.sets = nil
-		handoff.durableRoots = nil
+		for i, set := range handoff.sets {
+			if err := set.releaseFrom(ResourceOwnerRecovery); err != nil {
+				fail(err)
+				return
+			}
+			handoff.sets[i] = nil
+		}
+		for i, transaction := range handoff.durableRoots {
+			node, err := transaction.releaseFromRecovery()
+			if err != nil {
+				fail(err)
+				return
+			}
+			handoff.durableRoots[i] = nil
+			transaction = nil
+			completePrimaryTerminalsV6(&node)
+		}
+		handoff.sets, handoff.durableRoots = nil, nil
+		owner, charge := handoff.metadata, handoff.metadataCharge
+		handoff.metadata, handoff.metadataCharge = nil, 0
+		if owner != nil {
+			owner.RemovePending(charge)
+		}
 	})
+	if handoff.failure.causes[0] != nil {
+		return &handoff.failure
+	}
+	return nil
 }
 
 // TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
@@ -1286,32 +1462,74 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 		return nil, ErrRecoveryHandoffUnavailable
 	}
 	c.captureRecoveryResourcesLocked()
-	sets := append([]*StableResourceSet(nil), c.recoverySets...)
-	durableRoots := append([]*DurableRootTransaction(nil), c.recoveryDurableRoots...)
-	transferred := make([]*StableResourceSet, 0, len(sets))
-	for _, set := range sets {
+	// Transfer the existing retained slice backing; no second recovery arrays
+	// or ownership lifecycle are created merely to retain a failure receipt.
+	sets, durableRoots := c.recoverySets, c.recoveryDurableRoots
+	var metadata *retainedalloc.Owner
+	for _, transaction := range durableRoots {
+		transaction.mu.Lock()
+		if transaction.constructionV6 != nil {
+			metadata = transaction.constructionV6.arena.MetadataOwner()
+		}
+		transaction.mu.Unlock()
+		if metadata != nil {
+			break
+		}
+	}
+	if metadata == nil {
+		for _, set := range sets {
+			if set != nil && set.metadata != nil {
+				metadata = set.metadata.owner
+				break
+			}
+		}
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(RecoveryResourceHandoff{})))
+	if metadata != nil {
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	admitted := metadata != nil
+	defer func() {
+		if admitted {
+			metadata.RemovePending(charge)
+		}
+	}()
+	for i, set := range sets {
+		if set.Owner() == ResourceOwnerReleased {
+			continue
+		}
 		if err := set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
-			for i := len(transferred) - 1; i >= 0; i-- {
-				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for j := i - 1; j >= 0; j-- {
+				if sets[j].Owner() == ResourceOwnerRecovery {
+					_ = sets[j].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+				}
 			}
 			return nil, fmt.Errorf("%w: recovery ownership transfer: %w", ErrResourceOwnership, err)
 		}
-		transferred = append(transferred, set)
 	}
-	transferredRoots := make([]*DurableRootTransaction, 0, len(durableRoots))
-	for _, transaction := range durableRoots {
+	for i, transaction := range durableRoots {
 		if err := transaction.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
-			for i := len(transferredRoots) - 1; i >= 0; i-- {
-				_ = transferredRoots[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for j := i - 1; j >= 0; j-- {
+				_ = durableRoots[j].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
 			}
-			for i := len(transferred) - 1; i >= 0; i-- {
-				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			for _, set := range sets {
+				if set.Owner() == ResourceOwnerRecovery {
+					_ = set.transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+				}
 			}
 			return nil, fmt.Errorf("%w: durable-root recovery ownership transfer: %w", ErrDurableRootOwnership, err)
 		}
-		transferredRoots = append(transferredRoots, transaction)
 	}
-	c.recoverySets = nil
-	c.recoveryDurableRoots = nil
-	return &RecoveryResourceHandoff{sets: transferred, durableRoots: transferredRoots}, nil
+	handoff := &RecoveryResourceHandoff{sets: sets, durableRoots: durableRoots, metadata: metadata}
+	if metadata != nil {
+		handoff.metadataCharge = charge
+	}
+	c.recoverySets, c.recoveryDurableRoots = nil, nil
+	// Pending contributions have genuinely moved to recovery custody. Failed
+	// backing remains charged by its original graph, separate from this telemetry.
+	clear(c.resourceActivePins)
+	admitted = false
+	return handoff, nil
 }

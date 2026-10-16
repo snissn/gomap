@@ -4,6 +4,9 @@ import (
 	"math"
 	"sync"
 	"time"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
 // Iterator is the internal interface for iteration.
@@ -48,7 +51,7 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 	}
 	r := oneShotReadPool.Get().(*oneShotRead)
 	db.valueLogPublicationMu.RLock()
-	ok := db.captureSnapshotWithValueLogPublicationLockHeld(&r.snapshot)
+	ok := db.captureSnapshotForReadWithValueLogPublicationLockHeld(&r.snapshot, true)
 	db.valueLogPublicationMu.RUnlock()
 	if !ok {
 		oneShotReadPool.Put(r)
@@ -60,11 +63,16 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 func (r *oneShotRead) close() error {
 	// Close shares all registry, value-log, and leaf-generation release logic.
 	// The read has returned, so there are no outstanding readers or iterators.
-	err := r.snapshot.Close()
-	// Do not keep an index pager or its reader interfaces alive in the pool.
-	r.snapshot.tree.Reset(nil, nil, 0)
-	r.snapshot.treePager = nil
-	r.snapshot.treeRoot = 0
+	err := r.snapshot.closeRead(true)
+	if err != nil {
+		// The exact Snapshot may now be linked to its original cleanup owner.
+		// Reusing it would overwrite that owner's surviving physical debt.
+		return err
+	}
+	// This private capture exposes no Snapshot/iterator and its one synchronous
+	// owned-value read has returned. Close therefore completed the finalizer,
+	// including SnapshotPool.Put's scrub before stablePagerCompletion. Repeat
+	// neither that scrub nor failed-cleanup reuse here.
 	oneShotReadPool.Put(r)
 	return err
 }
@@ -83,10 +91,31 @@ func (p *SnapshotPool) Get() *Snapshot {
 }
 
 func (p *SnapshotPool) Put(s *Snapshot) {
+	p.putRead(s, false)
+}
+
+func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 	if s == nil {
 		return
 	}
-	s.tree.SetNegativeFilter(nil)
+	// Exported handles are never reused: scrub all tree/pager aliases before
+	// publishing completion of their original cleanup owner.
+	s.tree.Reset(nil, nil, 0)
+	s.treePager = nil
+	s.treeRoot = 0
+	if !oneShot {
+		clear(s.rootTrees)
+		s.rootTrees = nil
+		// Overflow may have moved the active cache away from its first inline
+		// entry. Only a populated entry carries an alias that still needs scrubbing.
+		if s.rootTreeFirst[0].root != 0 {
+			s.rootTreeFirst[0] = snapshotRootTree{}
+		}
+		// The private one-shot pool never exposes an alternate-root reader,
+		// historical rebind, or iterator. Its entries keep these fields empty.
+		s.primaryRebindRoot = primaryStateRootV5{}
+		s.primaryRebindErr = nil
+	}
 	s.db = nil
 	s.idx = nil
 	s.state = nil
@@ -101,12 +130,16 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.leafGenerationPinSet = nil
 	s.reader = valueReader{}
 	s.registryID = 0
-	s.iteratorMu.Lock()
-	clear(s.iterators)
+	if !oneShot {
+		s.iteratorMu.Lock()
+		clear(s.iterators)
+	}
 	s.readState.Store(snapshotReadClosedBit)
 	s.closed.Store(true)
 	s.finalized.Store(false)
-	s.iteratorMu.Unlock()
+	if !oneShot {
+		s.iteratorMu.Unlock()
+	}
 	// Do not make the exported handle reusable. See SnapshotPool's contract.
 }
 
@@ -116,14 +149,42 @@ type ghostIndex struct {
 }
 
 type indexGhostManager struct {
-	mu       sync.Mutex
-	ghosts   []ghostIndex
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	stopOnce sync.Once
+	retirementMu   sync.Mutex
+	stopped        bool
+	db             *DB
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
+	ghostCharge    uint64
+	mu             sync.Mutex
+	ghosts         []ghostIndex
+	stopCh         chan struct{}
+	doneCh         chan struct{}
+	stopOnce       sync.Once
 }
 
-func (m *indexGhostManager) start() {
+func newIndexGhostManager(metadata *retainedalloc.Owner) (*indexGhostManager, error) {
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(indexGhostManager{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	return &indexGhostManager{metadata: metadata, metadataCharge: charge}, nil
+}
+
+func (m *indexGhostManager) closeOriginalGeneration(gen *indexGen) (*retainedalloc.Owner, uint64) {
+	if gen == nil {
+		return nil, 0
+	}
+	metadata, charge, err := gen.closeWithCompletionV6()
+	if err != nil {
+		m.db.retainOriginalCleanupError(gen.originalCloseFailure(err))
+		m.db.quiesceFailedRetiredGeneration(gen)
+	}
+	gen = nil
+	return metadata, charge
+}
+
+func (m *indexGhostManager) start(db *DB) {
+	m.db = db
 	m.stopCh = make(chan struct{})
 	m.doneCh = make(chan struct{})
 	go m.loop()
@@ -144,48 +205,70 @@ func (m *indexGhostManager) loop() {
 	}
 }
 
-func (m *indexGhostManager) add(gen *indexGen) {
+func (m *indexGhostManager) add(gen *indexGen) (*retainedalloc.Owner, uint64, error) {
+	m.retirementMu.Lock()
+	defer m.retirementMu.Unlock()
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return gen.closeWithCompletionV6()
+	}
 	defer m.mu.Unlock()
-	m.ghosts = append(m.ghosts, ghostIndex{
-		gen:       gen,
-		retiredAt: time.Now(),
-	})
+	if len(m.ghosts) == cap(m.ghosts) {
+		capacity := cap(m.ghosts) * 2
+		if capacity < 4 {
+			capacity = 4
+		}
+		if capacity < cap(m.ghosts) || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof(ghostIndex{})) {
+			return nil, 0, retainedalloc.ErrCapacity
+		}
+		charge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(ghostIndex{})))
+		if err := m.metadata.AddPending(charge); err != nil {
+			return nil, 0, err
+		}
+		old, oldCharge := m.ghosts, m.ghostCharge
+		next := make([]ghostIndex, len(old), capacity)
+		copy(next, old)
+		m.ghosts, m.ghostCharge = next, charge
+		clear(old[:cap(old)])
+		old = nil
+		m.metadata.RemovePending(oldCharge)
+	}
+	m.ghosts = append(m.ghosts, ghostIndex{gen: gen, retiredAt: time.Now()})
+	return nil, 0, nil
 }
 
 func (m *indexGhostManager) scavenge(maxAge time.Duration) {
+	// The original queue backing doubles as the retirement batch. Serialize
+	// growth until its tail is consumed, so no copied list or premature refund
+	// appears and one partition remains linear in the number of generations.
+	m.retirementMu.Lock()
+	defer m.retirementMu.Unlock()
 	m.mu.Lock()
-	if len(m.ghosts) == 0 {
-		m.mu.Unlock()
-		return
-	}
-
+	original := m.ghosts
 	now := time.Now()
-	var keep []ghostIndex
-	var toClose []*indexGen
-
-	for _, g := range m.ghosts {
-		if now.Sub(g.retiredAt) > maxAge {
-			// Keep retired generations alive while any snapshot reader is still
-			// registered on that generation.
-			if g.gen != nil && g.gen.registry != nil && g.gen.registry.MinPinnedSeq() != math.MaxUint64 {
-				keep = append(keep, g)
-				continue
-			}
-			toClose = append(toClose, g.gen)
-		} else {
-			keep = append(keep, g)
+	kept, boundary := 0, len(original)
+	for kept < boundary {
+		ghost := original[kept]
+		if now.Sub(ghost.retiredAt) <= maxAge || (ghost.gen.registry != nil && ghost.gen.registry.MinPinnedSeq() != math.MaxUint64) {
+			kept++
+			continue
 		}
+		boundary--
+		original[kept], original[boundary] = original[boundary], original[kept]
 	}
-	m.ghosts = keep
+	m.ghosts = original[:boundary]
 	m.mu.Unlock()
-
-	for _, gen := range toClose {
-		_ = gen.close()
+	for i := boundary; i < len(original); i++ {
+		metadata, charge := m.closeOriginalGeneration(original[i].gen)
+		original[i] = ghostIndex{}
+		if charge != 0 {
+			metadata.RemovePending(charge)
+		}
 	}
 }
 
-func (m *indexGhostManager) stop() {
+func (m *indexGhostManager) stopWithCompletionV6() (*retainedalloc.Owner, uint64) {
 	stopCh := m.stopCh
 	doneCh := m.doneCh
 	if stopCh != nil {
@@ -194,14 +277,31 @@ func (m *indexGhostManager) stop() {
 	if doneCh != nil {
 		<-doneCh
 	}
-	m.closeAll()
+	return m.closeAllWithCompletionV6()
 }
 
-func (m *indexGhostManager) closeAll() {
+func (m *indexGhostManager) closeAllWithCompletionV6() (*retainedalloc.Owner, uint64) {
+	m.retirementMu.Lock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, g := range m.ghosts {
-		_ = g.gen.close()
-	}
+	m.stopped = true
+	original := m.ghosts
 	m.ghosts = nil
+	m.mu.Unlock()
+	for i := range original {
+		metadata, charge := m.closeOriginalGeneration(original[i].gen)
+		original[i] = ghostIndex{}
+		if charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}
+	clear(original[:cap(original)])
+	original = nil
+	m.mu.Lock()
+	owner, charge := m.metadata, m.ghostCharge+m.metadataCharge
+	m.metadata, m.ghostCharge, m.metadataCharge = nil, 0, 0
+	m.stopCh, m.doneCh = nil, nil
+	m.db = nil
+	m.mu.Unlock()
+	m.retirementMu.Unlock()
+	return owner, charge
 }

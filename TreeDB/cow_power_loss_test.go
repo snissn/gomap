@@ -46,7 +46,17 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 			}
 			var stable *powerlossoracle.Model
 			metaEvents := 0
+			var observerMu sync.Mutex
+			active := true
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !cowEventBelongsToDB(opts.Dir, event) {
+					return nil
+				}
+				observerMu.Lock()
+				defer observerMu.Unlock()
+				if !active {
+					return nil
+				}
 				if err := model.Observe(opts.Dir, event); err != nil {
 					return err
 				}
@@ -57,11 +67,19 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 				return nil
 			})
 			observing := true
+			deactivate := func() {
+				observerMu.Lock()
+				active = false
+				observerMu.Unlock()
+				restore()
+				observing = false
+			}
 			defer func() {
 				if observing {
-					restore()
+					deactivate()
 				}
 			}()
+
 			value := bytes.Repeat([]byte("persistent-pointer-"), 256)
 			b := db.NewBatch()
 			if err = b.Set([]byte("a"), value); err != nil {
@@ -77,12 +95,13 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 				t.Fatal(err)
 			}
 			_ = b.Close()
+			observerMu.Lock()
 			volatileCut := model.Clone()
+			observerMu.Unlock()
 			if err = db.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			restore()
-			observing = false
+			deactivate()
 			if stable == nil || metaEvents == 0 {
 				t.Fatal("actual COW checkpoint emitted no completed meta sync")
 			}
@@ -165,28 +184,35 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				}
 				var cut *powerlossoracle.Model
 				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
-				resource := durabilitycut.ResourceAuxiliary
+				wantResource := durabilitycut.ResourceMeta
+				switch point {
+				case durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync:
+					wantResource = durabilitycut.ResourceCommandWAL
+					if profile == treedb.ProfileNoWALFast {
+						wantResource = durabilitycut.ResourceAuxiliary
+					}
+				case durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync:
+					wantResource = durabilitycut.ResourceValueLog
+				case durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync:
+					wantResource = durabilitycut.ResourceIndex
+				case durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite:
+					wantResource = durabilitycut.ResourceSeal
+				}
+				targetPrimary := filepath.Clean(filepath.Join(opts.Dir, "index.db.primary"))
+				matchesCut := func(event durabilitycut.Event) bool {
+					if !cowEventBelongsToDB(opts.Dir, event) || event.Point != point || event.Resource != wantResource {
+						return false
+					}
+					return (wantResource != durabilitycut.ResourceMeta && wantResource != durabilitycut.ResourceSeal) || filepath.Clean(event.Path) == targetPrimary
+				}
+				var capturedPoint durabilitycut.Point
+				var resource durabilitycut.Resource
+				cutReturned := false
 				var observerMu sync.Mutex
 				active := true
 				matchingCuts := 0
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-					// Some value-log events omit Root and identify their owning
-					// database through an exact path instead.
-					eventRoot := event.Root
-					if eventRoot == "" {
-						eventRoot = event.Path
-					}
-					if eventRoot == "" {
-						eventRoot = event.NewPath
-					}
-					if eventRoot == "" {
-						eventRoot = event.OldPath
-					}
-					if eventRoot == "" && len(event.Paths) != 0 {
-						eventRoot = event.Paths[0]
-					}
-					rel, err := filepath.Rel(opts.Dir, eventRoot)
-					if err != nil || eventRoot == "" || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					if !cowEventBelongsToDB(opts.Dir, event) {
 						return nil
 					}
 					observerMu.Lock()
@@ -194,18 +220,26 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 					if !active {
 						return nil
 					}
+					target := matchesCut(event)
+					if cutReturned {
+						// Keep the first completed cut immutable, including its
+						// dependency image. Retry only the SAME interruption.
+						if target {
+							matchingCuts++
+							return cutErr
+						}
+						return nil
+					}
 					if err := model.Observe(opts.Dir, event); err != nil {
 						return err
 					}
-					if event.Point == point {
+					if target {
+						cut = model.Clone()
+						capturedPoint, resource = event.Point, event.Resource
 						matchingCuts++
-						if cut == nil {
-							cut = model.Clone()
-							resource = event.Resource
-						}
-						// A pre-meta failure is retryable. A checkpoint waiter
-						// arriving after an attempt starts can trigger another
-						// attempt, so keep the interruption active until restore.
+						// Latch only after observation and capture succeed, just
+						// before returning the injected cause to its producer.
+						cutReturned = true
 						return cutErr
 					}
 					return nil
@@ -244,17 +278,15 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				if cut == nil {
 					t.Fatalf("real COW route emitted no %s boundary (operation=%v)", point, err)
 				}
-				// At every cut after the actual meta write, the asynchronous
-				// publisher may poison the handle before the checkpoint's
-				// readiness/flush gate observes it. That gate returns the recovery
-				// sentinel instead of the observer cause. Keep every other cut's
-				// direct-cause check.
-				postMetaWriteCut := point == durabilitycut.AfterMetaWrite ||
-					point == durabilitycut.BeforeMetaSync || point == durabilitycut.AfterMetaSync
-				observedMetaPoison := postMetaWriteCut &&
-					resource == durabilitycut.ResourceMeta && errors.Is(err, backenddb.ErrRecoveryRequired)
-				if err == nil || (!errors.Is(err, cutErr) && !observedMetaPoison) {
-					t.Fatalf("interruption classification err=%v", err)
+				capturedExactCut := cutReturned && capturedPoint == point && resource == wantResource
+				// The original command-WAL flush or PRIMARY installation can
+				// poison admission before this checkpoint reaches the publisher.
+				// Its readiness gate returns only the typed recovery sentinel.
+				// Accept it only after this observer captured the SAME exact cut
+				// and returned cutErr; unrelated poison is never a cut witness.
+				observedCutPoison := capturedExactCut && errors.Is(err, backenddb.ErrRecoveryRequired)
+				if !capturedExactCut || err == nil || (!errors.Is(err, cutErr) && !observedCutPoison) {
+					t.Fatalf("interruption classification err=%v captured=%t point=%s resource=%s matching_attempts=%d", err, capturedExactCut, capturedPoint, resource, matchingCuts)
 				}
 				result, reopened, closeReopened, reopenErr := powerlossreopen.Stable(cut, opts, false)
 				if reopenErr != nil || result.Rejected || reopened == nil {
@@ -291,4 +323,22 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 			})
 		}
 	}
+}
+
+func cowEventBelongsToDB(dir string, event durabilitycut.Event) bool {
+	eventRoot := event.Root
+	if eventRoot == "" {
+		eventRoot = event.Path
+	}
+	if eventRoot == "" {
+		eventRoot = event.NewPath
+	}
+	if eventRoot == "" {
+		eventRoot = event.OldPath
+	}
+	if eventRoot == "" && len(event.Paths) != 0 {
+		eventRoot = event.Paths[0]
+	}
+	rel, err := filepath.Rel(dir, eventRoot)
+	return err == nil && eventRoot != "" && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

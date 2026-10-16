@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -954,5 +955,80 @@ func TestStandaloneLeafPageLogLateRegistryBindFailsStableOnly(t *testing.T) {
 	}
 	if _, err := db.leafPageLog.AppendLeafPage([]byte("ordinary compatibility remains")); err != nil {
 		t.Fatalf("ordinary append after late bind: %v", err)
+	}
+}
+
+func TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexPrimaryDirectory: true, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	pageBytes := buildRewriteLeafPageFixture(t, "selected-legacy-template")
+	cfg, provider := stableLeafTemplateFixture(t, pageBytes)
+	writer.SetTemplateCompression(templ.TemplateOnly, cfg, provider)
+	database.SetLeafPageLog(writer)
+	t.Cleanup(func() { _ = database.Close(); _ = writer.Close() })
+	owner := database.StableResourceMetadataOwner()
+	baseline := owner.Bytes()
+	capture, err := newRewriteStableOuterLeafCapture(writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() <= baseline {
+		capture.abandon()
+		t.Fatal("selected capture wrapper/builder escaped producer admission")
+	}
+	capture.abandon()
+	if owner.Bytes() != baseline {
+		t.Fatalf("capture unwind bytes=%d baseline=%d", owner.Bytes(), baseline)
+	}
+	_, resources, err := writer.AppendLeafPageWithStableResources(pageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.MetadataOwner() != owner {
+		resources.Release()
+		t.Fatal("selected rewrite returned unadmitted generic resources")
+	}
+	var template, outer bool
+	err = resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		for _, token := range tokens {
+			switch token.Kind() {
+			case rootpublication.ResourceTemplate:
+				template = true
+			case rootpublication.ResourceOuterLeafLog:
+				outer = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !template || !outer || provider.captureCalls.Load() != 1 {
+		t.Fatalf("template=%v outer=%v captures=%d", template, outer, provider.captureCalls.Load())
+	}
+	resources.Release()
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != baseline {
+		t.Fatalf("selected cleanup bytes=%d baseline=%d", owner.Bytes(), baseline)
+	}
+	var refused retainedalloc.Owner
+	if err = refused.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer.stableResourceMetadata = &refused
+	before := provider.captureCalls.Load()
+	if capture, err = newRewriteStableOuterLeafCapture(writer); err == nil {
+		capture.abandon()
+		t.Fatal("closed metadata admitted new capture")
+	}
+	if provider.captureCalls.Load() != before {
+		t.Fatal("refused constructor touched provider")
 	}
 }

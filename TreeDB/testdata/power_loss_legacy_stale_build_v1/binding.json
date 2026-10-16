@@ -1,0 +1,40 @@
+{
+  "schema_version": "treedb-historical-stale-build-archive/v1",
+  "source_head": "19ba9fdbca4ca85afc544a8b342d66aad32f01b2",
+  "current_coverage": false,
+  "retirement_decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
+  "historical_id": "stale-build-base-root-publication",
+  "historical_cut": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
+  "historical_seed": 12505447533306515078,
+  "freelist_generation": 8,
+  "bindings": [
+    {
+      "archive": "witness.go.txt",
+      "source_path": "TreeDB/db/power_loss_certification_stale_build_test.go",
+      "git_blob": "0276e8409fdcdc098f19f5cd60ee44eed6699229",
+      "sha256": "9abf532bd5a44dc7b6f91b13cabf00f0d744e19de760925061668d7e0d610fcb",
+      "bytes": 11107
+    },
+    {
+      "archive": "ledger.json",
+      "source_path": "TreeDB/testdata/power_loss_counterexamples.json",
+      "git_blob": "38559ed2122b96de56c5d24e95cc8e9eda61dd12",
+      "sha256": "57837810c392f42a7e7343585462aad9618fa31a1007cdd85ba903a1c25793f0",
+      "bytes": 9675
+    },
+    {
+      "archive": "contracts.json",
+      "source_path": "TreeDB/testdata/power_loss_witness_contracts.json",
+      "git_blob": "35d61ed90f5315449da949c16a414a9c6f4750ff",
+      "sha256": "fa0b475ce045a435602efca9dcb6a30b526a58bf3035532bf6c65faa1c7c09a9",
+      "bytes": 56686
+    }
+  ],
+  "replay_receipt_sha256": "69074d572dcfae23e78a28ff44a91d2af9d016bb41c1c046331bf962557e2a9f",
+  "replay_claim": "Original source-owned DB test binary; historical replay only. No current-source format or coverage claim.",
+  "replay_binary_sha256": "3239853dcba11be07c4921fa0bef9670b741f0b1d32466bdce6596ee28fd6425",
+  "successor_ids": [
+    "stale-build-base-saved-primary-v5",
+    "stale-build-base-primary-capsule-v6"
+  ]
+}

@@ -152,7 +152,8 @@ var retainedPowerLossCounterexamples = []string{
 	"relaxed-command-frame-before-rid",
 	"chunked-sync-intermediate-root",
 	"older-meta-live-page-reused",
-	"stale-build-base-root-publication",
+	"stale-build-base-saved-primary-v5",
+	"stale-build-base-primary-capsule-v6",
 }
 
 type observedPowerLossCommandFrame struct {
@@ -561,39 +562,88 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	var snapshot *powerlossoracle.Model
 	var actualSnapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
+	dependencyPaths := make(map[string]bool)
+	var observeMu sync.Mutex
+	observing := true
+	cutCaptured := false
+	targetPrimary := filepath.Clean(filepath.Join(dir, "index.db.primary"))
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !cowEventBelongsToDB(dir, event) {
+			return nil
+		}
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if !observing {
+			return nil
+		}
+		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary
+		if cutCaptured {
+			// Keep the first image and its dependency set immutable. A later
+			// attempt at the same interrupted boundary gets the original cause.
+			if targetMeta {
+				return cutErr
+			}
+			return nil
+		}
 		if err := observed.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaWrite {
-			meta = event
-			actualSnapshot = observed.Clone()
+		if event.Point == durabilitycut.AfterDependencyFileSync {
+			for _, path := range event.Paths {
+				rel, err := filepath.Rel(dir, path)
+				if err != nil {
+					return err
+				}
+				dependencyPaths[filepath.ToSlash(rel)] = true
+			}
+		}
+		if targetMeta {
+			capturedActual := observed.Clone()
 			// Retain a regression image with the new process-visible generation
 			// overlaid on the old stable baseline. Production has already synced
 			// dependencies and index pages at this point; this independent model
 			// keeps the historical selective-writeback variants replayable so the
 			// recovery selector must continue falling back safely.
-			snapshot = baseline.Clone()
-			if err := snapshot.Overlay(dir); err != nil {
+			captured := baseline.Clone()
+			if err := captured.Overlay(dir); err != nil {
 				return err
 			}
-			if err := snapshot.UseObservedTrace(actualSnapshot); err != nil {
+			if err := captured.UseObservedTrace(capturedActual); err != nil {
 				return err
 			}
+			meta, snapshot, actualSnapshot = event, captured, capturedActual
+			cutCaptured = true
 			return cutErr
 		}
 		return nil
 	})
+	var deactivateOnce sync.Once
+	deactivate := func() {
+		deactivateOnce.Do(func() {
+			// Drain even a callback that fetched the observer before restore.
+			observeMu.Lock()
+			observing = false
+			observeMu.Unlock()
+			restore()
+		})
+	}
+	defer deactivate()
 	for i := 0; i < 400; i++ {
 		key := []byte(fmt.Sprintf("new/pointer/%03d", i))
 		if err := db.Set(key, bytes.Repeat([]byte{byte(i + 1)}, 4096)); err != nil {
-			restore()
+			deactivate()
 			t.Fatalf("stage actual cached write %d: %v", i, err)
 		}
 	}
 	err = db.Checkpoint()
-	restore()
-	if !errors.Is(err, cutErr) || snapshot == nil || actualSnapshot == nil {
+	deactivate()
+	capturedExactCut := cutCaptured && snapshot != nil && actualSnapshot != nil &&
+		meta.Point == durabilitycut.AfterMetaWrite && meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetPrimary
+	// The original asynchronous publisher can return cutErr and poison the
+	// handle before this checkpoint enters public admission. That admission
+	// returns the typed recovery sentinel instead of replaying the cause.
+	observedMetaPoison := capturedExactCut && errors.Is(err, treedb.ErrRecoveryRequired)
+	if !capturedExactCut || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 		t.Fatalf("actual relaxed finalize did not stop at AfterMetaWrite: err=%v", err)
 	}
 	_ = db.Close()
@@ -643,6 +693,23 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if len(metaChanged) == 0 || len(indexChanged) == 0 {
 		t.Fatalf("adversarial replay model did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
 	}
+	// This witness selectively withholds actual data dependencies. V6 embeds
+	// its authoritative generation metadata in PRIMARY; the compatibility alias
+	// and unused manifest revisions are not leaf-record dependencies. Keep their
+	// already-synced bodies rather than manufacturing an empty JSON alias when a
+	// namespace variant promotes all siblings in leaf_vlog.
+	for _, path := range snapshot.VolatilePaths() {
+		if !strings.HasPrefix(filepath.ToSlash(path), "leaf_vlog/") || !strings.HasSuffix(path, ".json") {
+			continue
+		}
+		actualDirty, err := actualSnapshot.ChangedRanges(path)
+		if err != nil || len(actualDirty) != 0 {
+			t.Fatalf("ancillary manifest was not already synced at authority cut: path=%s dirty=%v err=%v", path, actualDirty, err)
+		}
+		if err := snapshot.SyncFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	stablePaths := make(map[string]bool)
 	for _, path := range snapshot.StablePaths() {
@@ -660,9 +727,13 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		slashed := filepath.ToSlash(path)
 		kind := powerlossoracle.ResourceKind("")
 		switch {
-		case strings.Contains(slashed, "value_vlog/"):
+		case slashed == "index.db":
+			// V6 authority is in PRIMARY; its DATA pages remain a separate
+			// dependency of the complete new generation.
+			kind = powerlossoracle.ResourceIndex
+		case strings.Contains(slashed, "value_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceValueLog
-		case strings.Contains(slashed, "leaf_vlog/"):
+		case strings.Contains(slashed, "leaf_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceOuterLeaf
 		default:
 			continue
@@ -1084,7 +1155,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 			},
 		},
 		{
-			ID:               "public-stale-build-base-retry-stable-image",
+			ID:               "public-stale-build-base-retry-saved-primary-v5",
 			Point:            powerlossoracle.AfterMetaSync,
 			Occurrence:       0,
 			Model:            model,
@@ -1094,6 +1165,15 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
 			},
+		},
+		{
+			ID:               "public-stale-build-base-retry-capsule-v6",
+			Point:            powerlossoracle.AfterIndexDataSync,
+			Occurrence:       0,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "stale-build-base-retry-capsule", Path: "maindb/index.db"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{powerlossoracle.VariantSyncedOnly: powerlossoracle.ExpectedOldRoot, powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot},
 		},
 	}
 	generated := make(map[string][]powerlossoracle.Variant, len(specs))
@@ -1283,6 +1363,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
 		t.Fatal(err)
 	}
@@ -1303,28 +1384,53 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	var snapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
 	var observeMu sync.Mutex
+	observing := true
+	cutReturned := false
+	targetPrimary := filepath.Clean(filepath.Join(dir, "index.db.primary"))
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !cowEventBelongsToDB(dir, event) {
+			return nil
+		}
 		observeMu.Lock()
 		defer observeMu.Unlock()
-		if snapshot != nil {
-			return cutErr
+		if !observing {
+			return nil
+		}
+		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary
+		if cutReturned {
+			if targetMeta {
+				return cutErr
+			}
+			return nil
 		}
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaWrite {
-			meta, snapshot = event, model.Clone()
+		if targetMeta {
+			// Keep only scalar event operands, never the borrowed stable handles.
+			meta = durabilitycut.Event{Point: event.Point, Resource: event.Resource, Path: event.Path, Offset: event.Offset, Length: event.Length}
+			snapshot = model.Clone()
+			cutReturned = true
 			return cutErr
 		}
 		return nil
 	})
+	deactivate := sync.OnceFunc(func() {
+		// Drain callbacks that already fetched the observer before restore.
+		observeMu.Lock()
+		observing = false
+		observeMu.Unlock()
+		restore()
+	})
+	defer deactivate()
 	err = db.Checkpoint()
-	restore()
-	observeMu.Lock()
-	capturedSnapshot, capturedMeta := snapshot, meta
-	observeMu.Unlock()
-	snapshot, meta = capturedSnapshot, capturedMeta
-	if !errors.Is(err, cutErr) || snapshot == nil {
+	deactivate()
+	// The SAME actual post-meta interruption may reach the checkpoint through
+	// its poisoned admission gate after the asynchronous publisher records it.
+	capturedExactCut := cutReturned && snapshot != nil && meta.Point == durabilitycut.AfterMetaWrite &&
+		meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetPrimary
+	observedMetaPoison := capturedExactCut && errors.Is(err, backenddb.ErrRecoveryRequired)
+	if !capturedExactCut || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)
 	}
 	_ = db.Close()

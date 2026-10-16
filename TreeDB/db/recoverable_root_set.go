@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"io"
 	"math"
 	"os"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -48,15 +51,19 @@ func recoverableRootIdentity(root RecoverableRoot) recoverableRootKey {
 }
 
 type recoverableDurableBasis struct {
-	slot       uint64
-	slotCommit [2]uint64
-	slotRecord [2]rootpublication.DurableRootRecordV1
-	pending    *durableRootPublishCandidateV1
-	ambiguous  []*durableRootPublishCandidateV1
+	slot             uint64
+	slotCommit       [2]uint64
+	slotRecord       [2]rootpublication.DurableRootRecordV1
+	primaryProof     [2]rootpublication.DurablePrimaryRootRecordV5
+	primaryReadRoots [4]uint64
+	primaryClosures  [4]primaryarena.Ref
+	dataFloor        [4]uint64
+	pending          *durableRootPublishCandidateV1
+	ambiguous        []*durableRootPublishCandidateV1
 }
 
 func (basis recoverableDurableBasis) equal(other recoverableDurableBasis) bool {
-	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
+	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.primaryProof != other.primaryProof || basis.primaryReadRoots != other.primaryReadRoots || basis.primaryClosures != other.primaryClosures || basis.dataFloor != other.dataFloor || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
 		return false
 	}
 	for i := range basis.ambiguous {
@@ -67,17 +74,50 @@ func (basis recoverableDurableBasis) equal(other recoverableDurableBasis) bool {
 	return true
 }
 
+func (db *DB) recoverableDurableBasisLocked() recoverableDurableBasis {
+	basis := recoverableDurableBasis{slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit, slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending, ambiguous: db.durableRoot.ambiguous}
+	if primary := db.durableRoot.primary; primary != nil {
+		basis.primaryProof = primary.proofRecords
+		basis.dataFloor = primary.dataFloor
+		if db.idx.Load().primary.CapsuleFormatV6() {
+			for i := 0; i < 2; i++ {
+				basis.primaryReadRoots[i] = primary.records[i].PageID
+				basis.primaryReadRoots[i+2] = primary.proofs[i].PageID
+				basis.primaryClosures[i] = primary.closures[i]
+				basis.primaryClosures[i+2] = primary.proofClosures[i]
+			}
+		}
+	}
+	return basis
+}
+
 type recoverableIdentityPin struct {
-	identity rootpublication.StableIdentity
-	pin      *rootpublication.IdentityPin
+	identity   rootpublication.StableIdentity
+	pin        *rootpublication.IdentityPin
+	observed   bool
+	cleanupErr error
 }
 
 // RecoverableRootSet is an opaque, DB-minted maintenance capability. Its
 // fields are deliberately private: callers can inspect copied roots, acquire
 // root-bound snapshots, add exact physical pins discovered while traversing a
 // root, revalidate, and release, but cannot manufacture authority.
+type recoverableRootResource struct {
+	key       recoverableRootKey
+	resources *rootpublication.StableResourceSet
+	present   bool
+}
 type RecoverableRootSet struct {
-	db *DB
+	db                *DB
+	metadata          *retainedalloc.Owner
+	metadataCharge    uint64
+	custody           *rootpublication.OriginalCleanupCustody
+	failure           originalDBCleanupFailure
+	releaseOnce       sync.Once
+	releaseErr        error
+	resourceStorage   [7]*rootpublication.StableResourceSet
+	primaryRefStorage [8]primaryarena.Ref
+	rootResources     [5]recoverableRootResource
 
 	roots               []RecoverableRoot
 	visible             StateToken
@@ -89,13 +129,14 @@ type RecoverableRootSet struct {
 	oldestRegistryID    int64
 	systemRootEpoch     uint64
 	resources           []*rootpublication.StableResourceSet
-	rootResources       map[recoverableRootKey]*rootpublication.StableResourceSet
+	primaryArena        *primaryarena.Arena
+	primaryRefs         []primaryarena.Ref
 	rootResourceIndexID uint64
 	rootResourceIndex   rootpublication.StableIdentity
 	identityPinRegistry *rootpublication.IdentityPinRegistry
 
 	mu           sync.Mutex
-	identityPins map[rootpublication.StableIdentity]recoverableIdentityPin
+	identityPins rootpublication.IdentityCapacityTable[recoverableIdentityPin]
 	released     atomic.Bool
 }
 
@@ -156,30 +197,67 @@ func (db *DB) captureRecoverableRootSetWithMaintenanceLockHeldMode(ctx context.C
 	stable := db.acquireStableSnapshotWithMaintenanceLockHeld()
 	if stable == nil || stable.idx == nil || stable.idx.registry == nil {
 		if stable != nil {
-			_ = stable.Close()
+			if closeErr := stable.Close(); closeErr != nil {
+				db.retainOriginalCleanupError(closeErr)
+				return nil, errors.Join(errors.New("treedb: capture recoverable root set stable index"), closeErr)
+			}
 		}
 		return nil, errors.New("treedb: capture recoverable root set stable index")
 	}
 
 	for attempt := 0; attempt < recoverableRootSetCaptureAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			_ = stable.Close()
+			if closeErr := stable.Close(); closeErr != nil {
+				db.retainOriginalCleanupError(closeErr)
+				return nil, errors.Join(err, closeErr)
+			}
 			return nil, err
 		}
 		capability, retry, err := db.tryCaptureRecoverableRootSet(stable)
 		if err != nil {
-			_ = stable.Close()
+			if closeErr := stable.Close(); closeErr != nil {
+				db.retainOriginalCleanupError(closeErr)
+				return nil, errors.Join(err, closeErr)
+			}
 			return nil, err
 		}
 		if !retry {
 			return capability, nil
 		}
 	}
-	_ = stable.Close()
+	if closeErr := stable.Close(); closeErr != nil {
+		db.retainOriginalCleanupError(closeErr)
+		return nil, errors.Join(ErrRecoverableRootSetStale, closeErr)
+	}
 	return nil, fmt.Errorf("%w: capture did not converge", ErrRecoverableRootSetStale)
 }
 
-func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSet, bool, error) {
+func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (capability *RecoverableRootSet, retry bool, resultErr error) {
+	metadata := db.valueLogIdentityPins.MetadataOwner()
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(RecoverableRootSet{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return nil, false, err
+	}
+	custody, err := rootpublication.NewOriginalCleanupCustody(db.valueLogIdentityPins, metadata)
+	if err != nil {
+		metadata.RemovePending(charge)
+		return nil, false, err
+	}
+	set := &RecoverableRootSet{db: db, metadata: metadata, metadataCharge: charge, custody: custody,
+		identityPinRegistry: db.valueLogIdentityPins, identityPins: rootpublication.NewIdentityCapacityTable[recoverableIdentityPin](metadata)}
+	set.failure.payload = set
+	set.resources = set.resourceStorage[:0]
+	set.primaryRefs = set.primaryRefStorage[:0]
+	defer func() {
+		if capability == nil {
+			cleanupErr := set.ReleaseWithError()
+			resultErr = errors.Join(resultErr, cleanupErr)
+			if cleanupErr != nil {
+				retry = false
+			}
+		}
+	}()
+
 	var rootResourceIndex rootpublication.StableIdentity
 	if err := stable.idx.pager.WithStableResourceFile(func(file *os.File) error {
 		var identityErr error
@@ -193,19 +271,16 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		coordinator = db.rootPublication.coordinator
 	}
 	var coordinatorView rootpublication.ReachabilitySnapshot
-	var err error
 	if coordinator != nil {
 		coordinatorView, err = coordinator.CaptureReachability()
 		if err != nil {
 			return nil, false, publicRootPublicationErrorV1(err)
 		}
 	}
-	releaseCoordinator := true
-	defer func() {
-		if releaseCoordinator {
-			coordinatorView.Release()
-		}
-	}()
+	if coordinatorView.Resources != nil {
+		set.resources = append(set.resources, coordinatorView.Resources)
+		coordinatorView.Resources = nil
+	}
 
 	var visibleResources *rootpublication.StableResourceSet
 	if db.rootPublication != nil {
@@ -214,22 +289,40 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 			return nil, false, err
 		}
 	}
-	releaseVisible := true
-	defer func() {
-		if releaseVisible {
-			visibleResources.Release()
-		}
-	}()
+	if visibleResources != nil {
+		set.resources = append(set.resources, visibleResources)
+	}
 
 	db.durablePublishMu.Lock()
 	db.rootReuseMu.RLock()
-	durable := recoverableDurableBasis{
-		slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit,
-		slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...),
+	sourceCapacity, capacityErr := checkedRetainedCapacity(5, len(db.durableRoot.ambiguous))
+	var ambiguousCharge, sourceCharge uint64
+	if capacityErr == nil {
+		capacityErr = checkedRetainedPayloadChargeAdd(&ambiguousCharge, uint64(len(db.durableRoot.ambiguous)), uint64(unsafe.Sizeof((*durableRootPublishCandidateV1)(nil))))
 	}
-	sources := make([]*rootpublication.StableResourceSet, 0, 5+len(db.durableRoot.ambiguous))
+	if capacityErr == nil {
+		capacityErr = checkedRetainedPayloadChargeAdd(&sourceCharge, uint64(sourceCapacity), uint64(unsafe.Sizeof((*rootpublication.StableResourceSet)(nil))))
+	}
+	if capacityErr == nil && sourceCharge > ^uint64(0)-ambiguousCharge {
+		capacityErr = retainedalloc.ErrCapacity
+	}
+	if capacityErr == nil {
+		capacityErr = metadata.AddPending(ambiguousCharge + sourceCharge)
+	}
+	if err := capacityErr; err != nil {
+		db.rootReuseMu.RUnlock()
+		db.durablePublishMu.Unlock()
+		return nil, false, err
+	}
+	set.metadataCharge += ambiguousCharge
+	durable := db.recoverableDurableBasisLocked()
+	durable.ambiguous = append([]*durableRootPublishCandidateV1(nil), durable.ambiguous...)
+	set.durable = durable
+	sources := make([]*rootpublication.StableResourceSet, 0, sourceCapacity)
 	sources = append(sources, db.durableRoot.slotResources[:]...)
+	if primary := db.durableRoot.primary; primary != nil {
+		sources = append(sources, primary.proofResources[:]...)
+	}
 	if pending := db.durableRoot.pending; pending != nil {
 		sources = append(sources, pending.resources)
 	}
@@ -239,14 +332,31 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		}
 	}
 	durableResources, cloneErr := cloneRecoverableResourceUnion(sources...)
-	rootResources := make(map[recoverableRootKey]*rootpublication.StableResourceSet, 3)
-	rootResourceSets := make([]*rootpublication.StableResourceSet, 0, 2)
+	clear(sources)
+	sources = nil
+	metadata.RemovePending(sourceCharge)
+	if durableResources != nil {
+		set.resources = append(set.resources, durableResources)
+	}
 	if cloneErr == nil {
-		for slot, record := range db.durableRoot.slotRecord {
+		var recordStorage [4]rootpublication.DurableRootRecordV1
+		var recordResourceStorage [4]*rootpublication.StableResourceSet
+		records := append(recordStorage[:0], db.durableRoot.slotRecord[:]...)
+		recordResources := append(recordResourceStorage[:0], db.durableRoot.slotResources[:]...)
+		if primary := db.durableRoot.primary; primary != nil {
+			for i, proof := range primary.proofRecords {
+				records = append(records, proof.Record)
+				recordResources = append(recordResources, primary.proofResources[i])
+			}
+		}
+		for slot, record := range records {
+			if durable.primaryReadRoots[slot] != 0 {
+				record.UserRootPageID = durable.primaryReadRoots[slot]
+			}
 			if record.CommitSeq == 0 {
 				continue
 			}
-			resources, resourceErr := rootpublication.CloneStableResourceSetExcludingKinds(db.durableRoot.slotResources[slot])
+			resources, resourceErr := rootpublication.CloneStableResourceSetExcludingKinds(recordResources[slot])
 			if resourceErr != nil {
 				cloneErr = resourceErr
 				break
@@ -256,114 +366,140 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 				SystemRootPageID: record.SystemRootPageID, AppliedCommandLSN: record.AppliedCommandLSN,
 				MaxEntryRevision: record.MaxEntryRevision,
 			}
-			rootResources[recoverableRootIdentity(root)] = resources
+			set.putRootResources(recoverableRootIdentity(root), resources)
 			if resources != nil {
-				rootResourceSets = append(rootResourceSets, resources)
+				set.resources = append(set.resources, resources)
 			}
+		}
+	}
+	var primaryArena *primaryarena.Arena
+	primaryRefs := set.primaryRefs
+	if cloneErr == nil && db.durableRoot.primary != nil {
+		primaryArena = stable.idx.primary
+		primary := db.durableRoot.primary
+		var refStorage [8]primaryarena.Ref
+		refs := append(refStorage[:0], primary.records[:]...)
+		refs = append(refs, primary.proofs[:]...)
+		refs = append(refs, primary.closures[:]...)
+		refs = append(refs, primary.proofClosures[:]...)
+		for _, ref := range refs {
+			if ref.PageID == 0 {
+				continue
+			}
+			ready, e := primaryArena.Acquire(ref, nil)
+			if e != nil || !ready {
+				cloneErr = errors.Join(e, errors.New("treedb: primary capture ownership unavailable"))
+				break
+			}
+			primaryRefs = append(primaryRefs, ref)
+			set.primaryRefs = primaryRefs
+			set.primaryArena = primaryArena
 		}
 	}
 	db.durablePublishMu.Unlock()
 	if cloneErr != nil {
 		db.rootReuseMu.RUnlock()
-		durableResources.Release()
-		for _, resources := range rootResourceSets {
-			resources.Release()
-		}
 		return nil, false, cloneErr
 	}
 
 	state, ok := db.StateToken()
 	if !ok || stable.idx != db.idx.Load() {
 		db.rootReuseMu.RUnlock()
-		durableResources.Release()
-		for _, resources := range rootResourceSets {
-			resources.Release()
-		}
 		return nil, true, nil
 	}
-	roots := recoverableRootsForBasis(state, durable, coordinatorView)
+	rootCapacity, rootCapacityErr := checkedRetainedCapacity(9, len(coordinatorView.Pending), len(durable.ambiguous))
+	var rootCharge uint64
+	if rootCapacityErr == nil {
+		rootCapacityErr = checkedRetainedPayloadChargeAdd(&rootCharge, uint64(rootCapacity), uint64(unsafe.Sizeof(RecoverableRoot{})))
+	}
+	if rootCapacityErr == nil {
+		rootCapacityErr = metadata.AddPending(rootCharge)
+	}
+	if err := rootCapacityErr; err != nil {
+		db.rootReuseMu.RUnlock()
+		return nil, false, err
+	}
+	set.metadataCharge += rootCharge
+	roots := recoverableRootsForBasisInto(make([]RecoverableRoot, 0, rootCapacity), state, durable, coordinatorView)
+	set.roots = roots
 	oldest := state.CommitSeq
 	for _, root := range roots {
 		if root.CommitSeq != 0 && (oldest == 0 || root.CommitSeq < oldest) {
 			oldest = root.CommitSeq
 		}
 	}
+	for _, floor := range durable.dataFloor {
+		if floor != 0 && (oldest == 0 || floor < oldest) {
+			oldest = floor
+		}
+	}
 	oldestRegistryID, _ := stable.idx.registry.RegisterWithHint(oldest, -1)
 	systemRootEpoch := db.systemRootPublishEpoch.Load()
 	db.rootReuseMu.RUnlock()
 
-	cleanupRetry := func() {
-		if oldestRegistryID != 0 {
-			stable.idx.registry.Unregister(oldestRegistryID)
-		}
-		durableResources.Release()
-		for _, resources := range rootResourceSets {
-			resources.Release()
-		}
-	}
+	set.oldestRegistryID, set.idx = oldestRegistryID, stable.idx
 	if coordinator != nil {
 		if err := coordinator.RevalidateReachability(coordinatorView.Epoch); err != nil {
-			cleanupRetry()
 			if errors.Is(err, rootpublication.ErrInvalidCandidate) {
 				return nil, true, nil
 			}
 			return nil, false, publicRootPublicationErrorV1(err)
 		}
 		if coordinatorView.Visible.CommitSeq() != state.CommitSeq || coordinatorView.Visible.UserRootPageID() != state.RootPageID || coordinatorView.Visible.SystemRootPageID() != state.SystemRootPageID || coordinatorView.Visible.AppliedCommandLSN() != state.AppliedCommandLSN || coordinatorView.Visible.MaxEntryRevision() != uint64(state.MaxEntryRevision) || coordinatorView.Durable.CommitSeq() != durable.slotRecord[durable.slot].CommitSeq {
-			cleanupRetry()
 			return nil, true, nil
 		}
 	}
 	current, ok := db.StateToken()
 	if !ok || current != state || db.idx.Load() != stable.idx || db.systemRootPublishEpoch.Load() != systemRootEpoch {
-		cleanupRetry()
 		return nil, true, nil
 	}
 	db.durablePublishMu.Lock()
-	currentDurable := recoverableDurableBasis{
-		slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit,
-		slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...),
-	}
+	currentMatches := durable.equal(db.recoverableDurableBasisLocked())
 	db.durablePublishMu.Unlock()
-	if !durable.equal(currentDurable) {
-		cleanupRetry()
+	if !currentMatches {
 		return nil, true, nil
 	}
 
-	resources := make([]*rootpublication.StableResourceSet, 0, 3+len(rootResourceSets))
-	if durableResources != nil {
-		resources = append(resources, durableResources)
-	}
-	if coordinatorView.Resources != nil {
-		resources = append(resources, coordinatorView.Resources)
-		coordinatorView.Resources = nil
-	}
 	if visibleResources != nil {
-		resources = append(resources, visibleResources)
-		visibleRoot := RecoverableRoot{
-			CommitSeq: state.CommitSeq, UserRootPageID: state.RootPageID,
-			SystemRootPageID: state.SystemRootPageID, AppliedCommandLSN: state.AppliedCommandLSN,
-			MaxEntryRevision: uint64(state.MaxEntryRevision),
+		root := RecoverableRoot{CommitSeq: state.CommitSeq, UserRootPageID: state.RootPageID, SystemRootPageID: state.SystemRootPageID, AppliedCommandLSN: state.AppliedCommandLSN, MaxEntryRevision: uint64(state.MaxEntryRevision)}
+		key := recoverableRootIdentity(root)
+		if _, ok := set.lookupRootResources(key); !ok {
+			set.putRootResources(key, visibleResources)
 		}
-		key := recoverableRootIdentity(visibleRoot)
-		if _, exists := rootResources[key]; !exists {
-			rootResources[key] = visibleResources
-		}
-		visibleResources = nil
 	}
-	resources = append(resources, rootResourceSets...)
-	releaseCoordinator = false
-	releaseVisible = false
-	return &RecoverableRootSet{
-		db: db, roots: roots, visible: state, durable: durable,
-		coordinator: coordinator, coordinatorEpoch: coordinatorView.Epoch,
-		idx: stable.idx, stableSnapshot: stable, oldestRegistryID: oldestRegistryID,
-		systemRootEpoch: systemRootEpoch, resources: resources, rootResources: rootResources,
-		rootResourceIndexID: stable.idx.id, rootResourceIndex: rootResourceIndex,
-		identityPinRegistry: db.StableResourceIdentityPinRegistry(),
-		identityPins:        make(map[rootpublication.StableIdentity]recoverableIdentityPin),
-	}, false, nil
+	set.primaryArena, set.primaryRefs = primaryArena, primaryRefs
+	set.visible, set.coordinator, set.coordinatorEpoch = state, coordinator, coordinatorView.Epoch
+	set.idx, set.stableSnapshot, set.oldestRegistryID = stable.idx, stable, oldestRegistryID
+	set.systemRootEpoch = systemRootEpoch
+	set.rootResourceIndexID, set.rootResourceIndex = stable.idx.id, rootResourceIndex
+	return set, false, nil
+}
+
+func (set *RecoverableRootSet) putRootResources(key recoverableRootKey, resources *rootpublication.StableResourceSet) {
+	for i := range set.rootResources {
+		record := &set.rootResources[i]
+		if !record.present || record.key == key {
+			*record = recoverableRootResource{key: key, resources: resources, present: true}
+			return
+		}
+	}
+	panic("recoverable root resource census exceeds four durable plus one visible")
+}
+func (set *RecoverableRootSet) removeRootResources(key recoverableRootKey) {
+	for i := range set.rootResources {
+		if set.rootResources[i].present && set.rootResources[i].key == key {
+			set.rootResources[i] = recoverableRootResource{}
+			return
+		}
+	}
+}
+func (set *RecoverableRootSet) lookupRootResources(key recoverableRootKey) (*rootpublication.StableResourceSet, bool) {
+	for _, record := range set.rootResources {
+		if record.present && record.key == key {
+			return record.resources, true
+		}
+	}
+	return nil, false
 }
 
 // CloneStableResourceForRoot selects one independently pinned resource from
@@ -377,7 +513,7 @@ func (set *RecoverableRootSet) CloneStableResourceForRoot(root RecoverableRoot, 
 	if set.released.Load() {
 		return nil, ErrRecoverableRootSetStale
 	}
-	resources, ok := set.rootResources[recoverableRootIdentity(root)]
+	resources, ok := set.lookupRootResources(recoverableRootIdentity(root))
 	if !ok {
 		return nil, ErrRecoverableRootSetStale
 	}
@@ -397,7 +533,7 @@ func (set *RecoverableRootSet) resourcesForRootExact(root RecoverableRoot) (*roo
 	if set == nil || set.released.Load() {
 		return nil, 0, rootpublication.StableIdentity{}, false
 	}
-	resources, ok := set.rootResources[recoverableRootIdentity(root)]
+	resources, ok := set.lookupRootResources(recoverableRootIdentity(root))
 	return resources, set.rootResourceIndexID, set.rootResourceIndex, ok
 }
 
@@ -415,7 +551,9 @@ func cloneRecoverableResourceUnion(sources ...*rootpublication.StableResourceSet
 }
 
 func recoverableRootsForBasis(state StateToken, durable recoverableDurableBasis, coordinator rootpublication.ReachabilitySnapshot) []RecoverableRoot {
-	roots := make([]RecoverableRoot, 0, 6+len(coordinator.Pending)+len(durable.ambiguous))
+	return recoverableRootsForBasisInto(make([]RecoverableRoot, 0, 9+len(coordinator.Pending)+len(durable.ambiguous)), state, durable, coordinator)
+}
+func recoverableRootsForBasisInto(roots []RecoverableRoot, state StateToken, durable recoverableDurableBasis, coordinator rootpublication.ReachabilitySnapshot) []RecoverableRoot {
 	add := func(root RecoverableRoot) {
 		if root.CommitSeq == 0 || root.UserRootPageID == 0 || root.SystemRootPageID == 0 {
 			return
@@ -433,11 +571,21 @@ func recoverableRootsForBasis(state StateToken, durable recoverableDurableBasis,
 		}
 		roots = append(roots, root)
 	}
-	for _, record := range durable.slotRecord {
+	for slot, record := range durable.slotRecord {
+		if durable.primaryReadRoots[slot] != 0 {
+			record.UserRootPageID = durable.primaryReadRoots[slot]
+		}
 		add(RecoverableRoot{
 			CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID, SystemRootPageID: record.SystemRootPageID,
 			AppliedCommandLSN: record.AppliedCommandLSN, MaxEntryRevision: record.MaxEntryRevision, Durable: true,
 		})
+	}
+	for slot, proof := range durable.primaryProof {
+		record := proof.Record
+		if durable.primaryReadRoots[slot+2] != 0 {
+			record.UserRootPageID = durable.primaryReadRoots[slot+2]
+		}
+		add(RecoverableRoot{CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID, SystemRootPageID: record.SystemRootPageID, AppliedCommandLSN: record.AppliedCommandLSN, MaxEntryRevision: record.MaxEntryRevision, Durable: true})
 	}
 	if durable.pending != nil {
 		next := durable.pending.next
@@ -527,35 +675,40 @@ func (set *RecoverableRootSet) leafGenerationIDsForFiles(fileIDs map[uint32]stru
 	}
 	seen := make(map[rootpublication.StableIdentity]struct{})
 	for _, resources := range set.resources {
-		for _, token := range resources.Tokens() {
-			if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
-				continue
+		if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			for _, token := range tokens {
+				if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
+					continue
+				}
+				identity := token.Identity()
+				if _, ok := seen[identity]; ok {
+					continue
+				}
+				seen[identity] = struct{}{}
+				frontier := token.Frontier()
+				if frontier.Bytes == 0 || frontier.Bytes > math.MaxInt64 {
+					return fmt.Errorf("%w: recoverable outer-leaf manifest has invalid frontier", rootpublication.ErrFrontierBeyondResource)
+				}
+				var data []byte
+				if err := token.WithPinnedFile(func(file *os.File) error {
+					var readErr error
+					data, readErr = io.ReadAll(io.NewSectionReader(file, 0, int64(frontier.Bytes)))
+					return readErr
+				}); err != nil {
+					return err
+				}
+				manifest, err := decodeLeafGenerationManifest(data, token.ResourceID())
+				if err != nil {
+					return err
+				}
+				// A recycled file ID can legitimately map to different generations in
+				// independently recoverable manifests. Preserve every matching
+				// generation rather than collapsing by the scalar file ID.
+				consumeManifest(manifest)
 			}
-			identity := token.Identity()
-			if _, ok := seen[identity]; ok {
-				continue
-			}
-			seen[identity] = struct{}{}
-			frontier := token.Frontier()
-			if frontier.Bytes == 0 || frontier.Bytes > math.MaxInt64 {
-				return nil, fmt.Errorf("%w: recoverable outer-leaf manifest has invalid frontier", rootpublication.ErrFrontierBeyondResource)
-			}
-			var data []byte
-			if err := token.WithPinnedFile(func(file *os.File) error {
-				var readErr error
-				data, readErr = io.ReadAll(io.NewSectionReader(file, 0, int64(frontier.Bytes)))
-				return readErr
-			}); err != nil {
-				return nil, err
-			}
-			manifest, err := decodeLeafGenerationManifest(data, token.ResourceID())
-			if err != nil {
-				return nil, err
-			}
-			// A recycled file ID can legitimately map to different generations in
-			// independently recoverable manifests. Preserve every matching
-			// generation rather than collapsing by the scalar file ID.
-			consumeManifest(manifest)
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	if len(unresolved) != 0 {
@@ -568,10 +721,20 @@ func (set *RecoverableRootSet) leafGenerationIDsForFiles(fileIDs map[uint32]stru
 // capability's oldest-sequence registry pin prevents page reuse while this
 // bounded traversal is in progress.
 func (set *RecoverableRootSet) AcquireSnapshotForRoot(root RecoverableRoot) *Snapshot {
+	return set.acquireSnapshotForRoot(root, false)
+}
+
+// acquireSnapshotForRootWithDurablePublishLockHeld retains the same exact root
+// and fresh guards while the vacuum cutover gate already holds durablePublishMu.
+func (set *RecoverableRootSet) acquireSnapshotForRootWithDurablePublishLockHeld(root RecoverableRoot) *Snapshot {
+	return set.acquireSnapshotForRoot(root, true)
+}
+
+func (set *RecoverableRootSet) acquireSnapshotForRoot(root RecoverableRoot, durablePublishLockHeld bool) *Snapshot {
 	if set == nil || set.released.Load() || set.db == nil || !set.containsRoot(root) {
 		return nil
 	}
-	if err := set.Revalidate(); err != nil {
+	if err := set.revalidate(durablePublishLockHeld); err != nil {
 		return nil
 	}
 	snapshot := set.db.AcquireSnapshot()
@@ -579,13 +742,66 @@ func (set *RecoverableRootSet) AcquireSnapshotForRoot(root RecoverableRoot) *Sna
 		return nil
 	}
 	if snapshot.idx != set.idx {
-		_ = snapshot.Close()
+		if closeErr := snapshot.Close(); closeErr != nil {
+			set.db.retainOriginalCleanupError(closeErr)
+		}
 		return nil
 	}
 	state := cloneDBState(snapshot.state)
 	if state == nil {
-		_ = snapshot.Close()
+		if closeErr := snapshot.Close(); closeErr != nil {
+			set.db.retainOriginalCleanupError(closeErr)
+		}
 		return nil
+	}
+	if snapshot.idx.primary != nil {
+		ref, ready, e := snapshot.idx.primary.BorrowDirectory(root.UserRootPageID, nil)
+		if e != nil || !ready {
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
+			return nil
+		}
+		// Rebinding uses preborn storage inside the SAME admitted Snapshot;
+		// there is no extra heap wrapper or bank-owned allocation per capture.
+		// set still retains this exact historical bank during producer binding.
+		rebound := &snapshot.primaryRebindRoot
+		*rebound = primaryStateRootV5{arena: snapshot.idx.primary, ref: ref}
+		if e = bindPrimaryReadRootCertificateV6(rebound); e != nil {
+			*rebound = primaryStateRootV5{}
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
+			return nil
+		}
+		ready, e = snapshot.idx.primary.Acquire(ref, nil)
+		if e != nil || !ready {
+			*rebound = primaryStateRootV5{}
+			if closeErr := snapshot.Close(); closeErr != nil {
+				set.db.retainOriginalCleanupError(closeErr)
+			}
+			return nil
+		}
+		if snapshot.primaryRoot != nil {
+			consumed, dropErr := snapshot.primaryRoot.arena.Drop(snapshot.primaryRoot.ref, nil)
+			if !consumed && dropErr == nil {
+				dropErr = rootpublication.ErrResourceOwnership
+			}
+			if dropErr != nil {
+				// Preserve the SAME original Snapshot and both operands after the
+				// first actual refusal. Its finalizer must not replay that Drop.
+				if consumed {
+					snapshot.primaryRoot = rebound
+				}
+				snapshot.primaryRebindErr = dropErr
+				if closeErr := snapshot.Close(); closeErr != nil {
+					set.db.retainOriginalCleanupError(closeErr)
+				}
+				return nil
+			}
+		}
+		snapshot.primaryRoot = rebound
+		state.primaryRoot = rebound
 	}
 	state.CommitSeq = root.CommitSeq
 	state.RootPageID = root.UserRootPageID
@@ -615,7 +831,7 @@ func (set *RecoverableRootSet) containsRoot(root RecoverableRoot) bool {
 // PinStableFile adds an exact physical deletion pin discovered while walking a
 // captured root. Duplicate aliases of the same inode coalesce within the
 // capability.
-func (set *RecoverableRootSet) PinStableFile(file *os.File) error {
+func (set *RecoverableRootSet) PinStableFile(file *os.File) (retErr error) {
 	if set == nil || set.released.Load() || set.identityPinRegistry == nil {
 		return ErrRecoverableRootSetStale
 	}
@@ -625,22 +841,48 @@ func (set *RecoverableRootSet) PinStableFile(file *os.File) error {
 	}
 	identity.Generation = 0
 	set.mu.Lock()
-	defer set.mu.Unlock()
+	var cleanupRefusal error
+	defer func() {
+		db := set.db
+		if cleanupRefusal != nil {
+			set.failure.retainCause(0, cleanupRefusal)
+			set.metadata.CleanupFailed()
+		}
+		set.mu.Unlock()
+		if cleanupRefusal != nil {
+			db.retainOriginalCleanupError(&set.failure)
+			retErr = errors.Join(retErr, &set.failure)
+		}
+	}()
 	if set.released.Load() {
 		return ErrRecoverableRootSetStale
 	}
-	if _, ok := set.identityPins[identity]; ok {
-		return nil
+	if owned, ok := set.identityPins.Lookup(identity); ok {
+		return owned.cleanupErr
+	}
+	if err := set.identityPins.Set(identity, recoverableIdentityPin{identity: identity}); err != nil {
+		return err
 	}
 	if err := set.identityPinRegistry.Observe(identity); err != nil {
+		set.identityPins.Remove(identity)
 		return err
 	}
 	pin, err := set.identityPinRegistry.Pin(identity)
 	if err != nil {
-		_ = set.identityPinRegistry.Unobserve(identity)
-		return err
+		cleanupErr := set.identityPinRegistry.Unobserve(identity)
+		if cleanupErr == nil {
+			set.identityPins.Remove(identity)
+		} else {
+			cleanupRefusal = cleanupErr
+			_ = set.identityPins.Set(identity, recoverableIdentityPin{identity: identity, observed: true, cleanupErr: cleanupErr})
+		}
+		return errors.Join(err, cleanupErr)
 	}
-	set.identityPins[identity] = recoverableIdentityPin{identity: identity, pin: pin}
+	if err := set.identityPins.Set(identity, recoverableIdentityPin{identity: identity, pin: pin, observed: true}); err != nil {
+		pin.Release()
+		cleanupRefusal = set.identityPinRegistry.Unobserve(identity)
+		return errors.Join(err, cleanupRefusal)
+	}
 	return nil
 }
 
@@ -673,47 +915,102 @@ func (set *RecoverableRootSet) revalidate(durablePublishLockHeld bool) error {
 	if !durablePublishLockHeld {
 		set.db.durablePublishMu.Lock()
 	}
-	current := recoverableDurableBasis{
-		slot: set.db.durableRoot.slot, slotCommit: set.db.durableRoot.slotCommit,
-		slotRecord: set.db.durableRoot.slotRecord, pending: set.db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), set.db.durableRoot.ambiguous...),
-	}
+	currentMatches := set.durable.equal(set.db.recoverableDurableBasisLocked())
 	if !durablePublishLockHeld {
 		set.db.durablePublishMu.Unlock()
 	}
-	if !set.durable.equal(current) {
+	if !currentMatches {
 		return ErrRecoverableRootSetStale
 	}
 	return nil
 }
 
-// Release drops every stable resource, exact identity, sequence, and index pin
-// owned by the capability. It is safe to call repeatedly.
-func (set *RecoverableRootSet) Release() {
-	if set == nil || !set.released.CompareAndSwap(false, true) {
-		return
+// Release preserves the compatibility API and retains real refusal in DB custody.
+func (set *RecoverableRootSet) Release() { _ = set.ReleaseWithError() }
+func (set *RecoverableRootSet) ReleaseWithError() error {
+	if set == nil {
+		return nil
 	}
-	set.mu.Lock()
-	pins := make([]recoverableIdentityPin, 0, len(set.identityPins))
-	for _, pin := range set.identityPins {
-		pins = append(pins, pin)
-	}
-	set.identityPins = nil
-	set.mu.Unlock()
-	for _, owned := range pins {
-		owned.pin.Release()
-		_ = set.identityPinRegistry.Unobserve(owned.identity)
-	}
-	for _, resources := range set.resources {
-		resources.Release()
-	}
-	set.resources = nil
-	if set.oldestRegistryID != 0 && set.idx != nil && set.idx.registry != nil {
-		set.idx.registry.Unregister(set.oldestRegistryID)
-		set.oldestRegistryID = 0
-	}
-	if set.stableSnapshot != nil {
-		_ = set.stableSnapshot.Close()
-		set.stableSnapshot = nil
-	}
+	set.releaseOnce.Do(func() {
+		set.released.Store(true)
+		// Join the existing mutation latch before callbacks; no callback holds it.
+		set.mu.Lock()
+		set.mu.Unlock()
+		var err error
+		for i, ref := range set.primaryRefs {
+			if ref.PageID == 0 {
+				continue
+			}
+			consumed, e := set.primaryArena.Drop(ref, nil)
+			if consumed {
+				set.primaryRefs[i] = primaryarena.Ref{}
+			} else if e == nil {
+				e = rootpublication.ErrResourceOwnership
+			}
+			err = errors.Join(err, e)
+		}
+		for at := -1; ; {
+			index, identity, owned, ok := set.identityPins.Next(at)
+			if !ok {
+				break
+			}
+			at = index
+			owned.pin.Release()
+			owned.pin = nil
+			if owned.observed {
+				e := owned.cleanupErr
+				if e == nil {
+					e = set.identityPinRegistry.Unobserve(identity)
+				}
+				err = errors.Join(err, e)
+				if e == nil {
+					owned.observed = false
+				}
+			}
+			if !owned.observed {
+				set.identityPins.Remove(identity)
+			} else {
+				_ = set.identityPins.Set(identity, owned)
+			}
+		}
+		for i, resources := range set.resources {
+			e := resources.ReleaseWithError()
+			err = errors.Join(err, e)
+			if e == nil {
+				set.resources[i] = nil
+			}
+		}
+		if set.oldestRegistryID != 0 && set.idx != nil {
+			set.idx.registry.Unregister(set.oldestRegistryID)
+			set.oldestRegistryID = 0
+			set.idx = nil
+		}
+		if set.stableSnapshot != nil {
+			e := set.stableSnapshot.Close()
+			err = errors.Join(err, e)
+			if e == nil {
+				set.stableSnapshot = nil
+			}
+		}
+		if err != nil {
+			set.failure.retainCause(0, err)
+			set.releaseErr = &set.failure
+			set.metadata.CleanupFailed()
+			set.db.retainOriginalCleanupError(set.releaseErr)
+			set.custody.Complete(set, set.releaseErr)
+			return
+		}
+		set.identityPins.Close()
+		clear(set.roots)
+		clear(set.durable.ambiguous)
+		set.roots, set.resources, set.primaryRefs = nil, nil, nil
+		set.durable = recoverableDurableBasis{}
+		set.rootResources = [5]recoverableRootResource{}
+		set.primaryArena, set.coordinator, set.identityPinRegistry, set.idx = nil, nil, nil, nil
+		owner, charge, custody := set.metadata, set.metadataCharge, set.custody
+		set.metadata, set.metadataCharge, set.custody, set.db = nil, 0, nil, nil
+		custody.Complete(nil, nil)
+		owner.RemovePending(charge)
+	})
+	return set.releaseErr
 }
