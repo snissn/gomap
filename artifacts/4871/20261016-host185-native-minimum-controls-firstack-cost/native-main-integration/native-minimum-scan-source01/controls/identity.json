@@ -1,0 +1,28 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/source-frozen.tar.gz",
+  "archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+  "archive_verified_files": 10435,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "80836c1edb89b463bc01daa855bedf4840de11d7e1fb69d10287d956e2c50fcd",
+  "proposed_commands_sha256": "5188b53251caaf917e9991829ccf5861d50bfc4a22f6578dfce261bf06f2b997",
+  "runner_pgid": 1401390,
+  "runner_pid": 1401390,
+  "runner_sha256": "bf4a281dc6e7b1b044fcc27c80ab36ca3d242f348523f617355aea8d2800093e",
+  "subreaper_verified": true,
+  "test_file_bindings": {
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go": "c674d95a5d07d892646c1338c3ac85b84cc8bd682608e2931d2822918d914ca7",
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+    "TreeDB/db/native_snapshot_minimum_admission_v6_test.go": "33756051ed6b12748461b7b7ea8f2a06b385b93fa0358de8b1b39ebb04851644",
+    "TreeDB/db/native_snapshot_minimum_interleaving_v6_test.go": "eed8edb1d5db256443d926cf539e123c59c89fcfba0221014372f1b76ff7932e",
+    "TreeDB/db/snapshot_view_test.go": "ce8356fc2225f61c324229fdd014e188f969ae06cb6e2d534db4585cd4eff278",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "9877bf91ef72826dba6e63c157ec66474559e9314818beec03f29e7aed35a31b"
+  }
+}

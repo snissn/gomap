@@ -1,0 +1,50 @@
+{
+  "status": "READ_ONLY_DESIGN_NO_IMPLEMENTATION",
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.json",
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "inspected_source_hashes": {
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "7b1d5fa6f53911ea15819772d59e3c7999f2e6fb7d0141a2feb50bef73c03803",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/snapshot_pins.go": "c2c3f66020578ad5720e666978be9ead09186381f4309fb3b463a95556b3428e",
+    "TreeDB/db/snapshot_publication_work_v6.go": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "TreeDB/db/native_minimum_price_for_test_v6.go": "4fecd22b096aef3d44d6b07e99f0af2e9aab9c39b8da5a695ce8e93291d875c4",
+    "TreeDB/db/native_snapshot_minimum_admission_v6_test.go": "8343a007ed04283cc7c2a247ef827c8c7245d011894a370a90b33368a417256d",
+    "TreeDB/db/snapshot_view_test.go": "ce8356fc2225f61c324229fdd014e188f969ae06cb6e2d534db4585cd4eff278",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "TreeDB/lifecycle/registry.go": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "TreeDB/freelist/generation_v1_txn.go": "04a9692b3937333e761734fa8a0c8b0158d1c61c6b2eeb919d00f53c80fc3571",
+    "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca"
+  },
+  "recommended": "saved initial/terminal shard phases on SAME minimum, epoch sampled before first scan and revalidated across whole observation",
+  "new_owner": false,
+  "acquisition_protocol_change": false,
+  "Q32_limit_change": false,
+  "minimum_scan_loads_per_successful_attempt": 512,
+  "local_progress": "one admitted persistent shard at a time",
+  "unconditional_concurrent_reader_progress_proven": false,
+  "convergence_condition": "eventual sufficiently long stable acquisition epoch",
+  "unsafe_shortcuts": [
+    "epoch sampled only after saved initial scan",
+    "terminal partial zeros reused without epoch validation",
+    "ready minimum0 on churn",
+    "pruning uses cached old zero without original exclusion"
+  ],
+  "separate_limits": [
+    "idxAll whole traversal",
+    "dirty registry fallback whole traversal",
+    "native leaf-pruning snapshotAcquireInFlight sibling calls"
+  ],
+  "proposed_scope": [
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+    "TreeDB/db/native_minimum_price_for_test_v6.go",
+    "TreeDB/db/native_snapshot_minimum_admission_v6_test.go",
+    "direct source-bound G/docs/test accounting adaptations"
+  ],
+  "report_sha256": "bf998aa2e4901082d4773b6a4bd826002fec081610a01f1076c9eec43c341a3b",
+  "go_commands": 0,
+  "product_edits": 0,
+  "source_lease_requested": false
+}

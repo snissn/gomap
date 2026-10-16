@@ -1,0 +1,9 @@
+# Frozen first-ACK cost source01
+
+Source-only extraction and wall/work meter; **no build/test/benchmark executed**. Source and runtime leases released. See measurement-spec.md for exact metric boundaries and exclusions; proposed-commands.json contains unexecuted all-six-arm normal/race, prebuild and three fresh-process 1x samples requiring root selection.
+
+Parent repair08 manifest `824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0`. Current full manifest `cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0`, archive `2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4`: 10,434 files, 3 modifications + 1 addition, 10,430 unchanged. Exact patch `a93e8a38f717ae4b7635867d416a5bb18bd2083905153bb398da59b2af0af37a` and changed archive `183c6d601154d9a1addc6fd91f154203baf4c33abf9f3be8941ffa3e0e586df1`. Index unchanged `4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1`. All archives were read back against the manifest; live source hashes rechecked after archiving.
+
+Changed paths: native_finaldriver_diagnostic_v6_test.go (shared TB runner/validator + optional call meter), native_finaldriver_precursor_test.go and native_selected_ledger_test.go (TB signatures only), new native_firstack_cost_v6_test.go (small benchmark/meter). All are under TreeDB/mvcc. Full modes are recorded separately. All production files and original source-derived G/retained formulas remain byte-identical. No claim of Q32 completion, allocations, general heap, full prune throughput, speedup or benchmark result.
+
+Handoff SHA256 `be634f49c442e2783f51d2004309981cd13ea98b5914ec0888220c74406332c7`. Proposal SHA256 `c2b6d51ecdfa44cc9103828ed8e4987619d927e8e5a5fa1008de363cc21e0a46`. Exact compiler-file evidence is in source-tool-evidence.json; the compiler was not executed.

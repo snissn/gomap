@@ -1,0 +1,105 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "disposition": "ACCEPT",
+  "scope": "Frozen minimum-scan source readiness only; no execution or qualification",
+  "head_sha_or_manifest": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+  "parent_manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "verified_archive_payloads": 10435,
+  "mismatches": [],
+  "unchanged_parent_paths": 10430,
+  "changed_paths": [
+    {
+      "after_sha256": "9b37d1c15168bf1182a518b5f8ccb1c9bdd09d6bde0ee456041e9d32ad21c358",
+      "before_sha256": "4fecd22b096aef3d44d6b07e99f0af2e9aab9c39b8da5a695ce8e93291d875c4",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_minimum_price_for_test_v6.go"
+    },
+    {
+      "after_sha256": "5e3b9af23f2b45337d79a0c095e3de9b4a72fdf6b48dc7d7b9110a303e500503",
+      "before_sha256": "7b1d5fa6f53911ea15819772d59e3c7999f2e6fb7d0141a2feb50bef73c03803",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go"
+    },
+    {
+      "after_sha256": "33756051ed6b12748461b7b7ea8f2a06b385b93fa0358de8b1b39ebb04851644",
+      "before_sha256": "8343a007ed04283cc7c2a247ef827c8c7245d011894a370a90b33368a417256d",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_snapshot_minimum_admission_v6_test.go"
+    },
+    {
+      "after_sha256": "eed8edb1d5db256443d926cf539e123c59c89fcfba0221014372f1b76ff7932e",
+      "before_sha256": null,
+      "change": "add",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_snapshot_minimum_interleaving_v6_test.go"
+    },
+    {
+      "after_sha256": "9877bf91ef72826dba6e63c157ec66474559e9314818beec03f29e7aed35a31b",
+      "before_sha256": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+    }
+  ],
+  "inspected_caller_bindings": {
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "TreeDB/db/snapshot_pins.go": "c2c3f66020578ad5720e666978be9ead09186381f4309fb3b463a95556b3428e",
+    "TreeDB/db/snapshot_publication_work_v6.go": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "TreeDB/lifecycle/registry.go": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "TreeDB/lifecycle/native_mvcc_registry.go": "20b49a38337e9f4e40bca1157fbca00d0e8e5231c5ba8ea26de4c0eccdc88213",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "66dc760f6bad7d01c8715c18dec99ccd74786491b954db6918fc94783d4b94d8",
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go": "c674d95a5d07d892646c1338c3ac85b84cc8bd682608e2931d2822918d914ca7",
+    "TreeDB/db/snapshot_view_test.go": "ce8356fc2225f61c324229fdd014e188f969ae06cb6e2d534db4585cd4eff278",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a"
+  },
+  "artifact_bindings": {
+    "freeze.json": "b3e15fc1aba9730c6faedca7a1d620f1c3f3c07b0f41de425e59c0655b693ab0",
+    "source.delta.patch": "a922adc36bd20e8d19c85fc763547cf3a3334d1af4715d04ed4aa2ffb4426835",
+    "changed-files.json": "917826c736dc0c0c8a690f79a6e4ea7b276709f8a88c31f7f4ee279d966218dd",
+    "source-modes.json": "b54ffaa235829242bc594a8cf1c0bcb858deeed0b78ccd6bad910455b683ba5b",
+    "accounting-and-callers.md": "cb7455da4891aca8492b2a95c65e1321d6b1717a5b766bf85f9376ca672b1e1d",
+    "README.md": "82c2fe53550e2b8d18efd6894846be69df5fb29249f1f04ebc6c530eb10bb47c",
+    "handoff.json": "b8cc2f6eea59eadbf69dc22ecf386523f2ed0be395b3164e1775e6d4bbec50e9",
+    "proposed-commands.json": "5188b53251caaf917e9991829ccf5861d50bfc4a22f6578dfce261bf06f2b997",
+    "invariance.json": "4ef570596508a1456fd58a7e51c99d2fe3bfa9e2da51b135f0c4130670b0a910"
+  },
+  "checks_performed": [
+    "full archive digest and every payload digest",
+    "full parent/successor manifest comparison",
+    "all parent modes unchanged",
+    "exact five-file changed archive",
+    "complete diff reproduction using proper new-file /dev/null header",
+    "actual source and test caller inspection",
+    "proposed command/test hash/name/count inspection"
+  ],
+  "blocking_findings": [],
+  "nonblocking_correction": "Accounting prose overgeneralizes view-read ordering. Ordinary/bounded counters precede view read; native reads current view under original publication exclusion, then announces admitted birth before unlock. Exact distinction documented in MD.",
+  "focused_commands_source_ready": 4,
+  "focused_per_mode": {
+    "tops": 16,
+    "children": 15
+  },
+  "genuine_actual_route_commands_separate_grant": 2,
+  "commands_executed_by_reviewer": 0,
+  "runtime_result": "UNEXECUTED",
+  "Q32": "RED/ACK0; no general progress acceptance",
+  "allowance_chosen": false,
+  "native_publication_accepted": false,
+  "performance_claim": false,
+  "unavailability_evidence": "Hosted manual review cannot pin user-required exact gpt-6.1-sol; not requested. Independent internally routed reviewer used.",
+  "lease_released": true
+}

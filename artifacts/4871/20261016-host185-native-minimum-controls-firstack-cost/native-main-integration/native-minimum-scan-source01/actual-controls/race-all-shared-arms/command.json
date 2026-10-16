@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-race",
+    "-run",
+    "^TestNativeSelectedOriginalSplitDiagnosticV6$",
+    "./TreeDB/mvcc"
+  ],
+  "behavior": "All six SAME original full-oracle real diagnostic arms, unchanged nil meter. Includes genuine native publication/Finish and requires a SEPARATE root actual-route grant; never implied by focused grant.",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/actual-controls/race-all-shared-arms/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 6,
+  "expected_top_level_count": 1,
+  "grant_sha256": "4213d2496eaa092770b4b46e8b8facd9f561d9abb5e96451ec55683d3b934400",
+  "name": "race-all-shared-arms",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestNativeSelectedOriginalSplitDiagnosticV6": [
+      "ready-cancel",
+      "stale-before-fence",
+      "frozen-limits",
+      "once-ack",
+      "paused-finish-close",
+      "pruner-enabled-refusal"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "selection_class": "actual_route_separate_grant_required"
+}

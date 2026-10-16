@@ -1,0 +1,17 @@
+{
+  "utc": "2026-10-16T10:18:57.741345+00:00",
+  "phase": "read-only pre-measurement survey; no measurement has run",
+  "unrelated_heavy_processes": [
+    {
+      "pid": 1305196,
+      "comm": "python3",
+      "ppid": 1305195,
+      "cpu_seconds": 35.06,
+      "elapsed_seconds": 4111.719999999739,
+      "last_cpu": 5,
+      "exe": "/usr/bin/python3.10",
+      "cwd": "/mnt/fast4tb/elastic-electron-graph-20261015/repo"
+    }
+  ],
+  "action": "Preserve unrelated job and services. Continue source review/build/correctness; recheck quietness before timed samples."
+}

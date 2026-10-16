@@ -1,0 +1,397 @@
+{
+  "Go_commands_executed": 0,
+  "Q32": "RED/ACK0; external caps unchanged; no general progress qualification",
+  "TMPDIR_precreate_and_write_read_unlink_check_required": true,
+  "actual_PID_PGID_subreaper_group_join_receipts_required": true,
+  "actual_route_commands": 2,
+  "benchmark_commands": 0,
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestNativeSnapshotMinimumAcquisitionAdmissionV6|TestNativeSnapshotMinimumTerminalScanAdmissionV6|TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6|TestNativeSnapshotMinimumUnsupportedGeometryV6|TestNativeSnapshotMinimumEpochInvalidationV6|TestNativeSnapshotMinimumChurnThenQuietProgressV6|TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6|TestNativeSnapshotMinimumConcurrentReadersV6|TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations|TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire|TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan|TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6)$",
+        "./TreeDB/db"
+      ],
+      "behavior": "Actual saved minimum admission/interleaving/concurrency; real held-reader partial capture/cancel; ordinary retired/current minimum and original native capture cleanup. No native publication.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/controls/normal-db-minimum/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 11,
+      "expected_top_level_count": 15,
+      "name": "normal-db-minimum",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6": [
+          "record-remainder-short",
+          "byte-remainder-short",
+          "first-shard",
+          "last-shard"
+        ],
+        "TestNativeSnapshotMinimumEpochInvalidationV6": [
+          "initial",
+          "registry",
+          "terminal",
+          "completed-reuse",
+          "counter-before-begin-epoch"
+        ],
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6": [
+          "whole-map",
+          "dirty-fallback"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+        "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+        "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6",
+        "TestNativeSnapshotMinimumEpochInvalidationV6",
+        "TestNativeSnapshotMinimumChurnThenQuietProgressV6",
+        "TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6",
+        "TestNativeSnapshotMinimumConcurrentReadersV6",
+        "TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations",
+        "TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire",
+        "TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan",
+        "TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn",
+        "TestNativeMVCCSnapshotActualCaptureAndCancellation",
+        "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+        "TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6"
+      ],
+      "selection_class": "focused_requires_root_runtime_grant"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestNativeFinaldriverEnvelopeCheckedArithmeticV6)$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "Pure checked selected-envelope arithmetic, no actual cursor/publication.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/controls/normal-mvcc-envelope/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 4,
+      "expected_top_level_count": 1,
+      "name": "normal-mvcc-envelope",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+          "supported-selected-shape",
+          "sum",
+          "multiply",
+          "missing-shape"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+      ],
+      "selection_class": "focused_requires_root_runtime_grant"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestNativeSnapshotMinimumAcquisitionAdmissionV6|TestNativeSnapshotMinimumTerminalScanAdmissionV6|TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6|TestNativeSnapshotMinimumUnsupportedGeometryV6|TestNativeSnapshotMinimumEpochInvalidationV6|TestNativeSnapshotMinimumChurnThenQuietProgressV6|TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6|TestNativeSnapshotMinimumConcurrentReadersV6|TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations|TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire|TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan|TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6)$",
+        "./TreeDB/db"
+      ],
+      "behavior": "Actual saved minimum admission/interleaving/concurrency; real held-reader partial capture/cancel; ordinary retired/current minimum and original native capture cleanup. No native publication.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/controls/race-db-minimum/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 11,
+      "expected_top_level_count": 15,
+      "name": "race-db-minimum",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6": [
+          "record-remainder-short",
+          "byte-remainder-short",
+          "first-shard",
+          "last-shard"
+        ],
+        "TestNativeSnapshotMinimumEpochInvalidationV6": [
+          "initial",
+          "registry",
+          "terminal",
+          "completed-reuse",
+          "counter-before-begin-epoch"
+        ],
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6": [
+          "whole-map",
+          "dirty-fallback"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+        "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+        "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6",
+        "TestNativeSnapshotMinimumEpochInvalidationV6",
+        "TestNativeSnapshotMinimumChurnThenQuietProgressV6",
+        "TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6",
+        "TestNativeSnapshotMinimumConcurrentReadersV6",
+        "TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations",
+        "TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire",
+        "TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan",
+        "TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn",
+        "TestNativeMVCCSnapshotActualCaptureAndCancellation",
+        "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+        "TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6"
+      ],
+      "selection_class": "focused_requires_root_runtime_grant"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestNativeFinaldriverEnvelopeCheckedArithmeticV6)$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "Pure checked selected-envelope arithmetic, no actual cursor/publication.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/controls/race-mvcc-envelope/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 4,
+      "expected_top_level_count": 1,
+      "name": "race-mvcc-envelope",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+          "supported-selected-shape",
+          "sum",
+          "multiply",
+          "missing-shape"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+      ],
+      "selection_class": "focused_requires_root_runtime_grant"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^TestNativeSelectedOriginalSplitDiagnosticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "All six SAME original full-oracle real diagnostic arms, unchanged nil meter. Includes genuine native publication/Finish and requires a SEPARATE root actual-route grant; never implied by focused grant.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/actual-controls/normal-all-shared-arms/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 1,
+      "name": "normal-all-shared-arms",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSelectedOriginalSplitDiagnosticV6": [
+          "ready-cancel",
+          "stale-before-fence",
+          "frozen-limits",
+          "once-ack",
+          "paused-finish-close",
+          "pruner-enabled-refusal"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6"
+      ],
+      "selection_class": "actual_route_separate_grant_required"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^TestNativeSelectedOriginalSplitDiagnosticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "All six SAME original full-oracle real diagnostic arms, unchanged nil meter. Includes genuine native publication/Finish and requires a SEPARATE root actual-route grant; never implied by focused grant.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01/actual-controls/race-all-shared-arms/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 1,
+      "name": "race-all-shared-arms",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSelectedOriginalSplitDiagnosticV6": [
+          "ready-cancel",
+          "stale-before-fence",
+          "frozen-limits",
+          "once-ack",
+          "paused-finish-close",
+          "pruner-enabled-refusal"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6"
+      ],
+      "selection_class": "actual_route_separate_grant_required"
+    }
+  ],
+  "focused_commands": 4,
+  "focused_per_mode_child_tests": 15,
+  "focused_per_mode_top_level_tests": 16,
+  "full_source_archive_index_compiler_bindings_required": true,
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "order": [
+    "normal-db-minimum",
+    "normal-mvcc-envelope",
+    "race-db-minimum",
+    "race-mvcc-envelope",
+    "normal-all-shared-arms",
+    "race-all-shared-arms"
+  ],
+  "retries": 0,
+  "selection": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-minimum-scan-source-selection.md",
+  "selection_sha256": "52c6704a7b3b3a2297613954e0b17358aa805a9aaab03aa51d83c00f453f99bc",
+  "source_archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+  "source_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "status": "PROPOSED_UNEXECUTED_ROOT_RUNTIME_SELECTION_REQUIRED",
+  "stop_first_failure": true,
+  "test_file_bindings": {
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go": "c674d95a5d07d892646c1338c3ac85b84cc8bd682608e2931d2822918d914ca7",
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+    "TreeDB/db/native_snapshot_minimum_admission_v6_test.go": "33756051ed6b12748461b7b7ea8f2a06b385b93fa0358de8b1b39ebb04851644",
+    "TreeDB/db/native_snapshot_minimum_interleaving_v6_test.go": "eed8edb1d5db256443d926cf539e123c59c89fcfba0221014372f1b76ff7932e",
+    "TreeDB/db/snapshot_view_test.go": "ce8356fc2225f61c324229fdd014e188f969ae06cb6e2d534db4585cd4eff278",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "9877bf91ef72826dba6e63c157ec66474559e9314818beec03f29e7aed35a31b"
+  },
+  "unexpected_skip_missing_RUN_drift_timeout_leak_stop": true
+}

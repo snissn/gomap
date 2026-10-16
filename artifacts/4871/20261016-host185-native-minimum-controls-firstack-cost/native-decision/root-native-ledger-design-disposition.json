@@ -1,0 +1,34 @@
+{
+  "utc": "2026-10-16T10:41:40.772212+00:00",
+  "root_full_report_and_json_read": true,
+  "report_sha256": "2869fc93ba3001c8cb6c45456e95306841b30eadfd6c5034882e8e082cf768f6",
+  "json_sha256": "c2e6ff9048eeef15fd2d93187f930b3c808cc72432e41d59798b5f7f07c15c7c",
+  "disposition": "ACCEPT_REQUIRED_REPRESENTATION_DIRECTION; implementation not yet leased",
+  "root_source_read": [
+    "TreeDB/freelist/generation_v1_reservation.go:180-680",
+    "TreeDB/freelist/allocator_publication_work_v6.go",
+    "TreeDB/freelist/allocator_cow.go:440-730",
+    "TreeDB/freelist/reservation_rollback_work_v6.go",
+    "TreeDB/freelist/generation_v1_metadata_claim_work.go",
+    "TreeDB/db/primary_seal_release_work_v6.go",
+    "TreeDB/db/durable_primary_runtime_v5.go:680-990"
+  ],
+  "selected_constraints": [
+    "No history-dependent control allowance; issue still requires quantum-scaled pause/memory",
+    "Preserve exact original reservation, original seal/member receipt and conservative page exclusions through real charged retirement",
+    "Stable canonical burned descriptors and mutation-safe traversal are required; packed-index resume and later unchanged PublishBatch rejected",
+    "Ordinary and native must consume same canonical representation; previsible rollback, Fail, Supersede, snapshot and recovery must be explicitly covered",
+    "Full containing admission, retained operand lifetime and original error/Close custody before effects and until actual last alias",
+    "No generic new owner, registry or background helper; no new cap selected"
+  ],
+  "remaining_design_obligations": [
+    "Specify actual constructor owner and full containing retention for reservation-embedded burned nodes, IDs and coverage; work-byte price is not retained-owner admission",
+    "Specify stable marker identity, insertion/removal, multiple receipts and no borrowed pointer after unlock",
+    "Current-generation and original old-reader/slot capability remain separate; deferred exclusion can reduce availability",
+    "Remaining atomic runtime-seal/root/owner traversals and continuing-writer progress unresolved"
+  ],
+  "source_lease": false,
+  "runtime_lease": false,
+  "Q32": "original RED/ACK0 retained",
+  "next": "Complete frozen minimum review/controls and original pending three cost01 samples, then select one coherent canonical ledger source packet with explicit retained constructor and receipt closure."
+}

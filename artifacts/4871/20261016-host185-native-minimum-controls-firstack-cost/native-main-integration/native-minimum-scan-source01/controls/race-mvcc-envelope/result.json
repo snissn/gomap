@@ -1,0 +1,179 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 4,
+  "elapsed_seconds": 21.93174795107916,
+  "ended_utc": "2026-10-16T10:50:49.286868+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-mvcc-envelope",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1403652,
+      "pid": 1403652,
+      "ppid": 1401390,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403670,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403753,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403758,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403837,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403842,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403847,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1403652,
+      "pid": 1403851,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1403652,
+      "pid": 1403863,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1403652,
+      "pid": 1404032,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1403652,
+      "pid": 1404413,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1403652,
+      "pid": 1404594,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1403652,
+      "pid": 1404654,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1403652,
+      "pid": 1404766,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1403652,
+      "pid": 1404801,
+      "ppid": 1403652,
+      "session": 1403652,
+      "state": "S"
+    }
+  ],
+  "pgid": 1403652,
+  "pid": 1403652,
+  "raw_log_sha256": "9be1e1d42c471f808374ec9fd208af2c679d90a83970731477a226d8c92f1d42",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T10:50:27.355119+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

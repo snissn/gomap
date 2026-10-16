@@ -1,0 +1,86 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9729312297805193,
+        "pid": 1881
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9729312297805193,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9729312297805193,
+        "pid": 3140140
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9864656148902596,
+        "pid": 1949
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9864656148902596,
+        "pid": 19242
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9864656148902596,
+        "pid": 120874
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9864656148902596,
+        "pid": 681192
+      }
+    ],
+    "aggregate_busy_percent": 0.9083402146985962,
+    "mem_available_kib": 19931384,
+    "seconds": 1.0137200779281557
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 3.9497527354343855,
+        "pid": 624687
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9748763677171928,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9748763677171928,
+        "pid": 6357
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9748763677171928,
+        "pid": 681192
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 0.9874381838585964,
+        "pid": 1881
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9874381838585964,
+        "pid": 120874
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9874381838585964,
+        "pid": 128239
+      }
+    ],
+    "aggregate_busy_percent": 0.9933774834437086,
+    "mem_available_kib": 19959456,
+    "seconds": 1.0127216228283942
+  }
+]

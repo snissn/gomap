@@ -1,0 +1,32 @@
+{
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "cpu_count": 12,
+  "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "go_version_file": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "5d28e61afc61dc0832198852557e5ddd9b46645400b488e5d7fcaa4c019f83e4",
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "proposal_sha256": "4163d3f78fd83be54913c6d3e77e33371cedb12f78c31fe85732311348659637",
+  "runner_pid": 1374100,
+  "runner_sha256": "0cb6029ddabce279b37bb55d5967e0c6750bdd7c32f687f9153f5721804459ed",
+  "runner_subreaper": true,
+  "source_files": 10434
+}

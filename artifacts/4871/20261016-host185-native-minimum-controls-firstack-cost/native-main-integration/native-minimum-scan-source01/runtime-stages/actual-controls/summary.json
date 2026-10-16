@@ -1,0 +1,139 @@
+{
+  "all_pass": true,
+  "no_product_acceptance": true,
+  "results": [
+    {
+      "PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "RUN": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "elapsed_seconds": 2.4501423947513103,
+      "elf_sha256": null,
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "normal-all-shared-arms",
+      "observed_group": [
+        {
+          "comm": "go",
+          "pgid": 1407450,
+          "pid": 1407450,
+          "ppid": 1407435,
+          "start_ticks": 372340763,
+          "state": "S",
+          "ticks": 18
+        },
+        {
+          "comm": "link",
+          "pgid": 1407450,
+          "pid": 1407472,
+          "ppid": 1407450,
+          "start_ticks": 372340775,
+          "state": "R",
+          "ticks": 37
+        },
+        {
+          "comm": "mvcc.test",
+          "pgid": 1407450,
+          "pid": 1407483,
+          "ppid": 1407450,
+          "start_ticks": 372340812,
+          "state": "S",
+          "ticks": 9
+        }
+      ],
+      "pgid": 1407450,
+      "pid": 1407450,
+      "raw_sha256": "447d2e5160bcbdbd9539b5b9900103e45af1bcabb944a205e872100313c6785b",
+      "reaped": [],
+      "reasons": [],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "subreaper": true
+    },
+    {
+      "PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "RUN": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "elapsed_seconds": 4.0725536076352,
+      "elf_sha256": null,
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "race-all-shared-arms",
+      "observed_group": [
+        {
+          "comm": "go",
+          "pgid": 1407502,
+          "pid": 1407502,
+          "ppid": 1407435,
+          "start_ticks": 372341104,
+          "state": "S",
+          "ticks": 21
+        },
+        {
+          "comm": "link",
+          "pgid": 1407502,
+          "pid": 1407524,
+          "ppid": 1407502,
+          "start_ticks": 372341116,
+          "state": "S",
+          "ticks": 45
+        },
+        {
+          "comm": "mvcc.test",
+          "pgid": 1407502,
+          "pid": 1407537,
+          "ppid": 1407502,
+          "start_ticks": 372341172,
+          "state": "S",
+          "ticks": 29
+        }
+      ],
+      "pgid": 1407502,
+      "pid": 1407502,
+      "raw_sha256": "2eb800e580b721f14336ad6c9b4b4949a2647a549ce5cb85be31b81747636eca",
+      "reaped": [],
+      "reasons": [],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "subreaper": true
+    }
+  ],
+  "stage": "controls",
+  "unexecuted_commands": [],
+  "utc": "2026-10-16T10:52:10.542703+00:00"
+}

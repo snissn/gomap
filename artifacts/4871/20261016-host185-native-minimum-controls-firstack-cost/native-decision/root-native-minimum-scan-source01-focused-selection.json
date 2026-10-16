@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-16T10:48:15.758151+00:00",
+  "scope": "focused-minimum-scan-source01",
+  "actual_native_driver_authorized": false,
+  "runner_sha256": "bf4a281dc6e7b1b044fcc27c80ab36ca3d242f348523f617355aea8d2800093e",
+  "proposed_commands_sha256": "5188b53251caaf917e9991829ccf5861d50bfc4a22f6578dfce261bf06f2b997",
+  "source_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "source_archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+  "authorized_command_names": [
+    "normal-db-minimum",
+    "normal-mvcc-envelope",
+    "race-db-minimum",
+    "race-mvcc-envelope"
+  ],
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-minimum-scan-source01-review.json",
+  "independent_review_sha256": "85135bbd1be39d285eb10fecafb2aa7c8e49c86373b653f93e8dbc034164d691",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-minimum-scan-source01-verify.json",
+  "source_verify_sha256": "c174785647d9bf2bb64fc634c232f5c42bca726cff6bed67c7f491f6621dc3cd",
+  "root_full_source_and_review_read": true,
+  "first_failure_stops": true,
+  "Q32": "original RED/ACK0 unchanged",
+  "limits": "Source readiness and focused normal/race only; corrected native producer order in independent report governs. No genuine native publication, benchmark, or product qualification."
+}

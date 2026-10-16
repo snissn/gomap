@@ -1,0 +1,19 @@
+{
+  "Go_compiler_tests_benchmarks_executed": false,
+  "Q32_protected_fixture_unchanged": true,
+  "acquisition_producer_and_registry_protocol_unchanged": true,
+  "all_parent_files_except_four_modifications_unchanged": 10430,
+  "benchmark_meter_and_six_arm_oracle_unchanged": true,
+  "public_caps_unchanged": true,
+  "unchanged_bound_files": {
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+    "TreeDB/db/snapshot_publication_work_v6.go": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "TreeDB/lifecycle/registry.go": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+    "TreeDB/mvcc/native_finaldriver_precursor_test.go": "9817c079cc4969042618ff079b0d9c0adbf84299a4c5d33e373e531c58a954b8",
+    "TreeDB/mvcc/native_firstack_cost_v6_test.go": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "9e24d0c655a707286d21dc528b72b09639904004239dd7a80883f758573c2a16"
+  }
+}

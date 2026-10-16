@@ -1,0 +1,33 @@
+{
+  "root_raw_reparse": true,
+  "rows": [
+    {
+      "name": "normal-db-minimum",
+      "top_count": 15,
+      "child_count": 11,
+      "raw_sha256": "e4f6bee7bae165d4db78b3f5a635847a85cac2b04c419dd706a47943e2854531"
+    },
+    {
+      "name": "normal-mvcc-envelope",
+      "top_count": 1,
+      "child_count": 4,
+      "raw_sha256": "ab338b501b9351bdf11d3514649f03e38e0157376f61355c1cb7e5bcebd48f72"
+    },
+    {
+      "name": "race-db-minimum",
+      "top_count": 15,
+      "child_count": 11,
+      "raw_sha256": "3d0fb07e7c3af03eabbb4bed70e9fec56e876bcac25c5c0f7f3c78d663ee2750"
+    },
+    {
+      "name": "race-mvcc-envelope",
+      "top_count": 1,
+      "child_count": 4,
+      "raw_sha256": "9be1e1d42c471f808374ec9fd208af2c679d90a83970731477a226d8c92f1d42"
+    }
+  ],
+  "source_files_verified_before_after_each_command": 10435,
+  "all_groups_joined": true,
+  "summary_sha256": "2235b11e4c9e8e5eca8e3ece448bf0a70555ea7ddf8131bd99ceecdc1f8f994f",
+  "utc": "2026-10-16T10:51:51.128850+00:00"
+}

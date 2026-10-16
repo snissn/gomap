@@ -1,0 +1,37 @@
+[
+  {
+    "after_sha256": "9b37d1c15168bf1182a518b5f8ccb1c9bdd09d6bde0ee456041e9d32ad21c358",
+    "before_sha256": "4fecd22b096aef3d44d6b07e99f0af2e9aab9c39b8da5a695ce8e93291d875c4",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/native_minimum_price_for_test_v6.go"
+  },
+  {
+    "after_sha256": "5e3b9af23f2b45337d79a0c095e3de9b4a72fdf6b48dc7d7b9110a303e500503",
+    "before_sha256": "7b1d5fa6f53911ea15819772d59e3c7999f2e6fb7d0141a2feb50bef73c03803",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go"
+  },
+  {
+    "after_sha256": "33756051ed6b12748461b7b7ea8f2a06b385b93fa0358de8b1b39ebb04851644",
+    "before_sha256": "8343a007ed04283cc7c2a247ef827c8c7245d011894a370a90b33368a417256d",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/native_snapshot_minimum_admission_v6_test.go"
+  },
+  {
+    "after_sha256": "eed8edb1d5db256443d926cf539e123c59c89fcfba0221014372f1b76ff7932e",
+    "before_sha256": null,
+    "change": "add",
+    "mode": "0o664",
+    "path": "TreeDB/db/native_snapshot_minimum_interleaving_v6_test.go"
+  },
+  {
+    "after_sha256": "9877bf91ef72826dba6e63c157ec66474559e9314818beec03f29e7aed35a31b",
+    "before_sha256": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+  }
+]

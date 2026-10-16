@@ -1,0 +1,136 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9760737932985777,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9760737932985777,
+        "pid": 120874
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9760737932985777,
+        "pid": 624687
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9760737932985777,
+        "pid": 3140140
+      },
+      {
+        "comm": "ksoftirqd/9",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 72
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 1949
+      },
+      {
+        "comm": "kdeconnectd",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 5045
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 19242
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 128239
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9880368966492888,
+        "pid": 681192
+      }
+    ],
+    "aggregate_busy_percent": 1.075268817204301,
+    "mem_available_kib": 20068608,
+    "seconds": 1.0121079520322382
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 3.9506374149973302,
+        "pid": 681192
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 2.9629780612479975,
+        "pid": 1949
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9753187074986651,
+        "pid": 1881
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9753187074986651,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9753187074986651,
+        "pid": 3140140
+      },
+      {
+        "comm": "ksoftirqd/7",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 60
+      },
+      {
+        "comm": "dbus-daemon",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 2004
+      },
+      {
+        "comm": "gnome-shell",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 3861
+      },
+      {
+        "comm": "zeitgeist-daemo",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 5262
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 120874
+      },
+      {
+        "comm": "systemd-oomd",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 213744
+      },
+      {
+        "comm": "EmbyServer",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 538321
+      },
+      {
+        "comm": "gnome-keyring-d",
+        "one_core_cpu_percent": 0.9876593537493326,
+        "pid": 2354873
+      }
+    ],
+    "aggregate_busy_percent": 7.717842323651452,
+    "mem_available_kib": 20173812,
+    "seconds": 1.0124948406592011
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "after_sha256": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+    "before_sha256": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  },
+  {
+    "after_sha256": "9817c079cc4969042618ff079b0d9c0adbf84299a4c5d33e373e531c58a954b8",
+    "before_sha256": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/mvcc/native_finaldriver_precursor_test.go"
+  },
+  {
+    "after_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+    "before_sha256": null,
+    "change": "add",
+    "mode": "0o664",
+    "path": "TreeDB/mvcc/native_firstack_cost_v6_test.go"
+  },
+  {
+    "after_sha256": "9e24d0c655a707286d21dc528b72b09639904004239dd7a80883f758573c2a16",
+    "before_sha256": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/mvcc/native_selected_ledger_test.go"
+  }
+]

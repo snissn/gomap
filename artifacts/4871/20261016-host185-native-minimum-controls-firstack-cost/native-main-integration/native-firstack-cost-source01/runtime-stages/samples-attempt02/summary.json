@@ -1,0 +1,20 @@
+{
+  "all_pass": false,
+  "no_product_acceptance": true,
+  "results": [
+    {
+      "executed": false,
+      "name": "firstack-sample01",
+      "reasons": [
+        "host preflight busy; no sample executed"
+      ],
+      "status": "STOP"
+    }
+  ],
+  "stage": "samples",
+  "unexecuted_commands": [
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "utc": "2026-10-16T10:28:49.610019+00:00"
+}

@@ -1,0 +1,27 @@
+{
+  "scope": "firstack-cost01",
+  "stage": "controls",
+  "actual_native_driver_authorized": true,
+  "runner_sha256": "0395de4cfa6ed9f3d3955cf2a78bd75c459f8d97587cf425f9cc2f7313215c2b",
+  "proposal_sha256": "c2b6d51ecdfa44cc9103828ed8e4987619d927e8e5a5fa1008de363cc21e0a46",
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-firstack-cost-source01-review.json",
+  "independent_review_sha256": "fcf364744bd7e98e0f5e2ffabae4f7af354198bd69908ef102cb4d23aea613f8",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-firstack-cost-source01-verify.json",
+  "source_verify_sha256": "a05540aef274b76648eac96e884e9287ba5f3b14b8b4235b9bec57a7c628563c",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "commands": [
+    "normal-all-shared-arms",
+    "race-all-shared-arms"
+  ],
+  "source_review_root_full_read": true,
+  "root_full_oracle_and_exact_delta_read": true,
+  "first_failure_stops": true,
+  "samples_authorized": false,
+  "Q32": "RED/ACK0 unchanged",
+  "utc": "2026-10-16T10:25:03.068469+00:00"
+}

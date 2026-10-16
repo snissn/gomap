@@ -1,0 +1,40 @@
+{
+  "scope": "firstack-cost01",
+  "stage": "samples",
+  "actual_native_driver_authorized": true,
+  "runner_sha256": "5e13d7193125e51b76196ac4215d4820fcb818697c2edb07b85858bbcdc68fec",
+  "proposal_sha256": "ac73c22a0adf2db5320553c735c3d6af6d3e17907ae76f528c8567d26fc3fda5",
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-firstack-cost-source01-review.json",
+  "independent_review_sha256": "fcf364744bd7e98e0f5e2ffabae4f7af354198bd69908ef102cb4d23aea613f8",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-firstack-cost-source01-verify.json",
+  "source_verify_sha256": "a05540aef274b76648eac96e884e9287ba5f3b14b8b4235b9bec57a7c628563c",
+  "commands": [
+    "firstack-sample01",
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "source_review_root_full_read": true,
+  "root_full_oracle_and_exact_delta_read": true,
+  "first_failure_stops": true,
+  "samples_authorized": true,
+  "Q32": "RED/ACK0 unchanged",
+  "utc": "2026-10-16T10:39:57.617984+00:00",
+  "focused_control_summary_sha256": "c9ba03c5b4516ab35763e2d03815f383a8865b3f853fdd33a35d718384a7e9d0",
+  "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "build_result_sha256": "1ee5aa017b5260462ec82f0a905b86ae474e42b1d98dd2d5d8e0a21b98e26bd0",
+  "measurement": "wall windows and actual work only; whole intercall interval separate; no allocation or full prune claim",
+  "sample_count": 3,
+  "calibration_or_retries": 0,
+  "quiet_preflight": "two 1s windows, aggregate busy <=5%, other process <=15% one core, >=8GiB available; first failing preflight or sample stops",
+  "rearm": "Previous attempts executed zero samples. Same original three samples on the byte-and-mode-exact frozen cost01 source with original already built ELF. Only sample CWD and fresh TMPDIR/output paths change. Shared fixture uses fresh t.TempDir DB and no repository-relative fixture files. No discarded or repeated benchmark. Execute only once both workers finish source/archive work and host preflight passes.",
+  "prior_preflight_summary_sha256": "34d6eee9b2d452c9b714a794e2520995bed28de3fc1de16fcf88d6ad9e1766db",
+  "source_identity": {
+    "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-firstack-cost-baseline-source",
+    "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "materialization_receipt_sha256": "b64329d683f2276489d37920cb60dc0c6d55a43bc5b490807d6ea1ef0d1cf953"
+  },
+  "all_prior_preflights_retained": true,
+  "mutable_native_source_excluded": true
+}

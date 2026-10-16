@@ -1,0 +1,106 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 6.915437333643391,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 2.963758857275739,
+        "pid": 3140140
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9758392381838261,
+        "pid": 1881
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9758392381838261,
+        "pid": 120874
+      },
+      {
+        "comm": "ksoftirqd/0",
+        "one_core_cpu_percent": 0.9879196190919131,
+        "pid": 16
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9879196190919131,
+        "pid": 1949
+      },
+      {
+        "comm": "kdeconnectd",
+        "one_core_cpu_percent": 0.9879196190919131,
+        "pid": 5045
+      },
+      {
+        "comm": "Plex Media Serv",
+        "one_core_cpu_percent": 0.9879196190919131,
+        "pid": 5917
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9879196190919131,
+        "pid": 681192
+      }
+    ],
+    "aggregate_busy_percent": 1.3234077750206783,
+    "mem_available_kib": 20264556,
+    "seconds": 1.0122281010262668
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "git",
+        "one_core_cpu_percent": 9.875584425843527,
+        "pid": 1371951
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 2.962675327753058,
+        "pid": 128239
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9751168851687055,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9751168851687055,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9751168851687055,
+        "pid": 6357
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9751168851687055,
+        "pid": 681192
+      },
+      {
+        "comm": "ksoftirqd/9",
+        "one_core_cpu_percent": 0.9875584425843528,
+        "pid": 72
+      },
+      {
+        "comm": "gnome-shell",
+        "one_core_cpu_percent": 0.9875584425843528,
+        "pid": 3861
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9875584425843528,
+        "pid": 624687
+      }
+    ],
+    "aggregate_busy_percent": 5.145228215767635,
+    "mem_available_kib": 20284140,
+    "seconds": 1.0125982998870313
+  }
+]

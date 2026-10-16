@@ -1,0 +1,46 @@
+{
+  "utc": "2026-10-16T10:53:39.045270+00:00",
+  "disposition": "PASS_ALL_SIX_SHARED_ARMS_NORMAL_RACE",
+  "root_independent_raw_inventory_reparse": true,
+  "source_files_before_after_verified": 10435,
+  "manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "summary_sha256": "eccf3bd3ab69e093ca0ddb396ca48adc58ce73ddc114b3f388b7adabbed09d4c",
+  "rows": [
+    {
+      "name": "normal-all-shared-arms",
+      "raw_sha256": "447d2e5160bcbdbd9539b5b9900103e45af1bcabb944a205e872100313c6785b",
+      "top_count": 1,
+      "child_count": 6,
+      "evidence_lines": [
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681832} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463325} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377600} Cancel={Records:20366 Bytes:12721622} Close={Records:20764 Bytes:13016630} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681946} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463373} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377606} Cancel={Records:20366 Bytes:12721652} Close={Records:20764 Bytes:13016660} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681851} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463333} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377601} Cancel={Records:20366 Bytes:12721627} Close={Records:20764 Bytes:13016635} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681737} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463285} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377595} Cancel={Records:20366 Bytes:12721597} Close={Records:20764 Bytes:13016605} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681946} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463373} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377606} Cancel={Records:20366 Bytes:12721652} Close={Records:20764 Bytes:13016660} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681984} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463389} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377608} Cancel={Records:20366 Bytes:12721662} Close={Records:20764 Bytes:13016670} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true"
+      ]
+    },
+    {
+      "name": "race-all-shared-arms",
+      "raw_sha256": "2eb800e580b721f14336ad6c9b4b4949a2647a549ce5cb85be31b81747636eca",
+      "top_count": 1,
+      "child_count": 6,
+      "evidence_lines": [
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681794} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463309} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377598} Cancel={Records:20366 Bytes:12721612} Close={Records:20764 Bytes:13016620} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681908} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463357} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377604} Cancel={Records:20366 Bytes:12721642} Close={Records:20764 Bytes:13016650} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681813} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463317} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377599} Cancel={Records:20366 Bytes:12721617} Close={Records:20764 Bytes:13016625} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681718} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463277} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377594} Cancel={Records:20366 Bytes:12721592} Close={Records:20764 Bytes:13016600} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681927} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463365} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377605} Cancel={Records:20366 Bytes:12721647} Close={Records:20764 Bytes:13016655} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split prebirth G={Records:77984 Bytes:41681927} birth={Records:228 Bytes:841672} prepare={Records:26824 Bytes:6463365} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377605} Cancel={Records:20366 Bytes:12721647} Close={Records:20764 Bytes:13016655} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true"
+      ]
+    }
+  ],
+  "source_and_index_unchanged": true,
+  "all_groups_joined": true,
+  "original_Q32": "RED/ACK0 unchanged; diagnostic G only",
+  "limits": "Minimum observer source01 correctness/diagnostic integration, not continuing-writer, performance, all19 or whole native qualification"
+}

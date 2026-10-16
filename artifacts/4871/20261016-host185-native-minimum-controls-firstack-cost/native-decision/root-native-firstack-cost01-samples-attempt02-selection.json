@@ -1,0 +1,37 @@
+{
+  "scope": "firstack-cost01",
+  "stage": "samples",
+  "actual_native_driver_authorized": true,
+  "runner_sha256": "0cb6029ddabce279b37bb55d5967e0c6750bdd7c32f687f9153f5721804459ed",
+  "proposal_sha256": "4163d3f78fd83be54913c6d3e77e33371cedb12f78c31fe85732311348659637",
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-firstack-cost-source01-review.json",
+  "independent_review_sha256": "fcf364744bd7e98e0f5e2ffabae4f7af354198bd69908ef102cb4d23aea613f8",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-firstack-cost-source01-verify.json",
+  "source_verify_sha256": "a05540aef274b76648eac96e884e9287ba5f3b14b8b4235b9bec57a7c628563c",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "commands": [
+    "firstack-sample01",
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "source_review_root_full_read": true,
+  "root_full_oracle_and_exact_delta_read": true,
+  "first_failure_stops": true,
+  "samples_authorized": true,
+  "Q32": "RED/ACK0 unchanged",
+  "utc": "2026-10-16T10:28:45.330354+00:00",
+  "focused_control_summary_sha256": "c9ba03c5b4516ab35763e2d03815f383a8865b3f853fdd33a35d718384a7e9d0",
+  "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "build_result_sha256": "1ee5aa017b5260462ec82f0a905b86ae474e42b1d98dd2d5d8e0a21b98e26bd0",
+  "measurement": "wall windows and actual work only; whole intercall interval separate; no allocation or full prune claim",
+  "sample_count": 3,
+  "calibration_or_retries": 0,
+  "quiet_preflight": "two 1s windows, aggregate busy <=5%, other process <=15% one core, >=8GiB available; first failing preflight or sample stops",
+  "rearm": "Attempt01 executed zero samples; two observed heavy Python jobs exited. Preserve prior failed quiet preflight and exact original three unexecuted samples. No discarded or repeated benchmark.",
+  "prior_preflight_summary_sha256": "84159ec1f1e72e7e35b40b0fe49582fd62d55d584ee54d07c7da378d4e04fac6"
+}

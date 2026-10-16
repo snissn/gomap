@@ -1,0 +1,12 @@
+{
+  "purpose": "Frozen original cost01 source for SAME already-built ELF while implementation proceeds independently",
+  "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-firstack-cost-baseline-source",
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "files": 10434,
+  "all_bytes_and_modes_verified": true,
+  "ELF": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-firstack-cost-source01/build/native-firstack-cost.test",
+  "ELF_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "sample_executions": 0,
+  "git_metadata": "none; full source artifact plus original build receipt binds inputs",
+  "timed_execution": "not authorized by extraction"
+}

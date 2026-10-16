@@ -1,0 +1,75 @@
+{
+  "seconds": 5.293763801921159,
+  "aggregate_busy_percent": 12.157235695038834,
+  "busy": [
+    {
+      "pid": 1371951,
+      "comm": "git",
+      "ppid": 1371835,
+      "ticks": 5136,
+      "born": 372184647,
+      "one_core_percent": 9.445075728889623
+    },
+    {
+      "pid": 681192,
+      "comm": "polystorechaind",
+      "ppid": 1620,
+      "ticks": 12794909,
+      "born": 101491827,
+      "one_core_percent": 5.855946951911567
+    },
+    {
+      "pid": 1373137,
+      "comm": "python",
+      "ppid": 1373136,
+      "ticks": 30,
+      "born": 372193133,
+      "one_core_percent": 5.28924240817819
+    },
+    {
+      "pid": 6357,
+      "comm": "clickhouse-serv",
+      "ppid": 5809,
+      "ticks": 17850609,
+      "born": 1488,
+      "one_core_percent": 3.2113257478224724
+    }
+  ],
+  "new_processes": [
+    {
+      "pid": 1373139,
+      "comm": "bash",
+      "ppid": 624687,
+      "ticks": 0,
+      "born": 372193173
+    },
+    {
+      "pid": 1373140,
+      "comm": "bash",
+      "ppid": 624687,
+      "ticks": 0,
+      "born": 372193173
+    },
+    {
+      "pid": 1373141,
+      "comm": "python3",
+      "ppid": 1373139,
+      "ticks": 488,
+      "born": 372193173
+    },
+    {
+      "pid": 1373143,
+      "comm": "python3",
+      "ppid": 1373140,
+      "ticks": 1,
+      "born": 372193176
+    },
+    {
+      "pid": 1373155,
+      "comm": "sleep",
+      "ppid": 4327,
+      "ticks": 0,
+      "born": 372193362
+    }
+  ]
+}

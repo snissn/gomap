@@ -1,0 +1,382 @@
+{
+  "all_pass": true,
+  "no_product_acceptance": true,
+  "results": [
+    {
+      "PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "RUN": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "elapsed_seconds": 5.4583136276341975,
+      "elf_sha256": null,
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "normal-all-shared-arms",
+      "observed_group": [
+        {
+          "comm": "go",
+          "pgid": 1371003,
+          "pid": 1371003,
+          "ppid": 1370989,
+          "start_ticks": 372180075,
+          "state": "S",
+          "ticks": 29
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371003,
+          "pid": 1371021,
+          "ppid": 1371003,
+          "start_ticks": 372180087,
+          "state": "R",
+          "ticks": 298
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371003,
+          "pid": 1371034,
+          "ppid": 1371003,
+          "start_ticks": 372180276,
+          "state": "S",
+          "ticks": 43
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371003,
+          "pid": 1371038,
+          "ppid": 1371003,
+          "start_ticks": 372180310,
+          "state": "R",
+          "ticks": 42
+        },
+        {
+          "comm": "link",
+          "pgid": 1371003,
+          "pid": 1371050,
+          "ppid": 1371003,
+          "start_ticks": 372180347,
+          "state": "R",
+          "ticks": 38
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371003,
+          "pid": 1371059,
+          "ppid": 1371003,
+          "start_ticks": 372180385,
+          "state": "S",
+          "ticks": 9
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371003,
+          "pid": 1371092,
+          "ppid": 1371003,
+          "start_ticks": 372180399,
+          "state": "S",
+          "ticks": 5
+        },
+        {
+          "comm": "mvcc.test",
+          "pgid": 1371003,
+          "pid": 1371104,
+          "ppid": 1371003,
+          "start_ticks": 372180411,
+          "state": "S",
+          "ticks": 10
+        }
+      ],
+      "pgid": 1371003,
+      "pid": 1371003,
+      "raw_sha256": "8d8acbeb4b737c80f8d827027b2f0e4b1fc52330dc27a608050bcb9b0c1e28d9",
+      "reaped": [],
+      "reasons": [],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "subreaper": true
+    },
+    {
+      "PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "RUN": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+      ],
+      "elapsed_seconds": 30.290247448720038,
+      "elf_sha256": null,
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "race-all-shared-arms",
+      "observed_group": [
+        {
+          "comm": "go",
+          "pgid": 1371345,
+          "pid": 1371345,
+          "ppid": 1370989,
+          "start_ticks": 372180718,
+          "state": "S",
+          "ticks": 55
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371364,
+          "ppid": 1371345,
+          "start_ticks": 372180729,
+          "state": "R",
+          "ticks": 365
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371370,
+          "ppid": 1371345,
+          "start_ticks": 372181046,
+          "state": "R",
+          "ticks": 159
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371376,
+          "ppid": 1371345,
+          "start_ticks": 372181191,
+          "state": "R",
+          "ticks": 1
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371380,
+          "ppid": 1371345,
+          "start_ticks": 372181199,
+          "state": "S",
+          "ticks": 97
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371389,
+          "ppid": 1371345,
+          "start_ticks": 372181286,
+          "state": "R",
+          "ticks": 89
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371395,
+          "ppid": 1371345,
+          "start_ticks": 372181365,
+          "state": "S",
+          "ticks": 903
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371487,
+          "ppid": 1371345,
+          "start_ticks": 372182133,
+          "state": "S",
+          "ticks": 20
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371495,
+          "ppid": 1371345,
+          "start_ticks": 372182161,
+          "state": "R",
+          "ticks": 15
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371512,
+          "ppid": 1371345,
+          "start_ticks": 372182178,
+          "state": "S",
+          "ticks": 634
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371581,
+          "ppid": 1371345,
+          "start_ticks": 372182721,
+          "state": "R",
+          "ticks": 119
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371636,
+          "ppid": 1371345,
+          "start_ticks": 372182824,
+          "state": "R",
+          "ticks": 304
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371641,
+          "ppid": 1371345,
+          "start_ticks": 372183089,
+          "state": "R",
+          "ticks": 43
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371645,
+          "ppid": 1371345,
+          "start_ticks": 372183137,
+          "state": "R",
+          "ticks": 39
+        },
+        {
+          "comm": "compile",
+          "pgid": 1371345,
+          "pid": 1371650,
+          "ppid": 1371345,
+          "start_ticks": 372183181,
+          "state": "R",
+          "ticks": 2
+        },
+        {
+          "comm": "link",
+          "pgid": 1371345,
+          "pid": 1371658,
+          "ppid": 1371345,
+          "start_ticks": 372183184,
+          "state": "R",
+          "ticks": 43
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371676,
+          "ppid": 1371345,
+          "start_ticks": 372183240,
+          "state": "R",
+          "ticks": 14
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371680,
+          "ppid": 1371345,
+          "start_ticks": 372183259,
+          "state": "R",
+          "ticks": 3
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371692,
+          "ppid": 1371345,
+          "start_ticks": 372183283,
+          "state": "R",
+          "ticks": 1
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371696,
+          "ppid": 1371345,
+          "start_ticks": 372183290,
+          "state": "S",
+          "ticks": 68
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371743,
+          "ppid": 1371345,
+          "start_ticks": 372183354,
+          "state": "S",
+          "ticks": 41
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371748,
+          "ppid": 1371345,
+          "start_ticks": 372183392,
+          "state": "S",
+          "ticks": 5
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371782,
+          "ppid": 1371345,
+          "start_ticks": 372183404,
+          "state": "R",
+          "ticks": 6
+        },
+        {
+          "comm": "vet",
+          "pgid": 1371345,
+          "pid": 1371787,
+          "ppid": 1371345,
+          "start_ticks": 372183417,
+          "state": "R",
+          "ticks": 4
+        },
+        {
+          "comm": "mvcc.test",
+          "pgid": 1371345,
+          "pid": 1371797,
+          "ppid": 1371345,
+          "start_ticks": 372183425,
+          "state": "S",
+          "ticks": 30
+        }
+      ],
+      "pgid": 1371345,
+      "pid": 1371345,
+      "raw_sha256": "3d333ac2f554c8aa99a2818770891eee47a3090b30469d4c2993eca12fdbf7fd",
+      "reaped": [],
+      "reasons": [],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "subreaper": true
+    }
+  ],
+  "stage": "controls",
+  "unexecuted_commands": [],
+  "utc": "2026-10-16T10:25:52.905281+00:00"
+}

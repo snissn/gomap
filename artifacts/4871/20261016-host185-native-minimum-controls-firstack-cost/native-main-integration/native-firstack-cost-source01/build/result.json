@@ -1,0 +1,40 @@
+{
+  "PASS": [],
+  "RUN": [],
+  "elapsed_seconds": 1.84517863066867,
+  "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "executed": true,
+  "exit_code": 0,
+  "interventions": [],
+  "leader_joined": true,
+  "name": "build-firstack-elf",
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1372359,
+      "pid": 1372359,
+      "ppid": 1372352,
+      "start_ticks": 372187291,
+      "state": "S",
+      "ticks": 15
+    },
+    {
+      "comm": "link",
+      "pgid": 1372359,
+      "pid": 1372387,
+      "ppid": 1372359,
+      "start_ticks": 372187305,
+      "state": "R",
+      "ticks": 69
+    }
+  ],
+  "pgid": 1372359,
+  "pid": 1372359,
+  "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_adopted_children": [],
+  "source_before_after_frozen": true,
+  "status": "PASS",
+  "subreaper": true
+}

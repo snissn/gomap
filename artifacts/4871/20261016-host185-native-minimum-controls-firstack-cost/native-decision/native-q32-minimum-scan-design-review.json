@@ -1,0 +1,42 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "verdict": "ACCEPT_DESIGN_CONDITIONAL",
+  "candidate_edits_by_reviewer": false,
+  "design_md_sha256": "bf998aa2e4901082d4773b6a4bd826002fec081610a01f1076c9eec43c341a3b",
+  "design_json_sha256": "895e5e6bbe5f39ae95a945c9034d0f2db04d6f17625faaeaf78cc557616177b0",
+  "source_manifest_sha256": "a7f05aa0a824de9f37664f1504636453133ad9b4d6d14a86826abeedd6bded2a",
+  "source_archive_sha256": "aa282fb7a4892023781dd9862a9f2000e92cccacc36edf42329cd0106a4f0dd9",
+  "design_source_bindings_verified": 13,
+  "findings": [],
+  "required_implementation_conditions": [
+    "Sample original epoch before first actual shard load; retain SAME epoch across all initial/registry/terminal phases.",
+    "Admit every actual shard/epoch/state transition before effects; save next index and terminal phase.",
+    "Restart entire accumulated minimum/currentSeen/generation/scan state on any observed nonzero counter or epoch mismatch.",
+    "Every later entry must admit epoch validation before using saved observations; final ready requires admitted equality against SAME initial epoch.",
+    "A completed result reused after phase4 tail refusal must still validate SAME epoch on every return. Changed epoch invalidates completed state.",
+    "Do not return ready minimum0 on uncertainty; original capability treats0 as unrestricted.",
+    "Use actual enlarged containing sizeof and new per-progress prices; recompute all repeated public/parent prefixes, do not infer full Q32 fit from local shard size."
+  ],
+  "safety_reason": "Begin increments counter before epoch before view load. End increments epoch before counter decrement. Under an unchanged bracketing epoch, an old unregistered acquisition stays visibly positive; a newly completed/started registration changes epoch and restarts. Registry first publication is synchronized and joins cannot lower cohort seq. Existing registered old reader remains included.",
+  "convergence": "Conditional on a sufficiently long stable acquisition epoch, supported registry geometry and funded next-progress parent+child unit.512 actual loads per no-restart successful attempt, not512 loads total across restarts.",
+  "not_proven": [
+    "Unconditional progress under legal perpetual acquisition churn",
+    "General Q32 fit for large idxAll/dirty fallback/leaf pruning",
+    "New proof of existing post-observation capability/publication race",
+    "Source implementation correctness or runtime tests",
+    "Numeric allowance, native publication or final qualification"
+  ],
+  "control_requirements": [
+    "Both scans persist across Q32 turns and complete only after all512 actual loads; record/byte refusal cannot advance/load next shard.",
+    "Acquisition on already-scanned shard, including full begin/end between turns, resets through epoch.",
+    "Terminal stale and deferred phase4 tail exercise unchanged-epoch revalidation vs changed-epoch invalidation.",
+    "Genuine old reader and partial native registration/cancel retain original minimum/counter lifetime.",
+    "Sustained churn refuses safely; same observer converges after churn stops.",
+    "Existing unsupported whole-map/dirty-registry and native leaf-pruning siblings remain explicit."
+  ],
+  "runtime_executed_by_reviewer": false,
+  "source_edits": false,
+  "lease_released": true
+}

@@ -1,0 +1,45 @@
+{
+  "all_pass": false,
+  "no_product_acceptance": true,
+  "results": [
+    {
+      "PASS": [],
+      "RUN": [],
+      "elapsed_seconds": 1.4133032448589802,
+      "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "firstack-sample01",
+      "observed_group": [
+        {
+          "comm": "native-firstack",
+          "pgid": 1398763,
+          "pid": 1398763,
+          "ppid": 1398749,
+          "start_ticks": 372315357,
+          "state": "Z",
+          "ticks": 3
+        }
+      ],
+      "pgid": 1398763,
+      "pid": 1398763,
+      "raw_sha256": "c5051f094ec712520986394baa4ce4850bbfbc0430ca1c0ecbde5ff214b4b921",
+      "reaped": [],
+      "reasons": [
+        "competing CPU during sample; retain contaminated sample"
+      ],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "STOP",
+      "subreaper": true
+    }
+  ],
+  "stage": "samples",
+  "unexecuted_commands": [
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "utc": "2026-10-16T10:47:50.433743+00:00"
+}

@@ -1,0 +1,87 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Frozen four-path test-only shared oracle extraction and wall/work benchmark source readiness; no runtime grant",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_model_routing_unavailability": "Manual hosted review cannot pin the user-required exact model; internal explicitly routed reviewer used.",
+  "source_manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "source_archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+  "parent_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "source_files": 10434,
+  "unchanged_from_parent": 10430,
+  "changed_source": [
+    {
+      "after_sha256": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+      "before_sha256": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+    },
+    {
+      "after_sha256": "9817c079cc4969042618ff079b0d9c0adbf84299a4c5d33e373e531c58a954b8",
+      "before_sha256": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_finaldriver_precursor_test.go"
+    },
+    {
+      "after_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+      "before_sha256": null,
+      "change": "add",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_firstack_cost_v6_test.go"
+    },
+    {
+      "after_sha256": "9e24d0c655a707286d21dc528b72b09639904004239dd7a80883f758573c2a16",
+      "before_sha256": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go"
+    }
+  ],
+  "checks": [
+    "all archive file hashes",
+    "all live source hashes at review",
+    "full manifest delta against repair08",
+    "exact reproduced patch",
+    "archive modes",
+    "artifact cross-references",
+    "unchanged raw index",
+    "full shared diagnostic caller/oracle",
+    "all four-path delta",
+    "pinned timer/ReportMetric source contract",
+    "all six proposed argv/env/source/hash/order bindings"
+  ],
+  "findings": [],
+  "packet_bindings": {
+    "source-frozen.json": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "source-frozen.tar.gz": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+    "source.delta.patch": "a93e8a38f717ae4b7635867d416a5bb18bd2083905153bb398da59b2af0af37a",
+    "changed-files.json": "f143e9c773ab822403f9e8adc96dedc2684f274e27e965ba4a02b9e73744067d",
+    "source-modes.json": "98a33d0a2026b141857552ace1dd4a8cb094700b5dc3984d31383f80d42d6845",
+    "freeze.json": "f099c1950bd0143fcd05353bec4884cee4638998dc38ea0a3b114ee3c5f79b14",
+    "handoff.json": "be634f49c442e2783f51d2004309981cd13ea98b5914ec0888220c74406332c7",
+    "measurement-spec.md": "23f97b8600a2787dd259b83e279cf4b889a22a377692e177c4dcb1bcc5186a20",
+    "proposed-commands.json": "c2b6d51ecdfa44cc9103828ed8e4987619d927e8e5a5fa1008de363cc21e0a46",
+    "source-tool-evidence.json": "2be031f11a8c1b99ef939e4c39e0ca84c255d6f708b52860921e468750d55279"
+  },
+  "runtime_executed_by_reviewer": false,
+  "proposed_commands_executed_in_packet": false,
+  "runtime_grant": false,
+  "measured_cost_claim": false,
+  "allocation_claim": false,
+  "whole_retained_union_complete": false,
+  "numeric_allowance_chosen": false,
+  "Q32": "RED/ACK0 unchanged",
+  "native_qualification": false,
+  "limitations": [
+    "measurement probe/bookkeeping affects later state",
+    "phase labels describe entry only",
+    "whole interval includes writer/observations/gaps",
+    "selected constructor P excludes optional meter storage",
+    "focused controls and samples require separate root selection/exact evidence",
+    "concurrent containing-admission limitation remains"
+  ]
+}

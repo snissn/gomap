@@ -1,0 +1,120 @@
+{
+  "disposition": "INTERRUPTED_CONTAMINATED_SAMPLE_RETAINED_NO_QUIET_BASELINE",
+  "planned_samples": 3,
+  "samples_executed": 1,
+  "samples_unexecuted": [
+    2,
+    3
+  ],
+  "automatic_retries": 0,
+  "replacement_samples": 0,
+  "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "source_files": 10434,
+  "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+  "raw_sha256": "c5051f094ec712520986394baa4ce4850bbfbc0430ca1c0ecbde5ff214b4b921",
+  "all_source_bytes_before_after_verified": true,
+  "raw_totals_independently_recomputed": {
+    "public_call_nanos": 16143381,
+    "whole_birth_to_ack_nanos": 31651227,
+    "max_call_nanos": 7932626,
+    "public_calls": 8,
+    "work_records": 7008,
+    "work_bytes": 7024027,
+    "exact_ack_returns": 1
+  },
+  "calls": [
+    {
+      "index": 0,
+      "starting_label": "start=cursor-birth",
+      "wall_nanos": 108705,
+      "work_records": 457,
+      "work_bytes": 2092652
+    },
+    {
+      "index": 1,
+      "starting_label": "start-phase=16",
+      "wall_nanos": 104857,
+      "work_records": 2714,
+      "work_bytes": 1984427
+    },
+    {
+      "index": 2,
+      "starting_label": "start-phase=16",
+      "wall_nanos": 8638,
+      "work_records": 10,
+      "work_bytes": 42896
+    },
+    {
+      "index": 3,
+      "starting_label": "start-phase=24",
+      "wall_nanos": 30249,
+      "work_records": 376,
+      "work_bytes": 269880
+    },
+    {
+      "index": 4,
+      "starting_label": "start-phase=25",
+      "wall_nanos": 757,
+      "work_records": 276,
+      "work_bytes": 1408
+    },
+    {
+      "index": 5,
+      "starting_label": "start-phase=25",
+      "wall_nanos": 7885232,
+      "work_records": 2231,
+      "work_bytes": 718973
+    },
+    {
+      "index": 6,
+      "starting_label": "start-phase=26",
+      "wall_nanos": 7932626,
+      "work_records": 766,
+      "work_bytes": 1185008
+    },
+    {
+      "index": 7,
+      "starting_label": "start-phase=27",
+      "wall_nanos": 72317,
+      "work_records": 178,
+      "work_bytes": 728783
+    }
+  ],
+  "intercall_and_observer_nanos": 15507846,
+  "host_activity": {
+    "active_other_processes": [
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 71.61369998606838,
+        "pid": 6357
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 2.8645479994427356,
+        "pid": 1949
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 2.8645479994427356,
+        "pid": 19242
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 2.8645479994427356,
+        "pid": 681192
+      }
+    ],
+    "aggregate_busy_percent": 8.674698795180722,
+    "mem_available_kib": 19949844,
+    "seconds": 0.34909521508961916
+  },
+  "limits": [
+    "Whole process CPU competitor threshold exceeded after both preflight windows passed.",
+    "This result is a contaminated diagnostic observation, not an accepted latency baseline or comparison.",
+    "Labels are starting phases; a call can span phases, so timings are not standalone phase costs.",
+    "Meter bookkeeping between public calls influences later state; this is not an uninstrumented benchmark.",
+    "No allocation, full prune, continuing writer, Q32, or product qualification claim.",
+    "Unexecuted samples 2 and 3 require explicit revised collection plan; sample 1 will not be discarded or replaced."
+  ],
+  "Q32": "original RED/ACK0 unchanged"
+}

@@ -1,0 +1,8 @@
+{
+  "utc": "2026-10-16T10:36:26.653743+00:00",
+  "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/dgraph-main-inspection",
+  "owner": "root",
+  "purpose": "Read-only M3 source/provenance and future qualification preparation; no build or collection authorized",
+  "disposition": "retain pending native and downstream graph consumers",
+  "remote": "https://github.com/snissn/dgraph.git"
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "sha": "868b58cfd2850fba25de23361c1060e64171882f",
+    "exit": 1,
+    "stderr": "gh: No commit found for SHA: 868b58cfd2850fba25de23361c1060e64171882f (HTTP 422)",
+    "response": "{\"message\":\"No commit found for SHA: 868b58cfd2850fba25de23361c1060e64171882f\",\"documentation_url\":\"https://docs.github.com/rest/commits/commits#get-a-commit\",\"status\":\"422\"}"
+  },
+  {
+    "sha": "c7f6faa98d7a8402eab6a8c0d43bbe3b5ad9d52f",
+    "exit": 1,
+    "stderr": "gh: No commit found for SHA: c7f6faa98d7a8402eab6a8c0d43bbe3b5ad9d52f (HTTP 422)",
+    "response": "{\"message\":\"No commit found for SHA: c7f6faa98d7a8402eab6a8c0d43bbe3b5ad9d52f\",\"documentation_url\":\"https://docs.github.com/rest/commits/commits#get-a-commit\",\"status\":\"422\"}"
+  }
+]

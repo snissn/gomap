@@ -1,0 +1,87 @@
+{
+  "Q32": "RED/ACK0 unchanged; no numeric runtime grant",
+  "README_sha256": "82c2fe53550e2b8d18efd6894846be69df5fb29249f1f04ebc6c530eb10bb47c",
+  "accounting_sha256": "cb7455da4891aca8492b2a95c65e1321d6b1717a5b766bf85f9376ca672b1e1d",
+  "changed_files": [
+    {
+      "after_sha256": "9b37d1c15168bf1182a518b5f8ccb1c9bdd09d6bde0ee456041e9d32ad21c358",
+      "before_sha256": "4fecd22b096aef3d44d6b07e99f0af2e9aab9c39b8da5a695ce8e93291d875c4",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_minimum_price_for_test_v6.go"
+    },
+    {
+      "after_sha256": "5e3b9af23f2b45337d79a0c095e3de9b4a72fdf6b48dc7d7b9110a303e500503",
+      "before_sha256": "7b1d5fa6f53911ea15819772d59e3c7999f2e6fb7d0141a2feb50bef73c03803",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go"
+    },
+    {
+      "after_sha256": "33756051ed6b12748461b7b7ea8f2a06b385b93fa0358de8b1b39ebb04851644",
+      "before_sha256": "8343a007ed04283cc7c2a247ef827c8c7245d011894a370a90b33368a417256d",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_snapshot_minimum_admission_v6_test.go"
+    },
+    {
+      "after_sha256": "eed8edb1d5db256443d926cf539e123c59c89fcfba0221014372f1b76ff7932e",
+      "before_sha256": null,
+      "change": "add",
+      "mode": "0o664",
+      "path": "TreeDB/db/native_snapshot_minimum_interleaving_v6_test.go"
+    },
+    {
+      "after_sha256": "9877bf91ef72826dba6e63c157ec66474559e9314818beec03f29e7aed35a31b",
+      "before_sha256": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+      "change": "modify",
+      "mode": "0o664",
+      "path": "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+    }
+  ],
+  "children_spawned": 0,
+  "git_index_GitHub_mutations": false,
+  "go_compiler_tests_benchmarks_executed": false,
+  "invariance_sha256": "4ef570596508a1456fd58a7e51c99d2fe3bfa9e2da51b135f0c4130670b0a910",
+  "mode_disposition_sha256": "af2ac4b806087d396fbd48256bdc9190b593ac113cbe701e61acf5af1b77ebf5",
+  "new_storage_or_owner": false,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-minimum-scan-source01",
+  "production_paths": [
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go"
+  ],
+  "proposal_sha256": "5188b53251caaf917e9991829ccf5861d50bfc4a22f6578dfce261bf06f2b997",
+  "protected_writer_after_every_yield_progress_proven": false,
+  "quiet_epoch_progress_only": true,
+  "runtime_lease_released": true,
+  "source": {
+    "added_paths": 1,
+    "archive_members_verified": true,
+    "changed_archive_sha256": "3a1500cc4dc4695975c171f329d01110c65c66982be4851c0b7e0aa61b0a6d0d",
+    "changed_paths": 5,
+    "created_utc": "2026-10-16T10:41:24.934186+00:00",
+    "deleted_paths": 0,
+    "delta_sha256": "a922adc36bd20e8d19c85fc763547cf3a3334d1af4715d04ed4aa2ffb4426835",
+    "go_executed": false,
+    "gofmt_only": true,
+    "index_after_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+    "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+    "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+    "modified_paths": 4,
+    "parent_archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+    "parent_manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "runtime_executed": false,
+    "runtime_lease_released": true,
+    "source_after_matches": true,
+    "source_archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c",
+    "source_files": 10435,
+    "source_lease_released": true,
+    "source_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+    "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+    "status": "FROZEN_MINIMUM_SCAN_SOURCE01_UNEXECUTED",
+    "unchanged_paths": 10430
+  },
+  "source_bindings_sha256": "97873fcb1694488932110656c6aa36579e7de9b8e236ce5746d6a6954470aed2",
+  "source_lease_released": true,
+  "status": "FROZEN_SOURCE_ONLY_UNEXECUTED_LEASES_RELEASED",
+  "whole_success_actual_counter_loads": 512
+}

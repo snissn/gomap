@@ -1,0 +1,65 @@
+{
+  "PASS": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+  ],
+  "RUN": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+  ],
+  "elapsed_seconds": 4.0725536076352,
+  "elf_sha256": null,
+  "executed": true,
+  "exit_code": 0,
+  "interventions": [],
+  "leader_joined": true,
+  "name": "race-all-shared-arms",
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1407502,
+      "pid": 1407502,
+      "ppid": 1407435,
+      "start_ticks": 372341104,
+      "state": "S",
+      "ticks": 21
+    },
+    {
+      "comm": "link",
+      "pgid": 1407502,
+      "pid": 1407524,
+      "ppid": 1407502,
+      "start_ticks": 372341116,
+      "state": "S",
+      "ticks": 45
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1407502,
+      "pid": 1407537,
+      "ppid": 1407502,
+      "start_ticks": 372341172,
+      "state": "S",
+      "ticks": 29
+    }
+  ],
+  "pgid": 1407502,
+  "pid": 1407502,
+  "raw_sha256": "2eb800e580b721f14336ad6c9b4b4949a2647a549ce5cb85be31b81747636eca",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_adopted_children": [],
+  "source_before_after_frozen": true,
+  "status": "PASS",
+  "subreaper": true
+}
