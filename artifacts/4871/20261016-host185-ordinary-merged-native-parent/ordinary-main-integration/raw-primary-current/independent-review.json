@@ -1,0 +1,2357 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Original current-head hosted raw and public PRIMARY cost gates only",
+  "baseline": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "candidate": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "candidate_tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "run_id": 38835454989,
+  "job_id": 116763456195,
+  "attempt": 1,
+  "artifact_id": 12019547135,
+  "artifact_zip_sha256": "bd92bf9279e5b938b52124e504b681aef96710efe2b1f20fa361fd48af9923e7",
+  "packet_files_verified": 56,
+  "packet_hashes": {
+    "baseline.txt": "07a04f1567c394df07d4ec62e310dc89daf34ad2fb1ca5032082ca07065c8723",
+    "binary-sha256.txt": "53c85a050f636eaeb47117a5f2e7db0191d772655f51d0ec0837d870725cc53c",
+    "binary-retention.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate.txt": "f63f6a3f074415b0893ba6e7d4592046f1a7a98029d95eea6d2f0922167588e2",
+    "environment.txt": "9b0d401e15ba8b03f5d44dd15536e08d256a56a9fcf364c104b8e2e325d8946a",
+    "measured-binaries/baseline-caching.test": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+    "measured-binaries/baseline-db.test": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "measured-binaries/baseline-treedb.test": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+    "measured-binaries/candidate-caching.test": "6cb8af92122575cb49140ae081f27b7ff51a526e8d72602e3e1213f5d48ccd62",
+    "measured-binaries/candidate-db.test": "a693988cb42f8b44578f6f037511a00df79d8be1d14f5dd13f13d2d940029143",
+    "measured-binaries/candidate-treedb.test": "0acfad58c4ae885b7bdad6bb701ecdcdf217f8792ec50a18892a9d4f5b197bee",
+    "measured-binaries.json": "7a2ea3036ee9cddc2c755cccb8823f7608b08e85bd625e3a57fbb20fb17de5d2",
+    "primary/baseline-guard-after.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/baseline-overlay.json": "e89ecdf34fec5b364c0f6b7e17c0e2e704845f28ef26e39a3038acd621cb4077",
+    "primary/baseline-primary.test": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+    "primary/baseline-worktree-remove.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/baseline-worktree.txt": "58fcc5d38ce6962c7191b4edaabf751da7f8a145b753ebc82baf0a6101868a4b",
+    "primary/bindings.json": "cb2504616550c949eb280b1bd9b499a533f4e50b973bab7435f3b17eb1cde574",
+    "primary/build-baseline.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/build-candidate.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/candidate-guard-after.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/candidate-guard-before.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary/candidate-primary.test": "d3aa64d4e08db197c119392892089b14d299abe1496d664836a6ed687cb9bc4b",
+    "primary/candidate-public-lifecycle.txt": "824ecf8b4598ffb8a4618c7e836f0c82f38b1107c851fd98f9a9d1d7c2f419d6",
+    "primary/commands.json": "086ff673fafbebde69efd98d3699748a440a0de392723d75409ac2b1cafc46ed",
+    "primary/go-version.txt": "34113d5d84bc5406ab3bfd0028c381611cad764f40baa15e43cffd89485c0aee",
+    "primary/lscpu.txt": "7630af067e8703adb64f6501b9ec80e82044e70f37a3df588a41eedc86b6ca24",
+    "primary/measured-processes.json": "9819db5c21750c1c37744084c53b93a5028f995979eb9d0c7d4430203eb81694",
+    "primary/measured-processes.jsonl": "79ee14093e7f0abcdad8ee6b9e1ca022f416740e1138b30d7cbfd699f125a791",
+    "primary/pair-1-baseline.txt": "f1a5caa762b41ee5b188290155eae224b33b9a3b739f9183e22671ba3b77744d",
+    "primary/pair-1-candidate.txt": "f8e88d2f3035ef05da565a2e1a12d863c848166e5285ca59eff12926d2d2e41a",
+    "primary/pair-2-baseline.txt": "984c73e1c85c7bf9ccf605c9ced3519ba1b153c5e0f48bc04740ae2b0c601b6c",
+    "primary/pair-2-candidate.txt": "2f737faeda9741388778e299054dd3302a73a6a8ab87875064e241fa78bc6978",
+    "primary/pair-3-baseline.txt": "71e29df947217e77cbc45721c1cdb147b880ad9432424273505eb9cec4dea498",
+    "primary/pair-3-candidate.txt": "04e0f82b8dc7ca297f3cc0ff0e06dc9fbf74237f74f0ce963fe7575a915bfdf6",
+    "primary/pair-4-baseline.txt": "662d124e08bf7cdf33d58586406853fbcfa766dbbfc81e55ae1b674971d2a59c",
+    "primary/pair-4-candidate.txt": "8b024211eb0193214d5e57cddfb7803ba743a24929d202966d015d562ee4254a",
+    "primary/pair-5-baseline.txt": "b16571ac101b8c8afe96f6d782b084c7d7f7fb72f82be492897cfdc15be26800",
+    "primary/pair-5-candidate.txt": "b4fb1f37381ccbe82d79e1547c207531667ad15ae82746fce869e6dccda1b7ae",
+    "primary/pair-6-baseline.txt": "3798cc798f690981c8277ba127ab316ee54e051acb8be72e90dbdf142f5af8da",
+    "primary/pair-6-candidate.txt": "5a95022d6f7663e93c526cc43d0b67bd63102c6c077b9a7941186a11f51ada2d",
+    "primary/pair-7-baseline.txt": "626f3d188bb827d6a3ed4dceb4d0c5a614fbbe0c6ac0f4fb2beca08a2782d807",
+    "primary/pair-7-candidate.txt": "805bd8e1bf21bd27db2f8e8a30a7c40364d9d7d7e948d79c0d6bd3e974cda3e3",
+    "primary/pair-8-baseline.txt": "50a81cc6dbc0140effe642862126587d79e8a6b11cc7bb65cb090d567509e8f9",
+    "primary/pair-8-candidate.txt": "62d65f61b8dd01df55f5762d054730bb7f77f26d0effd0a3f7bba374d73887a3",
+    "primary/preflight-processes.jsonl": "7e11bc13b9886408b0e454cd49d7225ebe9095e815e3eb334b3fdc54ebee370e",
+    "primary/primary_generation_routing_v6_test.go": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11",
+    "primary/preflight.json": "a33f4cac522844a68c071d79ec42cee6952d4be24d35596ef9234cc75b22b3b4",
+    "primary/processes.txt": "1596818aef00409dcb8072dd08d1f76e06df737d7870c93c6f97c16d3cc0ee63",
+    "primary/samples.json": "e891120d54ad7504eac12750e6c3996abc2f5020a2720a6eff3ff9a3133f87a1",
+    "primary/summary.json": "6d0a2abbfc8ddf11e74763a4d344aeb40a6b2a18a373cd4b56f091632c660e2c",
+    "primary/summary.md": "dd25c9ac980d9355a405d3c25dd0d0fe227e4031500c4f67250db0b9505f346b",
+    "primary/uname.txt": "cd8e31ad3f05d597238a1403bb5c2d25c975d53959c3d48af034216515712dc5",
+    "processes.txt": "4a9bad1198dbc04d5082163913997f4fbbabd978eb4af01b2b6b76fc3bb0926a",
+    "summary.json": "5da397ab200422e7c42da5ac3707622bdfe5799551f91e8c26d64c86477b4680",
+    "summary.md": "0e0f283247f03eadcce556fd59db3db6827c6e5f5e39a9c90a6aa4ccb8e42575"
+  },
+  "source_manifest_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+  "inspected_source_hashes": {
+    "scripts/mvcc_raw_path_gate.sh": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06",
+    "scripts/mvcc_primary_cost_gate.py": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+    "scripts/mvcc_candidate_checkout_guard.sh": "775d764acaa59b617ceeb3d7fcb468fdb49f48f3b7bd7c5171ddfd4071c0cb20",
+    ".github/scripts/check_mvcc_raw_path_gate.py": "3405c6088aff3ff6d06caa6f62b860edddbcbb18a983f91ac9d67af94c0eec9a",
+    ".github/workflows/treedb-tests.yml": "6ff7766261056eb9d06231a305d3a4a5585d25bc75b856298044d09582c50e7e",
+    "TreeDB/db/conditional_kv_contract_bench_test.go": "e428911df6d694614dd7f0c5e58cb28490102d68c4262c77756b929c65f070b6",
+    "TreeDB/caching/bench_test.go": "8962b9fead4a404dd791d622a225ac1fe83fd9a69a00439e74277cd916a1fc4e",
+    "TreeDB/snapshot_seek_iterator_bench_test.go": "b2947d89bf9f3c1fe46353518e44cb6b69518f6179d1afa583dd570169a39ac5",
+    "TreeDB/command_wal_public_test.go": "970ef668e65576be46d40b39ceb6c31b7861c4afc41c44c1de2a484de3571074",
+    "TreeDB/mvcc/primary_generation_routing_v6_test.go": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11"
+  },
+  "actual_elfs": [
+    {
+      "path": "measured-binaries/baseline-db.test",
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "bytes": 55518772,
+      "mode": 493,
+      "source_sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+      "source_tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+      "package": "./TreeDB/db",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/baseline-db.test",
+        "./TreeDB/db"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/baseline-caching.test",
+      "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+      "bytes": 32696518,
+      "mode": 493,
+      "source_sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+      "source_tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+      "package": "./TreeDB/caching",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/baseline-caching.test",
+        "./TreeDB/caching"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/baseline-treedb.test",
+      "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+      "bytes": 52438387,
+      "mode": 493,
+      "source_sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+      "source_tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+      "package": "./TreeDB",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/baseline-treedb.test",
+        "./TreeDB"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-db.test",
+      "sha256": "a693988cb42f8b44578f6f037511a00df79d8be1d14f5dd13f13d2d940029143",
+      "bytes": 61398136,
+      "mode": 493,
+      "source_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "source_tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+      "package": "./TreeDB/db",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/candidate-db.test",
+        "./TreeDB/db"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-caching.test",
+      "sha256": "6cb8af92122575cb49140ae081f27b7ff51a526e8d72602e3e1213f5d48ccd62",
+      "bytes": 36985361,
+      "mode": 493,
+      "source_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "source_tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+      "package": "./TreeDB/caching",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/candidate-caching.test",
+        "./TreeDB/caching"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "path": "measured-binaries/candidate-treedb.test",
+      "sha256": "0acfad58c4ae885b7bdad6bb701ecdcdf217f8792ec50a18892a9d4f5b197bee",
+      "bytes": 56905145,
+      "mode": 493,
+      "source_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "source_tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+      "package": "./TreeDB",
+      "build_argv": [
+        "go",
+        "test",
+        "-c",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate.rx7tkS/candidate-treedb.test",
+        "./TreeDB"
+      ],
+      "build_environment": {
+        "GOWORK": "off"
+      }
+    },
+    {
+      "bytes": 25225278,
+      "path": "baseline-primary.test",
+      "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+      "source_sha": "637129789378c33027a234997b6cdd57f20fd0fe"
+    },
+    {
+      "bytes": 29169648,
+      "path": "candidate-primary.test",
+      "sha256": "d3aa64d4e08db197c119392892089b14d299abe1496d664836a6ed687cb9bc4b",
+      "source_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80"
+    }
+  ],
+  "raw_samples": {
+    "baseline": [
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3867750,
+        "metrics": {
+          "ns/op": 623.1,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 65296.0,
+          "B/op": 31944.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6221677,
+        "metrics": {
+          "ns/op": 386.0,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8505723,
+        "metrics": {
+          "ns/op": 280.3,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 8854,
+        "metrics": {
+          "ns/op": 262602.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2659.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 231245.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 240662.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8771.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3808.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.21,
+          "public.batch.write_sync.phase.command_append.ns/op": 2659.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 247426.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 261.5,
+          "public.batch.write_sync.phase.command_sync.ns/op": 240846.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4293.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2707.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1814.0,
+          "public.batch.write_sync.phase.wall.ns/op": 256321.0,
+          "writesync_max_ns": 2432216.0,
+          "writesync_p50_ns": 240058.0,
+          "writesync_p95_ns": 347047.0,
+          "writesync_p99_ns": 441453.0,
+          "B/op": 4559.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3854160,
+        "metrics": {
+          "ns/op": 629.4,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 66925.0,
+          "B/op": 31945.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6304123,
+        "metrics": {
+          "ns/op": 381.7,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8542339,
+        "metrics": {
+          "ns/op": 323.6,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9962,
+        "metrics": {
+          "ns/op": 259899.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2679.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 229150.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 238105.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8359.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3848.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.41,
+          "public.batch.write_sync.phase.command_append.ns/op": 2679.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 244864.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 252.3,
+          "public.batch.write_sync.phase.command_sync.ns/op": 238284.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4203.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2795.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1780.0,
+          "public.batch.write_sync.phase.wall.ns/op": 253724.0,
+          "writesync_max_ns": 3382267.0,
+          "writesync_p50_ns": 238234.0,
+          "writesync_p95_ns": 331268.0,
+          "writesync_p99_ns": 426996.0,
+          "B/op": 4580.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3855106,
+        "metrics": {
+          "ns/op": 620.8,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 64661.0,
+          "B/op": 31944.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6232396,
+        "metrics": {
+          "ns/op": 384.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8506192,
+        "metrics": {
+          "ns/op": 277.5,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 8923,
+        "metrics": {
+          "ns/op": 257403.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2675.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 226754.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 235819.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8476.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3885.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.03,
+          "public.batch.write_sync.phase.command_append.ns/op": 2675.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 242579.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 256.5,
+          "public.batch.write_sync.phase.command_sync.ns/op": 236002.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4218.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2641.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1791.0,
+          "public.batch.write_sync.phase.wall.ns/op": 251309.0,
+          "writesync_max_ns": 5890652.0,
+          "writesync_p50_ns": 236030.0,
+          "writesync_p95_ns": 327530.0,
+          "writesync_p99_ns": 411237.0,
+          "B/op": 4556.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3859591,
+        "metrics": {
+          "ns/op": 624.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 65348.0,
+          "B/op": 31944.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6236883,
+        "metrics": {
+          "ns/op": 509.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8611425,
+        "metrics": {
+          "ns/op": 277.7,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9550,
+        "metrics": {
+          "ns/op": 255375.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2658.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 225087.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 234032.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8339.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3916.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 79.87,
+          "public.batch.write_sync.phase.command_append.ns/op": 2658.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 240701.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 252.8,
+          "public.batch.write_sync.phase.command_sync.ns/op": 234203.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4139.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2670.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1722.0,
+          "public.batch.write_sync.phase.wall.ns/op": 249311.0,
+          "writesync_max_ns": 3372487.0,
+          "writesync_p50_ns": 234998.0,
+          "writesync_p95_ns": 324555.0,
+          "writesync_p99_ns": 407420.0,
+          "B/op": 4568.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3872598,
+        "metrics": {
+          "ns/op": 621.2,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 64962.0,
+          "B/op": 31945.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6242338,
+        "metrics": {
+          "ns/op": 384.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8434317,
+        "metrics": {
+          "ns/op": 285.7,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9073,
+        "metrics": {
+          "ns/op": 259285.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2666.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 227981.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 237155.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8577.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3857.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.91,
+          "public.batch.write_sync.phase.command_append.ns/op": 2666.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 243952.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 256.0,
+          "public.batch.write_sync.phase.command_sync.ns/op": 237339.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4300.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2807.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1840.0,
+          "public.batch.write_sync.phase.wall.ns/op": 252982.0,
+          "writesync_max_ns": 3049573.0,
+          "writesync_p50_ns": 237242.0,
+          "writesync_p95_ns": 333061.0,
+          "writesync_p99_ns": 419672.0,
+          "B/op": 4554.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3845425,
+        "metrics": {
+          "ns/op": 620.4,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 65058.0,
+          "B/op": 31944.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6240013,
+        "metrics": {
+          "ns/op": 384.9,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8378528,
+        "metrics": {
+          "ns/op": 321.2,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 7828,
+        "metrics": {
+          "ns/op": 260624.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2704.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 229792.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 238971.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8584.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3837.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.59,
+          "public.batch.write_sync.phase.command_append.ns/op": 2704.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 245609.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 253.6,
+          "public.batch.write_sync.phase.command_sync.ns/op": 239149.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4053.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2928.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1788.0,
+          "public.batch.write_sync.phase.wall.ns/op": 254459.0,
+          "writesync_max_ns": 3180337.0,
+          "writesync_p50_ns": 237442.0,
+          "writesync_p95_ns": 340275.0,
+          "writesync_p99_ns": 448966.0,
+          "B/op": 4568.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3865074,
+        "metrics": {
+          "ns/op": 622.0,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 69961.0,
+          "B/op": 31945.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6239409,
+        "metrics": {
+          "ns/op": 384.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8534038,
+        "metrics": {
+          "ns/op": 283.4,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9177,
+        "metrics": {
+          "ns/op": 257911.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2732.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 226950.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 236056.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8525.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3877.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.39,
+          "public.batch.write_sync.phase.command_append.ns/op": 2732.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 242808.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 257.8,
+          "public.batch.write_sync.phase.command_sync.ns/op": 236227.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4177.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2814.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1780.0,
+          "public.batch.write_sync.phase.wall.ns/op": 251661.0,
+          "writesync_max_ns": 6463840.0,
+          "writesync_p50_ns": 237072.0,
+          "writesync_p95_ns": 331388.0,
+          "writesync_p99_ns": 420394.0,
+          "B/op": 4555.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3859087,
+        "metrics": {
+          "ns/op": 625.1,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 66532.0,
+          "B/op": 31945.0,
+          "allocs/op": 127.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6236803,
+        "metrics": {
+          "ns/op": 384.8,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8544628,
+        "metrics": {
+          "ns/op": 278.8,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9483,
+        "metrics": {
+          "ns/op": 261333.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2640.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 231274.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 240265.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8409.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3827.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.64,
+          "public.batch.write_sync.phase.command_append.ns/op": 2640.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 246883.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 251.1,
+          "public.batch.write_sync.phase.command_sync.ns/op": 240439.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4098.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2506.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1728.0,
+          "public.batch.write_sync.phase.wall.ns/op": 255296.0,
+          "writesync_max_ns": 6450544.0,
+          "writesync_p50_ns": 239646.0,
+          "writesync_p95_ns": 336387.0,
+          "writesync_p99_ns": 414282.0,
+          "B/op": 4551.0,
+          "allocs/op": 17.0
+        }
+      }
+    ],
+    "candidate": [
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3687139,
+        "metrics": {
+          "ns/op": 753.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 63543.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6232544,
+        "metrics": {
+          "ns/op": 386.0,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8029485,
+        "metrics": {
+          "ns/op": 350.9,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 10000,
+        "metrics": {
+          "ns/op": 262327.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2678.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 231194.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 240231.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8438.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3812.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 84.71,
+          "public.batch.write_sync.phase.command_append.ns/op": 2678.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 247044.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 281.0,
+          "public.batch.write_sync.phase.command_sync.ns/op": 240409.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4350.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2712.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1745.0,
+          "public.batch.write_sync.phase.wall.ns/op": 255936.0,
+          "writesync_max_ns": 6851967.0,
+          "writesync_p50_ns": 238445.0,
+          "writesync_p95_ns": 340104.0,
+          "writesync_p99_ns": 443828.0,
+          "B/op": 4580.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3673008,
+        "metrics": {
+          "ns/op": 646.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 63522.0,
+          "B/op": 31503.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6209820,
+        "metrics": {
+          "ns/op": 385.7,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8159268,
+        "metrics": {
+          "ns/op": 296.5,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9561,
+        "metrics": {
+          "ns/op": 264110.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2732.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 232178.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 241518.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8702.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3786.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.21,
+          "public.batch.write_sync.phase.command_append.ns/op": 2732.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 248474.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 285.8,
+          "public.batch.write_sync.phase.command_sync.ns/op": 241695.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4543.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2793.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1784.0,
+          "public.batch.write_sync.phase.wall.ns/op": 257674.0,
+          "writesync_max_ns": 6495762.0,
+          "writesync_p50_ns": 238856.0,
+          "writesync_p95_ns": 356845.0,
+          "writesync_p99_ns": 445230.0,
+          "B/op": 4568.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3665692,
+        "metrics": {
+          "ns/op": 650.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 64536.0,
+          "B/op": 31503.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6225848,
+        "metrics": {
+          "ns/op": 385.5,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8211957,
+        "metrics": {
+          "ns/op": 292.4,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9403,
+        "metrics": {
+          "ns/op": 257372.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2711.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 225787.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 234925.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8541.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3885.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.08,
+          "public.batch.write_sync.phase.command_append.ns/op": 2711.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 241863.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 283.7,
+          "public.batch.write_sync.phase.command_sync.ns/op": 235108.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4486.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2738.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1796.0,
+          "public.batch.write_sync.phase.wall.ns/op": 250964.0,
+          "writesync_max_ns": 6640520.0,
+          "writesync_p50_ns": 235550.0,
+          "writesync_p95_ns": 333953.0,
+          "writesync_p99_ns": 415224.0,
+          "B/op": 4552.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3667134,
+        "metrics": {
+          "ns/op": 648.1,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 63734.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6211491,
+        "metrics": {
+          "ns/op": 385.8,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 7311427,
+        "metrics": {
+          "ns/op": 295.2,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9206,
+        "metrics": {
+          "ns/op": 259680.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2691.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 227720.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 236991.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8645.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3851.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.33,
+          "public.batch.write_sync.phase.command_append.ns/op": 2691.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 243942.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 282.9,
+          "public.batch.write_sync.phase.command_sync.ns/op": 237179.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4532.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2813.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1785.0,
+          "public.batch.write_sync.phase.wall.ns/op": 253152.0,
+          "writesync_max_ns": 5352979.0,
+          "writesync_p50_ns": 235739.0,
+          "writesync_p95_ns": 337068.0,
+          "writesync_p99_ns": 467191.0,
+          "B/op": 4554.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3677226,
+        "metrics": {
+          "ns/op": 648.2,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 64649.0,
+          "B/op": 31503.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6175837,
+        "metrics": {
+          "ns/op": 387.0,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 7961744,
+        "metrics": {
+          "ns/op": 295.3,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9822,
+        "metrics": {
+          "ns/op": 259185.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2692.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 227807.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 236913.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8461.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3858.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 80.45,
+          "public.batch.write_sync.phase.command_append.ns/op": 2692.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 243805.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 278.8,
+          "public.batch.write_sync.phase.command_sync.ns/op": 237085.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4469.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2718.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1751.0,
+          "public.batch.write_sync.phase.wall.ns/op": 252824.0,
+          "writesync_max_ns": 3729390.0,
+          "writesync_p50_ns": 237362.0,
+          "writesync_p95_ns": 333552.0,
+          "writesync_p99_ns": 430672.0,
+          "B/op": 4581.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3714142,
+        "metrics": {
+          "ns/op": 649.7,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 63828.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6226458,
+        "metrics": {
+          "ns/op": 386.2,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8213937,
+        "metrics": {
+          "ns/op": 294.3,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 10000,
+        "metrics": {
+          "ns/op": 259561.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2724.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 228004.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 237243.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8625.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3853.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 82.02,
+          "public.batch.write_sync.phase.command_append.ns/op": 2724.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 244212.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 278.5,
+          "public.batch.write_sync.phase.command_sync.ns/op": 237425.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4489.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2686.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1758.0,
+          "public.batch.write_sync.phase.wall.ns/op": 253227.0,
+          "writesync_max_ns": 5737312.0,
+          "writesync_p50_ns": 236521.0,
+          "writesync_p95_ns": 324395.0,
+          "writesync_p99_ns": 455089.0,
+          "B/op": 4579.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3670147,
+        "metrics": {
+          "ns/op": 654.7,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 64613.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6220976,
+        "metrics": {
+          "ns/op": 385.2,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8065629,
+        "metrics": {
+          "ns/op": 296.4,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9770,
+        "metrics": {
+          "ns/op": 253939.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2688.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 222479.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 231610.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8520.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3938.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.14,
+          "public.batch.write_sync.phase.command_append.ns/op": 2688.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 238555.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 280.9,
+          "public.batch.write_sync.phase.command_sync.ns/op": 231789.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4485.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2679.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1764.0,
+          "public.batch.write_sync.phase.wall.ns/op": 247564.0,
+          "writesync_max_ns": 3537365.0,
+          "writesync_p50_ns": 233916.0,
+          "writesync_p95_ns": 324224.0,
+          "writesync_p99_ns": 420444.0,
+          "B/op": 4580.0,
+          "allocs/op": 17.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkGetVersioned",
+        "iterations": 3697812,
+        "metrics": {
+          "ns/op": 646.3,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+        "iterations": 1000,
+        "metrics": {
+          "ns/op": 63725.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+        "iterations": 6212509,
+        "metrics": {
+          "ns/op": 386.9,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkRepeatedIterator",
+        "iterations": 8212140,
+        "metrics": {
+          "ns/op": 295.9,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      {
+        "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+        "iterations": 9966,
+        "metrics": {
+          "ns/op": 255811.0,
+          "batch_keys/iteration": 1.0,
+          "cache.checkpoint.barrier_wait_ns/op": 0.0,
+          "cache.checkpoint.runs/op": 0.0,
+          "cache.checkpoint.stage.backend_boundary.total_ns/op": 0.0,
+          "cache.checkpoint.stage.command_wal_publish.total_ns/op": 0.0,
+          "cache.checkpoint.stage.cutover.total_ns/op": 0.0,
+          "cache.checkpoint.stage.flush_all.total_ns/op": 0.0,
+          "cache.checkpoint.stage.value_log_flush.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_cleanup.total_ns/op": 0.0,
+          "cache.checkpoint.stage.wal_rotate.total_ns/op": 0.0,
+          "cache.value_log.file_sync.calls/op": 0.0,
+          "cache.value_log.file_sync.ns/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.calls/op": 0.0,
+          "cache.value_log.file_sync.rotated_segment.ns/op": 0.0,
+          "cache.value_log.sync.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.calls/op": 0.0,
+          "cache.value_log.sync.external_ref.ns/op": 0.0,
+          "cache.value_log.sync.external_ref.wait_ns/op": 0.0,
+          "cache.value_log.sync.materialization.calls/op": 0.0,
+          "cache.value_log.sync.materialization.ns/op": 0.0,
+          "cache.value_log.sync.materialization.wait_ns/op": 0.0,
+          "cache.value_log.sync.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.calls/op": 0.0,
+          "cache.value_log.sync.pending_barrier.ns/op": 0.0,
+          "cache.value_log.sync.pending_barrier.wait_ns/op": 0.0,
+          "cache.value_log.sync.wait_ns/op": 0.0,
+          "cache.vlog_io.bytes/op": 0.0,
+          "command_wal.append.count/op": 1.0,
+          "command_wal.append.ns/op": 2709.0,
+          "command_wal.directory_sync.calls/op": 0.0,
+          "command_wal.directory_sync.ns/op": 0.0,
+          "command_wal.file_sync.calls/op": 1.0,
+          "command_wal.file_sync.ns/op": 224534.0,
+          "command_wal.flush.count/op": 0.0,
+          "command_wal.flush.ns/op": 0.0,
+          "command_wal.sync.count/op": 1.0,
+          "command_wal.sync.ns/op": 233683.0,
+          "command_wal.write.bytes/op": 136.9,
+          "command_wal.write.ns/op": 8544.0,
+          "command_wal.write.syscalls/op": 1.0,
+          "iterations/s": 3909.0,
+          "public.batch.write_sync.phase.checkpoint_gate.ns/op": 81.96,
+          "public.batch.write_sync.phase.command_append.ns/op": 2709.0,
+          "public.batch.write_sync.phase.command_callback.ns/op": 240554.0,
+          "public.batch.write_sync.phase.command_empty_barrier.ns/op": 0.0,
+          "public.batch.write_sync.phase.command_external_ref_ordering.ns/op": 285.6,
+          "public.batch.write_sync.phase.command_sync.ns/op": 233868.0,
+          "public.batch.write_sync.phase.memtable_publication_reset.ns/op": 4440.0,
+          "public.batch.write_sync.phase.preflight_materialization.ns/op": 2731.0,
+          "public.batch.write_sync.phase.residual.ns/op": 1725.0,
+          "public.batch.write_sync.phase.wall.ns/op": 249532.0,
+          "writesync_max_ns": 3555878.0,
+          "writesync_p50_ns": 234697.0,
+          "writesync_p95_ns": 330586.0,
+          "writesync_p99_ns": 416938.0,
+          "B/op": 4579.0,
+          "allocs/op": 17.0
+        }
+      }
+    ]
+  },
+  "raw_results": [
+    {
+      "benchmark": "BenchmarkGetVersioned",
+      "medians": {
+        "baseline": {
+          "ns/op": 622.55,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        "candidate": {
+          "ns/op": 648.95,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      "paired_deltas_percent": [
+        20.927619964692656,
+        2.716873212583426,
+        4.751932989690721,
+        3.812269742111174,
+        4.34642627173214,
+        4.722759509993568,
+        5.257234726688109,
+        3.3914573668212933
+      ],
+      "median_paired_delta_percent": 4.534592890862854,
+      "bytes_tolerance": 0.0,
+      "gates": "PASS"
+    },
+    {
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "medians": {
+        "baseline": {
+          "ns/op": 65322.0,
+          "B/op": 31944.5,
+          "allocs/op": 127.0
+        },
+        "candidate": {
+          "ns/op": 63781.0,
+          "B/op": 31502.0,
+          "allocs/op": 104.0
+        }
+      },
+      "paired_deltas_percent": [
+        -2.6846973780936034,
+        -5.084796413896154,
+        -0.19331590912605723,
+        -2.4698537063108317,
+        -0.48182014100550674,
+        -1.8906206769344291,
+        -7.644258944268945,
+        -4.2190224252991015
+      ],
+      "median_paired_delta_percent": -2.5772755422022176,
+      "bytes_tolerance": 64,
+      "gates": "PASS"
+    },
+    {
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "medians": {
+        "baseline": {
+          "ns/op": 384.65,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        },
+        "candidate": {
+          "ns/op": 385.9,
+          "B/op": 0.0,
+          "allocs/op": 0.0
+        }
+      },
+      "paired_deltas_percent": [
+        0.0,
+        1.0479434110558072,
+        0.31225604996096834,
+        -24.248969173375222,
+        0.7025761124121788,
+        0.33775006495193605,
+        0.18205461638491904,
+        0.5457380457380312
+      ],
+      "median_paired_delta_percent": 0.3250030574564522,
+      "bytes_tolerance": 0.0,
+      "gates": "PASS"
+    },
+    {
+      "benchmark": "BenchmarkRepeatedIterator",
+      "medians": {
+        "baseline": {
+          "ns/op": 281.85,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        },
+        "candidate": {
+          "ns/op": 295.6,
+          "B/op": 112.0,
+          "allocs/op": 2.0
+        }
+      },
+      "paired_deltas_percent": [
+        25.18729932215482,
+        -8.374536464771332,
+        5.369369369369359,
+        6.301764494058326,
+        3.3601680084004215,
+        -8.374844333748433,
+        4.587155963302747,
+        6.133428981348632
+      ],
+      "median_paired_delta_percent": 4.978262666336053,
+      "bytes_tolerance": 1.12,
+      "gates": "PASS"
+    },
+    {
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "medians": {
+        "baseline": {
+          "ns/op": 259592.0,
+          "B/op": 4557.5,
+          "allocs/op": 17.0
+        },
+        "candidate": {
+          "ns/op": 259373.0,
+          "B/op": 4579.0,
+          "allocs/op": 17.0
+        }
+      },
+      "paired_deltas_percent": [
+        -0.10472121309053062,
+        1.620244787398173,
+        -0.012043371677872283,
+        1.6857562408223226,
+        -0.038567599359773386,
+        -0.4078672723924148,
+        -1.5400661468491061,
+        -2.113012899251143
+      ],
+      "median_paired_delta_percent": -0.071644406225152,
+      "bytes_tolerance": 45.575,
+      "gates": "PASS"
+    }
+  ],
+  "raw_schedule_samples": 80,
+  "primary_samples": [
+    {
+      "pair": 0,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 8612251.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280035.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 0,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 5015587.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228249.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 1,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 4843451.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228248.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 1,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10201792.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280083.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 2,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10121204.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280081.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 2,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 4993973.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228248.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 3,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 4651588.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228248.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 3,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10126673.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280083.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 4,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10245121.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280083.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 4,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 5016818.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228247.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 5,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 12382976.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228528.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 5,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10106902.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280084.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 6,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 10063036.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280084.0,
+        "allocs/op": 476.0
+      }
+    },
+    {
+      "pair": 6,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 4724208.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228246.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 7,
+      "revision": "candidate",
+      "metrics": {
+        "ns/op": 4686503.0,
+        "generation_advances/op": 0.0,
+        "B/op": 228247.0,
+        "allocs/op": 391.0
+      }
+    },
+    {
+      "pair": 7,
+      "revision": "baseline",
+      "metrics": {
+        "ns/op": 11020884.0,
+        "generation_advances/op": 2.0,
+        "B/op": 280084.0,
+        "allocs/op": 476.0
+      }
+    }
+  ],
+  "primary_medians": {
+    "baseline": {
+      "ns/op": 10123938.5,
+      "generation_advances/op": 2.0,
+      "B/op": 280083.0,
+      "allocs/op": 476.0
+    },
+    "candidate": {
+      "ns/op": 4918712.0,
+      "generation_advances/op": 0.0,
+      "B/op": 228248.0,
+      "allocs/op": 391.0
+    }
+  },
+  "primary_paired_deltas_percent": [
+    -41.762182732481904,
+    -52.52352723913602,
+    -50.65831100726752,
+    -54.06598001140157,
+    -51.03212543804998,
+    22.519996730946822,
+    -53.05384975269889,
+    -57.47616071451256
+  ],
+  "primary_median_paired_delta_percent": -51.777826338593,
+  "primary_commands_verified": 28,
+  "quiet": {
+    "preflight-processes": {
+      "snapshots": 22,
+      "external_processes": 144,
+      "elapsed_s": 5.146179602000018,
+      "last_snapshot_s": 5.145970132000002,
+      "threshold_percent": 2,
+      "ticks_per_second": 100,
+      "maximum_external_cpu_percent": 0.38863781575417955,
+      "largest_external": [
+        {
+          "pid": 2121,
+          "start": "2653",
+          "command": "provjobd3288090",
+          "ticks": 2,
+          "cpu_percent": 0.38863781575417955
+        },
+        {
+          "pid": 2,
+          "start": "46",
+          "command": "kthreadd",
+          "ticks": 0,
+          "cpu_percent": 0.0
+        },
+        {
+          "pid": 3,
+          "start": "46",
+          "command": "pool_workqueue_release",
+          "ticks": 0,
+          "cpu_percent": 0.0
+        },
+        {
+          "pid": 4,
+          "start": "46",
+          "command": "kworker/R-rcu_gp",
+          "ticks": 0,
+          "cpu_percent": 0.0
+        },
+        {
+          "pid": 5,
+          "start": "46",
+          "command": "kworker/R-sync_wq",
+          "ticks": 0,
+          "cpu_percent": 0.0
+        }
+      ],
+      "busy": []
+    },
+    "measured-processes": {
+      "snapshots": 82,
+      "external_processes": 150,
+      "elapsed_s": 20.099397951999947,
+      "last_snapshot_s": 20.09919546399999,
+      "threshold_percent": 2,
+      "ticks_per_second": 100,
+      "maximum_external_cpu_percent": 1.1443128821533401,
+      "largest_external": [
+        {
+          "pid": 47,
+          "start": "51",
+          "command": "kworker/u16:2-events_power_efficient",
+          "ticks": 23,
+          "cpu_percent": 1.1443128821533401
+        },
+        {
+          "pid": 102,
+          "start": "131",
+          "command": "jbd2/sda1-8",
+          "ticks": 10,
+          "cpu_percent": 0.4975273400666696
+        },
+        {
+          "pid": 12,
+          "start": "46",
+          "command": "kworker/u16:0-events_power_efficient",
+          "ticks": 9,
+          "cpu_percent": 0.44777460606000263
+        },
+        {
+          "pid": 390,
+          "start": "376",
+          "command": "hv_kvp_daemon",
+          "ticks": 6,
+          "cpu_percent": 0.29851640404000174
+        },
+        {
+          "pid": 85,
+          "start": "101",
+          "command": "kworker/u16:4-events_power_efficient",
+          "ticks": 3,
+          "cpu_percent": 0.14925820202000087
+        }
+      ],
+      "busy": []
+    }
+  },
+  "bindings": {
+    "ordinary-main-integration/raw-primary-current/job.log": "101e3ba3654f0ad6146b55899609ce0c0522b65935e90d72d31b274d54975ea6",
+    "ordinary-main-integration/raw-primary-current/artifact-api.json": "6748ec1c8f112d597ccbb0b4e12a4122603f5e04dfbcdb7152a890b9860dd1e3",
+    "ordinary-main-integration/raw-primary-current/download-receipt.json": "fcf9bc39c2660c1d61eb0a2f2dace269a277862cba7211a57355f9fd78068d9f",
+    "ordinary-main-integration/raw-primary-current/verification.json": "09f9965fb1da9337ea6e49837be5ed719a79278db5053c08ef6437c8927e7c44",
+    "ordinary-main-integration/raw-primary-job-20261016T014300Z.json": "c761ed3e7f104a1d0d1b8b0df435891be5c9bc98fa5a4eb88d4d7bd0ec503b80",
+    "ordinary-main-integration/commit-binding.json": "2ec55400ef12f90f66052128e5c1c090f9b8f2c2ff072cf247d7fbb093343136",
+    "ordinary-main-integration/source-final.json": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+    "ordinary-main-integration/raw-primary-current/packet/summary.json": "5da397ab200422e7c42da5ac3707622bdfe5799551f91e8c26d64c86477b4680",
+    "ordinary-main-integration/raw-primary-current/packet/primary/summary.json": "6d0a2abbfc8ddf11e74763a4d344aeb40a6b2a18a373cd4b56f091632c660e2c",
+    "ordinary-main-integration/raw-primary-current/packet/primary/bindings.json": "cb2504616550c949eb280b1bd9b499a533f4e50b973bab7435f3b17eb1cde574"
+  },
+  "findings": [],
+  "observations": [
+    "RepeatedIterator paired +4.978262666336053% is only 0.021737333663947 percentage points below +5%.",
+    "PRIMARY pair6 +22.519996730946822% is retained; eight-pair median rule passes.",
+    "All six raw ELFs differ across revisions; no identical-binary exemption."
+  ],
+  "limits": [
+    "PRIMARY quiet means sampled whole-window per-external-process CPU below2%, not interval peaks or aggregate CPU. Raw ps snapshots do not establish interval CPU quiet.",
+    "100Hz tick conversion follows retained original Linux observer/summary; no complete SDK/kernel/compiler closure independently reconstructed.",
+    "Processes entirely between observations may be missed. No I/O/hypervisor/cgroup quiet, adopted-child enumeration or normal-child process-group completion proof.",
+    "Buildvcs=false binaries require source/worktree/build receipts; ELF hashes alone cannot prove source.",
+    "No packing causality/general speedup, residual maintenance cost acceptance, M0/native/full-graph or final mergeability conclusion."
+  ],
+  "method": "Independent pure offline Python parse/hash/ZIP/metric and sampled process aggregation; inspected original source. No downloaded-code execution, Git command, Go, tests, benchmark, profile, network or dispatch. Root verify.py was read but never executed.",
+  "reviewer_control_note": "First full independent pass reached quiet metadata check and stopped because it compared last observed mutable kernel-worker command names against original observer first-seen names. Corrected to original source setdefault first-seen metadata; PID/start/tick CPU totals were already identical. A separate attempted implementation used unavailable hashlib.file_digest and stopped before analysis. Neither changed evidence.",
+  "primary_overlay": {
+    "scope": "Sole candidate test harness overlay onto exact baseline source; no product overlay",
+    "replace": {
+      "/home/runner/work/_temp/mvcc-primary-cost-6vwqaorn/baseline/TreeDB/mvcc/primary_generation_routing_v6_test.go": "/home/runner/work/_temp/mvcc-raw-path-gate/primary/primary_generation_routing_v6_test.go"
+    },
+    "build_argv": {
+      "baseline": [
+        "go",
+        "test",
+        "-c",
+        "-p=1",
+        "-tags=treedb_test",
+        "-trimpath",
+        "-buildvcs=false",
+        "-overlay",
+        "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-overlay.json",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate/primary/baseline-primary.test",
+        "./TreeDB/mvcc"
+      ],
+      "candidate": [
+        "go",
+        "test",
+        "-c",
+        "-p=1",
+        "-tags=treedb_test",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        "/home/runner/work/_temp/mvcc-raw-path-gate/primary/candidate-primary.test",
+        "./TreeDB/mvcc"
+      ]
+    },
+    "guards": "candidate before/after and baseline after exit0 empty logs; baseline product source guarded separately from overlay"
+  },
+  "source_routes": [
+    {
+      "benchmark": "BenchmarkGetVersioned",
+      "source": "TreeDB/db/conditional_kv_contract_bench_test.go:12",
+      "route": "10000 seeded keys; public DB.GetVersionedAppend, random key, caller dst buffer; parallel harness with GOMAXPROCS1; nonlegacy revision/value length checked"
+    },
+    {
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "source": "TreeDB/db/conditional_kv_contract_bench_test.go:61",
+      "route": "Public backend Batch Reserve/Set/Write/Close,8-operation groups; Checkpoint drains outside timer and asserts publisher did not run inside foreground group; fixed1000x"
+    },
+    {
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "source": "TreeDB/snapshot_seek_iterator_bench_test.go:25",
+      "route": "1024 keys; precheckpoint; acquired public snapshot iterator repeated Seek; fixed index encoding options"
+    },
+    {
+      "benchmark": "BenchmarkRepeatedIterator",
+      "source": "TreeDB/caching/bench_test.go:10",
+      "route": "Empty cached memtable Iterator/Close, original backend and cache open"
+    },
+    {
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "source": "TreeDB/command_wal_public_test.go:4193",
+      "route": "Public command-WAL durable dirty one-key Batch.WriteSync; post-timer exact command-WAL append/sync/file-sync and zero checkpoint assertions"
+    },
+    {
+      "benchmark": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration",
+      "source": "TreeDB/mvcc/primary_generation_routing_v6_test.go:117",
+      "route": "ProfileNoWALFast, durable public mvcc.CommitAt; genuine DATA seed established before timer;128 replacements samekey/samets; actual generation advances reported; candidate public lifecycle separately verifies frontier/newDATA/reopen"
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 116763455818,
+      "run_id": 38835454968,
+      "workflow_name": "TreeDB: index-vacuum M0 evidence",
+      "head_branch": "codex/5111-ordinary-data-primary-publication",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38835454968",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbL6TxSg",
+      "head_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116763455818",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38835454968/job/116763455818",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-16T01:30:10Z",
+      "started_at": "2026-10-16T01:30:12Z",
+      "completed_at": "2026-10-16T01:35:06Z",
+      "name": "stable legacy/public capture",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-16T01:30:13Z",
+          "completed_at": "2026-10-16T01:30:13Z"
+        },
+        {
+          "name": "Checkout exact head",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-16T01:30:13Z",
+          "completed_at": "2026-10-16T01:30:35Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-16T01:30:35Z",
+          "completed_at": "2026-10-16T01:30:38Z"
+        },
+        {
+          "name": "Capture and enforce M0 evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-16T01:30:38Z",
+          "completed_at": "2026-10-16T01:35:03Z"
+        },
+        {
+          "name": "Upload complete evidence packet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T01:35:03Z",
+          "completed_at": "2026-10-16T01:35:04Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-16T01:35:04Z",
+          "completed_at": "2026-10-16T01:35:04Z"
+        },
+        {
+          "name": "Post Checkout exact head",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-16T01:35:04Z",
+          "completed_at": "2026-10-16T01:35:04Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T01:35:04Z",
+          "completed_at": "2026-10-16T01:35:04Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116763455818",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000547901,
+      "runner_name": "GitHub Actions 1000547901",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

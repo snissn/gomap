@@ -1,0 +1,25 @@
+{
+  "actual33_runtime": false,
+  "archive_verified_files": 10348,
+  "at_utc": "2026-10-16T01:42:50.755785+00:00",
+  "base_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "changed_paths": [
+    "TreeDB/db/native_capsule_parent_v6.go",
+    "TreeDB/db/native_capsule_parent_v6_test.go",
+    "TreeDB/db/native_mvcc_final_basis_v6.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/db/native_publication_remainder_v6_test.go",
+    "TreeDB/db/primary_authority_scope_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  ],
+  "delta_sha256": "10c1d94195567545e7ddecfbec271004aad2c3ea455d18599bc78d44bd35480e",
+  "native_publication_runtime": false,
+  "new_paths": [
+    "TreeDB/db/native_capsule_parent_v6.go",
+    "TreeDB/db/native_capsule_parent_v6_test.go"
+  ],
+  "selection_sha256": "da97231d275d2c45f904754c3e2f1b93e9122672fd7681fcb09f41fc6c8fe2da",
+  "source_archive_sha256": "4b78a22b7a7244f45d4379907261d5dcc6ccb5f70d9c6ee7f20be7de307296e1",
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+  "status": "Q32 RED/ACK0"
+}

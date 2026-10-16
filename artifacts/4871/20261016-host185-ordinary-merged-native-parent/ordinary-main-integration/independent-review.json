@@ -1,0 +1,86 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "ACCEPT",
+  "scope": "Frozen main integration consistency, provenance and generated CI metadata only; suitable source candidate for root commit/push and current-head CI, not final PR qualification.",
+  "parents": [
+    "a17febafb5353897c59a4e17f992e34c47a2585b",
+    "637129789378c33027a234997b6cdd57f20fd0fe"
+  ],
+  "parent_trees": [
+    "3d61eacb580bb65ff2696627f85f483f0bde85f5",
+    "5be6bbba648dd8f794368040138ffff1d5ffc84b"
+  ],
+  "head_sha_or_manifest": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+  "staged_tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "source_files": 10258,
+  "source_patch_sha256": "34831b024edf0b6714ffde81b4f5b9238931fa1f95aef87f8534fc0ed8dfac20",
+  "changed_paths": {
+    ".github/ci/ci_impact.json": "bcdc7a79f589b4c3201e12b9fd54073b064bc3e2c800a7ac45a2ae14564f91fd",
+    ".github/scripts/mvcc_m0_observation.py": "323b077f7a247b0016b567ef732d1daf0898d7abf8440cb26c048122ec058683",
+    ".github/scripts/mvcc_m0_observation_exec.py": "de7c5cc3e77bbab4c266966b9111f3fefefe02ff15e5b173aac58cbd3536e59c",
+    ".github/scripts/mvcc_m0_observation_gc.go.txt": "18b656d47ffd7caa0a04fd393d1ce31caa4a8a8a0b582f6a848e4f44b738f443",
+    ".github/scripts/mvcc_maintenance_README.md": "2f07bb2370e423696486a907d9862329594bf36bb9210a80f1e6c5054dce6ea3",
+    ".github/scripts/mvcc_maintenance_bootstrap.py": "69ddd5266db59a42611b924ebb68a522a789c7fae89fbdc1f53a83571fe79366",
+    ".github/scripts/mvcc_maintenance_collect.py": "fcc1291961907e6b3bde63ac1bc992a90eb379479bd04da243ecd8207b65f557",
+    ".github/scripts/mvcc_maintenance_prepare.py": "223178a8e185e7402488af30fdd906970c84306aebaba9a7107dda228e1a9f79",
+    ".github/scripts/mvcc_maintenance_test.py": "c72b01837d7825238615693b65cd9372f9e9a0e347e67afe0834985a1a967682",
+    ".github/scripts/test_ci_impact.py": "2cdfd01711aae9fe036a912c0218207821739f95a5b8a890735a211f955d1111",
+    ".github/scripts/test_mvcc_m0_observation.py": "1046b32af1a127982e47ec39b8a9e0a7719c86e53b1a4d197c51b74d9d64e979",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8",
+    ".github/workflows/treedb-vacuum-m0-observation.yml": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c",
+    "docs/CI_IMPACT_SELECTION.md": "2d8abda2f4131dcc8b404ece3db78d9ace23c5445a5314598b7cd5f03b15da8a",
+    "docs/benchmarks/treedb-vacuum-m0-observation.md": "8687d0ca4bc9959e2524826a267245b5600107f4167251e85f0164b2a2835c9b"
+  },
+  "checks_performed": [
+    "Read-only HEAD and MERGE_HEAD independently match a17febafb5353897c59a4e17f992e34c47a2585b and landed main637129789378c33027a234997b6cdd57f20fd0fe.",
+    "Read-only index entries, including file modes and object IDs, exactly equal frozen tree dd50b7ea3ca04193f4fa00decf15cbc98edb68d1; no nonzero-stage entries.",
+    "All10258 manifest paths and SHA256 bytes independently equal both staged Git blobs and live worktree files, with zero mismatches.",
+    "Actual cached binary diff exactly equals retained source.delta.patch; exactly15 changed paths versus candidate,14 byte-for-byte main, only generated CI inventory differs from main.",
+    "All candidate files outside those15 tooling/docs paths preserved; no .go file, TreeDB, HashDB, module file, scripts path or original production/performance workflow changed.",
+    "Generated policy independently equals exact main policy plus candidate go.mod/go.sum harness bindings, entire candidate treedb-tests.yml metadata and recomputed discovery digest. All other policy fields, owners and rules exactly equal main.",
+    "Imported existing Python generator/helper with bytecode disabled and ran read-only check_source_contracts using frozen-tree inputs; all17 workflows, harness descriptors/modes and discovery digest PASS. Did not invoke snapshot_inputs/write-tree or refresh.",
+    "Read retained root21-test pure-CI log, generator check/refresh and empty diff-check logs; all PASS. No Go/build/test-body/benchmark/network/Git mutation performed.",
+    "Read imported workflow/manual diagnostic boundaries and inspected test/documentation cardinality changes; imported files have exact landed main provenance."
+  ],
+  "ci_inventory": {
+    "workflows": 17,
+    "members": 59,
+    "discovery_source_sha256": "f7f11621d2e7166736c3dd7abce082655dabae46ec4aa62c6844caa6f9a3caed",
+    "owners_and_rules_equal_main": true,
+    "new_execution_authority": false
+  },
+  "unchanged_runtime_and_harness_identities": {
+    "TreeDB": "7ea9176b2b5b371c6e4a4a243a62b43f231d5197",
+    "HashDB": "4680faae9cbc9fad796c0fb17d10d21cdb4a212f",
+    "go.mod": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+    "go.sum": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050",
+    "scripts/mvcc_primary_cost_gate.py": "2546ac86914e0fcd721b80e972334b78968aaa0d",
+    ".github/workflows/treedb-tests.yml": "d5b5e407995d4ba131fb1c290da8acbafea28bfd",
+    ".github/workflows/treedb-vacuum-m0.yml": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508"
+  },
+  "findings": [],
+  "limits": [
+    "No merge commit exists in this review binding; root must preserve reviewed staged tree when committing.",
+    "No fresh hosted CI, correctness campaign, performance, M0 acceptance, native integration, dispatch/runtime grant or merge-readiness claim.",
+    "Imported manual diagnostics remain fixed historical products; their presence does not certify the merged candidate.",
+    "Native worktree not inspected or modified."
+  ],
+  "evidence_sha256": {
+    "source-binding.json": "b03cb4f3558414a88c127d7347925a824a270497b471f858f62212f327f8a364",
+    "preparation.json": "43904375323448f55792c2146d52325e10cdcd23b971fdc77aa4f1419757d49b",
+    "main-before.json": "6841b7e2f6d2c024c4c8330f20767b55dc91c91653d5fe1c0c9236807110a5b4",
+    "source-final.json": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+    "source.delta.patch": "34831b024edf0b6714ffde81b4f5b9238931fa1f95aef87f8534fc0ed8dfac20",
+    "pure-ci.log": "3c091dfd2ff7ff9ee7354bb4d6acaa1a06117304aa6b28b79bb1d93dd296d304",
+    "check.log": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "refresh.log": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9",
+    "diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "unavailability_evidence": "Manual hosted AI review cannot pin the explicitly required gpt-6.1-sol model; no hosted review requested. Actual explicitly routed independent subagent performed this read-only review.",
+  "lease": "released",
+  "completed_utc": "2026-10-16T01:28:59.725434+00:00"
+}

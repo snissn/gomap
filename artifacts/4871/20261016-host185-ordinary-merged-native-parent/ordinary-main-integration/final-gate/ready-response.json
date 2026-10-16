@@ -1,0 +1,11 @@
+{
+  "data": {
+    "markPullRequestReadyForReview": {
+      "pullRequest": {
+        "id": "PR_kwDOIdn7C88AAAABHZTk8Q",
+        "isDraft": false,
+        "headRefOid": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80"
+      }
+    }
+  }
+}

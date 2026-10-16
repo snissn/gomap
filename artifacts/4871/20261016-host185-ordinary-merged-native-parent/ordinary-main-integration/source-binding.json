@@ -1,0 +1,41 @@
+{
+  "at": "2026-10-16T01:25:46.248175+00:00",
+  "parents": [
+    "a17febafb5353897c59a4e17f992e34c47a2585b",
+    "637129789378c33027a234997b6cdd57f20fd0fe"
+  ],
+  "tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "files": 10258,
+  "changed_paths": [
+    ".github/ci/ci_impact.json",
+    ".github/scripts/mvcc_m0_observation.py",
+    ".github/scripts/mvcc_m0_observation_exec.py",
+    ".github/scripts/mvcc_m0_observation_gc.go.txt",
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/scripts/test_ci_impact.py",
+    ".github/scripts/test_mvcc_m0_observation.py",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+    ".github/workflows/treedb-vacuum-m0-observation.yml",
+    "docs/CI_IMPACT_SELECTION.md",
+    "docs/benchmarks/treedb-vacuum-m0-observation.md"
+  ],
+  "all_candidate_files_preserved_except_main_tooling_paths": true,
+  "all_main_tooling_files_exact_except_generated_inventory": true,
+  "policy_merge": "exact main plus original candidate go.mod/go.sum harness bindings and treedb-tests workflow metadata; regenerated discovery digest; policy owners/rules same main",
+  "unchanged_runtime_and_harness_identities": {
+    "TreeDB": "7ea9176b2b5b371c6e4a4a243a62b43f231d5197",
+    "HashDB": "4680faae9cbc9fad796c0fb17d10d21cdb4a212f",
+    "go.mod": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+    "go.sum": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050",
+    "scripts/mvcc_primary_cost_gate.py": "2546ac86914e0fcd721b80e972334b78968aaa0d",
+    ".github/workflows/treedb-tests.yml": "d5b5e407995d4ba131fb1c290da8acbafea28bfd",
+    ".github/workflows/treedb-vacuum-m0.yml": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508"
+  },
+  "source_manifest_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+  "patch_sha256": "34831b024edf0b6714ffde81b4f5b9238931fa1f95aef87f8534fc0ed8dfac20",
+  "validation": "generated inventory refresh+check,21pureCIcontrols,diffcheck PASS; noGo executed; pending independent source review and commit/push"
+}

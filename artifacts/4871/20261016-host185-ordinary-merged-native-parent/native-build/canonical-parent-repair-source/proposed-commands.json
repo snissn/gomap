@@ -1,0 +1,123 @@
+{
+  "actual33_executed": false,
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/mvcc",
+        "-run",
+        "^$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/compile-only/tmp"
+      },
+      "executed": false,
+      "name": "compile-only",
+      "outer_timeout_seconds": 300,
+      "requires_root_verification_grant": false,
+      "requires_separate_actual33_scope": false,
+      "source_only_selection_sha256": "da97231d275d2c45f904754c3e2f1b93e9122672fd7681fcb09f41fc6c8fe2da"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestNativeCapsuleParentRecordProjectionV6|TestPrimaryCapsuleV6CompleteIndependentSlots|TestNativePublicationRemainderAndFloorV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/pure-normal/tmp"
+      },
+      "executed": false,
+      "name": "pure-normal",
+      "outer_timeout_seconds": 300,
+      "requires_root_verification_grant": false,
+      "requires_separate_actual33_scope": false,
+      "source_only_selection_sha256": "da97231d275d2c45f904754c3e2f1b93e9122672fd7681fcb09f41fc6c8fe2da"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-race",
+        "-p=1",
+        "./TreeDB/db",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestNativeCapsuleParentRecordProjectionV6|TestPrimaryCapsuleV6CompleteIndependentSlots|TestNativePublicationRemainderAndFloorV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/pure-race/tmp"
+      },
+      "executed": false,
+      "name": "pure-race",
+      "outer_timeout_seconds": 300,
+      "requires_root_verification_grant": false,
+      "requires_separate_actual33_scope": false,
+      "source_only_selection_sha256": "da97231d275d2c45f904754c3e2f1b93e9122672fd7681fcb09f41fc6c8fe2da"
+    }
+  ],
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f"
+}

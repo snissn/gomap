@@ -1,0 +1,12 @@
+{
+  "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "base": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "merged": "0149d78dba2574b09d7119d2631ec78a144e088d",
+  "tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "merged_at": "2026-10-16T01:59:24Z",
+  "checks_success": 56,
+  "review": "INTERNAL_SUBAGENT_REVIEW gpt-6.1-sol ACCEPT",
+  "unresolved_threads": 0,
+  "runtime_calls": 0,
+  "worktree_retained": "Required product, review, measurement and subsequent native integration provenance."
+}

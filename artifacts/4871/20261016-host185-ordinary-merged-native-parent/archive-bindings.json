@@ -1,0 +1,62 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/source-frozen.tar.gz",
+    "bytes": 180933450,
+    "sha256": "4b78a22b7a7244f45d4379907261d5dcc6ccb5f70d9c6ee7f20be7de307296e1",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/artifact.zip",
+    "bytes": 175982829,
+    "sha256": "bd92bf9279e5b938b52124e504b681aef96710efe2b1f20fa361fd48af9923e7",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/baseline-caching.test",
+    "bytes": 32696518,
+    "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/baseline-db.test",
+    "bytes": 55518772,
+    "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/baseline-treedb.test",
+    "bytes": 52438387,
+    "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/candidate-caching.test",
+    "bytes": 36985361,
+    "sha256": "6cb8af92122575cb49140ae081f27b7ff51a526e8d72602e3e1213f5d48ccd62",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/candidate-db.test",
+    "bytes": 61398136,
+    "sha256": "a693988cb42f8b44578f6f037511a00df79d8be1d14f5dd13f13d2d940029143",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/measured-binaries/candidate-treedb.test",
+    "bytes": 56905145,
+    "sha256": "0acfad58c4ae885b7bdad6bb701ecdcdf217f8792ec50a18892a9d4f5b197bee",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/primary/baseline-primary.test",
+    "bytes": 25225278,
+    "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-main-integration/raw-primary-current/packet/primary/candidate-primary.test",
+    "bytes": 29169648,
+    "sha256": "d3aa64d4e08db197c119392892089b14d299abe1496d664836a6ed687cb9bc4b",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  }
+]

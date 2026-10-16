@@ -1,0 +1,160 @@
+{
+  "accepted": true,
+  "all_row_binaries_equivalent": false,
+  "attributable_measurement_pass": true,
+  "baseline_sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "binary_digests": {
+    "caching": {
+      "baseline": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12",
+      "candidate": "6cb8af92122575cb49140ae081f27b7ff51a526e8d72602e3e1213f5d48ccd62"
+    },
+    "db": {
+      "baseline": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe",
+      "candidate": "a693988cb42f8b44578f6f037511a00df79d8be1d14f5dd13f13d2d940029143"
+    },
+    "treedb": {
+      "baseline": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950",
+      "candidate": "0acfad58c4ae885b7bdad6bb701ecdcdf217f8792ec50a18892a9d4f5b197bee"
+    }
+  },
+  "candidate_sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "expected_samples": 8,
+  "max_bytes_regression_absolute": 64.0,
+  "max_bytes_regression_percent": 1.0,
+  "max_regression_percent": 5.0,
+  "measurement_pass": true,
+  "no_attributable_regression": true,
+  "results": [
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 622.55
+      },
+      "benchmark": "BenchmarkGetVersioned",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 648.95
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 4.240623243113029,
+      "paired_ns_delta_percent": 4.534592890862854,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 127.0,
+        "bytes_per_op": 31944.5,
+        "ns_per_op": 65322.0
+      },
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": -442.5,
+      "bytes_pass": true,
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 104.0,
+        "bytes_per_op": 31502.0,
+        "ns_per_op": 63781.0
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -2.359082698019044,
+      "paired_ns_delta_percent": -2.5772755422022176,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 384.65
+      },
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 385.9
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 0.3249707526322698,
+      "paired_ns_delta_percent": 0.3250030574564522,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 281.85
+      },
+      "benchmark": "BenchmarkRepeatedIterator",
+      "binary_equivalent": false,
+      "binary_package": "caching",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 1.12,
+      "candidate": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 295.6
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 4.878481461770434,
+      "paired_ns_delta_percent": 4.978262666336053,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4557.5,
+        "ns_per_op": 259592.0
+      },
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": 21.5,
+      "bytes_pass": true,
+      "bytes_tolerance": 45.575,
+      "candidate": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4579.0,
+        "ns_per_op": 259373.0
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -0.084363154488587,
+      "paired_ns_delta_percent": -0.071644406225152,
+      "timing_pass": true
+    }
+  ],
+  "verdict": "PASS"
+}

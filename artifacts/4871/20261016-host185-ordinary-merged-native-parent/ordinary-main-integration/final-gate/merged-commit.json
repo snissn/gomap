@@ -1,0 +1,40 @@
+{
+  "sha": "0149d78dba2574b09d7119d2631ec78a144e088d",
+  "node_id": "C_kwDOIdn7C9oAKDAxNDlkNzhkYmEyNTc0YjA5ZDcxMTlkMjYzMWVjNzhhMTQ0ZTA4OGQ",
+  "url": "https://api.github.com/repos/snissn/gomap/git/commits/0149d78dba2574b09d7119d2631ec78a144e088d",
+  "html_url": "https://github.com/snissn/gomap/commit/0149d78dba2574b09d7119d2631ec78a144e088d",
+  "author": {
+    "name": "Mikers",
+    "email": "snissn@gmail.com",
+    "date": "2026-10-16T01:59:24Z"
+  },
+  "committer": {
+    "name": "GitHub",
+    "email": "noreply@github.com",
+    "date": "2026-10-16T01:59:24Z"
+  },
+  "tree": {
+    "sha": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+    "url": "https://api.github.com/repos/snissn/gomap/git/trees/dd50b7ea3ca04193f4fa00decf15cbc98edb68d1"
+  },
+  "message": "Merge pull request #5127 from snissn/codex/5111-ordinary-data-primary-publication\n\nTreeDB: publish recoverable DATA and PRIMARY roots with shared custody",
+  "parents": [
+    {
+      "sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/637129789378c33027a234997b6cdd57f20fd0fe",
+      "html_url": "https://github.com/snissn/gomap/commit/637129789378c33027a234997b6cdd57f20fd0fe"
+    },
+    {
+      "sha": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+      "html_url": "https://github.com/snissn/gomap/commit/6d3fc3a6e3582810d7c80fc46b784a9b30fada80"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq0YT8CRC1aQ7uu5UhlAAAl/sQAA8W0fnVqxX+hrqlsCjmPVt5\nmmDHZVw3g+V6MOBIki4kJ2itjpTDLl45Nh4WvQk+yBO8Ff5Ji+pQwBM6BjRD9dwb\nLkbCw32IlrM5McrcJMPu4OcwavRyAGbJQSoPxCSWn/6iztHcxl/GRbEbFgmpzEEz\nkskqEvKEHmoOuakr5WC0mcvLf78dSdb1a0v0JKKvHpNkXsTx7a0XLLg2Od/AcruT\ns2XFQzN+l00k5g5Cd8GL/MrmcL3J0unJAyAnmRsWpb2b83Hhhzx0aYeiiMtlx2x+\n8Lk0/pfN6F0TYDDx2iUKVvNlrxhHXwbgNDaB7BayNqU0nd5sfLy7djU1GICHnPDg\nTyubbFs4q1v3lXEX4BZGbfgmUZ5i9bx40MtscXKmfcftJ4xPYHp5eEpInJjk6Nex\nE1ldYXRUh+GfqBvIeNIMDQSK8ncxyqUvGd+WF6e9WhJLTfdqc2XDJteE9H6T4yZ6\n/sHLm2ERf6NX52aqOZBEe6ACiXXzq+Tzxr10bgDw9FOtsBs+JmEk6ibtvYc2vhPQ\noQGD73so89zhvequx6y9rsZ7o7Jjleih5wgnQgYZy7jbYpRfcS5VZWHrOEBdLirX\n77P10iKngyFJZ7br7FKwiLxwFrTlhSLHnG5bdjh2H2cXjhFvRyuZ1gWU5Ee8HBfZ\nAG4QdK+YBzn8qYx3ilBR\n=LlXD\n-----END PGP SIGNATURE-----\n",
+    "payload": "tree dd50b7ea3ca04193f4fa00decf15cbc98edb68d1\nparent 637129789378c33027a234997b6cdd57f20fd0fe\nparent 6d3fc3a6e3582810d7c80fc46b784a9b30fada80\nauthor Mikers <snissn@gmail.com> 1792115964 -1000\ncommitter GitHub <noreply@github.com> 1792115964 -1000\n\nMerge pull request #5127 from snissn/codex/5111-ordinary-data-primary-publication\n\nTreeDB: publish recoverable DATA and PRIMARY roots with shared custody",
+    "verified_at": "2026-10-16T01:59:24Z"
+  }
+}

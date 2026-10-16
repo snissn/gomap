@@ -1,0 +1,69 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 2.045497198123485,
+  "ended_utc": "2026-10-16T01:44:27.291645+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "pure-normal",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 865476,
+      "pid": 865476,
+      "ppid": 863984,
+      "session": 865476,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 865476,
+      "pid": 865499,
+      "ppid": 865476,
+      "session": 865476,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 865476,
+      "pid": 865516,
+      "ppid": 865476,
+      "session": 865476,
+      "state": "S"
+    }
+  ],
+  "pgid": 865476,
+  "pid": 865476,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T01:44:25.246147+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 10,
+  "test_RUN_names": [
+    "TestNativeCapsuleParentRecordProjectionV6",
+    "TestNativeCapsuleParentRecordProjectionV6/base-slot-0",
+    "TestNativeCapsuleParentRecordProjectionV6/base-slot-1",
+    "TestNativeCapsuleParentRecordProjectionV6/invalid-target-and-nil",
+    "TestNativeCapsuleParentRecordProjectionV6/pricing-and-pre-effect-refusal",
+    "TestNativePublicationRemainderAndFloorV6",
+    "TestNativePublicationRemainderAndFloorV6/success",
+    "TestNativePublicationRemainderAndFloorV6/refusal",
+    "TestNativePublicationRemainderAndFloorV6/error",
+    "TestPrimaryCapsuleV6CompleteIndependentSlots"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 0,
+  "top_level_fail_names": [],
+  "top_level_pass_count": 3,
+  "top_level_pass_names": [
+    "TestNativeCapsuleParentRecordProjectionV6",
+    "TestNativePublicationRemainderAndFloorV6",
+    "TestPrimaryCapsuleV6CompleteIndependentSlots"
+  ],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

@@ -1,0 +1,58 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 1.7041414370760322,
+  "ended_utc": "2026-10-16T01:51:28.040642+00:00",
+  "exit_code": 1,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "actual33-promoted-prebuilder-observation-after-parent-repair",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 874842,
+      "pid": 874842,
+      "ppid": 874568,
+      "session": 874842,
+      "state": "Z"
+    },
+    {
+      "comm": "link",
+      "pgid": 874842,
+      "pid": 874864,
+      "ppid": 874842,
+      "session": 874842,
+      "state": "S"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 874842,
+      "pid": 874875,
+      "ppid": 874842,
+      "session": 874842,
+      "state": "D"
+    }
+  ],
+  "pgid": 874842,
+  "pid": 874842,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T01:51:26.336492+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 1,
+  "test_RUN_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 1,
+  "top_level_fail_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "top_level_pass_count": 0,
+  "top_level_pass_names": [],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

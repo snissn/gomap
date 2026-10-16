@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "reviewer": "/root/ordinary_deep_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "READ_ONLY_SOURCE_DESIGN_ADVICE",
+  "verdict": "Recommend local explicit-capacity append-only uint64 set for only selected private controls; not implementation acceptance",
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "source_archive_sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+  "source03_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "source03_archive_sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+  "inspected_source83": {
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "7fcb1ba0fa7630274baf245ee639eeb87b0a808a303f108cf8411fe1455a1fb1",
+    "TreeDB/freelist/generation_v1_txn.go": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+    "TreeDB/freelist/generation_v1_begin_work.go": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+    "TreeDB/freelist/generation_v1_prune_work.go": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b",
+    "TreeDB/freelist/generation_v1_materialize_work.go": "80824f4394fddfdec0dba6a76b0261b2c28dc658d70ef7fb69d9cb83824fabe0",
+    "TreeDB/freelist/generation_v1_materialize_output_work.go": "2ab6d11e86265b62baeacb0488b4a82f27404117b7d9dc4495bd1b894ccaf401",
+    "TreeDB/freelist/generation_v1_metadata_reuse_work.go": "35da38fcecdc5508eef6bd2c48ce22e7f59fbf3eff106bc0f0ea592759cfb4ad",
+    "TreeDB/freelist/generation_v1_reservation_inventory_work.go": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+    "TreeDB/freelist/generation_v1_emit_work.go": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a",
+    "TreeDB/freelist/generation_v1_format.go": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+    "TreeDB/freelist/append_retirement_work_v6.go": "448ce1ed3aeccfcb2eba02255a89e7387e07901f1e54a293bbe74f135642703e",
+    "TreeDB/freelist/append_work.go": "36a72ebed5d4a5f8f54607e964ad3e0901e9106d9c94d8526f9773dc21610807",
+    "TreeDB/freelist/allocator_activation_work.go": "a431ed3b9fca5c06d242ad2197eb6e0bfe6a12a0ce08e5453ae94d7cb4c2c680",
+    "TreeDB/freelist/allocator_cow.go": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "TreeDB/internal/rootpublication/registry_capacity.go": "0c35c4c6a0194474ac2134ad8aa1574795f48e0b77ef82e95eb791a52b709b7d",
+    "TreeDB/internal/rootpublication/identity_capacity_table.go": "95b98aa75c21b3882d7c8f78a31aca13b709a6ab5bcf9b6fa1ad21ba57adb0e5",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "045bf03e4c3cd651694aa3829b448669e0c9051f8d26e8ef2b0efab5dd3cf55d",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d"
+  },
+  "source03_core_comparison": "All listed core files unchanged except owner_work.go has appended observer only; diff inspected",
+  "source03_observers_inspected": {
+    "TreeDB/freelist/allocator_publication_work_v6.go": "31535906b71b519ce2d4fee11ef4205de7a34f99a77293115eb6a98f6ec0d103",
+    "TreeDB/freelist/native_publication_bound_v6.go": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f"
+  },
+  "inputs": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/observer-retention-provenance-advice.md": "5266f71cbda5de34590bc58bdb7aaa5f290ac2aca576af9b4ac199469f9352e4",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/observer-retention-provenance-advice.json": "7a2d4ba4125b7dad662977da3e333d865f8fe71cceefe3c09818b0009092ec19",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-03/source-frozen.json": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-03/source.delta.patch": "6d5ce90f2049439d0adf2f56aa0d1a5bba1ea1cd21f32ada4acc32bdec0bf764"
+  },
+  "selected_roles": [
+    "captured private changedChunks",
+    "captured private replacedMetadata",
+    "independent metadataReuse planned replacements when reached",
+    "private validation sink pageIDs"
+  ],
+  "excluded_roles": [
+    "ordinary maps and constructors",
+    "canonical live and prepared successor transaction maps",
+    "appendRetirement live map replacement output",
+    "canonical generation/record/images and output inventory vector",
+    "original ledger maps",
+    "registry authority"
+  ],
+  "representation": {
+    "kind": "local unsorted append-only unique uint64 slice",
+    "backing": "explicit make capacity, Q(capacity*sizeof(uint64)) with checked overflow",
+    "membership_worst_case": "O(n), resumable comparisons",
+    "build_by_individual_inserts_worst_case": "O(n^2)",
+    "enumeration_copy": "O(n)",
+    "owner": "SAME original bound retainedalloc.Owner",
+    "selection": "explicit exact-txn private view, not w!=nil/privatePreparation",
+    "coexistence": "native map fields remain nil; no parallel native map+set",
+    "layout_preference": "controls embedded in existing preparation/materialization work and typed views; avoid adding owner/control fields to copied FreelistTxn or ordinary CandidatePageSink",
+    "growth_phases": [
+      "atomic owner admission plus actual allocation work and new make while old still charged",
+      "admitted incremental copy",
+      "admitted install/insert, clear old aliases",
+      "original RemovePendingWork completion before cursor reuse"
+    ],
+    "refund": "both original Cancel and published-only ClosePublished, after all original work/recording/planning aliases clear; preserve scalar cleanup debt through refusal"
+  },
+  "alternative_comparison": {
+    "extract_registry_storage": "larger: dependency direction, identity/payload callbacks, unbounded probe/rehash/Next and ordinary owner operations require refactoring and broad existing-use validation",
+    "stateMapInsert": "reuse exact-owner/key/count/phase and saved-probe discipline; original map work bytes do not prove retention; preserve canonical map branch",
+    "inventory": "reuse finite copy/enumeration idiom only; canonical extent output is too late and has wrong lifetime to store pre-consumption private membership"
+  },
+  "hazards": [
+    "FreelistTxn.valid nonnil changed map requirement: private exact-view validator, no global weakening/dummy map",
+    "planned=*t must not copy owned backing/RemovalWork or alias planned replacement storage",
+    "marker resets must not erase private dispatch",
+    "sink duplicate error differs from idempotent transaction insertion; own committed insert resumes by phase",
+    "canonical sourceLocked and allocator profile reads remain live-map reads",
+    "capture mutable canonical maps only under original whole-copy lock/admission; no cross-call map iterator",
+    "retained new backing admitted in full before allocation while old remains charged",
+    "Owner atomic binding walk can be unsupported or exceed Q32; local set does not prove progress",
+    "all parent containing-header and actual-operation prices must refresh for added controls",
+    "source03 observers must see actual private backing rather than infer absent from nil maps",
+    "terminal outer sink aliases must clear before refund",
+    "canonical successor maps and inherited DATA outputs must not be refunded with private controls"
+  ],
+  "validation_plan": [
+    "set semantics/cap/overflow/refusal",
+    "growth phase/refund/budget overlap and partial cancellation",
+    "nonempty capture/stale writer/original copy unit boundary",
+    "bound-owner private preparation original-slot/adoption controls",
+    "canonical output bytes and sink duplicate/committed-insert resume/first-error/burn",
+    "actual private reuse success and failed sizing/claim repeated planning",
+    "previsible and published terminal lifetime with preserved successor maps",
+    "unchanged canonical CandidateBegin map Q32 boundary"
+  ],
+  "unproven": [
+    "runtime branch presence and current geometry",
+    "complete retained union beyond selected private sets",
+    "Z256 within Q32",
+    "owner growth binding geometry fitting Q32",
+    "atomic whole-graph observation",
+    "future Finish/last-reader/last-owner",
+    "numeric allowance, publication, ACK or performance"
+  ],
+  "runtime_executed": false,
+  "source_mutated": false,
+  "live_native_source_inspected": false,
+  "new_owner_registry_pool_lock": false,
+  "children_spawned": false,
+  "lease": "RELEASED",
+  "completed_utc": "2026-10-16T01:50:01.821125+00:00"
+}

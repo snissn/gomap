@@ -1,0 +1,293 @@
+{
+  "schema": 1,
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "git_or_github_mutations": false,
+  "children_spawned": false,
+  "go_build_test_benchmark_runtime_executed": false,
+  "disposition": "ACCEPT",
+  "scope": "Final exact-head ordinary source acceptance and evidence/PR-scope reconciliation by complete retained review plus every successor delta; not merge readiness or native qualification.",
+  "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "parents": [
+    "a17febafb5353897c59a4e17f992e34c47a2585b",
+    "637129789378c33027a234997b6cdd57f20fd0fe"
+  ],
+  "original_graph_base": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "source_manifest_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+  "all_committed_blobs_verified": 10258,
+  "all_live_manifest_files_verified": 10258,
+  "blob_mismatches": [],
+  "live_mismatches": [],
+  "clean_before_and_after": true,
+  "blocking_findings": [],
+  "coverage": {
+    "whole_candidate_inventory_paths": 539,
+    "retained_risk_direct_body_or_hunk_inspections": 123,
+    "inventory_only_coverage_preserved": true,
+    "ordinary_allocation_groups": [
+      {
+        "group": 1,
+        "name": "Arena/read-root baseline",
+        "anchor": "TreeDB/pager/primary_read_root_v6.go:1",
+        "inspection_result": "Fixed metadata table, exact growth replacement admission, immutable root address registration and removal before refund.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 2,
+        "name": "Banks, chunks and custody",
+        "anchor": "TreeDB/internal/primaryarena/retention.go:1",
+        "inspection_result": "Full chunk/group/control storage is charged before construction; bank edges and original failed queues retain their actual arena.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 3,
+        "name": "Pager mappings and growth",
+        "anchor": "TreeDB/pager/grow_work.go:1",
+        "inspection_result": "Fresh original pager identity/count/dirty revision checked under growth locks; reserve before mapping effect; physical close retains first failed operand.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 4,
+        "name": "Prepared DATA root and allocator activation",
+        "anchor": "TreeDB/db/root_publication_activation.go:408",
+        "inspection_result": "Original prepared allocator candidate binds DATA generation/freelist certificate; actual DATA work controls generation advance; activation precedes publication.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 5,
+        "name": "Transaction, member and prepared state",
+        "anchor": "TreeDB/db/root_publication_activation.go:1050",
+        "inspection_result": "Original construction transaction becomes the visibility owner; member/state/callback contributions precede retention and lock handoff.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 6,
+        "name": "Runtime visible/debt queues and slots",
+        "anchor": "TreeDB/db/primary_runtime_metadata.go:17",
+        "inspection_result": "Full replacement capacity admitted while old backing remains live; obsolete aliases cleared before old refund; untouched physical slot custody transferred.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 7,
+        "name": "Capsules, recovery and snapshot rebind",
+        "anchor": "TreeDB/db/primary_capsule_recovery_v6.go:18",
+        "inspection_result": "Exactly two real slots are eligible; four possible current/parent closures retain independently; fixed scratch overlap preadmitted and rebound copies reselected.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 8,
+        "name": "Seal, callback and prefix custody",
+        "anchor": "TreeDB/db/primary_capsule_runtime_v6.go:28",
+        "inspection_result": "Fresh finite parent and prepared proof form same-original promotion; capsule publication follows DATA/PRIMARY content and namespace barriers.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 9,
+        "name": "Failure and snapshot physical owners",
+        "anchor": "TreeDB/db/snapshot_primary_retention.go:13",
+        "inspection_result": "RAM root and physical arena owner are distinct edges; snapshot keeps exact owners through readers/iterators, cleanup, scrub and completion.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 10,
+        "name": "Startup, COW handoff and dictionary capture",
+        "anchor": "TreeDB/caching/cow_basis_completion.go:12",
+        "inspection_result": "Original startup generation owns LOCK/manager/partial pager failures; paired owner enrollment activated on successful capture; backend basis refund follows actual snapshot callback.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 11,
+        "name": "Namespace files and proof operands",
+        "anchor": "TreeDB/db/primary_offline_pair_v6.go:1",
+        "inspection_result": "Parent/file/proof storage admitted before open; same original handles persist through close refusal; pair decision uses exact parent-relative child identities.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 12,
+        "name": "PRIMARY token and owned operations",
+        "anchor": "TreeDB/db/stable_pager_owned_operations.go:36",
+        "inspection_result": "Admitted callback backing owns original snapshot, pager and physical owner; descriptor consumption and physical completion are independent.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 13,
+        "name": "Namespace token, lease and sync cleanup",
+        "anchor": "TreeDB/internal/rootpublication/resource_original_cleanup.go:91",
+        "inspection_result": "Original cleanup custody preexists fallible construction; actual namespace parent/proof outcomes survive producer return and retain governing contribution on refusal.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 14,
+        "name": "Identity/link registry capacity",
+        "anchor": "TreeDB/internal/rootpublication/registry_capacity.go:68",
+        "inspection_result": "Full open-addressed replacement and key payload admitted before make/clone; retained physical identity pins protect exact observed files.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 15,
+        "name": "Dependency directories and leases",
+        "anchor": "TreeDB/db/primary_bank_construction_v5.go:1",
+        "inspection_result": "Read-root/dependency banks retain original physical owner; exact-directory serialization includes field/logical data and imports under same owner.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 16,
+        "name": "Manifest codec, loading and rebinding",
+        "anchor": "TreeDB/internal/rootpublication/resource_manifest_load.go:31",
+        "inspection_result": "Canonical lengths/counts checked before allocation; parser/scratch overlap admitted; exclusive unpublished rebinding transfers storage before prior contribution refund.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 17,
+        "name": "Builder, immutable set, kind/import storage",
+        "anchor": "TreeDB/internal/rootpublication/resource_builder_allocation.go:1",
+        "inspection_result": "Private arrays admitted before token claim; immutable kind backing retains real directory/view edges; selected constructors require common actual owner.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 18,
+        "name": "Rope, logical/RID/history/obligation backing",
+        "anchor": "TreeDB/internal/rootpublication/resource_obligation_allocation.go:1",
+        "inspection_result": "Actual string clones, arrays and path-copy nodes charged before creation; exact membership belongs retained backing; duplicate integrity conflicts rejected.",
+        "disposition": "no demonstrated ordinary source blocker"
+      },
+      {
+        "group": 19,
+        "name": "Release queues, scopes and diagnostics",
+        "anchor": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go:1",
+        "inspection_result": "Original intrusive cleanup frames retain ancestors through descendant failure; actual release clears borrowed aliases before refund; admitted diagnostics borrow real immutable backing.",
+        "disposition": "no demonstrated ordinary source blocker"
+      }
+    ],
+    "5027_to_2588": "Exactly DB capture, resource_entry_view and pager lock-cost source plus CI metadata; retained independent review and original controls bound.",
+    "2588_to_a17": "Exactly two generic diagnostics packing source/test files; retained independent acceptance and all10246 committed blobs bound.",
+    "a17_to_head": "Exactly15 tooling/docs paths already independently accepted; no product Go/module/benchmark/original raw/PRIMARY/M0 harness drift.",
+    "earlier_findings": "Earlier R1-R5 ownership/capture defects resolved by retained successor reviews; no reopened invariant found.",
+    "fresh_exhaustive_body_read_claim": false
+  },
+  "checks_this_review": [
+    "Read exact-head AGENTS/TreeDB/HashDB/CONTRIBUTING and current PR body, issue/design status and named retained reviews.",
+    "Read-only Git ls-tree/cat-file plus SHA256 verify every10258 committed blob and live file against8f32 manifest, exact path sets/head/parents/tree and clean status.",
+    "Git diff path inventory independently closes all successor boundaries5027->2588->a17->6d3.",
+    "Checked accepted bounded cost packet and original issue requirements without relabeling older runs current-head.",
+    "Independently hash-checked all25 downloaded current M0 packet files plus ZIP and reparsed20raw rows; every sample list/mean/median/CV matches.",
+    "No Go or downloaded code execution, no test/benchmark/CI dispatch."
+  ],
+  "maintenance_cost": {
+    "run_id": 38833428170,
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "measured_candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+    "toolchain": "Go1.26.3",
+    "fixed_calls": 14,
+    "source_reuse": "Current product and original fixture bytes unchanged; measured source/ELF identities remaina17.",
+    "root_accepted_checkpoint_extra_bytes_per_op": 13029,
+    "root_accepted_checkpoint_extra_allocations_per_op": 24,
+    "all_checkpoint_byte_pairs_increase": true,
+    "worst_observed_byte_percent_increase": 4.3323,
+    "root_accepted_cohort_sizes": [
+      8,
+      16
+    ],
+    "limits": [
+      "Three pairs, mixed timing signs: no stable speedup or packing-only causal saving.",
+      "Sampled2% CPU quietness does not prove I/O isolation or all short-lived-process costs.",
+      "Retained paths and zero immediate GC explicitly accepted; actual DB.Close terminal handles/owners/leases/governor verified, not disk deletion.",
+      "No universal minimum/necessary allocation or future ceiling. Separate40%shrink/8xoutput and format/fault/reopen guards remain required."
+    ]
+  },
+  "m0_current": {
+    "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+    "run_id": 38835454968,
+    "attempt": 1,
+    "workflow_conclusion": "SUCCESS",
+    "raw_files_independently_recomputed": 20,
+    "packet_files_independently_hashed": 25,
+    "zip_sha256": "80bdd5dec78b8dda23b185bbe52d7e6adae0a26bb315b6d9967ffe3f4581dadf",
+    "CV_percent": {
+      "vacuum_total": 0.41943668632729647,
+      "max_writer_pause": 2.4414166548747978,
+      "foreground_p99": 2.088746534573786
+    },
+    "unchanged_threshold_percent": 10,
+    "public_success": 6,
+    "public_typed_retry": 4,
+    "unexpected_errors_exposure_misses_unsupported": 0,
+    "all_public_overlap_positive": true,
+    "toolchain": "Go1.26.9",
+    "cpu": "AMD EPYC7763",
+    "floating_tolerance": "rel1e-14/abs1e-15 one-ULP recomputation only; not benchmark gate relaxation",
+    "limits": "Original stability/classification evidence only; no packing causality or explanation of previous failed samples."
+  },
+  "ci_snapshot": {
+    "path": "ordinary-main-integration/ci-20261016T013850Z.json",
+    "sha256": "3d5a4761f2f40072ebd6b924dd514610240639078c015556fcc70b8fe520405d",
+    "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+    "counts": {
+      "IN_PROGRESS": 26,
+      "SUCCESS": 28,
+      "QUEUED_OR_UNREPORTED": 1
+    },
+    "draft": true,
+    "incomplete_snapshot_only": true
+  },
+  "remaining_delivery_gates": [
+    "Root finishes and verifies current-head original raw/PRIMARY, remaining correctness/race/platform and aggregate CI; dispositions any fresh findings/threads.",
+    "Root refreshes PR body with terminal evidence and final review/authorization before merge.",
+    "Cleanup deferred while native/other consumers retain worktrees; no destruction authorized here."
+  ],
+  "nonblocking_reconciliation": [
+    {
+      "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "line": 31,
+      "observation": "Dated5699 paragraph still lists accepted checkpoint/vacuum/cohort disposition pending and describes harness as unmerged; current PR body/new packet supersede it.",
+      "recommendation": "Label historical or link new accepted run38833428170/root disposition during delivery reconciliation. Preserve original limits and still-open CI/native obligations.",
+      "source_blocker": false
+    },
+    {
+      "path": "ordinary-main-integration/pr-body.md",
+      "observation": "Captured body conservatively says M0 pending; subsequent exact-head M0 packet now independently corroborates PASS. Root plans terminal CI/body refresh.",
+      "source_blocker": false
+    }
+  ],
+  "overall_merge_readiness": "HOLD pending remaining original current-head gates and root final delivery acceptance. Source ACCEPT is not merge authorization.",
+  "native_scope": "No native final driver/Finish/Q32/1MiB/once-ACK or final Dgraph qualification. Unpublished native source excluded.",
+  "hosted_review_unavailability": "Hosted manual review cannot pin explicitly required exact model and was not requested. Actual independent subagent explicitly routed gpt-6.1-sol/high; root retains actual review/thread inventory responsibility.",
+  "input_sha256": {
+    "ordinary-main-integration/source-final.json": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+    "ordinary-main-integration/pr-body.md": "76b9ee5c2c0af78c65b753c0ed4c2804ab2e7d6a66bc5f0b51b433a1a2d8916d",
+    "ordinary-main-integration/independent-review.md": "178bba0cc1ef0444d2e6eff99beeb618d368c8d140b05bd0b30b4817bf199f5c",
+    "ordinary-main-integration/independent-review.json": "e3a5ee873deb7e8f5a892bc4b566e786dec2f5def801de9ddff078afa9c930f4",
+    "ordinary-review/full-source-5027d.md": "3785a7fe685435eafd752a91bfc74038bc0d0593372b2f7a8f997e26573890ef",
+    "ordinary-review/full-source-5027d.json": "0ff75492c80a09c72fc72520eaf73a61f23f932cb70bbceeb06916ced78c2d39",
+    "ordinary-review/delta-2588c-final-controls.md": "815bdd4bc7699640eb48fedf586653ab54c268215cba333fc17dfac81d5a01dc",
+    "ordinary-review/delta-2588c-final-controls.json": "763bd9eb8945c5c7df9e54010da3e13e326c93901e195351d931062b5872f866",
+    "ordinary-diagnostic-packing/review.md": "32543cff60a2192f48aa5f4d9d86213b4c7dcfff4abb8c388f08e7b7a8f1294e",
+    "ordinary-diagnostic-packing/review.json": "1a060f07b1d345267223936912751690db7c6bfb0cbefdc5e5efbe713f7e66d4",
+    "ordinary-review/acceptance-5699.json": "66e55f6a45376356bf42fa65c7b3bab14ddff53a60b0f77adc75e56163ce1273",
+    "maintenance-portability-runtime/retained-verification.json": "2fa44f7c6d05ad10001df4f284e029f139e55b24019c330912c956abb391edb2",
+    "maintenance-portability-runtime/independent-review.md": "3978e1d4c5ef183d53953733882a0bdc4f57ea3690004cad5979921d53f0352b",
+    "maintenance-portability-runtime/independent-review.json": "6246c406898795958f01460dfc6d527f2daa7c30b6da1f3bfb54bd5dc2ae2256",
+    "maintenance-portability-runtime/root-disposition.md": "aadd9cd57a0c110ed6e308f0341708bf2171d9d80301b76bd57cc3722f234f41",
+    "maintenance-portability-runtime/root-disposition.json": "c08e8d132d6b33b253415119b1f1916dd0e0185ca4ec71dea7e55e17dd5e5ec5",
+    "ordinary-main-integration/m0-current/verification.json": "d82a82b9434d8eab2583f07a7981cfeff401e00fc1811e909ea6db1993245fc2",
+    "ordinary-main-integration/m0-current/download-receipt.json": "06b9faf870f1f8ee7d520d08f058fbfa28d6f15f6953d8c5a0b1b2d94b6d0e2e",
+    "ordinary-main-integration/m0-current/packet/results.json": "f15377de8881880a0b8d78c2688e7d3f3e09156eac893d4b53c5328dd75053ce",
+    "live-startup/issue-5111.json": "640630ddd58c945572d42f36b94302456b3f12fa1c8eb786a179739099a84732",
+    "skills/github-pr-mergeable/SKILL.md": "94c25fb0274760005e3b5e81a50cc79ce0c72bd04e92f76333ec9329a9eeca4c",
+    "skills/github-pr-mergeable/references/internal-review-fallback.md": "a673ec989c2873cb785e8066327775876e2efc46a036c5aafc15abd832bdba34",
+    "skills/go-performance-optimization/SKILL.md": "567167fe1a7c6007a7448d87341b5899f949adc82af033f0286cccb858a83109"
+  },
+  "exact_head_policy_sha256": {
+    "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "HashDB/AGENTS.md": "408db25830f047ef318151d342bc41f6d76ce2c1b382fe753568908ee2bfad57",
+    "CONTRIBUTING.md": "7842035e4e975b6010532c52ebf55a562f92a5d379f14fa0f2a0de91c5744b9b",
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md": "181192737693917ba7a7796fee4630a9da8f3a71c0be5f8c2db981edcec7fbfd"
+  },
+  "review_lease_released": true,
+  "written_utc": "2026-10-16T01:40:52.176408+00:00"
+}

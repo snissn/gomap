@@ -1,0 +1,204 @@
+{
+  "accepted": true,
+  "base": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "artifact_id": 12019547135,
+  "all_packet_files_verified": 56,
+  "raw_samples": 80,
+  "raw_results": [
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 622.55
+      },
+      "benchmark": "BenchmarkGetVersioned",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 648.95
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 4.240623243113029,
+      "paired_ns_delta_percent": 4.534592890862854,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 127.0,
+        "bytes_per_op": 31944.5,
+        "ns_per_op": 65322.0
+      },
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "binary_equivalent": false,
+      "binary_package": "db",
+      "bytes_delta": -442.5,
+      "bytes_pass": true,
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 104.0,
+        "bytes_per_op": 31502.0,
+        "ns_per_op": 63781.0
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -2.359082698019044,
+      "paired_ns_delta_percent": -2.5772755422022176,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 384.65
+      },
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 0.0,
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 385.9
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 0.3249707526322698,
+      "paired_ns_delta_percent": 0.3250030574564522,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 281.85
+      },
+      "benchmark": "BenchmarkRepeatedIterator",
+      "binary_equivalent": false,
+      "binary_package": "caching",
+      "bytes_delta": 0.0,
+      "bytes_pass": true,
+      "bytes_tolerance": 1.12,
+      "candidate": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 295.6
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": 4.878481461770434,
+      "paired_ns_delta_percent": 4.978262666336053,
+      "timing_pass": true
+    },
+    {
+      "acceptance_pass": true,
+      "acceptance_verdict": "PASS",
+      "allocs_pass": true,
+      "attribution": "CANDIDATE",
+      "baseline": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4557.5,
+        "ns_per_op": 259592.0
+      },
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "binary_equivalent": false,
+      "binary_package": "treedb",
+      "bytes_delta": 21.5,
+      "bytes_pass": true,
+      "bytes_tolerance": 45.575,
+      "candidate": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4579.0,
+        "ns_per_op": 259373.0
+      },
+      "measurement_pass": true,
+      "ns_delta_percent": -0.084363154488587,
+      "paired_ns_delta_percent": -0.071644406225152,
+      "timing_pass": true
+    }
+  ],
+  "raw_schedule_verified": 80,
+  "primary_samples": 16,
+  "primary_commands_hash_verified": 28,
+  "primary_summary": {
+    "accepted": true,
+    "baseline": "637129789378c33027a234997b6cdd57f20fd0fe",
+    "candidate": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+    "gates": {
+      "allocations": true,
+      "bytes": true,
+      "candidate_primary_activation": true,
+      "timing": true
+    },
+    "measurement_pass": true,
+    "median_paired_delta_percent": -51.777826338593,
+    "medians": {
+      "baseline": {
+        "B/op": 280083.0,
+        "allocs/op": 476.0,
+        "generation_advances/op": 2.0,
+        "ns/op": 10123938.5
+      },
+      "candidate": {
+        "B/op": 228248.0,
+        "allocs/op": 391.0,
+        "generation_advances/op": 0.0,
+        "ns/op": 4918712.0
+      }
+    },
+    "paired_deltas_percent": [
+      -41.762182732481904,
+      -52.52352723913602,
+      -50.65831100726752,
+      -54.06598001140157,
+      -51.03212543804998,
+      22.519996730946822,
+      -53.05384975269889,
+      -57.47616071451256
+    ],
+    "quiet": true
+  },
+  "primary_quiet_recomputed": {
+    "preflight-processes": {
+      "snapshots": 22,
+      "external_processes": 144,
+      "elapsed_s": 5.146179602000018,
+      "maximum_external_cpu_percent": 0.38863781575417955
+    },
+    "measured-processes": {
+      "snapshots": 82,
+      "external_processes": 150,
+      "elapsed_s": 20.099397951999947,
+      "maximum_external_cpu_percent": 1.1443128821533401
+    }
+  },
+  "actual_elfs_hash_verified": 8,
+  "limits": [
+    "Raw ps snapshots are not interval CPU quiet certification.",
+    "PRIMARY CPU quiet uses whole-window per-process 2% threshold and may miss processes entirely between snapshots; no I/O quiet claim.",
+    "RepeatedIterator paired delta +4.978262666336053% is close to the unchanged +5% limit.",
+    "PRIMARY pair6 delta +22.519996730946822% remains in the 8-pair result.",
+    "Recorded Go1.26.9 and source/ELF bindings are not complete compiler closure.",
+    "No inference about packing causality, general throughput, native progress, or final graph qualification."
+  ]
+}

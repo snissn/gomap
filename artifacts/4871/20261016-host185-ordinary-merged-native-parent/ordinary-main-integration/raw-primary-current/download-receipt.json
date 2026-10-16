@@ -1,0 +1,231 @@
+{
+  "artifact_id": 12019547135,
+  "zip_sha256": "bd92bf9279e5b938b52124e504b681aef96710efe2b1f20fa361fd48af9923e7",
+  "api_size_and_digest_match": true,
+  "files": {
+    "baseline.txt": {
+      "size": 31136,
+      "sha256": "07a04f1567c394df07d4ec62e310dc89daf34ad2fb1ca5032082ca07065c8723"
+    },
+    "binary-sha256.txt": {
+      "size": 519,
+      "sha256": "53c85a050f636eaeb47117a5f2e7db0191d772655f51d0ec0837d870725cc53c"
+    },
+    "binary-retention.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "candidate.txt": {
+      "size": 31136,
+      "sha256": "f63f6a3f074415b0893ba6e7d4592046f1a7a98029d95eea6d2f0922167588e2"
+    },
+    "environment.txt": {
+      "size": 3678,
+      "sha256": "9b0d401e15ba8b03f5d44dd15536e08d256a56a9fcf364c104b8e2e325d8946a"
+    },
+    "measured-binaries/baseline-caching.test": {
+      "size": 32696518,
+      "sha256": "09a243b41aa0486cf78b4e98493204d3620c74bece6780c6c55ac44a2382ab12"
+    },
+    "measured-binaries/baseline-db.test": {
+      "size": 55518772,
+      "sha256": "943733dcfb972d319198a05d4ae13bcfc857e243339b106212421442e89193fe"
+    },
+    "measured-binaries/baseline-treedb.test": {
+      "size": 52438387,
+      "sha256": "4519a5d48cfabf9d68dead1ef4fdb0bd9ca673a99fdbe8451b181ec043824950"
+    },
+    "measured-binaries/candidate-caching.test": {
+      "size": 36985361,
+      "sha256": "6cb8af92122575cb49140ae081f27b7ff51a526e8d72602e3e1213f5d48ccd62"
+    },
+    "measured-binaries/candidate-db.test": {
+      "size": 61398136,
+      "sha256": "a693988cb42f8b44578f6f037511a00df79d8be1d14f5dd13f13d2d940029143"
+    },
+    "measured-binaries/candidate-treedb.test": {
+      "size": 56905145,
+      "sha256": "0acfad58c4ae885b7bdad6bb701ecdcdf217f8792ec50a18892a9d4f5b197bee"
+    },
+    "measured-binaries.json": {
+      "size": 4452,
+      "sha256": "7a2ea3036ee9cddc2c755cccb8823f7608b08e85bd625e3a57fbb20fb17de5d2"
+    },
+    "primary/baseline-guard-after.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/baseline-overlay.json": {
+      "size": 231,
+      "sha256": "e89ecdf34fec5b364c0f6b7e17c0e2e704845f28ef26e39a3038acd621cb4077"
+    },
+    "primary/baseline-primary.test": {
+      "size": 25225278,
+      "sha256": "ba993814e8f86bc1ba0ac704a08a6357c46464477e1fd883ca2ee35454c42391"
+    },
+    "primary/baseline-worktree-remove.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/baseline-worktree.txt": {
+      "size": 2446,
+      "sha256": "58fcc5d38ce6962c7191b4edaabf751da7f8a145b753ebc82baf0a6101868a4b"
+    },
+    "primary/bindings.json": {
+      "size": 944,
+      "sha256": "cb2504616550c949eb280b1bd9b499a533f4e50b973bab7435f3b17eb1cde574"
+    },
+    "primary/build-baseline.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/build-candidate.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/candidate-guard-after.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/candidate-guard-before.txt": {
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "primary/candidate-primary.test": {
+      "size": 29169648,
+      "sha256": "d3aa64d4e08db197c119392892089b14d299abe1496d664836a6ed687cb9bc4b"
+    },
+    "primary/candidate-public-lifecycle.txt": {
+      "size": 135,
+      "sha256": "824ecf8b4598ffb8a4618c7e836f0c82f38b1107c851fd98f9a9d1d7c2f419d6"
+    },
+    "primary/commands.json": {
+      "size": 14922,
+      "sha256": "086ff673fafbebde69efd98d3699748a440a0de392723d75409ac2b1cafc46ed"
+    },
+    "primary/go-version.txt": {
+      "size": 32,
+      "sha256": "34113d5d84bc5406ab3bfd0028c381611cad764f40baa15e43cffd89485c0aee"
+    },
+    "primary/lscpu.txt": {
+      "size": 3189,
+      "sha256": "7630af067e8703adb64f6501b9ec80e82044e70f37a3df588a41eedc86b6ca24"
+    },
+    "primary/measured-processes.json": {
+      "size": 20327,
+      "sha256": "9819db5c21750c1c37744084c53b93a5028f995979eb9d0c7d4430203eb81694"
+    },
+    "primary/measured-processes.jsonl": {
+      "size": 1007547,
+      "sha256": "79ee14093e7f0abcdad8ee6b9e1ca022f416740e1138b30d7cbfd699f125a791"
+    },
+    "primary/pair-1-baseline.txt": {
+      "size": 271,
+      "sha256": "f1a5caa762b41ee5b188290155eae224b33b9a3b739f9183e22671ba3b77744d"
+    },
+    "primary/pair-1-candidate.txt": {
+      "size": 267,
+      "sha256": "f8e88d2f3035ef05da565a2e1a12d863c848166e5285ca59eff12926d2d2e41a"
+    },
+    "primary/pair-2-baseline.txt": {
+      "size": 271,
+      "sha256": "984c73e1c85c7bf9ccf605c9ced3519ba1b153c5e0f48bc04740ae2b0c601b6c"
+    },
+    "primary/pair-2-candidate.txt": {
+      "size": 267,
+      "sha256": "2f737faeda9741388778e299054dd3302a73a6a8ab87875064e241fa78bc6978"
+    },
+    "primary/pair-3-baseline.txt": {
+      "size": 271,
+      "sha256": "71e29df947217e77cbc45721c1cdb147b880ad9432424273505eb9cec4dea498"
+    },
+    "primary/pair-3-candidate.txt": {
+      "size": 267,
+      "sha256": "04e0f82b8dc7ca297f3cc0ff0e06dc9fbf74237f74f0ce963fe7575a915bfdf6"
+    },
+    "primary/pair-4-baseline.txt": {
+      "size": 271,
+      "sha256": "662d124e08bf7cdf33d58586406853fbcfa766dbbfc81e55ae1b674971d2a59c"
+    },
+    "primary/pair-4-candidate.txt": {
+      "size": 267,
+      "sha256": "8b024211eb0193214d5e57cddfb7803ba743a24929d202966d015d562ee4254a"
+    },
+    "primary/pair-5-baseline.txt": {
+      "size": 271,
+      "sha256": "b16571ac101b8c8afe96f6d782b084c7d7f7fb72f82be492897cfdc15be26800"
+    },
+    "primary/pair-5-candidate.txt": {
+      "size": 267,
+      "sha256": "b4fb1f37381ccbe82d79e1547c207531667ad15ae82746fce869e6dccda1b7ae"
+    },
+    "primary/pair-6-baseline.txt": {
+      "size": 271,
+      "sha256": "3798cc798f690981c8277ba127ab316ee54e051acb8be72e90dbdf142f5af8da"
+    },
+    "primary/pair-6-candidate.txt": {
+      "size": 267,
+      "sha256": "5a95022d6f7663e93c526cc43d0b67bd63102c6c077b9a7941186a11f51ada2d"
+    },
+    "primary/pair-7-baseline.txt": {
+      "size": 271,
+      "sha256": "626f3d188bb827d6a3ed4dceb4d0c5a614fbbe0c6ac0f4fb2beca08a2782d807"
+    },
+    "primary/pair-7-candidate.txt": {
+      "size": 267,
+      "sha256": "805bd8e1bf21bd27db2f8e8a30a7c40364d9d7d7e948d79c0d6bd3e974cda3e3"
+    },
+    "primary/pair-8-baseline.txt": {
+      "size": 271,
+      "sha256": "50a81cc6dbc0140effe642862126587d79e8a6b11cc7bb65cb090d567509e8f9"
+    },
+    "primary/pair-8-candidate.txt": {
+      "size": 267,
+      "sha256": "62d65f61b8dd01df55f5762d054730bb7f77f26d0effd0a3f7bba374d73887a3"
+    },
+    "primary/preflight-processes.jsonl": {
+      "size": 268283,
+      "sha256": "7e11bc13b9886408b0e454cd49d7225ebe9095e815e3eb334b3fdc54ebee370e"
+    },
+    "primary/primary_generation_routing_v6_test.go": {
+      "size": 5608,
+      "sha256": "ec137a4fbc8f4c7b5038e53f16e5b7cd8ff922cb9dfa989a214082b55e36ee11"
+    },
+    "primary/preflight.json": {
+      "size": 19319,
+      "sha256": "a33f4cac522844a68c071d79ec42cee6952d4be24d35596ef9234cc75b22b3b4"
+    },
+    "primary/processes.txt": {
+      "size": 9110,
+      "sha256": "1596818aef00409dcb8072dd08d1f76e06df737d7870c93c6f97c16d3cc0ee63"
+    },
+    "primary/samples.json": {
+      "size": 3011,
+      "sha256": "e891120d54ad7504eac12750e6c3996abc2f5020a2720a6eff3ff9a3133f87a1"
+    },
+    "primary/summary.json": {
+      "size": 880,
+      "sha256": "6d0a2abbfc8ddf11e74763a4d344aeb40a6b2a18a373cd4b56f091632c660e2c"
+    },
+    "primary/summary.md": {
+      "size": 476,
+      "sha256": "dd25c9ac980d9355a405d3c25dd0d0fe227e4031500c4f67250db0b9505f346b"
+    },
+    "primary/uname.txt": {
+      "size": 113,
+      "sha256": "cd8e31ad3f05d597238a1403bb5c2d25c975d53959c3d48af034216515712dc5"
+    },
+    "processes.txt": {
+      "size": 112626,
+      "sha256": "4a9bad1198dbc04d5082163913997f4fbbabd978eb4af01b2b6b76fc3bb0926a"
+    },
+    "summary.json": {
+      "size": 4863,
+      "sha256": "5da397ab200422e7c42da5ac3707622bdfe5799551f91e8c26d64c86477b4680"
+    },
+    "summary.md": {
+      "size": 2337,
+      "sha256": "0e0f283247f03eadcce556fd59db3db6827c6e5f5e39a9c90a6aa4ccb8e42575"
+    }
+  }
+}

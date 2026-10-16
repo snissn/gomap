@@ -1,0 +1,67 @@
+{
+  "at_utc": "2026-10-16T01:51:21.831743+00:00",
+  "authority": "Original user execute-and-merge instruction; root accepts independently reviewed canonical-parent repair and grants ONE successor original promoted previsibility observation.",
+  "benchmark_authorized": false,
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-observation/tmp"
+    },
+    "executed": false,
+    "name": "actual33-promoted-prebuilder-observation-after-parent-repair",
+    "native_final_driver_publication_authorized": false,
+    "outer_timeout_seconds": 240,
+    "public_status": "Q32 RED/ACK0",
+    "requires_root_verification_grant": true,
+    "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/source-frozen.tar.gz",
+    "source_archive_sha256": "4b78a22b7a7244f45d4379907261d5dcc6ccb5f70d9c6ee7f20be7de307296e1",
+    "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f"
+  },
+  "maximum_commands": 1,
+  "prior_attempt": "source03 failed before observer rows; retained unchanged, no retry of that source",
+  "prior_review_sha256": "98e91a025f8a4b728d1d0e4d8a44f0d19152cf0713a6b652567bd6cc8b219b36",
+  "producer_limits": {
+    "bytes": 1048576,
+    "files": 17,
+    "guards": [
+      80,
+      4096
+    ],
+    "history": 33,
+    "indexes": 2,
+    "input": 32,
+    "records": 32,
+    "resources": 16
+  },
+  "proposed_command_sha256": "27e2365db8ceb7f264a4352d20d124be869a0e13d8b1c27b7b414c1021e3e08f",
+  "publication_runtime_authorized": false,
+  "retries": 0,
+  "review_sha256": "9636a9ee185db5cf78a457b510252437d7e4e859c86aa59743765462cb2ec954",
+  "scope": "Observe original phase26/candidate8/seal13 refusal, actual33inputs/newerwriter/stalecancel/oldreader/reopen under unchangedcaps. No native finaldriver/enqueue/adopt/fence/Consume/Finish/ACK allowance; incomplete F/retainedunion must remain incomplete.",
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f"
+}

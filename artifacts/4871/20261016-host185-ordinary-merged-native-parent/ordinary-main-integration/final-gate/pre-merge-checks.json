@@ -1,0 +1,226 @@
+[
+  {
+    "name": "TreeDB required gate",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-caching-heavy-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-8",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-caching-rest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-3",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-6",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "race-check (linux)-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "race-check (linux)-3",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "CI impact (advisory only)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "snapshot-iterator-perf (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-caching-rest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-nativewire",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "vet (macos)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-mongo-gateway",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "mvcc raw-path gate (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "perf-smoke (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "vet (ubuntu)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-caching-rest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "race-check (linux)-4",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "macos-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "vet (windows)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-4",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "qualify",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "paired-performance",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "public-path-cost",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-powerloss-oracle",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "stable legacy/public capture",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "append-only snapshot guardrail (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-5",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "race-check (linux)-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-core-7",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "qualify",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-caching-heavy-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "qualify",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "gofmt",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "profiles (linux) (fast)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "profiles (linux) (durable)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "suites (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "windows-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "profiles (linux) (balanced)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "bench (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "bigkeys_guard (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "ubuntu-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "name": "CodeRabbit",
+    "state": "SUCCESS"
+  }
+]

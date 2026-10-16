@@ -1,0 +1,20 @@
+{
+  "at_utc": "2026-10-16T01:56:29.793905+00:00",
+  "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "tree": "dd50b7ea3ca04193f4fa00decf15cbc98edb68d1",
+  "base": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "checks_success": 56,
+  "unresolved_threads": 0,
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "review_model": "gpt-6.1-sol",
+  "review_disposition": "ACCEPT",
+  "hosted_unavailability": "Hosted manual review cannot pin explicitly required exact model and was not requested. Actual independent subagent explicitly routed gpt-6.1-sol/high; root retains actual review/thread inventory responsibility.",
+  "review_json_sha256": "01bb53d986cbaf01f0a9433545758de8a64ec6c8d693fb93cfd797964d145e42",
+  "source_manifest_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+  "source_files": 10258,
+  "runtime_calls_in_final_gate": 0,
+  "original_m0_verification_sha256": "d82a82b9434d8eab2583f07a7981cfeff401e00fc1811e909ea6db1993245fc2",
+  "raw_primary_verification_sha256": "09f9965fb1da9337ea6e49837be5ed719a79278db5053c08ef6437c8927e7c44",
+  "maintenance_cost_disposition_sha256": "c08e8d132d6b33b253415119b1f1916dd0e0185ca4ec71dea7e55e17dd5e5ec5",
+  "authorization": "User explicitly authorized sole-coordinator execute-and-merge for graph 4871; no local human approval restriction."
+}

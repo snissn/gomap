@@ -1,0 +1,162 @@
+[
+  {
+    "metrics": {
+      "B/op": 280035.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 8612251.0
+    },
+    "pair": 0,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 228249.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 5015587.0
+    },
+    "pair": 0,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 228248.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 4843451.0
+    },
+    "pair": 1,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 280083.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10201792.0
+    },
+    "pair": 1,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 280081.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10121204.0
+    },
+    "pair": 2,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 228248.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 4993973.0
+    },
+    "pair": 2,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 228248.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 4651588.0
+    },
+    "pair": 3,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 280083.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10126673.0
+    },
+    "pair": 3,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 280083.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10245121.0
+    },
+    "pair": 4,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 228247.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 5016818.0
+    },
+    "pair": 4,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 228528.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 12382976.0
+    },
+    "pair": 5,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 280084.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10106902.0
+    },
+    "pair": 5,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 280084.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 10063036.0
+    },
+    "pair": 6,
+    "revision": "baseline"
+  },
+  {
+    "metrics": {
+      "B/op": 228246.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 4724208.0
+    },
+    "pair": 6,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 228247.0,
+      "allocs/op": 391.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 4686503.0
+    },
+    "pair": 7,
+    "revision": "candidate"
+  },
+  {
+    "metrics": {
+      "B/op": 280084.0,
+      "allocs/op": 476.0,
+      "generation_advances/op": 2.0,
+      "ns/op": 11020884.0
+    },
+    "pair": 7,
+    "revision": "baseline"
+  }
+]

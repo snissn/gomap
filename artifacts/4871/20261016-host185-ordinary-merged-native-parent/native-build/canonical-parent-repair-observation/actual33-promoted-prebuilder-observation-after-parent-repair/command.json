@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "./TreeDB/mvcc",
+    "-run",
+    "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+    "-count=1",
+    "-v",
+    "-timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-observation/tmp"
+  },
+  "executed": true,
+  "grant_sha256": "2ce006622ffda2a8a0d9189d0bc51564d003790f9dad9d077dee04096c9495ac",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-observation/identity.json",
+  "name": "actual33-promoted-prebuilder-observation-after-parent-repair",
+  "native_final_driver_publication_authorized": false,
+  "outer_timeout_seconds": 240,
+  "public_status": "Q32 RED/ACK0",
+  "requires_root_verification_grant": true,
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-source/source-frozen.tar.gz",
+  "source_archive_sha256": "4b78a22b7a7244f45d4379907261d5dcc6ccb5f70d9c6ee7f20be7de307296e1",
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f"
+}

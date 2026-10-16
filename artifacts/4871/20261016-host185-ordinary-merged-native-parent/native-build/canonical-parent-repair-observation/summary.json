@@ -1,0 +1,19 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T01:51:28.947861+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 1,
+      "name": "actual33-promoted-prebuilder-observation-after-parent-repair",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-observation/actual33-promoted-prebuilder-observation-after-parent-repair/result.json"
+    }
+  ],
+  "source_files": 10348,
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true
+}

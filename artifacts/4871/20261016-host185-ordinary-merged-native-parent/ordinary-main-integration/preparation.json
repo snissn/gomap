@@ -1,0 +1,7 @@
+{
+  "at": "2026-10-16T01:23:31.666962+00:00",
+  "source": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "tree": "3d61eacb580bb65ff2696627f85f483f0bde85f5",
+  "main": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "scope": "Integrate only landed main tooling/docs into reviewed product; production/harness equivalence must be recorded before any push. No fresh runtime or performance claim."
+}
