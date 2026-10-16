@@ -1,0 +1,2032 @@
+{
+  "mode": "INDEPENDENT_READ_ONLY_DESIGN_ADVICE",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "source_manifest_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+  "source_archive_sha256": "1d89ee9b8a42a9787c05a3ee808e5c862b4c650d0b58ba3de5c63e181906ebf0",
+  "inspected_files": {
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go": "25c3d21cf4978dfb27e95eaa1a1617e42a700f2afd490aa9e82e592b853024fd",
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/primary_seal_release_work_v6.go": "04b6571bdda40805ed7ae402fbaa8ebb6619f43af6cded3bc57b22413b85f4aa",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "28dfe60ee9a77fe8717552672db403d343af42daa1bf05bdc25b33bcfde817ca",
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+    "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "TreeDB/tree/charged_projection.go": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+    "TreeDB/zipper/materialized_input_work_v6.go": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+    "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+    "TreeDB/internal/valuelog/cow_leaf_projection.go": "34e69cb7ed983c991b12458bdf68e2b1b7cc62989d3a3b3cd3472f66b7299b48"
+  },
+  "reservation_callsite_index": [
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 107,
+      "function": "func (s *Store) pruneNativeV6(options PruneOptions) (stats PruneStats, err error)",
+      "source": "if !w.Reserve(1, size) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 201,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, size) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 227,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 256,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 273,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 296,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 313,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 331,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(c.anchorSize)+128) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 344,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 3*uint64(len(record.Key))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 358,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 128) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 382,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 2*uint64(c.logicalSize)+uint64(len(c.record.Value))+3*uint64(len(c.record.Key))+uint64(c.anchorSize)+128) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 445,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 460,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(c.selectedSize)+64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 485,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(c.selectedSize)+64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 498,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, n*2+uint64(unsafe.Sizeof(selectedRecord))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 543,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(len(c.record.Value))+128) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 624,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))+128) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 636,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 642,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 674,
+      "function": "func (c *PruneCursor) step(stats *PruneStats, w *iterator.OrdinalScanWork) error",
+      "source": "if !w.Reserve(1, uint64(c.resumeSize)+64) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 757,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.closePhase))+2*uint64(unsafe.Sizeof(c.closed))+2*uint64(unsafe.Sizeof(c.preparation))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 774,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.prepared))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 801,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.record))+2*uint64(unsafe.Sizeof(c.reader))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 813,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.outputReader))+2*uint64(unsafe.Sizeof(c.outputLeaf))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 832,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/mvcc/prune_cursor_v6.go",
+      "line": 838,
+      "function": "func (c *PruneCursor) closeStepLockedV6(w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.batchEntries))+2*uint64(unsafe.Sizeof(c.store))+2*uint64(unsafe.Sizeof(c.db))+2*uint64(unsafe.Sizeof(c.request))+2*uint64(unsafe.Sizeof(c.codec))+2*uint64(unsafe.Sizeof(c.retention))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_final_publication_v6.go",
+      "line": 21,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) FenceNativeMVCCPreparedV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(6, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(nativeSealInstallationV6{}))+2*uint64(unsafe.Sizeof(mvccadmission.Cut{}))+2*uint64(unsafe.Sizeof(rootpublication.NativePublicationCompletionPlanV6{}))+2*uint64(unsafe.Sizeof(rootpublication.NativeBuilderReleasePlanV6{}))+2*uint64(unsafe.Sizeof(rootpublication.PublishResult{}))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_published_terminal_v6.go",
+      "line": 26,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) closePublishedNativeStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.candidatePreparation))+2*uint64(unsafe.Sizeof(c.rootPreparation))+2*uint64(unsafe.Sizeof(c.sealPreparation.seal))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_published_terminal_v6.go",
+      "line": 88,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) closePublishedNativeStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 34,
+      "function": "func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(ref))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 44,
+      "function": "func (r *NativeMVCCFrameReaderV6) BeginProjectionFrame(ref page.ChildRef, dst []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 256) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 79,
+      "function": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error)",
+      "source": "if w == nil || !w.Reserve(1, 128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 104,
+      "function": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error)",
+      "source": "if amount == 0 || !w.Reserve(1, 2*uint64(amount)) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 114,
+      "function": "func (r *NativeMVCCFrameReaderV6) StepProjectionFrame(w *iterator.OrdinalScanWork) ([]byte, bool, error)",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 129,
+      "function": "func (r *NativeMVCCFrameReaderV6) CancelProjectionFrame(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 144,
+      "function": "func (s *Snapshot) NewNativeMVCCProjectionV6(cert *primaryarena.ReadRootCertificateV6, start, end []byte, reader *NativeMVCCFrameReaderV6, w *iterator.OrdinalScanWork) (*tree.ChargedProjection, error)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 160,
+      "function": "func (s *Snapshot) ValidateNativeMVCCSelectionV6(selection tree.NativeMVCCSelectionV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if s == nil || w == nil || !w.Reserve(1, 128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 234,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) bindNativeMVCCCurrentDeleteV6(s *Snapshot, selection tree.NativeMVCCSelectionV6, source NativeMVCCSelectionSourceV6, request mvccadmission.Request, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(selection))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 253,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCDeleteBatchV6(records []node.LeafEntry, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(len(last.Key))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 300,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCurrentDeleteV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 350,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scratch []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 379,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) composeNativeMVCCCurrentDeleteLockedV6(scratch []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(mvccadmission.Cut{}))+2*uint64(unsafe.Sizeof(mvccadmission.Authority{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "line": 493,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) CloseNativeMVCCCurrentDeleteStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "line": 20,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCPublicationV6(owner rootpublication.NativePublicationOwnerV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(c.publicationCoordinator))+uint64(unsafe.Sizeof(c.publicationBound))+uint64(unsafe.Sizeof(c.db.teardownMu))+uint64(unsafe.Sizeof(c.db.closing))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "line": 53,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) completeNativePublicationBindingV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.publicationCoordinator))+2*uint64(unsafe.Sizeof(c.publicationBound))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "line": 69,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) NativeMVCCPublicationRecoveryErrorV6(w *iterator.OrdinalScanWork) (error, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(c.publicationCoordinator))+uint64(unsafe.Sizeof(c.publicationBound))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 57,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(rootPublicationVisibleMemberV1{}))+2*uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 110,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(rootPublicationVisibleMemberV1{}))+2*uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{}))+10*uint64(unsafe.Sizeof(primaryVisibilityCallbackEnvironmentV6{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 130,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s.member.install))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 161,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCCandidateV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryStateRootV5{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "line": 224,
+      "function": "func (s *nativeMVCCCandidatePreparationV6) closeStep(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 30,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeBasisGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeBasisGeometryForTestV6, ready bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(6+witnessRecords, witnessBytes+2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(rootPublicationRuntimeV1{}))+4*uint64(unsafe.Sizeof(durableRootRuntimeV1{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 71,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeBasisGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeBasisGeometryForTestV6, ready bool)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(runtime.debt[i]))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 83,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeAllocatorGeometryForTestV6(w *iterator.OrdinalScanWork) (freelist.NativeCOWGeometryForTestV6, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 90,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeCoordinatorGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeCoordinatorGeometryForTestV6, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.db == nil || c.db.rootPublication == nil {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 97,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeResourcesGeometryForTestV6(w *iterator.OrdinalScanWork) (rootpublication.NativeEmptySetGeometryForTestV6, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*c))) || c.candidatePreparation.member == nil {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 114,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) MaintenanceNativeIndexGeometryForTestV6(index int, target, first, last, pages uint64, w *iterator.OrdinalScanWork) (g NativeIndexGeometryForTestV6, ready bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+uint64(unsafe.Sizeof(DB{}))+uint64(unsafe.Sizeof(rootPublicationRuntimeV1{}))+uint64(unsafe.Sizeof(rootPublicationSealV1{}))+uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) || index < 0 || index > 1 || c.db == nil || c.db.rootPublication == nil || c.sealPreparation.seal == nil {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 132,
+      "function": "func observeNativeIndexCaptureForTestV6(capture *nativeStablePagerCaptureV6, token *rootpublication.StableResourceToken, expectedIdx *indexGen, primary bool, target, first, last, pages uint64, w *iterator.OrdinalScanWork) (g NativeIndexGeometryForTestV6, ready bool)",
+      "source": "if w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(nativeStablePagerCaptureV6{}))+2*uint64(unsafe.Sizeof(Snapshot{}))+2*uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))+2*uint64(unsafe.Sizeof(indexGen{}))+uint64(unsafe.Sizeof(primaryarena.Arena{}))+2*uint64(unsafe.Sizeof(rootpublication.StableIdentity{}))+2*uint64(unsafe.Sizeof(g))) || capture == nil || expectedIdx == nil {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 257,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(rootpublication.PrimaryCapsuleViewV6{}))+2*uint64(unsafe.Sizeof(rootpublication.DurableRootRecordV1{}))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 306,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 338,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 6*page.PageSize+2*uint64(unsafe.Sizeof(primaryManifestImagesV5{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 354,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.record))+2*uint64(unsafe.Sizeof(s.projection))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 367,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCSealPreparationV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.parentRecord))+2*uint64(unsafe.Sizeof(s.parentMeta))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 439,
+      "function": "func (s *nativeMVCCSealPreparationV6) finishClaimV6(cancel bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryBankConstructionV5{}))+2*uint64(unsafe.Sizeof(ref))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 480,
+      "function": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 540,
+      "function": "func (s *nativeMVCCSealPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 564,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(s.parentRecord))+2*uint64(unsafe.Sizeof(s.parentMeta))+128) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "line": 573,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) prepareNativePrivateSealDescriptorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3+uint64(count), bytes) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 60,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(page.MetaPageBody{}))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 111,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 4*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+2*page.PageSize) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 119,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCBackendRootV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "return w.Reserve(1, 2*uint64(len(observed.Key)+len(entry.Key))+2*uint64(unsafe.Sizeof(entry)))"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 186,
+      "function": "func (s *nativeMVCCRootPreparationV6) closeScratchStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 232,
+      "function": "func (s *nativeMVCCRootPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 241,
+      "function": "func (s *nativeMVCCRootPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(s.source))+2*uint64(unsafe.Sizeof(s.phase))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+      "line": 264,
+      "function": "func (s *nativeMVCCRootPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 47,
+      "function": "func (s *nativeMVCCSnapshotMinimumV6) step(db *DB, w *iterator.OrdinalScanWork) (uint64, bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*s))+32) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 61,
+      "function": "func (s *nativeMVCCSnapshotMinimumV6) step(db *DB, w *iterator.OrdinalScanWork) (uint64, bool, error)",
+      "source": "if !w.Reserve(1+uint64(len(db.idxAll)), 32*uint64(len(db.idxAll))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 129,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(s.count)*8+2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 148,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 163,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 177,
+      "function": "func (c *NativeMVCCCurrentDeleteV6) StepNativeMVCCAllocatorV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 259,
+      "function": "func (s *nativeMVCCAllocatorPreparationV6) closeStep(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+uint64(len(s.retired))*8) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "line": 274,
+      "function": "func (s *nativeMVCCAllocatorPreparationV6) closePublishedStepV6(w *iterator.OrdinalScanWork, refundOwner **retainedalloc.Owner, refundCharge *uint64) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+uint64(len(s.retired))*8) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "line": 24,
+      "function": "func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(*s))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "line": 46,
+      "function": "func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*state))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "line": 117,
+      "function": "func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 4*uint64(unsafe.Sizeof(*s))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "line": 197,
+      "function": "func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+64) {"
+    },
+    {
+      "file": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "line": 221,
+      "function": "func (owner *primaryArenaOwnerV5) releaseNativeMVCCNonlast(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*owner))+64) {"
+    },
+    {
+      "file": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 19,
+      "function": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error)",
+      "source": "if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(s.disposalFailure))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {"
+    },
+    {
+      "file": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 34,
+      "function": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error)",
+      "source": "admit := func(r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "file": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 227,
+      "function": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error)",
+      "source": "if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(s.disposalFailure))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))) {"
+    },
+    {
+      "file": "TreeDB/db/primary_seal_release_work_v6.go",
+      "line": 238,
+      "function": "func continueRootPublicationSealReleaseV6(s *rootPublicationSealV1, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (primaryRuntimeDisposalCompletionV6, bool, error)",
+      "source": "admit := func(r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 77,
+      "function": "func (s *COWPreparationWorkV6) BindInstalledPageProducerV6(producer COWInstalledPageProducerV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(s.installedPages))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 94,
+      "function": "func (s *COWPreparationWorkV6) ValidateInstalledPageV6(appendWork *AppendWork, id, oldID uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(AppendWork{}))+64); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 103,
+      "function": "func (s *COWPreparationWorkV6) ValidateInstalledPageV6(appendWork *AppendWork, id, oldID uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(allocatedPage{}))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 120,
+      "function": "func (s *COWPreparationWorkV6) ValidateInstalledPageV6(appendWork *AppendWork, id, oldID uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(COWRetirementV1{}))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 125,
+      "function": "func (s *COWPreparationWorkV6) ValidateInstalledPageV6(appendWork *AppendWork, id, oldID uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 16); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 198,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 3*raw+2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 223,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, raw+48); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 239,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, raw+48); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 257,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, bytes); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 313,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1+uint64(len(t.changedChunks)), 256+128*uint64(len(t.changedChunks))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 331,
+      "function": "func (s *COWPreparationWorkV6) capture(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1+uint64(len(t.replacedMetadata)), 256+128*uint64(len(t.replacedMetadata))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 361,
+      "function": "func (s *COWPreparationWorkV6) Step(a *Allocator, generationID, commitSeq uint64, candidate CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, sink *CandidatePageSinkV1, w *iterator.OrdinalScanWork) (*FreelistCandidateV1, bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 96); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 404,
+      "function": "func (s *COWPreparationWorkV6) advance(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*r))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 437,
+      "function": "func (s *COWPreparationWorkV6) advance(a *Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 469,
+      "function": "func (s *COWPreparationWorkV6) ValidateSourceWithWorkV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 256); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 587,
+      "function": "func (s *COWPreparationWorkV6) claimDataLockedV6(extraRecords, extraBytes uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, records, bytes); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 646,
+      "function": "func (s *COWPreparationWorkV6) ClosePublishedWithWorkV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(PreparedCOWCandidateV1{}))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 688,
+      "function": "func (s *COWPreparationWorkV6) closePrivateControls(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 747,
+      "function": "func (s *COWPreparationWorkV6) closePrivateControls(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 773,
+      "function": "func (s *privateRetirementWorkV6) step(t *FreelistTxn, id, seq uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "line": 811,
+      "function": "func (s *privateRetirementWorkV6) step(t *FreelistTxn, id, seq uint64, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 84,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 93,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 109,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 125,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 155,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, raw+2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 172,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 181,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 191,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 40); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 203,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 2, 64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 212,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 222,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 232,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 2, 2*uint64(unsafe.Sizeof(*s))+8); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 255,
+      "function": "func (s *privateUint64SetV6) insert(key uint64, w *iterator.OrdinalScanWork) (inserted, ready bool, err error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 285,
+      "function": "func (s *privateUint64SetV6) captureMap(m map[uint64]struct",
+      "source": "if ok, e := appendReserve(w, 1+n, header+32*n); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 309,
+      "function": "func (s *privateUint64SetV6) buildSnapshot(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 317,
+      "function": "func (s *privateUint64SetV6) buildSnapshot(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 331,
+      "function": "func (s *privateUint64SetV6) buildSnapshot(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 347,
+      "function": "func (s *privateUint64SetV6) cloneFrom(source *privateUint64SetV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 351,
+      "function": "func (s *privateUint64SetV6) cloneFrom(source *privateUint64SetV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 364,
+      "function": "func (s *privateUint64SetV6) cloneFrom(source *privateUint64SetV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 375,
+      "function": "func (s *privateUint64SetV6) cloneFrom(source *privateUint64SetV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 381,
+      "function": "func (s *privateUint64SetV6) cloneFrom(source *privateUint64SetV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 406,
+      "function": "func (s *privateUint64SetV6) close(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 413,
+      "function": "func (s *privateUint64SetV6) close(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := appendReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/freelist/private_control_capacity_v6.go",
+      "line": 494,
+      "function": "func (s *privateUint64SetV6) geometryV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (g NativePrivateCapacityForTestV6, ready bool)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+      "line": 29,
+      "function": "func (s *PrimaryConstructionReleaseWork) BindFinishV6(t *DurableRootTransaction, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 62,
+      "function": "func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork, native bool) (primaryarena.ReadRootConstructionV6, bool, error)",
+      "source": "if !w.Reserve(3, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))+2*uint64(unsafe.Sizeof(primaryTerminalCompletionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 99,
+      "function": "func (t *DurableRootTransaction) PrepareNativeMVCCConstructionRootV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*t))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 178,
+      "function": "func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransactionSpec, resources *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(DurableRootTransactionSpec{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 279,
+      "function": "func (t *DurableRootTransaction) PreparePrimaryPromotionStorageV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 303,
+      "function": "func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork, native bool) (*PrimaryPromotionV6, uint64, bool, error)",
+      "source": "if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 336,
+      "function": "func (t *DurableRootTransaction) preparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork, private bool) (result *PrimaryPromotionV6, completed bool, returnErr error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 404,
+      "function": "func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 461,
+      "function": "func (t *DurableRootTransaction) finishPrimaryStepWithWorkV6(w *iterator.OrdinalScanWork, activePins map[ResourceKind]uint64, release func(*StableResourceSet, map[ResourceKind]uint64, *iterator.OrdinalScanWork) (bool, error)) (*primaryTerminalCompletionV6, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 50,
+      "function": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool",
+      "source": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 51,
+      "function": "func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool",
+      "source": "return w == nil || w.Reserve(r, b)"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 61,
+      "function": "func startResourceGraphReleaseV6(a *resourceAllocation, value any, w *iterator.OrdinalScanWork) (*resourceReleaseFrameV6, bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*a))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 96,
+      "function": "func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, uint64(unsafe.Sizeof(*root))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 157,
+      "function": "func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 220,
+      "function": "func (root *resourceReleaseFrameV6) propagateFailure(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(resourceReleaseFrameV6{}))+2*uint64(unsafe.Sizeof(resourceAllocation{}))+2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))+2*uint64(unsafe.Sizeof(StableResourceSet{}))+2*uint64(unsafe.Sizeof(StableResourceToken{}))+2*uint64(unsafe.Sizeof(resourcePinnedBacking{}))+2*uint64(unsafe.Sizeof(IdentityPinRegistry{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 257,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 290,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 329,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 362,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 427,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*cell))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 472,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+2*uint64(unsafe.Sizeof(*n.metadata))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 493,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 548,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*t))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 587,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*entry))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 599,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n.frontier))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 611,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 16) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 697,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof((*dependencyManifestEncodedEntryV1)(nil)))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 709,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(dependencyManifestEncodedEntryV1{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 722,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 739,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 751,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(ReachabilityField(\"\")))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 763,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 775,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 16) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 789,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 795,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 804,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(resourceFieldCell{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 810,
+      "function": "func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+      "line": 857,
+      "function": "func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, charge) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 78,
+      "function": "func (c *Coordinator) BindNativePublicationV6(r *NativePublicationV6, owner NativePublicationOwnerV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))+64) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 115,
+      "function": "func (c *Coordinator) BeginNativePublicationTurnV6(r *NativePublicationV6, candidate *PreparedRootCandidate, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 198,
+      "function": "func (c *Coordinator) AdmitNativePublicationCompletionV6(r *NativePublicationV6, candidate *PreparedRootCandidate, w *iterator.OrdinalScanWork) (NativePublicationCompletionPlanV6, bool, error)",
+      "source": "if !w.Reserve(4, 2*uint64(unsafe.Sizeof(p))+2*uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(candidate))+uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 230,
+      "function": "func (c *Coordinator) AdmitNativePublicationCompletionV6(r *NativePublicationV6, candidate *PreparedRootCandidate, w *iterator.OrdinalScanWork) (NativePublicationCompletionPlanV6, bool, error)",
+      "source": "if !w.Reserve(19, uint64(unsafe.Sizeof(c.timer))+uint64(unsafe.Sizeof(time.Timer{}))+2*uint64(unsafe.Sizeof(pendingEntry{}))+uint64(unsafe.Sizeof(primaryPublicationCompletionV6{}))+4*uint64(unsafe.Sizeof(Frontier{}))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+2*uint64(unsafe.Sizeof(nativeRecoveryErrorV6{}))+2*uint64(unsafe.Sizeof(c.pending))+16*8) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 326,
+      "function": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 343,
+      "function": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, uint64(unsafe.Sizeof(c.pending))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(durableRootGroupExtension{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 365,
+      "function": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(6, 2*uint64(unsafe.Sizeof(result.Err))+uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))+uint64(unsafe.Sizeof(c.waiters))+uint64(unsafe.Sizeof(c.poison))+uint64(unsafe.Sizeof(c.publishNow))+uint64(unsafe.Sizeof(c.wakeReason))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+16) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 410,
+      "function": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(DurableRootCallbackInput{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 416,
+      "function": "func (c *Coordinator) ReleaseNativePublicationTurnV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(14, uint64(unsafe.Sizeof(primaryPublicationCompletionV6{}))+4*uint64(unsafe.Sizeof(Frontier{}))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+2*uint64(unsafe.Sizeof(c.pending))+2*uint64(unsafe.Sizeof(c.waiters))+12*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 443,
+      "function": "func (c *Coordinator) NativePublicationRecoveryErrorV6(r *NativePublicationV6, w *iterator.OrdinalScanWork) (error, bool)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 483,
+      "function": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(builderHandle{}))+uint64(unsafe.Sizeof(builderLease{}))+uint64(unsafe.Sizeof(BuilderHandoffReceipt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 499,
+      "function": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof([]error{}))+2*uint64(unsafe.Sizeof(error(nil)))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 538,
+      "function": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(link))+uint64(unsafe.Sizeof(r.next))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 549,
+      "function": "func (c *Coordinator) completeNativePublicationWithWorkV6(r *NativePublicationV6, physicalErr error, retained bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w != nil && !w.Reserve(6, 2*uint64(unsafe.Sizeof(*r))+2*uint64(unsafe.Sizeof(PublishAttempt{}))+4*uint64(unsafe.Sizeof(uint64(0)))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 682,
+      "function": "func (c *Coordinator) ConsumeNativePublicationResourcesV6(r *NativePublicationV6, result PublishResult, visible *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*r))) {"
+    },
+    {
+      "file": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "line": 709,
+      "function": "func (c *Coordinator) ConsumeNativePublicationTransactionV6(r *NativePublicationV6, result PublishResult, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*r))+uint64(unsafe.Sizeof(DurableRootTransaction{}))+uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 123,
+      "function": "func reserve(w *iterator.OrdinalScanWork, r, b uint64) bool",
+      "source": "func reserve(w *iterator.OrdinalScanWork, r, b uint64) bool { return w == nil || w.Reserve(r, b) }"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 364,
+      "function": "func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error)",
+      "source": "if c.native && (w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c)))) {"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 381,
+      "function": "func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(bankChunk{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 481,
+      "function": "func (c *Claim) Cancel(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 502,
+      "function": "func (c *Claim) NativeInstalledWithWorkV6(w *iterator.OrdinalScanWork) (Ref, bool, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/internal/primaryarena/arena.go",
+      "line": 515,
+      "function": "func (c *Claim) DetachNativeAccountingV6(w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 72,
+      "function": "func (p *Pager) PrepareOrdinaryPrimaryReadRootOwnerWithWorkV6(local uint64, owner any, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := pagerReserve(w, 1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 97,
+      "function": "func (p *Pager) PrepareOrdinaryPrimaryReadRootOwnerWithWorkV6(local uint64, owner any, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := pagerReserve(w, records, bytes); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 150,
+      "function": "func (p *Pager) PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local uint64, metadata *retainedalloc.Owner, bankCharge uint64, constructor PrimaryReadRootOwnerConstructorV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(primaryReadRootTableV6{}))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))+2*uint64(unsafe.Sizeof(constructor))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 164,
+      "function": "func (p *Pager) PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local uint64, metadata *retainedalloc.Owner, bankCharge uint64, constructor PrimaryReadRootOwnerConstructorV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 206,
+      "function": "func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(primaryReadRootTableV6{}))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 217,
+      "function": "func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 240,
+      "function": "func (p *Pager) RegisterPrimaryReadRootV6(local uint64, image []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := pagerReserve(w, 1, uint64(2*page.PageSize+128)); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 258,
+      "function": "func (p *Pager) RegisterPrimaryReadRootV6(local uint64, image []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 292,
+      "function": "func (p *Pager) removePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error)",
+      "source": "if ok, err := pagerReserve(w, 1, 128); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 306,
+      "function": "func (p *Pager) removePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error)",
+      "source": "if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 374,
+      "function": "func (p *Pager) MaintenanceNativeReadRootTableGeometryForTestV6(local uint64, owner any, image []byte, metadata *retainedalloc.Owner, w *iterator.OrdinalScanWork) (g NativeReadRootTableGeometryForTestV6, ready bool)",
+      "source": "if p == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(primaryReadRootTableV6{}))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "file": "TreeDB/pager/primary_read_root_v6.go",
+      "line": 394,
+      "function": "func (p *Pager) MaintenanceNativeReadRootTableGeometryForTestV6(local uint64, owner any, image []byte, metadata *retainedalloc.Owner, w *iterator.OrdinalScanWork) (g NativeReadRootTableGeometryForTestV6, ready bool)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))+uint64(unsafe.Sizeof(*link))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_growth_work.go",
+      "line": 19,
+      "function": "func (o *Owner) addWithWork(bytes uint64, pending bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*o))+2*uint64(unsafe.Sizeof(EnrollmentWork{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_growth_work.go",
+      "line": 23,
+      "function": "func (o *Owner) addWithWork(bytes uint64, pending bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 4*uint64(unsafe.Sizeof(*active))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_growth_work.go",
+      "line": 37,
+      "function": "func (o *Owner) addWithWork(bytes uint64, pending bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 6*uint64(unsafe.Sizeof(*b))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 51,
+      "function": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool",
+      "source": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 52,
+      "function": "func reserveCleanup(w *iterator.OrdinalScanWork, r, b uint64) bool",
+      "source": "return w == nil || w.Reserve(r, b)"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 77,
+      "function": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(Owner{}))+2*uint64(unsafe.Sizeof(EnrollmentWork{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 105,
+      "function": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 128,
+      "function": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 159,
+      "function": "func (o *Owner) shrinkStepLocked(s *shrinkWork, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 3, 6*uint64(unsafe.Sizeof(binding{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 224,
+      "function": "func (o *Owner) closeStep(native bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 266,
+      "function": "func (o *Owner) removeUnserialized(amount uint64, pending, native bool, s *RemovalWork, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Owner{}))+2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 333,
+      "function": "func (s *RemovalWork) bindRemoval(o *Owner, amount uint64, pending, native bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 379,
+      "function": "func (s *RemovalWork) resetWork(w *iterator.OrdinalScanWork, unused bool) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 477,
+      "function": "func (state *EnrollmentReleaseWork) bindUnserialized(e *Enrollment, native bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*e))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 503,
+      "function": "func (state *EnrollmentReleaseWork) bindUnserialized(e *Enrollment, native bool, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(*state))+2*uint64(unsafe.Sizeof(*companion))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 583,
+      "function": "func (e *Enrollment) closeEnrollmentStepInto(native bool, w *iterator.OrdinalScanWork, state *RemovalWork, alias **Enrollment) (bool, error)",
+      "source": "if !reserveCleanup(w, 1, 2*uint64(unsafe.Sizeof(Enrollment{}))+2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(RemovalWork{}))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 638,
+      "function": "func (o *Owner) MaintenanceNativeOwnerGeometryForTestV6(expected Budget, w *iterator.OrdinalScanWork) (g NativeOwnerGeometryForTestV6, ready bool)",
+      "source": "if w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(g))+2*uint64(unsafe.Sizeof(Owner{}))+2*uint64(unsafe.Sizeof(EnrollmentWork{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/retainedalloc/owner_work.go",
+      "line": 663,
+      "function": "func (o *Owner) MaintenanceNativeOwnerGeometryForTestV6(expected Budget, w *iterator.OrdinalScanWork) (g NativeOwnerGeometryForTestV6, ready bool)",
+      "source": "if !w.Reserve(2, 2*uint64(unsafe.Sizeof(binding{}))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "file": "TreeDB/internal/memtable/native_retention_work.go",
+      "line": 15,
+      "function": "func (b *COWBudget) AcquireRetentionWork(bytes uint64, w *iterator.OrdinalScanWork) (retainedalloc.Lease, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*b))+uint64(unsafe.Sizeof(COWExternalLease{}))) {"
+    },
+    {
+      "file": "TreeDB/internal/memtable/native_retention_work.go",
+      "line": 35,
+      "function": "func (l *COWExternalLease) AdmitRetentionClose(w *iterator.OrdinalScanWork) bool",
+      "source": "return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{})))"
+    },
+    {
+      "file": "TreeDB/internal/memtable/native_retention_work.go",
+      "line": 72,
+      "function": "func (l *COWExternalLease) AdmitRetentionResize(w *iterator.OrdinalScanWork) bool",
+      "source": "return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{})))"
+    },
+    {
+      "file": "TreeDB/internal/memtable/native_retention_work.go",
+      "line": 79,
+      "function": "func (l *COWExternalLease) MaintenanceNativeRetentionGeometryForTestV6(expected retainedalloc.Budget, w *iterator.OrdinalScanWork) (g retainedalloc.NativeRetentionLeaseGeometryForTestV6, ready bool)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(COWExternalLease{}))+2*uint64(unsafe.Sizeof(COWBudget{}))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 20,
+      "function": "func (db *DB) NativeMVCCBudgetV6(w *iterator.OrdinalScanWork) (*memtable.COWBudget, bool, error)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(db.nativeMVCCBudget))+2*uint64(unsafe.Sizeof(db.nativeMVCCLimits))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 37,
+      "function": "func (db *DB) NativeMVCCBudgetV6(w *iterator.OrdinalScanWork) (*memtable.COWBudget, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(memtable.COWBudget{}))+uint64(unsafe.Sizeof(db.nativeMVCCLimits))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 95,
+      "function": "func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))+128) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 132,
+      "function": "func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error)",
+      "source": "if !w.Reserve(1, 256) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 151,
+      "function": "func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(rootDomainSnapshot{}))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 161,
+      "function": "func (db *DB) StepNativeMVCCCaptureV6(c *NativeMVCCCaptureV6, admit func(backenddb.SnapshotAllocationSizes) error, w *iterator.OrdinalScanWork) (*backenddb.Snapshot, bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(memShard{}))+2*uint64(unsafe.Sizeof(rootDomainSnapshot{}))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 313,
+      "function": "func (c *NativeMVCCCaptureV6) CloseNativeMVCCOwnedCaptureV6(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 353,
+      "function": "func (c *NativeMVCCCaptureV6) MaintenanceNativeOwnerGeometryForTestV6(p *backenddb.NativeMVCCCurrentDeleteV6, role uint8, w *iterator.OrdinalScanWork) (retainedalloc.NativeOwnerGeometryForTestV6, bool, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 366,
+      "function": "func (c *NativeMVCCCaptureV6) MaintenanceNativeCaptureGeometryForTestV6(w *iterator.OrdinalScanWork) (g NativeCaptureGeometryForTestV6, ready bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(g))) {"
+    },
+    {
+      "file": "TreeDB/caching/native_mvcc_prune_v6.go",
+      "line": 384,
+      "function": "func (c *NativeMVCCCaptureV6) MaintenanceNativeExternalGeometryForTestV6(lease *memtable.COWExternalLease, w *iterator.OrdinalScanWork) (retainedalloc.NativeRetentionLeaseGeometryForTestV6, bool)",
+      "source": "if c == nil || w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*c))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 111,
+      "function": "func (t *Tree) NewChargedProjection(cert *primaryarena.ReadRootCertificateV6, start, end []byte, reader any, w *iterator.OrdinalScanWork) (*ChargedProjection, error)",
+      "source": "if w == nil || !w.Reserve(1, ChargedProjectionRetainedCharge()+uint64(unsafe.Sizeof(Tree{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 141,
+      "function": "func (c *ChargedProjection) Begin(op ProjectionOperation, key []byte, w *iterator.OrdinalScanWork) error",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))+64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 211,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 222,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 230,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryOperand{}))+uint64(unsafe.Sizeof(node.PrimaryDirectoryView{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 239,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 271,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 282,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 291,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 24) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 300,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 310,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 330,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 341,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 352,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 379,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 394,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 403,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(page.ChildRef{}))+32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 428,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+uint64(unsafe.Sizeof(node.Node{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 440,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 458,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 481,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 540,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 549,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))+32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 564,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if amount == 0 || !w.Reserve(1, uint64(2*amount)) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 571,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 96) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 592,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 604,
+      "function": "func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 627,
+      "function": "func (c *ChargedProjection) Record(w *iterator.OrdinalScanWork) (node.LeafEntry, bool, error)",
+      "source": "if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 647,
+      "function": "func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 653,
+      "function": "func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(CursorItem{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 678,
+      "function": "func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))*2+uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+uint64(unsafe.Sizeof(node.PrimaryDirectoryView{}))+uint64(unsafe.Sizeof(node.Node{}))+256) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 700,
+      "function": "func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(Tree{}))+96) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 741,
+      "function": "func (b *projectionBase) begin(op ProjectionOperation, key []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 764,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(CursorItem{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 771,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 64) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 779,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(page.ChildRef{}))+32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 817,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if amount == 0 || !w.Reserve(1, uint64(amount)) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 840,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16+uint64(unsafe.Sizeof(CursorItem{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 866,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 876,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 32) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 900,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 914,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 942,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 954,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 966,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+uint64(unsafe.Sizeof(page.ChildRef{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 990,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 1003,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 8) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 1014,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(CursorItem{}))) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 1025,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 16) {"
+    },
+    {
+      "file": "TreeDB/tree/charged_projection.go",
+      "line": 1037,
+      "function": "func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))+32) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 47,
+      "function": "func NewMaterializedInputWorkV6(owner *retainedalloc.Owner, reader MaterializedFrameReaderV6, root uint64, certificate *primaryarena.ReadRootCertificateV6, prefix []batch.Entry, deletes []node.LeafEntry, w *iterator.OrdinalScanWork) (*MaterializedInputWorkV6, bool, error)",
+      "source": "if !w.Reserve(1, 2*n) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 76,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 7*page.PageSize) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 99,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 2*n) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 126,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 3*page.PageSize) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 139,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, page.PageSize+2*uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 166,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 3*page.PageSize) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 188,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 2*page.PageSize) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 201,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(2, 3*uint64(size)+2*uint64(unsafe.Sizeof(batch.Entry{}))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 245,
+      "function": "func (s *MaterializedInputWorkV6) Step(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(3, 2*n+4*uint64(unsafe.Sizeof(batch.Entry{}))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 313,
+      "function": "func (s *MaterializedInputWorkV6) CloseStep(w *iterator.OrdinalScanWork) (bool, *retainedalloc.Owner, uint64, error)",
+      "source": "if !w.Reserve(1, uint64(len(e.Key)+len(e.Value))+2*uint64(unsafe.Sizeof(*e))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 322,
+      "function": "func (s *MaterializedInputWorkV6) CloseStep(w *iterator.OrdinalScanWork) (bool, *retainedalloc.Owner, uint64, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(batch.Entry{}))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_input_work_v6.go",
+      "line": 328,
+      "function": "func (s *MaterializedInputWorkV6) CloseStep(w *iterator.OrdinalScanWork) (bool, *retainedalloc.Owner, uint64, error)",
+      "source": "if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 105,
+      "function": "func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*MaterializedWriteWork, bool, error)",
+      "source": "if ok, err := mergeReserve(w, 2, 2*n+2*frameBytes); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 118,
+      "function": "func NewMaterializedWriteWork(z *Zipper, owner *retainedalloc.Owner, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*MaterializedWriteWork, bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 2*n); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 149,
+      "function": "func (s *MaterializedWriteWork) appendWorkspaceForTarget(target *materializedWriteFrame, w *iterator.OrdinalScanWork) (*valuelog.LeafAppendWork, bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(2*unsafe.Sizeof(target))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 163,
+      "function": "func (s *MaterializedWriteWork) newFrame(parent *materializedWriteFrame, ref page.ChildRef, ops []batch.Entry, w *iterator.OrdinalScanWork) (*materializedWriteFrame, bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 2*n); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 201,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 2*page.PageSize); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 216,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, page.PageSize+256); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 255,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 256); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 321,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(len(r.Key))+64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 349,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(len(r.Key))+64); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 442,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 8); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 454,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 2, uint64(2*page.PageSize+64)); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 480,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 8); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 524,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, page.PageSize+128); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 580,
+      "function": "func (s *MaterializedWriteWork) Step(a *freelist.Allocator, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, 2*n+uint64(len(f.event.entry.Key))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 646,
+      "function": "func (s *MaterializedWriteWork) VisitPagesWithWorkV6(cursor *MaterializedPageVisitWorkV6, visit func(uint64, uint64, *iterator.OrdinalScanWork) (bool, error), w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, uint64(unsafe.Sizeof(*cursor))) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 655,
+      "function": "func (s *MaterializedWriteWork) VisitPagesWithWorkV6(cursor *MaterializedPageVisitWorkV6, visit func(uint64, uint64, *iterator.OrdinalScanWork) (bool, error), w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if !w.Reserve(1, 3*8) {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 680,
+      "function": "func (s *MaterializedWriteWork) AdoptPagesWithWorkV6(visit func(uint64, uint64, *iterator.OrdinalScanWork) (bool, error), w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(unsafe.Sizeof(f.append))+32); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 702,
+      "function": "func (s *MaterializedWriteWork) ValidateCOWInstalledPagesV6(preparation *freelist.COWPreparationWorkV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := mergeReserve(w, 1, 2*uint64(unsafe.Sizeof(*s))); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 710,
+      "function": "func (s *MaterializedWriteWork) ValidateCOWInstalledPagesV6(preparation *freelist.COWPreparationWorkV6, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, err := mergeReserve(w, 2, 4*uint64(unsafe.Sizeof(f.append))+2*uint64(unsafe.Sizeof(f.result))+32); !ok || err != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 746,
+      "function": "func (s *MaterializedWriteWork) CompleteWithWorkV6(w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(unsafe.Sizeof(*f))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 752,
+      "function": "func (s *MaterializedWriteWork) CompleteWithWorkV6(w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(unsafe.Sizeof(*s))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/zipper/materialized_write_work.go",
+      "line": 778,
+      "function": "func (s *MaterializedWriteWork) Cancel(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if ok, e := mergeReserve(w, 1, uint64(unsafe.Sizeof(*f))); !ok || e != nil {"
+    },
+    {
+      "file": "TreeDB/internal/iterator/ordinal.go",
+      "line": 80,
+      "function": "func (w *OrdinalScanWork) Reserve(records, bytes uint64) bool",
+      "source": "func (w *OrdinalScanWork) Reserve(records, bytes uint64) bool {"
+    },
+    {
+      "file": "TreeDB/internal/valuelog/cow_leaf_projection.go",
+      "line": 37,
+      "function": "func (r *COWLeafProjectionReader) BeginProjectionFrame(ref page.ChildRef, dst []byte, w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(ref))+uint64(unsafe.Sizeof(r.leaf))+128) {"
+    },
+    {
+      "file": "TreeDB/internal/valuelog/cow_leaf_projection.go",
+      "line": 59,
+      "function": "func (r *COWLeafProjectionReader) CancelProjectionFrame(w *iterator.OrdinalScanWork) (bool, error)",
+      "source": "if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(*r))) {"
+    }
+  ],
+  "index_scope": "Direct reservation callsites in named inspected families, not a claim every transitive adapter was exhaustively closed",
+  "G": "componentwise_max(F(theta)+C_fence(theta), max restart-prefix+next-progress-unit over preparation, Finish and Close)",
+  "critical_correction": "max leaf Reserve alone is insufficient; repeated wrapper prefixes must be summed through the next persisted continuation advance",
+  "unknowns": [
+    "Final target sizeof/caller prices",
+    "Selected private capacities and vector/payload lengths",
+    "Atomic owner Add binding/enrollment envelope",
+    "Root-table lookup envelope through specified successor writer",
+    "Concrete Finish/Close capability and lifecycle predicates"
+  ],
+  "envelope_evaluable_now": false,
+  "numeric_allowance": null,
+  "complete_finish_total": null,
+  "runtime_grant": false,
+  "native_publication_qualification": false,
+  "candidate_edits": false,
+  "executions": [],
+  "report_sha256": "7a28a18711a2572909b428dbaa5bb97755b4e14000a2b8384c080e2baeca80f8"
+}

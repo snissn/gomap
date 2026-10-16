@@ -1,0 +1,58 @@
+[
+  {
+    "caller": "COWPreparationWorkV6.BindRetainedOwnerV6",
+    "disposition": "same existing owner binds three embedded controls, independent planner and normalizers; no new Owner"
+  },
+  {
+    "caller": "COWPreparationWorkV6.capture",
+    "disposition": "locked original allocator snapshot; header/allocated/abandoned exact admission; typed view, whole key vector snapshot then outside-lock incremental hash build"
+  },
+  {
+    "caller": "candidateBeginWorkV1.step",
+    "disposition": "typed replacement insertion; ordinary map implementation remains when private view absent"
+  },
+  {
+    "caller": "privateRetirementWorkV6.step / txnPruneWorkV1.step",
+    "disposition": "changed-chunk insertion uses original marker and typed view; marker resets preserve view"
+  },
+  {
+    "caller": "txnMaterializeWorkV1.step",
+    "disposition": "requires exact bound view/sink owner and nil private maps; propagates inventory/output/recording/planner views"
+  },
+  {
+    "caller": "metadataReuseWorkV1.step",
+    "disposition": "independent plannedReplaced set cloned incrementally; inline planned header borrows other txn fields; detaches prior inventory before retry"
+  },
+  {
+    "caller": "reservationInventoryWorkV1.step",
+    "disposition": "private replaced enumeration scans admitted cells and emits zero once; version/root/count/source guards; normalization still determines canonical order"
+  },
+  {
+    "caller": "recordingSink.record",
+    "disposition": "sink duplicate validation uses same explicit private set; original canonical candidate pages remain unchanged"
+  },
+  {
+    "caller": "COWPreparationWorkV6.AdoptAndActivateV6 / Allocator.installActivatedCandidateV6",
+    "disposition": "original ledger/claim/slot operation; clone temporarily canonical, distinct successor replaces it before return; output AppendWork transfer unchanged"
+  },
+  {
+    "caller": "COWPreparationWorkV6.Cancel",
+    "disposition": "original previsible rollback first; no adopted cancellation; then shared finite private cleanup"
+  },
+  {
+    "caller": "COWPreparationWorkV6.ClosePublishedWithWorkV6",
+    "disposition": "original published/activated/AppendWork-detached proof then same private cleanup, never Cancel"
+  },
+  {
+    "caller": "COWPreparationWorkV6.closePrivateControls",
+    "disposition": "release two normalization scratches; detach all private aliases; close four sets and original scalar refund; final original containing reset only after every receipt"
+  },
+  {
+    "caller": "db.nativeMVCCAllocatorPreparationV6.cancel / closePublished",
+    "disposition": "existing parents call same preparation Cancel / ClosePublishedWithWorkV6 then own containing retirement; no new shared-runtime continuation"
+  },
+  {
+    "caller": "MaintenancePrivateLedgerForTestV6 / db/caching/rootpublication/retainedalloc/primaryarena/zipper observers",
+    "disposition": "by-value preadmitted original role/charge/completeness only; original locks; no retain/admission/physical effects"
+  }
+]

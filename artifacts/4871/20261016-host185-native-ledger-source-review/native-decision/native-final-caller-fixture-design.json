@@ -1,0 +1,63 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW_DESIGN_ONLY",
+  "reviewer": "ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "candidate_edits": false,
+  "children_spawned": false,
+  "disposition": "SOURCE_FEASIBLE_RECOMMENDATION_NO_GRANT",
+  "source": {
+    "manifest_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+    "archive_sha256": "1d89ee9b8a42a9787c05a3ee808e5c862b4c650d0b58ba3de5c63e181906ebf0",
+    "file_count": 10379,
+    "inspected_files": {
+      "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "43f2542f60d83c471ecffe38b8406fb6670a107e0cd8d1b298aadd89e7fbed37",
+      "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+      "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+      "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+      "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+      "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+      "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+      "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+      "TreeDB/db/native_close_barrier_v6_test.go": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a"
+    }
+  },
+  "planning_inputs": {
+    "native-main-integration/finaldriver-planning/README.md": "41ce6747f24233f5a50c4953569f9fbfef1ea87111186acff94bfdcfc8922a60",
+    "native-main-integration/finaldriver-planning/input-bindings.json": "5851a1e80e769729732500cb355a50f8248210cc33a88fddf60820f7e742cdae",
+    "native-decision/atomic-completion-selection.md": "2b14a5c7a42c0d496adb328214c64e74c25f32f7662ac47782aca5fbeec2cb6d"
+  },
+  "minimum_source_seams": [
+    "Admitted outer publicationReady bit; ready return in existing phase26 after SAME candidate/seal/binding; next SAME-limit public call invokes Fence",
+    "Bounded scalar exposure of existing FinishDetachedV6 and receipt state; no pointer escape or synthetic progress"
+  ],
+  "existing_genuine_pause": {
+    "source": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "transition": "phase3 -> phase1 after actual physical finish and terminal alias detachment; mandatory false,nil return",
+    "producer_phase": 8,
+    "scope": "post-physical/pre-accounting; not an in-flight physical release callback",
+    "new_blocking_hook_needed": false
+  },
+  "fixtures": [
+    "unchanged original Q32/1MiB refusal+copied-parent controls",
+    "new ready/stale/cancel and immutable-limit controls",
+    "new original public Fence/Finish/ACK/reopen arm",
+    "new real FinishDetached/newer durable writer/owning DB.Close-join/reopen arm without claiming Close emits prune ACK"
+  ],
+  "numeric_allowance": null,
+  "complete_finish_total": null,
+  "complete_retained_total": null,
+  "Q32_status": "RED/ACK0 preserved",
+  "native_publication_qualification": false,
+  "runtime_granted": false,
+  "executions": [],
+  "limitations": [
+    "Design only; next actual source delta must be reviewed",
+    "Source-backed F+caller and maximum indivisible Finish/Close units must be recomputed on final frozen source",
+    "Original observer input binding differs in ad721; no historical F numeric carried",
+    "Existing protocol/mock-owner tests are not actual producer qualification",
+    "Error-state retained Close is not successful physical teardown"
+  ],
+  "report_sha256": "c3f8a5e28c484501433de77ed0f9423971e4175a521d6cd85691e7a3101e7113"
+}

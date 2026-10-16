@@ -1,0 +1,10 @@
+{
+  "verified_utc": "2026-10-16T05:22:30.171313+00:00",
+  "evidence_archive_sha256": "63284d4e20b47eff963c3103119d8afa0116f861c818e0f5552f1860d54ed2a1",
+  "artifact_manifest_sha256": "94c0c85d9bc1ffa4e6b162e453fd49ffeac2359a3e7807b675f538759c6dda12",
+  "payloads": 23,
+  "archive_members": 24,
+  "handoff_sha256": "aba06eb4e5a76fe2458a65e352a508602ee8c77702499808c769b9314e49d079",
+  "all_archive_payloads_equal_manifest_and_disk": true,
+  "source_and_compile_verified_separately": true
+}

@@ -1,0 +1,182 @@
+[
+  {
+    "baseline_sha256": null,
+    "final_sha256": "e3d3b18c46ca1bb05d37ce297ebfa0ab1e1e52be80d0a44d0c151161db2d7eb4",
+    "path": "TreeDB/caching/native_selected_ledger_for_test_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "final_sha256": "d467bc1cbbd02219ba9c67cd9b49d5957c1058e16dc13b72c87dfd720c3b2639",
+    "path": "TreeDB/db/native_index_observer_v6_test.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "final_sha256": "ceb344de2f6285af5348bc53594313ecb8c73d174e5edd83ddb229211fd98b01",
+    "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "1c995f12ce46d9228b15fab5140e7bd7edc24b9a2437d570092b40eee95bc795",
+    "path": "TreeDB/db/native_selected_ledger_for_test_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "81acd119eb7ddaacde4fada6f49d9f5480e51fcae4eac9e75d6327cd7bc88618",
+    "path": "TreeDB/db/native_selected_ledger_v6_test.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "7fcb1ba0fa7630274baf245ee639eeb87b0a808a303f108cf8411fe1455a1fb1",
+    "final_sha256": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "31535906b71b519ce2d4fee11ef4205de7a34f99a77293115eb6a98f6ec0d103",
+    "final_sha256": "1bc722c85e4aaad079f11683183707d2ef2a91b0a841e4678f4e4d1aa9cb03a9",
+    "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+    "final_sha256": "9e2ff692472a85c28555175bc6f601fbbb687677fee7613849394a42c281bfbd",
+    "path": "TreeDB/freelist/generation_v1_begin_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a",
+    "final_sha256": "2310a8339e7b9b3087d32f96478db8511f1b10ab50cc9119c3538867e47fe04a",
+    "path": "TreeDB/freelist/generation_v1_emit_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "2ab6d11e86265b62baeacb0488b4a82f27404117b7d9dc4495bd1b894ccaf401",
+    "final_sha256": "e1d1a6cc87a3469e2f0a220f4682baf837e7c810eb8732d25f3878850abbc267",
+    "path": "TreeDB/freelist/generation_v1_materialize_output_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "80824f4394fddfdec0dba6a76b0261b2c28dc658d70ef7fb69d9cb83824fabe0",
+    "final_sha256": "81eeb0407551b194ed29e6f7be60ea3156709109bf74d9a8e191782715a106f3",
+    "path": "TreeDB/freelist/generation_v1_materialize_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "35da38fcecdc5508eef6bd2c48ce22e7f59fbf3eff106bc0f0ea592759cfb4ad",
+    "final_sha256": "2a1c7ca9deb82422702c8e3366f8fe3327f2cab392aee0c928dcba32305a3efd",
+    "path": "TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b",
+    "final_sha256": "832dcf8424b9469fd08f647feff55a7d5477e4daec7e41bb29358f8bec24b002",
+    "path": "TreeDB/freelist/generation_v1_prune_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+    "final_sha256": "5ff05425add02fbad993215b9112fa4470f43e412cff0fb963d1c965cdc90f41",
+    "path": "TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+    "final_sha256": "04a9692b3937333e761734fa8a0c8b0158d1c61c6b2eeb919d00f53c80fc3571",
+    "path": "TreeDB/freelist/generation_v1_txn.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "final_sha256": "2dd42e98e3fb2321feafc8d2347a2864928429b93adf9d686ef82c714903339e",
+    "path": "TreeDB/freelist/native_publication_bound_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "path": "TreeDB/freelist/private_control_capacity_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "30b7fc7a6c9ed8cc3cc67e3c0cb390df7ff25fd268e6cfb2d21a7f118e579b8d",
+    "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "ebaf8ee22ef4d030b5e2350a452c06fabe1d32d7eb7fc17db35418dbce020c65",
+    "path": "TreeDB/freelist/private_ledger_for_test_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "final_sha256": "c4d9150bda025702051ed62da3936434725bc33acd6cf222cd25944b64b69a1b",
+    "path": "TreeDB/internal/primaryarena/retention.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "c0747f15bd80e9cd8efed88f7e5ce113fa752d7f17a455793d9bfe497843bb20",
+    "path": "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "path": "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "3302dadf28f7a8b8c5da065613dffeac163ca01d3a62101fa8deb8d0762ec0d9",
+    "final_sha256": "95f00f734c7403864838a723f3c640f24bb6a3c677b3f5181f676ba3260433b2",
+    "path": "TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": "fc6f3ad4c914531ef2777c917da712eb74a3a9a18a8e481263be2251f905c135",
+    "final_sha256": "bd4d3d57eee3ea1e1c2e67af8807f8d358bd1a959960a87a9f0a853247b549b0",
+    "path": "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "138c8a5bfac504ee1a2cf4fd3036a14cc5301b0d8912b7b21d3e6dab5ac9c19c",
+    "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "f0cebfd2561c47c6783df35869f7d7d8a232ba60e5710dd5ecaf787fcb03c9ae",
+    "path": "TreeDB/internal/rootpublication/selected_token_ledger_for_test_v6.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8",
+    "final_sha256": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "8930abfab00a85d71f3b52cb59d9811f8b7d456e0bce4bf6cbae32f1c38423f0",
+    "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+    "status": "added"
+  },
+  {
+    "baseline_sha256": "506c9bfa63d13289d9963dd69754c2cf4b157d3698478878cfe98972306bf3ce",
+    "final_sha256": "311f3c30ca31e7512dfd31ebfa28abacaf5b57704d8b88e8a495dedb35a77e82",
+    "path": "TreeDB/zipper/materialized_observer_for_test_v6.go",
+    "status": "modified"
+  },
+  {
+    "baseline_sha256": null,
+    "final_sha256": "5ebe51b4dc158c49b3a538f377e2bf641f87b8b8f83bcd0f7beed9910c952c36",
+    "path": "TreeDB/zipper/materialized_selected_ledger_test.go",
+    "status": "added"
+  }
+]

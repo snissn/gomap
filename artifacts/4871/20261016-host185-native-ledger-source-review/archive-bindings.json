@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/changed-source.tar.gz",
+    "bytes": 69292,
+    "sha256": "e9d477c8b0a51ae869831a7b42745a219873600ee9c0cb608dffe909de156625",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/evidence.tar.gz",
+    "bytes": 1523697,
+    "sha256": "63284d4e20b47eff963c3103119d8afa0116f861c818e0f5552f1860d54ed2a1",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/source-frozen.tar.gz",
+    "bytes": 156092695,
+    "sha256": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  }
+]

@@ -1,0 +1,61 @@
+{
+  "mode": "READ_ONLY_DESIGN_ADVICE",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits": false,
+  "source_manifest_sha256": "ad721ad3112f1d1348b80f5c71d2c9711b9e9456dfde1811e23cdb3ab8afafbe",
+  "source_archive_sha256": "1d89ee9b8a42a9787c05a3ee808e5c862b4c650d0b58ba3de5c63e181906ebf0",
+  "source_file_count": 10379,
+  "inspected_source_hashes": {
+    "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "43f2542f60d83c471ecffe38b8406fb6670a107e0cd8d1b298aadd89e7fbed37",
+    "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+    "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "TreeDB/caching/mvcc_admission.go": "f42a75f729f04289692626dde3356beb435c67f3c4474e1089dfe595aad1bc96",
+    "TreeDB/caching/db.go": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "TreeDB/caching/flush_run_planner.go": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858",
+    "TreeDB/caching/root_domain.go": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+    "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/root_publication_build_group.go": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f",
+    "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "988c969ec318cf8bf96b9b258282b74aa3f893bbdd179f5c913ac1ed33798e1e",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "20b8f4bc53b7c6a94ace277227387e6a206ca80ae741dfb63112378281f43285",
+    "TreeDB/zipper/primary_directory.go": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b",
+    "TreeDB/zipper/zipper.go": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "TreeDB/zipper/read_only_prepare.go": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "ebb053bf4be6d291d6fb38aed2969572c06cc397337ad07b526e1a120567141c",
+    "TreeDB/internal/primaryarena/retention.go": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+    "TreeDB/pager/primary_read_root_close_work.go": "81cece0fed7431727375f97a3ddae3ad4bafaf265c5bd4e23358c468d70fdae9"
+  },
+  "disposition": "SOURCE_DERIVED_SELECTED_ROUTE_BOUND",
+  "table_scalar": "NativeBankGeometryForTestV6.PagerTable.TableNodeCount = uint64(primaryReadRootTableV6.count)",
+  "max_new_nodes": 4,
+  "max_new_nodes_derivation": "optimisticWriteMaxAttempts(3)+serialized(1), one registered RAM directory root per apply, one nonempty backend batch for the fresh singleton write",
+  "link_bound_including_nil": "N0+5",
+  "lookup_cost": {
+    "records": "1+(N0+5)",
+    "bytes": "sizeof(table)+(N0+5)*(sizeof(link pointer)+sizeof(entry))"
+  },
+  "removal_cost": {
+    "records": "1+(N0+5)",
+    "bytes": "128+(N0+5)*(sizeof(link pointer)+2*sizeof(entry))"
+  },
+  "required_inputs": [
+    "new frozen N0 after all native private root constructors and before Fence",
+    "same pager/table and exact geometry owner/image matching",
+    "fresh reopened cache, one fresh-key mutation, no other cache writes or pending flush debt",
+    "only one explicit cached checkpoint since reopen; no background/manual root-producing maintenance",
+    "ordinary successful Fence before successor; genuine Finish remains paused through successor"
+  ],
+  "unknown_numeric_N0": true,
+  "no_numeric_allowance": true,
+  "no_runtime_grant": true,
+  "native_publication_accepted": false,
+  "q32_acceptance": false,
+  "report_sha256": "7bab422b16f9361c549800e5436a35821ee4f6a604d694d8e7f718b95663ed27"
+}

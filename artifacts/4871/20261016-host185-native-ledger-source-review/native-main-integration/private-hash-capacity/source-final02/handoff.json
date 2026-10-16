@@ -1,0 +1,63 @@
+{
+  "compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/verification/compile-only/result.json",
+  "compile_result_sha256": "ea3995b9f2e0d6622d232d77c02ffef3400a34efd5e48d10c6b2cdf8f13b6ca5",
+  "compile_summary": {
+    "all_groups_empty": true,
+    "all_requested_packages_reported": true,
+    "commands_executed": 1,
+    "commands_not_executed": [],
+    "completed_utc": "2026-10-16T05:14:08.283321+00:00",
+    "native_publication_runtime": false,
+    "public_status": "Q32 RED/ACK0",
+    "results": [
+      {
+        "exit_code": 0,
+        "name": "compile-only",
+        "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/verification/compile-only/result.json"
+      }
+    ],
+    "source_files": 10389,
+    "source_manifest_sha256": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+    "source_still_frozen": true,
+    "stopped_at_first_failure": false,
+    "test_bodies_executed": false,
+    "zero_test_RUN_verified": true
+  },
+  "completed_utc": "2026-10-16T05:18:53.318268+00:00",
+  "known_followups": [
+    "P14 actual distinct seal clone and post-transfer proofResources holder/multiplicity",
+    "snapshot-build intermediate refund-debt fixture equality"
+  ],
+  "native_publication_or_actual33_runtime": false,
+  "no_go_jobs_remaining": true,
+  "public_status": "Q32 RED/ACK0",
+  "runtime_lease_released": true,
+  "runtime_proposals_executed": false,
+  "source": {
+    "added_paths": 12,
+    "baseline_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+    "baseline_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "changed_paths": 30,
+    "changed_paths_sha256": "2311abe12d44dcf2c98df0393d7ca9c4b869d6df62046d5a792938ca3c55b29d",
+    "changed_source_archive_sha256": "e9d477c8b0a51ae869831a7b42745a219873600ee9c0cb608dffe909de156625",
+    "created_utc": "2026-10-16T05:12:12.903010+00:00",
+    "deleted_paths": 0,
+    "modified_paths": 18,
+    "selections": {
+      "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+      "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+      "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+      "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+      "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+    },
+    "source_archive_sha256": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+    "source_delta_sha256": "252fb0ffed9207bd9c26903a9def1ea722f7b81cc03f19776162a6e9d8268818",
+    "source_equals_verified_archive": true,
+    "source_files": 10389,
+    "source_manifest_sha256": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+    "status": "source frozen; no test bodies, actual33 or publication runtime"
+  },
+  "source_lease_released": true,
+  "source_review_status": "follow-ups explicitly pending; no selected-ledger-complete claim",
+  "test_bodies_executed": false
+}

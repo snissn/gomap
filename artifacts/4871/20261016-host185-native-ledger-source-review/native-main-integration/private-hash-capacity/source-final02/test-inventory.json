@@ -1,0 +1,84 @@
+[
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/db/native_index_observer_v6_test.go",
+    "sha256": "d467bc1cbbd02219ba9c67cd9b49d5957c1058e16dc13b72c87dfd720c3b2639",
+    "top_level_tests": [
+      "TestNativeIndexObserverOriginalCapturesV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/db/native_selected_ledger_v6_test.go",
+    "sha256": "81acd119eb7ddaacde4fada6f49d9f5480e51fcae4eac9e75d6327cd7bc88618",
+    "top_level_tests": [
+      "TestNativeSelectedManifestTransferredHolderV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+    "sha256": "30b7fc7a6c9ed8cc3cc67e3c0cb390df7ff25fd268e6cfb2d21a7f118e579b8d",
+    "top_level_tests": [
+      "TestPrivateCapacitySetSemanticsAndScalingV6",
+      "TestPrivateCapacityCollisionsOverflowAndUnsupportedV6",
+      "TestPrivateCapacityEveryTurnRefusalAndCancelV6",
+      "TestPrivateCapacitySnapshotIndependentPlanAndPeakV6",
+      "TestPrivateCapacityBoundCaptureCanonicalAndStaleV6",
+      "TestPrivateCapacityPartialCloneAdmissionCancelV6",
+      "TestPrivateCapacityPublishedCleanupPreservesCanonicalV6",
+      "TestPrivateCapacityOversizedSnapshotAndAllocationV6",
+      "TestPrivateCapacitySinkDuplicateAndCommittedResumeV6",
+      "TestPrivateCapacityAbandonedVectorAdmissionAndCancelV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go",
+    "sha256": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "top_level_tests": [
+      "TestSelectedEnrollmentConstructorLedgerV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+    "sha256": "95f00f734c7403864838a723f3c640f24bb6a3c677b3f5181f676ba3260433b2",
+    "top_level_tests": [
+      "TestNativeIndexObserverOriginalBackingV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+    "sha256": "138c8a5bfac504ee1a2cf4fd3036a14cc5301b0d8912b7b21d3e6dab5ac9c19c",
+    "top_level_tests": [
+      "TestSelectedEmptyManifestConstructorLedgerV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "sha256": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+    "top_level_tests": [
+      "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6",
+      "TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+    "sha256": "8930abfab00a85d71f3b52cb59d9811f8b7d456e0bce4bf6cbae32f1c38423f0",
+    "top_level_tests": [
+      "TestNativeSelectedConstructorLedgerCheckedArithmeticV6"
+    ]
+  },
+  {
+    "bodies_executed": false,
+    "path": "TreeDB/zipper/materialized_selected_ledger_test.go",
+    "sha256": "5ebe51b4dc158c49b3a538f377e2bf641f87b8b8f83bcd0f7beed9910c952c36",
+    "top_level_tests": [
+      "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+    ]
+  }
+]

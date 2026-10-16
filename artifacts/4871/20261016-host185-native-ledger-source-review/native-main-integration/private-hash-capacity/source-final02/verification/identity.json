@@ -1,0 +1,20 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-final02/source-frozen.tar.gz",
+  "archive_sha256": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+  "archive_verified_files": 10389,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+  "runner_pgid": 1078855,
+  "runner_pid": 1078855,
+  "selection_bindings": {
+    "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+    "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+  },
+  "subreaper_verified": true
+}

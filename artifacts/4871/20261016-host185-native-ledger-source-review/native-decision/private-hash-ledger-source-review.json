@@ -1,0 +1,208 @@
+{
+  "disposition": "REJECT",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required model; no hosted review was requested.",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+  "source_archive_sha256": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+  "source_files": 10389,
+  "archive_all_files_verified": true,
+  "incremental_files_reviewed": 19,
+  "full_changed_paths_from_23e": 30,
+  "prior_provisional_production_disposition_preserved": true,
+  "findings": [
+    {
+      "id": "L1",
+      "severity": "blocking-observer-correctness",
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+      "line": 119,
+      "title": "Selected Set predicate requires a constructor-impossible alias and omits the seal wrapper",
+      "trigger": "Completed selected phase13 before native publication.",
+      "cause": "Candidate preparation phase2 CloneAdmitted(resources) creates member.resources; seal preparation phase1 independently CloneAdmitted(member.resources) creates seal.resources. Therefore MemberSealSameSet is false. P14 nevertheless requires it and adds only Set0 and Set1 charges (lines126-128). The independently admitted seal wrapper is absent from the subtotal.",
+      "correction": "Expose direct actual wrapper/metadata/kind/empty-backing pair facts for the fixed surviving roles; sum each distinct allocation once. Support the actual distinct clone shape; do not merely negate MemberSealSameSet or infer identity from equal charges/kinds. Add an expected selected-shape positive evaluator control plus unsupported/alias negatives.",
+      "related_sources": [
+        "TreeDB/db/native_mvcc_candidate_preparation_v6.go:123",
+        "TreeDB/db/native_mvcc_seal_preparation_v6.go:291",
+        "TreeDB/db/native_selected_ledger_for_test_v6.go:60"
+      ]
+    },
+    {
+      "id": "L2",
+      "severity": "blocking-observer-coverage",
+      "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "line": 355,
+      "title": "Proof Set observation uses the cleared preparation alias instead of its surviving seal holder",
+      "trigger": "seal descriptor binding transfers s.proofResources into s.seal.primary.proofResources and clears s.proofResources.",
+      "cause": "Seal phase0 PrepareEmptyStableResourceSet constructs/clones an independent proof wrapper from base.slotResources. Binding at604-607 transfers it. Set role3 continues to inspect s.proofResources; the evaluator requires role3 absent. Thus a real surviving independently admitted wrapper and possible distinct kind/empty backing are missing. This is analogous to the manifest-holder defect already correctly fixed in this packet.",
+      "correction": "Observe seal.primary.proofResources at the completed transfer phase, prove cleared preparation alias and valid actual holder, include it in the fixed direct allocation-pair facts and P14/P15 or named empty-backing row. Keep absent/dual/unsupported holders incomplete; do not count a cleared alias as zero or assume proof kinds equal candidate kinds.",
+      "related_sources": [
+        "TreeDB/db/native_mvcc_seal_preparation_v6.go:276",
+        "TreeDB/db/native_mvcc_seal_preparation_v6.go:604",
+        "TreeDB/mvcc/native_selected_ledger_test.go:126",
+        "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go:76"
+      ]
+    },
+    {
+      "id": "L3",
+      "severity": "blocking-fixture-fidelity",
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "line": 203,
+      "title": "Intermediate snapshot oracle equates refund receipt debt with current Owner bytes",
+      "trigger": "buildSnapshot yields after original RemovePendingWork debits bytes, but before shrink/reset completion clears scalar debt.",
+      "cause": "removeUnserialized subtracts o.bytes/o.pending before shrinkStepLocked; CompletePendingWork clears caller amount only after ResetCompletedWork. The test requires Owner.Bytes == live backing charges + full scalar debt after every not-ready return. That equality is not a valid invariant in this legal window; no executed failure is asserted here.",
+      "correction": "Use the exact liveBacking <= Owner.Bytes <= liveBacking+detachedDebt interval for intermediate returns, preserving terminal exact zero/debt/alias assertions and same-receipt resume. Add a targeted bounded work refusal in the debit-before-reset window so the intended distinction is tested. Do not blanket weaken unrelated pre-refund equality checks.",
+      "related_sources": [
+        "TreeDB/freelist/private_control_capacity_v6.go:305",
+        "TreeDB/freelist/private_control_capacity_v6.go:334",
+        "TreeDB/internal/retainedalloc/owner_work.go:280",
+        "TreeDB/internal/retainedalloc/owner_work.go:405"
+      ]
+    }
+  ],
+  "coverage": [
+    {
+      "path": "TreeDB/caching/native_selected_ledger_for_test_v6.go",
+      "sha256": "e3d3b18c46ca1bb05d37ce297ebfa0ab1e1e52be80d0a44d0c151161db2d7eb4",
+      "review": "Capture/outer lease distinction and constructor-detached predicate; fixed original Snapshot enrollment pair."
+    },
+    {
+      "path": "TreeDB/db/native_index_observer_v6_test.go",
+      "sha256": "d467bc1cbbd02219ba9c67cd9b49d5957c1058e16dc13b72c87dfd720c3b2639",
+      "review": "Actual original DATA/PRIMARY capture positive and zero-work controls; token ancillary and pair facts."
+    },
+    {
+      "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "sha256": "ceb344de2f6285af5348bc53594313ecb8c73d174e5edd83ddb229211fd98b01",
+      "review": "P12 transferred manifest holder, bank constructor floor and transaction aggregate floor; existing Set roles."
+    },
+    {
+      "path": "TreeDB/db/native_selected_ledger_for_test_v6.go",
+      "sha256": "1c995f12ce46d9228b15fab5140e7bd7edc24b9a2437d570092b40eee95bc795",
+      "review": "All fixed role facts and token/private ledger dispatchers; no pointer results."
+    },
+    {
+      "path": "TreeDB/db/native_selected_ledger_v6_test.go",
+      "sha256": "81acd119eb7ddaacde4fada6f49d9f5480e51fcae4eac9e75d6327cd7bc88618",
+      "review": "Genuine warmed DB capture plus synthetic transferred manifest holder, original finite cleanup."
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "sha256": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+      "review": "Explicit clone.privatePreparation=false after header copy; no mutation authority before detach."
+    },
+    {
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "sha256": "30b7fc7a6c9ed8cc3cc67e3c0cb390df7ff25fd268e6cfb2d21a7f118e579b8d",
+      "review": "All changed private-capacity fixture assertions, empty planner correction, clone/vector/abandoned cancellation."
+    },
+    {
+      "path": "TreeDB/freelist/private_ledger_for_test_v6.go",
+      "sha256": "ebaf8ee22ef4d030b5e2350a452c06fabe1d32d7eb7fc17db35418dbce020c65",
+      "review": "Clone/vector exact charges, four fixed hash backing rows, completed normalizer scratch state."
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/retention.go",
+      "sha256": "c4d9150bda025702051ed62da3936434725bc33acd6cf222cd25944b64b69a1b",
+      "review": "Original bank/descriptor/image/edge constructor floor and overflow handling."
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6.go",
+      "sha256": "c0747f15bd80e9cd8efed88f7e5ce113fa752d7f17a455793d9bfe497843bb20",
+      "review": "Enrollment/companion/binding/concrete lease headers, expected owners/budget, detached constructor locks."
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go",
+      "sha256": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+      "review": "Genuine two-owner enrollment positive/refusal/wrong-owner/closed controls and cleanup."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+      "sha256": "95f00f734c7403864838a723f3c640f24bb6a3c677b3f5181f676ba3260433b2",
+      "review": "Original backing generic-namespace incomplete, missing pin pair and zero-channel negatives."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+      "sha256": "bd4d3d57eee3ea1e1c2e67af8807f8d358bd1a959960a87a9f0a853247b549b0",
+      "review": "Empty Set/manifest shape capacity checks, transaction aggregate/floor/transfer flags and owner accessor."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+      "sha256": "138c8a5bfac504ee1a2cf4fd3036a14cc5301b0d8912b7b21d3e6dab5ac9c19c",
+      "review": "Actual empty manifest constructor charge and wrong owner/allocated-empty payload controls; original release."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/selected_token_ledger_for_test_v6.go",
+      "sha256": "f0cebfd2561c47c6783df35869f7d7d8a232ba60e5710dd5ecaf787fcb03c9ae",
+      "review": "Token metadata/obligation/physical/namespace/pin-state fixed facts and canonical physical identity projection; pointer dedup."
+    },
+    {
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "sha256": "ca8e3b7ee0293ebf2ab0852b7a53794d7770d79edd9d05fad73f7f140211b214",
+      "review": "Original promoted actual33 helper invocation only; global union remains explicitly incomplete."
+    },
+    {
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+      "sha256": "8930abfab00a85d71f3b52cb59d9811f8b7d456e0bce4bf6cbae32f1c38423f0",
+      "review": "Every P01-P21 row, checked arithmetic, alias suppressions and optional named source/target banks; L1/L2."
+    },
+    {
+      "path": "TreeDB/zipper/materialized_observer_for_test_v6.go",
+      "sha256": "311f3c30ca31e7512dfd31ebfa28abacaf5b57704d8b88e8a495dedb35a77e82",
+      "review": "Original private zipper owner equality and nonnil map absence, bounded scalar return."
+    },
+    {
+      "path": "TreeDB/zipper/materialized_selected_ledger_test.go",
+      "sha256": "5ebe51b4dc158c49b3a538f377e2bf641f87b8b8f83bcd0f7beed9910c952c36",
+      "review": "Genuine zipper constructor/refusal/wrong-owner/allocated-empty map controls and actual finite cleanup."
+    }
+  ],
+  "inputs": {
+    "native-main-integration/private-hash-capacity/source-final02/source-frozen.json": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+    "native-main-integration/private-hash-capacity/source-final02/source-frozen.tar.gz": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+    "native-main-integration/private-hash-capacity/source-final02/source-delta.patch": "252fb0ffed9207bd9c26903a9def1ea722f7b81cc03f19776162a6e9d8268818",
+    "native-main-integration/private-hash-capacity/source-final02/changed-paths.json": "2311abe12d44dcf2c98df0393d7ca9c4b869d6df62046d5a792938ca3c55b29d",
+    "native-main-integration/private-hash-capacity/source-final02/changed-source.tar.gz": "e9d477c8b0a51ae869831a7b42745a219873600ee9c0cb608dffe909de156625",
+    "native-main-integration/private-hash-capacity/source-final02/freeze-receipt.json": "c83ac59d58c33d62aad7ae433a3bb4b2a86285368d19629ded8175e3cf5a7933",
+    "native-main-integration/private-hash-capacity/source-final02/price-lifetime-ledger.md": "a63aa0af81b13b5c838df3e63a971f92f83c17f820a3e9371f3d670368f0d3f7",
+    "native-main-integration/private-hash-capacity/source-final02/proposed-focused-runtime.json": "b6ce56d8e20a609bee16b8c937d4c03984ceaa228e0fbf25c1dbad2bab5cff3d",
+    "native-main-integration/private-hash-capacity/source-final02/proposed-actual33.json": "87a67ad4e89d3375fe71cad4467af24c0133b989c2539cba3164d42de53f395c",
+    "native-main-integration/private-hash-capacity/source-final02/verification/summary.json": "66b5dfcb1e69b301ac2622c6194d97f05128a435d135d74fece4526d7e3b1f4f",
+    "native-main-integration/private-hash-capacity/source-final02/verification/compile-only/command.json": "bacaf797f555e4165f88cde5877e3e327d8b1955989cd56810015dcd287479cf",
+    "native-main-integration/private-hash-capacity/source-final02/verification/compile-only/process.json": "27e36dd5c7a88402f730140e122003b0bd212b917e8e7bfe601c715d71de4aa3",
+    "native-main-integration/private-hash-capacity/source-final02/verification/compile-only/result.json": "ea3995b9f2e0d6622d232d77c02ffef3400a34efd5e48d10c6b2cdf8f13b6ca5",
+    "native-main-integration/private-hash-capacity/source-final02/verification/compile-only/run.log": "5286b663e11eb1e081b62dc94be5dadecb7a8d88a821b512de4bd5a749161a0e",
+    "native-main-integration/private-hash-source02-root-read/delta-from-ad721.patch": "12cfaed3542054e725a742206bbc8a0739b6e59c155f6dc3d54e5e4f18ab961d",
+    "native-decision/private-hash-capacity-provisional-review.md": "1daf8b6603ca236d1b3e4a366a6b1d27e1aa65dbd0bd52b708b52a5bd07c6519"
+  },
+  "compile_evidence": {
+    "commands": 1,
+    "packages": 8,
+    "test_bodies": 0,
+    "exit_code": 0,
+    "elapsed_seconds": 95.49992285994813,
+    "source_before_after_frozen_equal": true,
+    "leader_joined": true,
+    "process_groups_and_children_empty": true
+  },
+  "production_disposition": "No new production hash/clone correctness blocker found in the incremental delta; provisional hash source disposition is preserved. Full source packet rejected for selected-ledger fidelity and fixture issues.",
+  "complete_retained_union_accepted": false,
+  "selected_P_complete_accepted": false,
+  "F_numeric_accepted": false,
+  "numeric_allowance_chosen": false,
+  "native_publication_accepted": false,
+  "Q32_status": "RED",
+  "ACK": 0,
+  "runtime_performed_by_reviewer": false,
+  "limitations": [
+    "No test bodies on this final source were executed or accepted.",
+    "No actual33 observation on this source.",
+    "No whole supported retained closure, exact heap/RSS/transitive sum or atomic shared-state observation.",
+    "No general nonempty-resource or future Finish numerical closure.",
+    "F record expression is conditional source arithmetic, not a current measured aggregate or runtime grant.",
+    "No performance, final driver, native publication, C1/C3 or qualification claim."
+  ],
+  "review_lease_released": true
+}

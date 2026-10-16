@@ -1,0 +1,104 @@
+{
+  "whole_files": [
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "exists": true,
+      "baseline_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "final_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_publication_v6.go",
+      "exists": true,
+      "baseline_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+      "final_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/native_publication_remainder_v6.go",
+      "exists": true,
+      "baseline_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+      "final_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_generation_completion_v6.go",
+      "exists": true,
+      "baseline_sha256": "678245791809e43be4e4d6d23465e083017f9891e1950a255dde25e2d582c5e3",
+      "final_sha256": "678245791809e43be4e4d6d23465e083017f9891e1950a255dde25e2d582c5e3",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "exists": true,
+      "baseline_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+      "final_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "exists": true,
+      "baseline_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+      "final_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "exists": true,
+      "baseline_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+      "final_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "exists": true,
+      "baseline_sha256": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+      "final_sha256": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/zipper/materialized_write_work.go",
+      "exists": true,
+      "baseline_sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+      "final_sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/zipper/materialized_input_work_v6.go",
+      "exists": true,
+      "baseline_sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+      "final_sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_work.go",
+      "exists": true,
+      "baseline_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+      "final_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_growth_work.go",
+      "exists": true,
+      "baseline_sha256": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+      "final_sha256": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "exists": true,
+      "baseline_sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+      "final_sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+      "byte_identical": true
+    }
+  ],
+  "original_actual33_test_function": {
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "function": "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6",
+    "baseline_sha256": "f8cfeb489e27df9cb0068550237a2dbf856c821b1c123d39df19729ff1bd20d2",
+    "final_sha256": "f8cfeb489e27df9cb0068550237a2dbf856c821b1c123d39df19729ff1bd20d2",
+    "byte_identical": true,
+    "helper_changed": true
+  },
+  "numeric_price_status": "Re-evaluate bytes from current unsafe.Sizeof expressions/current geometry; previous numerical observations not reused."
+}
