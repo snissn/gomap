@@ -1,0 +1,88 @@
+{
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "cpu_count": 12,
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "go_version_file": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "8b926dd4db31cbb17c2eb1bfc8039549bc2700581e3ce31c9eec27985160959d",
+  "proposal_sha256": "3eafcf14a82c8cfccb8b0f4e77cd00586426efab37120c02cf86292797388c21",
+  "quietness_policy": {
+    "max_other_process_one_core_cpu_percent": 15,
+    "minimum_available_memory_kib": 8388608,
+    "preflight_max_aggregate_busy_percent": 5,
+    "preflight_window_seconds": 1,
+    "preflight_windows": 2,
+    "sample_scope": "whole process; observed surviving unrelated processes",
+    "unobserved_exited_process_limitation": true
+  },
+  "runner_pid": 1596333,
+  "runner_sha256": "82dfdff40568700caa2db6d57c6f841f8f495c75fd6a6a1a202ca6ff25db0173",
+  "runner_subreaper": true,
+  "sides": {
+    "A": {
+      "archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+      "benchmark_source_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+      "build_accepted": true,
+      "build_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-firstack-cost-source01/build/result.json",
+      "build_receipt_sha256": "1ee5aa017b5260462ec82f0a905b86ae474e42b1d98dd2d5d8e0a21b98e26bd0",
+      "controls_accepted": true,
+      "controls_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-firstack-cost-source01/runtime-stages/controls/summary.json",
+      "controls_receipt_sha256": "c9ba03c5b4516ab35763e2d03815f383a8865b3f853fdd33a35d718384a7e9d0",
+      "elf": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-firstack-cost-source01/build/native-firstack-cost.test",
+      "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+      "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-firstack-cost-source01-review.json",
+      "independent_review_sha256": "fcf364744bd7e98e0f5e2ffabae4f7af354198bd69908ef102cb4d23aea613f8",
+      "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+      "modes_sha256": "98a33d0a2026b141857552ace1dd4a8cb094700b5dc3984d31383f80d42d6845",
+      "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-firstack-cost-source01",
+      "review_accepted": true,
+      "source_identity": {
+        "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+        "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-firstack-cost-baseline-source"
+      },
+      "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-firstack-cost-baseline-source",
+      "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-firstack-cost-source01-verify.json",
+      "source_verify_sha256": "a05540aef274b76648eac96e884e9287ba5f3b14b8b4235b9bec57a7c628563c"
+    },
+    "B": {
+      "archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+      "benchmark_source_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+      "build_accepted": true,
+      "build_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/result.json",
+      "build_receipt_sha256": "a4922a8639fabd975990e7e37a6bb3ef6811031566267e35c4991a1315c2d8b3",
+      "controls_accepted": true,
+      "controls_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/runtime-stages/actual-controls/summary.json",
+      "controls_receipt_sha256": "74519d79da316888161cacc72ebc3a750a56e27c64f9c1cad4701772b95dcae2",
+      "elf": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/native-firstack-cost.test",
+      "elf_sha256": "c02b67d663db0994062839294cd3fa408fbea3bab5653a8e8be5426b8afbf177",
+      "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source04-review.json",
+      "independent_review_sha256": "69c62a14db4584436bb0a94ad7ab8c53be4c19a4b9856ff6eba3b86604f8a859",
+      "manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+      "modes_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+      "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04",
+      "review_accepted": true,
+      "source_identity": {
+        "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+        "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823",
+        "manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+        "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+      },
+      "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-verify.json",
+      "source_verify_sha256": "b886f41770d32c70fe1b4ea159e157c5a2f250cea9d0b4e6d1e126a49012ef99"
+    }
+  }
+}

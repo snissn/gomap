@@ -1,0 +1,34 @@
+{
+  "scope": "focused-canonical-ledger-source01",
+  "created_utc": "2026-10-16T12:16:52.509307+00:00",
+  "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "source_archive_sha256": "f595dfec6b394856f61a91b9b338a89a5d4b5cfa6e2ea6732886b487b3aa169c",
+  "proposed_commands_sha256": "bb9714998cc5a6a74fb254eac0f9dafe9b2943e6d414be0df752533c4ea83aa4",
+  "runner_sha256": "c4170dfd33a5226a0fce11d177688093fe0698af0d07f0c476f0f42a85ba2d69",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source01-review.json",
+  "independent_review_sha256": "f08e1d3b7cfae63cb60d1ec17acf750a3cade67fcef7b3639d453ea7b1cb683c",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source01-verify.json",
+  "source_verify_sha256": "a7a425274a242b348a3141f0e9fb9a409376b6e4840ffcff84ecb6f594cffd50",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "authorized_command_names": [
+    "normal-mvcc-prices",
+    "normal-freelist-canonical",
+    "normal-freelist-consumers",
+    "normal-db-construction",
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction"
+  ],
+  "actual_native_driver_authorized": false,
+  "numeric_allowance_selected": false,
+  "source_lease": "released; all product source stays frozen through runtime",
+  "root_disposition": "Accept source for these exact eight focused normal/race calls after full final source/delta/control/docs and independent review. Preserved preliminary rejection resolved by exact nine-path final delta. Stop first failure; no retry or actual six-arm execution implied.",
+  "required_top_tests_per_mode": 101,
+  "required_child_paths_per_mode": 178,
+  "public_Q32": "RED/ACK0; protected fixture unchanged",
+  "full_graph_qualification": "OPEN"
+}

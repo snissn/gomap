@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-16T12:31:33.322143+00:00",
+  "scope": "Root diagnosis and narrow source-only disposal UNIT control adaptation",
+  "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "source_bindings": {
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe",
+    "TreeDB/db/primary_runtime_disposal_work_v6_test.go": "18d1e3cb7fa04fc00fc4a7f7ae9603d34f5876cc673cc61493d371fdaa235323",
+    "TreeDB/internal/rootpublication/resource_token_release_work_v6.go": "a9e659cfcea57b775c81920ea8fd8bff36f6554dab88ce8405555593601a1c70",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/primaryarena/arena.go": "f1a2fd47dfd1408c75e2eadb8b82e9019a3bbdf1624c8ca2ead9b2618163456b",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "75654de9e97fcaace9a1465872144b57c1bafab72956ca1b00c463a1470a278e",
+    "TreeDB/internal/primaryarena/native_terminal_price_for_test_v6.go": "7b495de07a13634b25972f22327072fd759e4f32f06ec2d69e49ba25aff5c981",
+    "TreeDB/pager/primary_read_root_v6.go": "13a24b929b58abfcf7458a588e1b9cbbb649d1166d87ceb2ed6878c32f6a6469",
+    "TreeDB/pager/native_read_root_price_for_test_v6.go": "2042307f9329cc1b694e779b952fee993d28d7318b0b22d75f32e24263cc42e8"
+  },
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/run.log",
+  "raw_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+  "findings": [
+    "Original runtime entry preadmits3records and exact containing bytes before observing sticky failure; zero-work refusal cannot promise first-error observation. Preserve refused-call no-effects then check SAME first error with exact entry admission.",
+    "Old5record Drop probe now spends3entry+1init+1image before any ref/Drop effects. One freshly prepared immutable root has one lookup match: ref1+Drop2+lookup2, total10. Empty accounting completion adds no work because owner nil."
+  ],
+  "selection": "Use actual existing source price forwards and named parent sizeof/admission rows in ONLY two primary_runtime_disposal_work_v6_test.go controls. Retain before-effects refusal, exact queued root Drop, ordinary queue nonassistance, delayed original resource callback, SAME header/Set/owner until actual alias detach and once-only accounting completion. Verify continuation allowances from whole repeated prefix, never guessed bigger caps.",
+  "sticky_selection": "Keep zero-work observation as explicit refusal and unchanged first receipt/alias/callback count. Then exact entry-admitted call proves original sticky error returned with no physical replay.",
+  "public_caps": "Unchanged original Q32/1MiB and actual diagnostic controls. No production/runtime/G grant.",
+  "constructor_scope": "Independent reviewer handles inline-only seed causing nil Sets; use actual nonempty persistent dependencies to make original nonnil handoff assertions meaningful, not vacuous nil equivalence.",
+  "source_writer": "native_prerequisite only",
+  "runtime_stopped": true
+}

@@ -1,0 +1,49 @@
+{
+  "all_pass": true,
+  "no_product_acceptance": true,
+  "results": [
+    {
+      "PASS": [],
+      "RUN": [],
+      "elapsed_seconds": 1.8085664799436927,
+      "elf_sha256": "c02b67d663db0994062839294cd3fa408fbea3bab5653a8e8be5426b8afbf177",
+      "executed": true,
+      "exit_code": 0,
+      "interventions": [],
+      "leader_joined": true,
+      "name": "build-firstack-elf",
+      "observed_group": [
+        {
+          "comm": "go",
+          "pgid": 1584633,
+          "pid": 1584633,
+          "ppid": 1584622,
+          "start_ticks": 373081817,
+          "state": "S",
+          "ticks": 18
+        },
+        {
+          "comm": "link",
+          "pgid": 1584633,
+          "pid": 1584660,
+          "ppid": 1584633,
+          "start_ticks": 373081832,
+          "state": "R",
+          "ticks": 70
+        }
+      ],
+      "pgid": 1584633,
+      "pid": 1584633,
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "reaped": [],
+      "reasons": [],
+      "remaining_group_or_adopted_children": [],
+      "source_before_after_frozen": true,
+      "status": "PASS",
+      "subreaper": true
+    }
+  ],
+  "stage": "build",
+  "unexecuted_commands": [],
+  "utc": "2026-10-16T12:55:35.432939+00:00"
+}

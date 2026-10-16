@@ -1,0 +1,121 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "node_exporter",
+        "one_core_cpu_percent": 2.9657378861164756,
+        "pid": 5838
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.977158590744317,
+        "pid": 1881
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.977158590744317,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.977158590744317,
+        "pid": 624687
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.977158590744317,
+        "pid": 681192
+      },
+      {
+        "comm": "ksoftirqd/7",
+        "one_core_cpu_percent": 0.9885792953721585,
+        "pid": 60
+      },
+      {
+        "comm": "ksoftirqd/11",
+        "one_core_cpu_percent": 0.9885792953721585,
+        "pid": 84
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9885792953721585,
+        "pid": 1949
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9885792953721585,
+        "pid": 128239
+      },
+      {
+        "comm": "cloudflared",
+        "one_core_cpu_percent": 0.9885792953721585,
+        "pid": 1729533
+      }
+    ],
+    "aggregate_busy_percent": 0.9925558312655087,
+    "mem_available_kib": 18860560,
+    "seconds": 1.0115526439622045
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 4.936647421251678,
+        "pid": 681192
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 2.9619884527510068,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 2.9619884527510068,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 2.9619884527510068,
+        "pid": 3140140
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.974658968500671,
+        "pid": 1881
+      },
+      {
+        "comm": "gnome-shell",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 3861
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 120874
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 128239
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 624687
+      },
+      {
+        "comm": "polystore_gatew",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 684322
+      },
+      {
+        "comm": "top",
+        "one_core_cpu_percent": 0.9873294842503355,
+        "pid": 874030
+      }
+    ],
+    "aggregate_busy_percent": 8.340214698596201,
+    "mem_available_kib": 18949268,
+    "seconds": 1.0128331179730594
+  }
+]

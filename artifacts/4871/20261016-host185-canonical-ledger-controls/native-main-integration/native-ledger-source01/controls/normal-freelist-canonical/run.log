@@ -1,0 +1,253 @@
+=== RUN   TestPrivateCOWPreparationUsesOriginalSlotOnlyAtAdoptionV6
+--- PASS: TestPrivateCOWPreparationUsesOriginalSlotOnlyAtAdoptionV6 (0.00s)
+=== RUN   TestPrivateCOWPreparationCannotAdoptOverRealForegroundWriterV6
+--- PASS: TestPrivateCOWPreparationCannotAdoptOverRealForegroundWriterV6 (0.00s)
+=== RUN   TestPrivateCOWAtomicAdoptionActivationRefusesBeforeSlotOrLedgerEffectsV6
+    allocator_preparation_work_v6_test.go:197: invalid freelist generation format
+--- FAIL: TestPrivateCOWAtomicAdoptionActivationRefusesBeforeSlotOrLedgerEffectsV6 (0.00s)
+=== RUN   TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6
+    allocator_preparation_work_v6_test.go:228: invalid freelist generation format
+--- FAIL: TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6 (0.00s)
+=== RUN   TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6
+=== RUN   TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6/append
+    allocator_preparation_work_v6_test.go:287: invalid freelist generation format
+=== RUN   TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6/reuse
+    allocator_preparation_work_v6_test.go:287: invalid freelist generation format
+--- FAIL: TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6 (0.00s)
+    --- FAIL: TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6/append (0.00s)
+    --- FAIL: TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6/reuse (0.00s)
+=== RUN   TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6
+=== RUN   TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6/append
+    allocator_preparation_work_v6_test.go:336: invalid freelist generation format
+=== RUN   TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6/reuse
+    allocator_preparation_work_v6_test.go:336: invalid freelist generation format
+--- FAIL: TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6 (0.00s)
+    --- FAIL: TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6/append (0.00s)
+    --- FAIL: TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6/reuse (0.00s)
+=== RUN   TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6
+=== RUN   TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/one-record
+    allocator_preparation_work_v6_test.go:378: invalid freelist generation format
+=== RUN   TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/Q32-atomic-refusal
+    allocator_preparation_work_v6_test.go:378: invalid freelist generation format
+=== RUN   TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/below
+    allocator_preparation_work_v6_test.go:378: invalid freelist generation format
+=== RUN   TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/exact
+    allocator_preparation_work_v6_test.go:378: invalid freelist generation format
+--- FAIL: TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6 (0.00s)
+    --- FAIL: TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/one-record (0.00s)
+    --- FAIL: TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/Q32-atomic-refusal (0.00s)
+    --- FAIL: TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/below (0.00s)
+    --- FAIL: TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6/exact (0.00s)
+=== RUN   TestNativeCOWPublicationScopeExcludesPrivateRollbackV6
+--- PASS: TestNativeCOWPublicationScopeExcludesPrivateRollbackV6 (0.01s)
+=== RUN   TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6
+=== RUN   TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6/ordinary
+=== RUN   TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6/native
+--- PASS: TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6 (0.00s)
+    --- PASS: TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6/ordinary (0.00s)
+    --- PASS: TestNativeCOWPublicationDefersOnlyConservativeEagerReuseV6/native (0.00s)
+=== RUN   TestCanonicalPublicationPrefixBackingCustodyV6
+=== RUN   TestCanonicalPublicationPrefixBackingCustodyV6/ordinary-borrow
+=== RUN   TestCanonicalPublicationPrefixBackingCustodyV6/native-refusal
+--- PASS: TestCanonicalPublicationPrefixBackingCustodyV6 (0.00s)
+    --- PASS: TestCanonicalPublicationPrefixBackingCustodyV6/ordinary-borrow (0.00s)
+    --- PASS: TestCanonicalPublicationPrefixBackingCustodyV6/native-refusal (0.00s)
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6/empty
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6/one
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6/33
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6/257
+=== RUN   TestPrivateCapacitySetSemanticsAndScalingV6/4097
+--- PASS: TestPrivateCapacitySetSemanticsAndScalingV6 (0.00s)
+    --- PASS: TestPrivateCapacitySetSemanticsAndScalingV6/empty (0.00s)
+    --- PASS: TestPrivateCapacitySetSemanticsAndScalingV6/one (0.00s)
+    --- PASS: TestPrivateCapacitySetSemanticsAndScalingV6/33 (0.00s)
+    --- PASS: TestPrivateCapacitySetSemanticsAndScalingV6/257 (0.00s)
+    --- PASS: TestPrivateCapacitySetSemanticsAndScalingV6/4097 (0.00s)
+=== RUN   TestPrivateCapacityCollisionsOverflowAndUnsupportedV6
+--- PASS: TestPrivateCapacityCollisionsOverflowAndUnsupportedV6 (0.00s)
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/empty
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/one
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#01
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#02
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#03
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#04
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#05
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#06
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#07
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#08
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#09
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#10
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#11
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#12
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#13
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#14
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#15
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#16
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#17
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#18
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#19
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#20
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#21
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#22
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#23
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#24
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#25
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#26
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#27
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#28
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#29
+=== RUN   TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#30
+--- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/empty (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/one (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#01 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#02 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#03 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#04 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#05 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#06 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#07 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#08 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#09 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#10 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#11 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#12 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#13 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#14 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#15 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#16 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#17 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#18 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#19 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#20 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#21 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#22 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#23 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#24 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#25 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#26 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#27 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#28 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#29 (0.00s)
+    --- PASS: TestPrivateCapacityEveryTurnRefusalAndCancelV6/4097#30 (0.00s)
+=== RUN   TestPrivateCapacitySnapshotIndependentPlanAndPeakV6
+--- PASS: TestPrivateCapacitySnapshotIndependentPlanAndPeakV6 (0.00s)
+=== RUN   TestPrivateCapacityBoundCaptureCanonicalAndStaleV6
+=== RUN   TestPrivateCapacityBoundCaptureCanonicalAndStaleV6/append
+=== RUN   TestPrivateCapacityBoundCaptureCanonicalAndStaleV6/reuse
+--- PASS: TestPrivateCapacityBoundCaptureCanonicalAndStaleV6 (0.00s)
+    --- PASS: TestPrivateCapacityBoundCaptureCanonicalAndStaleV6/append (0.00s)
+    --- PASS: TestPrivateCapacityBoundCaptureCanonicalAndStaleV6/reuse (0.00s)
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/empty
+    private_control_capacity_v6_test.go:468: cancel lost original ledger before cleanup
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/one
+    private_control_capacity_v6_test.go:468: cancel lost original ledger before cleanup
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097
+    private_control_capacity_v6_test.go:468: cancel lost original ledger before cleanup
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#01
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#02
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#03
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#04
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#05
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#06
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#07
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#08
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#09
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#10
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#11
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#12
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#13
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#14
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#15
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#16
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#17
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#18
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#19
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#20
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#21
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#22
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#23
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#24
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#25
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#26
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#27
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#28
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#29
+=== RUN   TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#30
+--- FAIL: TestPrivateCapacityPartialCloneAdmissionCancelV6 (0.01s)
+    --- FAIL: TestPrivateCapacityPartialCloneAdmissionCancelV6/empty (0.00s)
+    --- FAIL: TestPrivateCapacityPartialCloneAdmissionCancelV6/one (0.00s)
+    --- FAIL: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#01 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#02 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#03 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#04 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#05 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#06 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#07 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#08 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#09 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#10 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#11 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#12 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#13 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#14 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#15 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#16 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#17 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#18 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#19 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#20 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#21 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#22 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#23 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#24 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#25 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#26 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#27 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#28 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#29 (0.00s)
+    --- PASS: TestPrivateCapacityPartialCloneAdmissionCancelV6/4097#30 (0.00s)
+=== RUN   TestPrivateCapacityPublishedCleanupPreservesCanonicalV6
+--- PASS: TestPrivateCapacityPublishedCleanupPreservesCanonicalV6 (0.00s)
+=== RUN   TestPrivateCapacityOversizedSnapshotAndAllocationV6
+--- PASS: TestPrivateCapacityOversizedSnapshotAndAllocationV6 (0.00s)
+=== RUN   TestPrivateCapacitySinkDuplicateAndCommittedResumeV6
+--- PASS: TestPrivateCapacitySinkDuplicateAndCommittedResumeV6 (0.00s)
+=== RUN   TestPrivateCapacityAbandonedVectorAdmissionAndCancelV6
+--- PASS: TestPrivateCapacityAbandonedVectorAdmissionAndCancelV6 (0.00s)
+=== RUN   TestCanonicalLedgerPatriciaSemanticsAndChargesV6
+--- PASS: TestCanonicalLedgerPatriciaSemanticsAndChargesV6 (0.00s)
+=== RUN   TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6
+=== RUN   TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6/below
+=== RUN   TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6/exact
+--- PASS: TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6 (0.00s)
+    --- PASS: TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6/below (0.00s)
+    --- PASS: TestCanonicalLedgerClaimExactAdmissionAndNoEffectsV6/exact (0.00s)
+=== RUN   TestCanonicalLedgerSharedOwnerCloseIsolationV6
+--- PASS: TestCanonicalLedgerSharedOwnerCloseIsolationV6 (0.00s)
+=== RUN   TestCanonicalLedgerCommittedRetirementInterleavesPinnedBurnsV6
+    reservation_canonical_storage_v6_test.go:257: alternating peer lost original pinned tombstone
+--- FAIL: TestCanonicalLedgerCommittedRetirementInterleavesPinnedBurnsV6 (0.00s)
+=== RUN   TestCanonicalLedgerGoverningBudgetRefusalsV6
+=== RUN   TestCanonicalLedgerGoverningBudgetRefusalsV6/capacity
+=== RUN   TestCanonicalLedgerGoverningBudgetRefusalsV6/ordinary-lease
+--- PASS: TestCanonicalLedgerGoverningBudgetRefusalsV6 (0.00s)
+    --- PASS: TestCanonicalLedgerGoverningBudgetRefusalsV6/capacity (0.00s)
+    --- PASS: TestCanonicalLedgerGoverningBudgetRefusalsV6/ordinary-lease (0.00s)
+=== RUN   TestCanonicalLedgerConstructorCloseOriginalCustodyV6
+=== RUN   TestCanonicalLedgerConstructorCloseOriginalCustodyV6/ordinary-prepared
+=== RUN   TestCanonicalLedgerConstructorCloseOriginalCustodyV6/failed-abort
+=== RUN   TestCanonicalLedgerConstructorCloseOriginalCustodyV6/activated
+--- PASS: TestCanonicalLedgerConstructorCloseOriginalCustodyV6 (0.00s)
+    --- PASS: TestCanonicalLedgerConstructorCloseOriginalCustodyV6/ordinary-prepared (0.00s)
+    --- PASS: TestCanonicalLedgerConstructorCloseOriginalCustodyV6/failed-abort (0.00s)
+    --- PASS: TestCanonicalLedgerConstructorCloseOriginalCustodyV6/activated (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/freelist	0.029s
+FAIL

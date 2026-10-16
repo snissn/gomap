@@ -1,0 +1,6 @@
+{
+  "correction": "Aggregate42 because runtime-disposal test was unchanged vs minimum01 in source02 and now joins delta. Incremental source02\u219203 remains2paths.",
+  "current_expected_aggregate_paths": 42,
+  "current_expected_files": 10444,
+  "first_freeze_script_invocation": "Stopped at inherited aggregate41 assertion before writing source artifacts; not a Go/compiler/runtime failure."
+}

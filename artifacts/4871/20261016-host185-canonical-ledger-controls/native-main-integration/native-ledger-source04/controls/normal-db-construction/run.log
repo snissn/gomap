@@ -1,0 +1,60 @@
+=== RUN   TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6
+    primary_capsule_v6_test.go:83: pre-corruption slot0 commit3 parent2 newest0 prior2
+    primary_capsule_v6_test.go:83: pre-corruption slot1 commit2 parent1 newest0 prior2
+--- PASS: TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6 (0.12s)
+=== RUN   TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6
+--- PASS: TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6 (0.08s)
+=== RUN   TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6
+--- PASS: TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6 (0.13s)
+=== RUN   TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6
+--- PASS: TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6 (0.08s)
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/success
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release
+--- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6 (0.52s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/success (0.14s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain (0.13s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close (0.13s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release (0.13s)
+=== RUN   TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure
+=== RUN   TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum
+=== RUN   TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog
+--- PASS: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure (0.42s)
+    --- PASS: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum (0.19s)
+    --- PASS: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog (0.23s)
+=== RUN   TestPrimaryOfflinePairV6ConstructionUsesRetainedParent
+=== RUN   TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-primary-create
+=== RUN   TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-data-create
+--- PASS: TestPrimaryOfflinePairV6ConstructionUsesRetainedParent (0.18s)
+    --- PASS: TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-primary-create (0.08s)
+    --- PASS: TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-data-create (0.09s)
+=== RUN   TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage
+--- PASS: TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage (0.08s)
+=== RUN   TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls
+--- PASS: TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls (0.08s)
+=== RUN   TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody
+--- PASS: TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody (0.07s)
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh
+=== RUN   TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered
+--- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor (0.08s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh (0.04s)
+    --- PASS: TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered (0.04s)
+=== RUN   TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot
+--- PASS: TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6
+--- PASS: TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6 (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6
+--- PASS: TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6 (0.00s)
+=== RUN   TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow
+--- PASS: TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow (0.00s)
+=== RUN   TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6
+--- PASS: TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6 (0.00s)
+=== RUN   TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6
+--- PASS: TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6 (0.00s)
+=== RUN   TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement
+--- PASS: TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement (0.11s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.961s

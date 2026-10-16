@@ -1,0 +1,9 @@
+{
+  "executed": false,
+  "name": "firstack-A-04",
+  "reasons": [
+    "host preflight busy; no sample executed"
+  ],
+  "side": "A",
+  "status": "STOP"
+}

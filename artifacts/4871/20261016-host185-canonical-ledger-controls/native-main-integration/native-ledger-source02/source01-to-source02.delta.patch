@@ -1,0 +1,156 @@
+--- source01/TreeDB/freelist/allocator_preparation_work_v6_test.go
++++ source02/TreeDB/freelist/allocator_preparation_work_v6_test.go
+@@ -159,7 +159,9 @@
+ 	if err := s.BindRetainedOwnerV6(owner); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	id, sink := candidateIDFromString(name), NewCandidatePageSinkV1()
++	// Owned private materialization supplies its SAME admitted typed sink set.
++	// The ordinary constructor's pageIDs map is a different storage contract.
++	id, sink := candidateIDFromString(name), &CandidatePageSinkV1{}
+ 	var candidate *FreelistCandidateV1
+ 	for calls := 0; calls < 512; calls++ {
+ 		var ready bool
+@@ -175,8 +177,8 @@
+ 			break
+ 		}
+ 	}
+-	if candidate == nil {
+-		t.Fatal("private candidate did not complete")
++	if candidate == nil || s.prepared == nil || s.phase != 9 || sink.pageIDs != nil || s.materialize.privateSink != &s.sinkPrivate || s.sinkPrivate.owner != owner {
++		t.Fatal("private candidate did not complete through original admitted typed sink")
+ 	}
+ 	activation := &COWActivationWorkV1{}
+ 	for calls := 0; calls < 512; calls++ {
+@@ -432,7 +434,7 @@
+ 					t.Fatal("published private cleanup did not finish")
+ 				}
+ 			} else {
+-				privateCancelBoundTestV6(t, s, a.cow.ledger.metadata)
++				privateCancelBoundTestV6(t, s, a.cow.ledger.metadata, a.cow.ledger)
+ 			}
+ 			if e := a.cow.ledger.Abandon(foreign); e != nil {
+ 				t.Fatal(e)
+--- source01/TreeDB/freelist/private_control_capacity_v6_test.go
++++ source02/TreeDB/freelist/private_control_capacity_v6_test.go
+@@ -337,11 +337,31 @@
+ 	t.Fatal("bound preparation failed to progress")
+ 	return nil, nil
+ }
+-func privateCancelBoundTestV6(t *testing.T, s *COWPreparationWorkV6, o *retainedalloc.Owner) {
++func privateCancelBoundTestV6(t *testing.T, s *COWPreparationWorkV6, o *retainedalloc.Owner, originalLedger *ReservationLedger) {
+ 	t.Helper()
+-	originalLedger := s.ledger
+-	if originalLedger == nil {
+-		t.Fatal("cancel lost original ledger before cleanup")
++	if originalLedger == nil || originalLedger.metadata != o || s.ledger != nil && s.ledger != originalLedger {
++		t.Fatal("cancel lost original allocator ledger or owner before cleanup")
++	}
++	// A refusal before capture's first allocation legitimately leaves s.ledger
++	// nil. The caller still owns the exact allocator ledger; prove that this is
++	// an uncaptured constructor, not a lost private/claim cleanup obligation.
++	uncaptured := s.ledger == nil
++	assertUncaptured := func() {
++		t.Helper()
++		if s.allocator != nil || s.private != nil || s.prepared != nil || s.result != nil || s.materialize.txn != nil || s.captureStage != 0 || s.privateHeaderCharge != 0 || s.privateAllocatedCharge != 0 || s.privateAbandonedCharge != 0 || s.privateDebtOwner != nil || s.privateDebt != 0 || s.ledgerRollback.bound || s.ledgerRollback.ledger != nil || s.ledgerRollback.debt != 0 {
++			t.Fatal("uncaptured refusal retained an unexplained private obligation")
++		}
++		for _, control := range []*privateUint64SetV6{&s.changedPrivate, &s.replacedPrivate, &s.materialize.reuse.plannedReplaced, &s.sinkPrivate} {
++			if control.slots != nil || control.next != nil || control.snapshot != nil || control.cloneSource != nil || control.charge != 0 || control.nextCharge != 0 || control.snapshotCharge != 0 || control.debtOwner != nil || control.debt != 0 {
++				t.Fatal("uncaptured refusal retained private backing or debt")
++			}
++		}
++		if o.Bytes() != originalLedger.storageCharge {
++			t.Fatal("uncaptured refusal changed original canonical charge", o.Bytes(), originalLedger.storageCharge)
++		}
++	}
++	if uncaptured {
++		assertUncaptured()
+ 	}
+ 	for i := 0; i < 10000; i++ {
+ 		ok, e := s.Cancel(privateQuantumV6())
+@@ -349,6 +369,9 @@
+ 			t.Fatal(e)
+ 		}
+ 		if ok {
++			if uncaptured {
++				assertUncaptured()
++			}
+ 			if o.Bytes() != originalLedger.storageCharge {
+ 				t.Fatal("private cleanup failed to leave exact canonical charge", o.Bytes(), originalLedger.storageCharge)
+ 			}
+@@ -404,7 +427,7 @@
+ 				t.Fatal("stale source accepted", ok, e)
+ 			}
+ 			current := a.cow.txn
+-			privateCancelBoundTestV6(t, s, o)
++			privateCancelBoundTestV6(t, s, o, a.cow.ledger)
+ 			if a.cow.txn != current || current.changedChunks == nil || current.replacedMetadata == nil {
+ 				t.Fatal("cancel destroyed canonical maps")
+ 			}
+@@ -422,6 +445,7 @@
+ 			var o retainedalloc.Owner
+ 			o.Initialize(0)
+ 			bindOwnedLedgerFixtureV6(t, a, &o)
++			originalLedger, originalTxn := a.cow.ledger, a.cow.txn
+ 			if e := s.BindRetainedOwnerV6(&o); e != nil {
+ 				t.Fatal(e)
+ 			}
+@@ -465,7 +489,10 @@
+ 			if actual := o.Bytes(); actual < live || actual > upper || debt == 0 && actual != live {
+ 				t.Fatal("partial physical provenance mismatch", actual, live, debt)
+ 			}
+-			privateCancelBoundTestV6(t, &s, &o)
++			privateCancelBoundTestV6(t, &s, &o, originalLedger)
++			if a.cow.ledger != originalLedger || a.cow.txn != originalTxn {
++				t.Fatal("partial capture cancellation replaced original allocator custody")
++			}
+ 			if e := a.CloseReservationLedgerV6(); e != nil || o.Bytes() != 0 {
+ 				t.Fatal("canonical shutdown", e, o.Bytes())
+ 			}
+@@ -634,7 +661,7 @@
+ 	if s.private == nil || s.privateAllocatedCharge != wantAllocated || s.privateAbandonedCharge != wantAbandoned || wantAbandoned == 0 || &s.private.allocated[0] == &original.allocated[0] || &s.private.abandonedAppends[0] == &original.abandonedAppends[0] || s.private.abandonedAppends[0] != original.abandonedAppends[0] {
+ 		t.Fatal("private copied vectors lack exact independent admission")
+ 	}
+-	privateCancelBoundTestV6(t, &s, &owner)
++	privateCancelBoundTestV6(t, &s, &owner, a.cow.ledger)
+ 	if a.cow.txn != original || len(original.abandonedAppends) != 1 || !a.cow.ledger.Reserved(start) {
+ 		t.Fatal("cancel consumed canonical/foreign tail")
+ 	}
+--- source01/TreeDB/freelist/reservation_canonical_storage_v6_test.go
++++ source02/TreeDB/freelist/reservation_canonical_storage_v6_test.go
+@@ -182,7 +182,7 @@
+ func TestCanonicalLedgerCommittedRetirementInterleavesPinnedBurnsV6(t *testing.T) {
+ 	l, o := ownedLedgerTestV6(t)
+ 	burn := candidateIDFromString("burned-original")
+-	start, _, e := l.reserveTail(burn, 100, 2, nil, nil)
++	start, burnedPages, e := l.reserveTail(burn, 100, 2, nil, nil)
+ 	if e != nil {
+ 		t.Fatal(e)
+ 	}
+@@ -196,10 +196,15 @@
+ 	if tomb == nil || !tomb.burned || !tomb.cleanupDone {
+ 		t.Fatal("failure lost preborn descriptor")
+ 	}
++	// reserveTail includes the reservation chain and root in addition to its
++	// two state pages. Coverage must describe the SAME entire original range.
++	if burnedPages <= 2 || burnedPages > uint64(^uint32(0)) || tomb.tailStart != start || tomb.tailCount != burnedPages || !l.Reserved(start+burnedPages-1) {
++		t.Fatal("original burned tail geometry", burnedPages, tomb.tailCount)
++	}
+ 	var children [2]COWLedgerRetirementWorkV6
+ 	for i := range children {
+ 		id := candidateIDFromString(string(rune('a' + i)))
+-		_, _, e = l.reserveTail(id, 200+uint64(i)*10, 1, nil, []ReservationExtentV1{{StartPageID: start, Count: 2, Kind: ReservationAbandonedAppend}})
++		_, _, e = l.reserveTail(id, 200+uint64(i)*10, 1, nil, []ReservationExtentV1{{StartPageID: start, Count: uint32(burnedPages), Kind: ReservationAbandonedAppend}})
+ 		if e != nil {
+ 			t.Fatal(e)
+ 		}
+@@ -281,7 +286,7 @@
+ 	if !finished[0] || !finished[1] || turns[0] == 0 || turns[1] == 0 {
+ 		t.Fatal("alternating original receipts did not complete", finished, turns)
+ 	}
+-	if tomb.scanPins != 0 || tomb.metadataCharge != 0 || l.burnedCount != 1 || !l.Reserved(400) || l.Reserved(start) {
++	if tomb.scanPins != 0 || tomb.metadataCharge != 0 || l.burnedCount != 1 || !l.Reserved(400) || l.Reserved(start) || l.Reserved(start+burnedPages-1) {
+ 		t.Fatal("alternating finish lost later burn or replayed old cleanup")
+ 	}
+ 	before := o.Bytes()

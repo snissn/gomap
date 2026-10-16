@@ -1,0 +1,14 @@
+{
+  "archive_sha256": "2e95363d01a4b38314b08f550e38b6d9d1d08016e5329ec1c2e30379dae8f6b2",
+  "disposition": "Historical source03 normal DB17/18 tops PASS; all10children RUN, six PASS and constructor four FAIL early. Both disposal controls PASS. First-failure stop before all races/actual; source/index unchanged and all groups joined, per root receipt.",
+  "files": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-pointer-fixture-diagnosis.json": "67c55dfa59b99e8cf741ad7d8d1d6ea843f191a33cf565abade25145c3998f37",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-pointer-fixture-diagnosis.md": "2a5f2dadcc2aba02ec91651f57255f4510794a416ee66992cb40e8a0df8ccd43",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-focused-failure.json": "dd86df779a444bb327356fe7a59c400f01677239ca732f70391c271a74e26e0a",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/result.json": "b460adde1a3721ea8d005adf9531a8091bc96ea0cf420de59a6cf18f666a1209",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/run.log": "aa22d591155ccbe57d439f388350950064469fdbbf31eb1106354e4d4d93b9fd",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/summary.json": "dcdd3d7828a9cdd2856e090c603bd8f3f51b21d72c039fc1f48bfd34124cf7c0"
+  },
+  "manifest_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03"
+}

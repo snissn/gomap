@@ -1,0 +1,40 @@
+--- run-minimum-actual-source01.py
++++ run-ledger-actual-source02.py
+@@ -12,7 +12,7 @@
+ 
+ D = Path('/mnt/fast4tb/gomap-mvcc-4871-20261015')
+ N = D / 'native-integrated'
+-B = D / 'native-main-integration/native-minimum-scan-source01'
++B = D / 'native-main-integration/native-ledger-source02'
+ p = argparse.ArgumentParser()
+ p.add_argument('--selection', type=Path, required=True)
+ p.add_argument('--selection-sha256', required=True)
+@@ -33,13 +33,13 @@
+ assert a.selection.resolve().is_relative_to(D / 'native-decision')
+ assert sha(a.selection) == a.selection_sha256
+ grant = read(a.selection)
+-assert grant['scope'] == 'actual-minimum-scan-source01' and grant['actual_native_driver_authorized']
++assert grant['scope'] == 'actual-canonical-ledger-source02' and grant['actual_native_driver_authorized']
+ assert grant['runner_sha256'] == sha(Path(__file__))
+ assert grant['proposal_sha256'] == sha(B / 'proposed-commands.json')
+ assert grant['manifest_sha256'] == sha(B / 'source-frozen.json')
+ assert grant['archive_sha256'] == sha(B / 'source-frozen.tar.gz')
+ assert grant['independent_review_sha256'] == sha(Path(grant['independent_review']))
+-assert read(Path(grant['source_verify']))['live_source_equal']
++assert read(Path(grant['source_verify']))['live_source_and_modes_match']
+ expected = read(B / 'source-frozen.json')
+ modes = read(B / 'source-modes.json')
+ proposal = read(B / 'proposed-commands.json')
+@@ -73,6 +73,12 @@
+     assert c['env']['GOROOT'] == str(compiler.parent.parent)
+     assert c['env']['GOPROXY'] == 'off' and c['env']['GOFLAGS'] == ''
+     assert c['argv'][0] == str(elf if stage == 'samples' else compiler)
++    assert c['selection_class'] == 'actual_route_separate_grant_required'
++    assert c['argv'] == [str(compiler), 'test', '-p=1', '-parallel=1', '-count=1', '-v', '-timeout=3m'] + (['-race'] if c['name'].startswith('race-') else []) + ['-run', '^TestNativeSelectedOriginalSplitDiagnosticV6$', './TreeDB/mvcc']
++    assert c['outer_timeout_seconds'] == 600
++    assert c['required_top_level_tests'] == ['TestNativeSelectedOriginalSplitDiagnosticV6']
++    assert c['required_child_tests'] == {'TestNativeSelectedOriginalSplitDiagnosticV6': ['ready-cancel', 'stale-before-fence', 'frozen-limits', 'once-ack', 'paused-finish-close', 'pruner-enabled-refusal']}
++    assert c['expected_top_level_count'] == 1 and c['expected_child_count'] == 6
+ 
+ def identity():
+     def git(args):

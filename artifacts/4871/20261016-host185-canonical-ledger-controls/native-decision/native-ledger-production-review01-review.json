@@ -1,0 +1,131 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "disposition": "REJECT",
+  "scope": "PRELIMINARY_PRODUCTION_AND_PRICING_ONLY",
+  "candidate_edits_by_reviewer": false,
+  "source_accepted": false,
+  "runtime_grant": false,
+  "native_publication_acceptance": false,
+  "numeric_allowance_chosen": false,
+  "Q32_status": "RED retained; no fit/progress claim",
+  "head_context": "mutable construction lane at original merged ordinary 0149d78; review bound to deterministic immutable manifest, not a committed successor",
+  "bindings": {
+    "manifest": "1a6fa236d5c980fbde55bb567e89f3c8eb3bb87a02cf18ba4374c006705dcfa1",
+    "archive": "5d048448e02583dacf4a0b514792a94856a08397a9a71c823bf18fe75f3f8d5f",
+    "source_files": 10443,
+    "parent_manifest": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+    "delta": "a8157de22bff234a846c6ca9f1285ac06b1152882707cd12a74e61ffdd773bba",
+    "changed_files": "10e73dbebac9d8363cbb0a01996a14a556a65ea534b8b7e0c58a9956bc13afd3",
+    "review_targets": "1a0c53c1c9e8333a0bcd0aa78700484fcb51ee811302e560b8a324395c54cf26",
+    "root_verifier": "a93dd07dbf9096b721578d66e218486b25aca76f6e212af5098c58b034b04eb2"
+  },
+  "reviewed_paths": {
+    "TreeDB/db/durable_primary_rebuild_v5.go": "afd1f7f7fdc8e860a85e0b538b8141a6af6bba84c78bf288779c53213f1d2d4e",
+    "TreeDB/db/durable_primary_runtime_v5.go": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f",
+    "TreeDB/db/index_gen.go": "65d60b0834af4a87e85a48ff2dd76a0acf0d719cd0d15fb3be09096f73ea4c66",
+    "TreeDB/db/primary_authority_scope_v6.go": "03fc589b020f08f375d7fb18137d4dcf50235ad8cf783b542d92ba871c799526",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5",
+    "TreeDB/db/primary_seal_release_work_v6.go": "8920df6e6dffa38f96248a9a45c3b9f09f0ebf848579922739acca54bfeb1295",
+    "TreeDB/db/root_publication_activation.go": "525bcaa5f10dc7ba54032f22d27077cb3c6a0092480b1546867b4b41f7b1fe37",
+    "TreeDB/db/vacuum_online.go": "b9f685fe9740b048e904a00eabea0160a351391ad82ca917d8f00176cbe2219f",
+    "TreeDB/freelist/allocator_cow.go": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "8949dd2b4033b74921553849f9db839a7d972f85d9f43441c75ff9f7b1101f17",
+    "TreeDB/freelist/allocator_publication_work_v6.go": "3c1331260d9c0ed63f02bc158471eac7346d3582b316672b13301e233bc83cc4",
+    "TreeDB/freelist/append_work.go": "b13f7f595b7017abef6cc44b398c0818d846377cb665ec6c1595eb50bb4e48f1",
+    "TreeDB/freelist/generation_v1_metadata_claim_work.go": "56d82f99f0a778bd0eab9cb6073944c3ae0b32163619190017d94d5a33c60095",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "1acba48cc8b1afdcf07059ced2ab0f22e612b109ed33b2abb0bc3401df2ecdb5",
+    "TreeDB/freelist/generation_v1_metadata_reuse_work.go": "f925f0e7b8b529a15018b74460f6f44f1d199575afc8e019314ff089add3280f",
+    "TreeDB/freelist/generation_v1_publication_work_v6.go": "d4d82d0fb1624cc189c690f45f2db8bafa67c4e3bce6699730413e54aa6b6cce",
+    "TreeDB/freelist/generation_v1_reservation.go": "a5c28c641653bd06145b64a4d9a28555414fba1d7ca92757f54e76430a1dd3fd",
+    "TreeDB/freelist/native_pre_cursor_for_test_v6.go": "8b6f22c10952c91a12ec70789968ae91714c0699f99f0c50650ccf8a05af82a4",
+    "TreeDB/freelist/native_progress_price_for_test_v6.go": "2a261fa3bb9fdd09d7097c5d027dccc113774aeda076e892094cc52342f41845",
+    "TreeDB/freelist/native_publication_bound_v6.go": "acfd0371f927e615cafb8e7165c87c1cd9c434f91a5a9df6b886803eddb0b6dd",
+    "TreeDB/freelist/private_ledger_for_test_v6.go": "7f5d61090736e4766805ae07f49a44a53fed58da0824c97f8d4af03a3e6f815b",
+    "TreeDB/freelist/reservation_close_v6.go": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33",
+    "TreeDB/freelist/reservation_index_v6.go": "a33db48a1cf5066606b372585084999817aeabcce3c08e082b7a71f4ee2bf5e5",
+    "TreeDB/freelist/reservation_price_for_test_v6.go": "dbdc76500f20858188b53c64f1120a1a8878d9c5c5ce87f0948e5465880e2e5d",
+    "TreeDB/freelist/reservation_retirement_work_v6.go": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c",
+    "TreeDB/freelist/reservation_rollback_work_v6.go": "b0bd0fcdce884771e07ac286352a963e2d9f043f23175699b92b0fb00af311f7",
+    "TreeDB/freelist/reservation_storage_v6.go": "be39f1f32f21f11cbe3fda76b9f1fbc9e2f62414ab7a6426d988c726b3b23798"
+  },
+  "findings": [
+    {
+      "id": "P1",
+      "origin": "known pending correction declared before review",
+      "severity": "blocking preauthority contract",
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "line": 29,
+      "related": [
+        "TreeDB/freelist/allocator_cow.go:574",
+        "TreeDB/db/primary_authority_scope_v6.go:88"
+      ],
+      "trigger": "BeginCOWPublicationScopeV6 receives a prefix backed by allocator.cow.activated.",
+      "cause": "Begin validates entries but returns an active authority scope; Commit later rejects that same backing before handoff. An otherwise accepted scope therefore retains a nonphysical post-authority failure branch. The actual DB producer uses an independently admitted seal prefix and is not the counterexample.",
+      "correction": "Move the activated-backing alias rejection into Begin before success/authority; retain Commit defense. Reconcile the announced one-file successor.",
+      "status": "unresolved in immutable snapshot"
+    },
+    {
+      "id": "P2",
+      "origin": "root discovery independently source-confirmed",
+      "severity": "blocking failure custody",
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "line": 176,
+      "related": [
+        "TreeDB/db/durable_primary_rebuild_v5.go:95",
+        "TreeDB/db/durable_primary_rebuild_v5.go:320",
+        "TreeDB/db/durable_primary_rebuild_v5.go:447",
+        "TreeDB/db/durable_primary_rebuild_v5.go:512",
+        "TreeDB/db/primary_offline_pair_v6.go:288"
+      ],
+      "trigger": "Rebuild succeeds and marks published=true, then a deferred construction-ledger drain or other late cleanup returns an error. Offline caller receives that error.",
+      "cause": "The construction release defer skips once published=true. The generation retains the temporary allocator, but the offline caller returns on err before storing runtime/selection in idx.unpublishedPrimary/Selection; retained successful PRIMARY roots/resources/charges consequently lack that original Close attachment. Vacuum has an outer replacement runtime attachment and must not be confused with offline.",
+      "correction": "Preserve successful selected/runtime custody through all late fallible defers and attach it to the original generation before the offline error return, or perform a fully checked original unwind. Audit all late cleanup defers, including namespace release, rather than fix only DrainConstructionLedgerV6.",
+      "status": "unresolved pending writer delta"
+    },
+    {
+      "id": "P3",
+      "origin": "independent reviewer discovery",
+      "severity": "blocking truthful finite observation pricing",
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "line": 181,
+      "related": [
+        "TreeDB/freelist/allocator_preparation_work_v6.go:623",
+        "TreeDB/freelist/generation_v1_metadata_claim_work.go:68"
+      ],
+      "trigger": "MaintenanceNativeGeometryForTestV6 prices claim storage in a ledger whose candidate index contains a nontrivial path.",
+      "cause": "The observer already holds and validates exact prepared.ledgerClaim, but claimDataAdmissionLockedV6 calls claimStorageBoundLockedV1, which descends candidateLockedV6 without candidateLookupAdmissionV6 or an observer visit reservation. Its fixed two-record ledger/header Reserve does not account for those actual per-node visits. Returned ClaimRecords forecasts later adoption work; that forecast does not admit the present observation lookup. Actual install/adoption separately admits the canonical lookup and is not this defect.",
+      "correction": "Compute ledgerStoragePriceV6 from the already validated exact reservation scalar lengths, or explicitly reserve the lookup traffic before walking it. The only other helper caller found is reservation_owned_fixture_v6_test.go; rebind that fixture in the final packet.",
+      "status": "unresolved in immutable snapshot"
+    }
+  ],
+  "checks_performed": [
+    "Independently hashed supplied immutable manifest and full archive; stream-verified every one of 10443 archived file contents against the manifest; extracted immutable source for review.",
+    "Read all 27 targeted production/pricing changes and affected original allocator/ledger, authority, seal release, constructor and Close callers.",
+    "Traced canonical typed candidate/page insertion, deletion, Supersede, storage overlap and original-owner enrollment/refund.",
+    "Traced native logical commit and original finite retirement child, stop identity, scan pins and pin-next-before-drop-current; checked ordinary synchronous adapter and previsible rollback.",
+    "Reviewed scalar/price helpers, saturated arithmetic and retained canonical storage observation; searched all claimStorageBoundLockedV1 and claimDataAdmissionLockedV6 callers.",
+    "Read applicable root/TreeDB policy and contribution requirements plus task-local internal review fallback/performance guidance.",
+    "No Go, compiler, test body, benchmark, runtime, network, Git/index/GitHub mutation, or source change performed."
+  ],
+  "coverage_limits": [
+    "13 mutable control paths are not final and are not accepted/tested by this pass.",
+    "No full final candidate acceptance, complete retained union, exact F/G, Finish total, continuing-writer progress, Q32/1MiB fit, publication or performance qualification.",
+    "Canonical storageCharge excludes accounting-only debt already transferred to original surviving receipt children; it must not be interpreted as whole-owner or whole-union retained total.",
+    "Root receipt covers its own archive mode/live/index checks; this reviewer independently verified immutable contents and did not inspect mutable live source."
+  ],
+  "open_variable_work": [
+    "whole tail descriptor conflict/burn/high-water scans and repeated range-placement passes",
+    "coverage versus burned-descriptor retirement traversal, incrementally persisted in original child",
+    "input duplicate triangle and constructor copies/initialization proportional to actual input/backing",
+    "ordinary PublishBatch duplicate validation and synchronous shutdown/drain traversal"
+  ],
+  "required_reconciliation": [
+    "Exact P1/P2/P3 correction delta and source binding",
+    "Final discriminating control sources/commands and actual results, separately authorized by root",
+    "Final pricing/retention ledger and controls reflecting any additional changed work rows"
+  ],
+  "hosted_review_unavailability": "Hosted manual review cannot pin the explicitly required gpt-6.1-sol model; no hosted review was requested. This is the existing independently routed read-only subagent, with no construction role."
+}

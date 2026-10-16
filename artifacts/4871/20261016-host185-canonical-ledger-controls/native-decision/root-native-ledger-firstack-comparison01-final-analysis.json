@@ -1,0 +1,278 @@
+{
+  "utc": "2026-10-16T13:01:23.301112+00:00",
+  "disposition": "TERMINALLY_INCOMPLETE_THREE_OF_SIX_NO_PERFORMANCE_ACCEPTANCE",
+  "original_summary_sha256": "0ad91110d320fd8d4f44e9a61ace9ce1212b49767ed3f4767fa400fb55bb4a97",
+  "continuation_summary_sha256": "3534b769b292353a8488d0726e9c6576dd7d76111a00a1efd4a7d9c5ed661c51",
+  "continuation_selection_sha256": "8b926dd4db31cbb17c2eb1bfc8039549bc2700581e3ce31c9eec27985160959d",
+  "retained_samples": [
+    {
+      "name": "firstack-A-01",
+      "side": "A",
+      "output": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01",
+      "result_sha256": "b0cbf084270dc33c8d1295c262932755f3d4e43841352534ffa711dbda9baede",
+      "raw_sha256": "fca0be0b29cfcc6d6e1882fe59130c1037b14956f4667c2553eaa5a1b6c39039",
+      "metrics": {
+        "public_call_sum_ns": 13390312,
+        "whole_birth_to_ack_ns": 23499026,
+        "max_call_ns": 7618585,
+        "public_calls": 8,
+        "work_records": 6973,
+        "work_bytes": 7022925,
+        "exact_ack_returns": 1
+      },
+      "calls": [
+        {
+          "ordinal": 0,
+          "wall_ns": 84574,
+          "records": 422,
+          "bytes": 2091700
+        },
+        {
+          "ordinal": 1,
+          "wall_ns": 72433,
+          "records": 2714,
+          "bytes": 1984427
+        },
+        {
+          "ordinal": 2,
+          "wall_ns": 6240,
+          "records": 10,
+          "bytes": 42896
+        },
+        {
+          "ordinal": 3,
+          "wall_ns": 21058,
+          "records": 376,
+          "bytes": 269880
+        },
+        {
+          "ordinal": 4,
+          "wall_ns": 579,
+          "records": 276,
+          "bytes": 1408
+        },
+        {
+          "ordinal": 5,
+          "wall_ns": 5522994,
+          "records": 2231,
+          "bytes": 718853
+        },
+        {
+          "ordinal": 6,
+          "wall_ns": 7618585,
+          "records": 766,
+          "bytes": 1184978
+        },
+        {
+          "ordinal": 7,
+          "wall_ns": 63849,
+          "records": 178,
+          "bytes": 728783
+        }
+      ],
+      "start_utc": "2026-10-16T12:56:35.641560+00:00",
+      "preflight_sha256": "8a3831a71c0c0c3d34e67390b9a020b7b9a40c060f5763ccdff03d67228e99c6",
+      "host_window_sha256": "64fa9560f433af6ec681dea77c9233bcb72654b753ddd0c994defa27ec67bf87",
+      "host_whole_process_aggregate_percent": 3.9285714285714284,
+      "prebirth_G_line": "native_firstack_cost_v6_test.go:93: native-split prebirth G={Records:78492 Bytes:41684744} birth={Records:228 Bytes:841672} prepare={Records:27332 Bytes:6466545} F={Records:8430 Bytes:3260983} Finish={Records:1372 Bytes:5377572} Cancel={Records:20366 Bytes:12721482} Close={Records:20764 Bytes:13016490} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+      "semantic_and_existing_quietness_gates_pass": true
+    },
+    {
+      "name": "firstack-B-02",
+      "side": "B",
+      "output": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02",
+      "result_sha256": "a1168f1e4b6df6b992282f0ac92fbf1b69754c06362f293419a58d34f8b7b21e",
+      "raw_sha256": "543609d767845c95502e521a00e6ccf18003380553c0efe87c1e73ca463ff828",
+      "metrics": {
+        "public_call_sum_ns": 13774774,
+        "whole_birth_to_ack_ns": 24426191,
+        "max_call_ns": 7797534,
+        "public_calls": 10,
+        "work_records": 6564,
+        "work_bytes": 7121059,
+        "exact_ack_returns": 1
+      },
+      "calls": [
+        {
+          "ordinal": 0,
+          "wall_ns": 68344,
+          "records": 407,
+          "bytes": 2092292
+        },
+        {
+          "ordinal": 1,
+          "wall_ns": 60386,
+          "records": 2715,
+          "bytes": 1984507
+        },
+        {
+          "ordinal": 2,
+          "wall_ns": 5927,
+          "records": 10,
+          "bytes": 42896
+        },
+        {
+          "ordinal": 3,
+          "wall_ns": 21206,
+          "records": 359,
+          "bytes": 288600
+        },
+        {
+          "ordinal": 4,
+          "wall_ns": 758,
+          "records": 21,
+          "bytes": 592
+        },
+        {
+          "ordinal": 5,
+          "wall_ns": 325,
+          "records": 21,
+          "bytes": 592
+        },
+        {
+          "ordinal": 6,
+          "wall_ns": 230,
+          "records": 4,
+          "bytes": 304
+        },
+        {
+          "ordinal": 7,
+          "wall_ns": 5747582,
+          "records": 2015,
+          "bytes": 756845
+        },
+        {
+          "ordinal": 8,
+          "wall_ns": 7797534,
+          "records": 834,
+          "bytes": 1223696
+        },
+        {
+          "ordinal": 9,
+          "wall_ns": 72482,
+          "records": 178,
+          "bytes": 730735
+        }
+      ],
+      "start_utc": "2026-10-16T12:59:51.694031+00:00",
+      "preflight_sha256": "05c3ce127d62c92f855c93ff30a4707589e1b37a7dbd2a425d057dcd2c85f480",
+      "host_window_sha256": "60777f7baef6f937926d8d7c440523370074c757294ca4c39edbea908a1c915c",
+      "host_whole_process_aggregate_percent": 3.5714285714285716,
+      "prebirth_G_line": "native_firstack_cost_v6_test.go:93: native-split prebirth G={Records:39608 Bytes:43582577} birth={Records:228 Bytes:841872} prepare={Records:12622 Bytes:6455909} F={Records:12214 Bytes:5100175} Finish={Records:1522 Bytes:5406435} Cancel={Records:6312 Bytes:12741389} Close={Records:6710 Bytes:13036797} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+      "semantic_and_existing_quietness_gates_pass": true
+    },
+    {
+      "name": "firstack-B-03",
+      "side": "B",
+      "output": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03",
+      "result_sha256": "276ffd1f5c82f23e861b881828fa6efb47255ee7a7493f4f3741d6f9f8471e3f",
+      "raw_sha256": "4496085870958e8d362e85a80433522bfc6f4c9822bf8d1530ced46c33e76705",
+      "metrics": {
+        "public_call_sum_ns": 13720000,
+        "whole_birth_to_ack_ns": 24293725,
+        "max_call_ns": 7970086,
+        "public_calls": 10,
+        "work_records": 6589,
+        "work_bytes": 7121739,
+        "exact_ack_returns": 1
+      },
+      "calls": [
+        {
+          "ordinal": 0,
+          "wall_ns": 77252,
+          "records": 432,
+          "bytes": 2092972
+        },
+        {
+          "ordinal": 1,
+          "wall_ns": 65135,
+          "records": 2715,
+          "bytes": 1984507
+        },
+        {
+          "ordinal": 2,
+          "wall_ns": 7217,
+          "records": 10,
+          "bytes": 42896
+        },
+        {
+          "ordinal": 3,
+          "wall_ns": 20750,
+          "records": 359,
+          "bytes": 288600
+        },
+        {
+          "ordinal": 4,
+          "wall_ns": 712,
+          "records": 21,
+          "bytes": 592
+        },
+        {
+          "ordinal": 5,
+          "wall_ns": 318,
+          "records": 21,
+          "bytes": 592
+        },
+        {
+          "ordinal": 6,
+          "wall_ns": 247,
+          "records": 4,
+          "bytes": 304
+        },
+        {
+          "ordinal": 7,
+          "wall_ns": 5509717,
+          "records": 2015,
+          "bytes": 756845
+        },
+        {
+          "ordinal": 8,
+          "wall_ns": 7970086,
+          "records": 834,
+          "bytes": 1223696
+        },
+        {
+          "ordinal": 9,
+          "wall_ns": 68566,
+          "records": 178,
+          "bytes": 730735
+        }
+      ],
+      "start_utc": "2026-10-16T12:59:56.031476+00:00",
+      "preflight_sha256": "638e1ca49f3166fceba498a1929d69b46486cb685d2135f3ad9ff1858532465b",
+      "host_window_sha256": "b730e7434a41e6ffb9d32c11dd2df9510e011f6f72946695227c8ef60120f8c9",
+      "host_whole_process_aggregate_percent": 4.642857142857143,
+      "prebirth_G_line": "native_firstack_cost_v6_test.go:93: native-split prebirth G={Records:39608 Bytes:43582577} birth={Records:228 Bytes:841872} prepare={Records:12622 Bytes:6455909} F={Records:12214 Bytes:5100175} Finish={Records:1522 Bytes:5406435} Cancel={Records:6312 Bytes:12741389} Close={Records:6710 Bytes:13036797} Npre=3 L=9 allocator={DataHighWater:47 Chunks:1 StatePages:15 Changed:2 Replaced:19 Allocated:35 Abandoned:0 Retired:35 Inventory:54 TailStart:47 GapExtents:1 ChainPages:1 MetadataPages:17 HighWater:64 Complete:true} noQ32Acceptance=true",
+      "semantic_and_existing_quietness_gates_pass": true
+    }
+  ],
+  "interrupted_A01_to_B02_start_gap_seconds": 196.052471,
+  "executed_order": "ABB",
+  "remaining_unexecuted": [
+    "firstack-A-04",
+    "firstack-A-05",
+    "firstack-B-06"
+  ],
+  "second_stop_preflight_sha256": "119ab110623a62ca1f4d623059fc5a492374cd134aa3e21836ddc011e617660a",
+  "second_stop_preflight_aggregate_percent": [
+    0.8264462809917356,
+    9.256198347107437
+  ],
+  "benchmark_samples_repeated": 0,
+  "further_campaign_continuation_authorized": false,
+  "both_sources_and_ELFs_unchanged": true,
+  "all_process_groups_joined": true,
+  "claims_excluded": [
+    "improvement or regression estimate",
+    "matched pairs",
+    "statistical significance",
+    "isolated ledger attribution",
+    "matched quantum",
+    "public Q32 acceptance",
+    "allocation/residency",
+    "throughput",
+    "full-prune cost",
+    "graph qualification"
+  ],
+  "root_decision": "Retain all three observed values and both refusals. No more quiet-host retries in this campaign. Actual source04 first-ACK executes coherently on this selected workload; observations do not establish a speed gain or a material regression. Proceed with already-selected correctness/bounded-work registry API prerequisite, with performance unresolved and mandatory later stable-candidate qualification. The original requirement to review available early viability evidence has been met; no performance gate is waived."
+}

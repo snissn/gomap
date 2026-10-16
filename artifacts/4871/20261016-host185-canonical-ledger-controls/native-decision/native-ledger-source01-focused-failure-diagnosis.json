@@ -1,0 +1,48 @@
+{
+  "scope": "Assigned two focused source01 failure families only",
+  "disposition": "FIXTURE_DEFECTS_CONFIRMED_RUNTIME_ACCEPTANCE_BLOCKED",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "source_archive_sha256": "f595dfec6b394856f61a91b9b338a89a5d4b5cfa6e2ea6732886b487b3aa169c",
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/run.log",
+  "raw_log_sha256": "364498e5178384d45a761babc8c1d0543f82d9da2b1ebb257144dc5cc15084c1",
+  "inspected_source": {
+    "TreeDB/freelist/reservation_canonical_storage_v6_test.go": "3403cdb0d679d6e14d6d7ad7c6eb4c36c5d99bf89899d891a2e970bb458f9f60",
+    "TreeDB/freelist/private_control_capacity_v6_test.go": "520e5ef0fc06f32f8431da6f2323f9fb86998405b6931e1c39d38a6b3728d2e2",
+    "TreeDB/freelist/generation_v1_reservation.go": "a5c28c641653bd06145b64a4d9a28555414fba1d7ca92757f54e76430a1dd3fd",
+    "TreeDB/freelist/reservation_retirement_work_v6.go": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "6c077d3fb4a7f5051064d1a8504c6414e7bde42d8fa32595fa65840c8a237377"
+  },
+  "findings": [
+    {
+      "id": "LFC1",
+      "classification": "fixture",
+      "assertion": "reservation_canonical_storage_v6_test.go:257",
+      "cause": "Fixture discards actual reserveTail count and supplies2-page abandoned coverage; original state2+reservation-record1+root1 tail is4 pages. Exact coverage predicate correctly preserves burn.",
+      "correction": "Use original returned count, checked uint32 conversion. Preserve exact2 initial pins, one surviving charged pin after alternating peer advance, monotonic traversal, last-pin refund, late-burn preservation and replay checks."
+    },
+    {
+      "id": "LFC2",
+      "classification": "fixture",
+      "assertion": "private_control_capacity_v6_test.go:344 via468",
+      "cause": "available0/1/2 legitimately return before capture stores private ledger alias at allocator_preparation_work_v6.go:215. Helper incorrectly requires private binding before any capture effect.",
+      "correction": "Save original canonical allocator ledger before Step and pass explicitly to helper; validate nonnil private ledger matches it, require real bounded Cancel and exact Owner.Bytes==original.storageCharge, then original Close0. Do not synthesize private binding or omit early cuts."
+    }
+  ],
+  "helper_callers": [
+    "TreeDB/freelist/private_control_capacity_v6_test.go:407",
+    "TreeDB/freelist/private_control_capacity_v6_test.go:468",
+    "TreeDB/freelist/private_control_capacity_v6_test.go:637",
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go:435"
+  ],
+  "limits": [
+    "No production defect established by these two failures",
+    "Adoption failures separately owned by root and not dispositioned here",
+    "Prior source readiness ACCEPT remains historical, not runtime acceptance",
+    "No execution or source mutation; no quantum/publication qualification"
+  ],
+  "lease": "Released"
+}

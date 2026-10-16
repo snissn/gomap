@@ -1,0 +1,43 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "source_archive_sha256": "89756760b2d8edb2d9485051da54cce976fd6dd8c0cb19970d828b5fed7f04e7",
+  "source_file_count": 10444,
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/run.log",
+  "raw_log_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+  "inspected_source_bindings": {
+    "TreeDB/db/dependency_directory_v2.go": "d0709b189e098005107c4c0df7ed9be41aeef9bb99ef81f2a1ab24758e3bb2ee",
+    "TreeDB/db/durable_primary_rebuild_v5.go": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd",
+    "TreeDB/db/durable_root_recovery.go": "b02d7a941f6d632ec871c0916c17d2a76bb47d7ecb3f8b9156913f7ce353c387",
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/index_gen.go": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15",
+    "TreeDB/db/original_primary_runtime_cleanup.go": "d0df9b5f4c79cda28ec9b20ec687ba9c1263c7baf8e3fdd8489e37772b3f870a",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5",
+    "TreeDB/db/primary_construction_ledger_v6_test.go": "fcded47738c4a709d63a7d225ebda66255046d1d5e70751104ea7468258b579c",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": "5376ec6db9bca74c93f7801aa93dc055d291fda8e35ddc1910186d0647cd89ec",
+    "TreeDB/db/primary_offline_pair_v6.go": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe"
+  },
+  "disposition": "FIXTURE_DEFECT; four-arm control failed pending corrected fixture",
+  "production_defect_established": false,
+  "successful_selection_reached": true,
+  "late_drain_reached_all_three_error_arms": true,
+  "root_cause": "Inline-only seed permits nil selected SlotResources; unconditional nonnil checks fail after actual selection and final drain injection.",
+  "required_repair": "Produce real persistent-value dependencies through original DB.SetSync in both selected slots before roots/scope capture; retain original nonnil/exact-pointer/not-Released and full Close/failure custody assertions.",
+  "unexecuted_oracles": [
+    "successful handoff cleanup",
+    "late-drain successful Close",
+    "failed-ledger Close retention",
+    "runtime-release stale Close retention",
+    "repeat Close same sticky cause"
+  ],
+  "limits": [
+    "No reviewer Go/runtime execution.",
+    "No production defect shown by these failures.",
+    "No Q32, native publication, whole graph, retained union, performance or CI qualification."
+  ],
+  "lease": "released; idle"
+}

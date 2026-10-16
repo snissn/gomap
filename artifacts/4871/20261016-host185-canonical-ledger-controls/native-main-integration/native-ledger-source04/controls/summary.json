@@ -1,0 +1,49 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 5,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T12:53:59.669454+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-db-construction",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-mvcc-prices",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-freelist-canonical",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-freelist-consumers",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-db-construction",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10444,
+  "source_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "top_pass_normal": 18,
+  "top_pass_race": 101
+}

@@ -1,0 +1,77 @@
+--- run-ledger-actual-source03.py
++++ run-ledger-firstack-build-source03.py
+@@ -33,20 +33,20 @@
+ assert a.selection.resolve().is_relative_to(D / 'native-decision')
+ assert sha(a.selection) == a.selection_sha256
+ grant = read(a.selection)
+-assert grant['scope'] == 'actual-canonical-ledger-source03' and grant['actual_native_driver_authorized']
++assert grant['scope'] == 'build-canonical-ledger-source03' and grant['build_only_authorized'] and grant['actual_native_driver_authorized'] is False
+ assert grant['runner_sha256'] == sha(Path(__file__))
+-assert grant['proposal_sha256'] == sha(B / 'proposed-commands.json')
++assert grant['proposal_sha256'] == sha(B / 'proposed-build-root01.json')
+ assert grant['manifest_sha256'] == sha(B / 'source-frozen.json')
+ assert grant['archive_sha256'] == sha(B / 'source-frozen.tar.gz')
+ assert grant['independent_review_sha256'] == sha(Path(grant['independent_review']))
+ assert read(Path(grant['source_verify']))['live_source_and_modes_match']
+ expected = read(B / 'source-frozen.json')
+ modes = read(B / 'source-modes.json')
+-proposal = read(B / 'proposed-commands.json')
++proposal = read(B / 'proposed-build-root01.json')
+ commands = [c for c in proposal['commands'] if c['name'] in grant['commands']]
+ assert [c['name'] for c in commands] == grant['commands']
+ stage = grant['stage']
+-assert stage == 'controls'
++assert stage == 'build'
+ assert sha(Path(grant['source_verify'])) == grant['source_verify_sha256']
+ assert sha(B / 'controls/summary.json') == grant['focused_summary_sha256']
+ assert read(B / 'controls/summary.json')['all_authorized_pass']
+@@ -55,14 +55,15 @@
+          'build': ['build-firstack-elf'],
+          'samples': ['firstack-sample01', 'firstack-sample02', 'firstack-sample03']}
+ assert grant['commands'] == names[stage]
+-O = B / 'runtime-stages' / 'actual-controls'
++O = B / 'runtime-stages' / 'build'
+ assert not O.exists()
+ compiler = D / 'toolchains/go1.26.3/bin/go'
+ elf = B / 'build/native-firstack-cost.test'
+ assert sha(compiler) == 'd68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65'
+ assert sha(compiler.parent.parent / 'pkg/tool/linux_amd64/compile') == '3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1'
+ if stage != 'controls':
+-    assert read(B / 'runtime-stages/controls/summary.json')['all_pass']
++    assert sha(B / 'runtime-stages/actual-controls/summary.json') == grant['actual_summary_sha256']
++    assert read(B / 'runtime-stages/actual-controls/summary.json')['all_pass']
+ if stage == 'samples':
+     assert read(B / 'runtime-stages/build/summary.json')['all_pass']
+     assert sha(elf) == grant['elf_sha256']
+@@ -73,12 +74,17 @@
+     assert c['env']['GOROOT'] == str(compiler.parent.parent)
+     assert c['env']['GOPROXY'] == 'off' and c['env']['GOFLAGS'] == ''
+     assert c['argv'][0] == str(elf if stage == 'samples' else compiler)
+-    assert c['selection_class'] == 'actual_route_separate_grant_required'
+-    assert c['argv'] == [str(compiler), 'test', '-p=1', '-parallel=1', '-count=1', '-v', '-timeout=3m'] + (['-race'] if c['name'].startswith('race-') else []) + ['-run', '^TestNativeSelectedOriginalSplitDiagnosticV6$', './TreeDB/mvcc']
++    assert c['selection_class'] == 'root_build_only'
++    assert c['argv'] == [str(compiler), 'test', '-p=1', '-c', '-o', str(elf), './TreeDB/mvcc']
+     assert c['outer_timeout_seconds'] == 600
+-    assert c['required_top_level_tests'] == ['TestNativeSelectedOriginalSplitDiagnosticV6']
+-    assert c['required_child_tests'] == {'TestNativeSelectedOriginalSplitDiagnosticV6': ['ready-cancel', 'stale-before-fence', 'frozen-limits', 'once-ack', 'paused-finish-close', 'pruner-enabled-refusal']}
+-    assert c['expected_top_level_count'] == 1 and c['expected_child_count'] == 6
++    assert c['required_top_level_tests'] == [] and c['required_child_tests'] == {}
++    assert c['expected_top_level_count'] == 0 and c['expected_child_count'] == 0
++    assert c['env'] == {
++        'CGO_ENABLED':'1','GOCACHE':str(D/'native-build/cache'),
++        'GOMODCACHE':str(D/'ordinary-work/modcache'),'GOROOT':str(compiler.parent.parent),
++        'GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','GOWORK':'off',
++        'GOENV':'off','GOFLAGS':'','GODEBUG':'','GOGC':'100','GOMAXPROCS':'2',
++        'GOMEMLIMIT':'8GiB','TMPDIR':str(B/'build/tmp')}
+ 
+ def identity():
+     def git(args):
+@@ -152,7 +158,7 @@
+ assert libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0 and subreaper.value == 1
+ O.mkdir(parents=True)
+ dump(O / 'identity.json', {'grant_sha256': sha(a.selection), 'runner_sha256': sha(Path(__file__)),
+-    'proposal_sha256': sha(B / 'proposed-commands.json'), 'git_identity': identity(),
++    'proposal_sha256': sha(B / 'proposed-build-root01.json'), 'git_identity': identity(),
+     'manifest_sha256': sha(B / 'source-frozen.json'), 'source_files': len(expected),
+     'go_binary_sha256': sha(compiler), 'compile_binary_sha256': sha(compiler.parent.parent / 'pkg/tool/linux_amd64/compile'),
+     'go_version_file': (compiler.parent.parent / 'VERSION').read_text(),

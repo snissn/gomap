@@ -1,0 +1,87 @@
+{
+  "Go_commands_executed": 0,
+  "Q32": "RED/ACK0; no allowance/performance/product acceptance",
+  "actual_route_commands_separate": 2,
+  "all_modes_unchanged": true,
+  "artifacts": {
+    "README.md": "f33f779b0c580f85f83686960ab5396966891c3a437c10d446bd2478707a1aa8",
+    "caller-constructor-ledger.json": "31a06348dac915d46adf439820145c9e8702c70969d70bc37ae89d041cfeef23",
+    "changed-files.json": "9498f328600bddbc6c731e96bc81a333e321ddf89fc6190cc7b027b015774a18",
+    "changed-source.tar.gz": "73d58293bdf3c2ffc9d45c04646246fbe2a7441faf1e1db464460734ff2670d2",
+    "failure-diagnosis.json": "b32d0aba70aecdacc87c27b98c7f460687b8c42f717986964a4be4e9dc446e5a",
+    "failure-diagnosis.md": "a24c32ecbb8b4e0b44f21ea3ecfb563a9aa9f0a9cf97ef7fcfd8cebd7ca4bd80",
+    "freeze.json": "143bb80df11ec32b090a69f55fcb88d37a965d3cbc0c7977bce3d19e973bdfd8",
+    "invariance.json": "42624d8971e49e4ab0493edafd30ff0f1c799ca2786d1b46d8a8f8b7b9b3de89",
+    "pricing-retention.md": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "proposed-commands.json": "1fe1de496b0fa66afbfa9c28fa6fcfa8cac035373136801e593de48691d5733b",
+    "source-frozen.json": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "source-frozen.tar.gz": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+    "source-modes.json": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "source.delta.patch": "0069fdb5a01d8023a691c47f30647f29949fac10c4dec0e7a384babb176ed156",
+    "source03-evidence.json": "37c18419083ba7b7fb2ce76372c5ce79cf3cbf596dc249a90ccff93d16e707d8",
+    "source03-to-source04.changed-files.json": "7699bb229b42f18b736a58a5a3b459d641779223aec4690785308364f9eeb930",
+    "source03-to-source04.changed-source.tar.gz": "e7cd9cb310092131fcb66764acdc084ac7a6eba2bf5397378416ee329ba47b6a",
+    "source03-to-source04.delta.patch": "1aaefdc5957b234c2d44c801283fbc3c1bf8aa8a31890adeaa1951d45ad80293",
+    "test-inventory.json": "01174b04e158b4bd16fd97e099cd673290dc8edb2e799b7af7229706fe8111ca"
+  },
+  "changed_paths_vs_minimum01": 42,
+  "changed_paths_vs_source03": 1,
+  "focused_counts_by_mode": {
+    "normal": {
+      "children": 10,
+      "commands": 1,
+      "top_level": 18
+    },
+    "race": {
+      "children": 178,
+      "commands": 4,
+      "top_level": 101
+    }
+  },
+  "focused_proposed_commands": 5,
+  "index_unchanged": true,
+  "production_pricing_layout_G_P_unchanged": true,
+  "reuse_previous_commands": [
+    {
+      "applicability": "All production/build and this target-package test inputs remain byte-identical through source04. Only DB primary_construction_ledger_v6_test.go changes from03; DB _test.go files are not inputs to mvcc/freelist package tests. Original executions remain historical; root decides final reuse.",
+      "children": 40,
+      "name": "normal-mvcc-prices",
+      "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/run.log",
+      "raw_log_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+      "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+      "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+      "top_level": 4
+    },
+    {
+      "applicability": "All production/build and this target-package test inputs remain byte-identical through source04. Only DB primary_construction_ledger_v6_test.go changes from03; DB _test.go files are not inputs to mvcc/freelist package tests. Original executions remain historical; root decides final reuse.",
+      "children": 92,
+      "name": "normal-freelist-canonical",
+      "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/run.log",
+      "raw_log_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/result.json",
+      "result_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "top_level": 26
+    },
+    {
+      "applicability": "All production/build and this target-package test inputs remain byte-identical through source04. Only DB primary_construction_ledger_v6_test.go changes from03; DB _test.go files are not inputs to mvcc/freelist package tests. Original executions remain historical; root decides final reuse.",
+      "children": 36,
+      "name": "normal-freelist-consumers",
+      "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/run.log",
+      "raw_log_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/result.json",
+      "result_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "top_level": 53
+    }
+  ],
+  "runtime_lease_released": true,
+  "source_after_matches": true,
+  "source_archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "source_files": 10444,
+  "source_lease_released": true,
+  "source_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "status": "COMPLETE_SOURCE04_POINTER_PRODUCER_FIXTURE_FROZEN_UNEXECUTED",
+  "unchanged_vs_source03": 10443
+}

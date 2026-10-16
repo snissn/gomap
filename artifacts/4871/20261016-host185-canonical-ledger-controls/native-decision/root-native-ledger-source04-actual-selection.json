@@ -1,0 +1,26 @@
+{
+  "scope": "actual-canonical-ledger-source04",
+  "stage": "controls",
+  "actual_native_driver_authorized": true,
+  "runner_sha256": "d3220d7c8653db4c00a0c406bca55d857fea7c17018b769e10590d23f9cbb573",
+  "proposal_sha256": "1fe1de496b0fa66afbfa9c28fa6fcfa8cac035373136801e593de48691d5733b",
+  "manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source04-review.json",
+  "independent_review_sha256": "69c62a14db4584436bb0a94ad7ab8c53be4c19a4b9856ff6eba3b86604f8a859",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-verify.json",
+  "source_verify_sha256": "b886f41770d32c70fe1b4ea159e157c5a2f250cea9d0b4e6d1e126a49012ef99",
+  "focused_summary_sha256": "df491648df9700e0c09658453a079e10287b04ec59833c839bc7606d700153ea",
+  "focused_root_receipt_sha256": "06e7ca622240610cf1dafc226f6cfee52e258f9a496efa4ef3ea597da567761e",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "commands": [
+    "normal-all-shared-arms",
+    "race-all-shared-arms"
+  ],
+  "root_disposition": "Focused changed-risk controls accepted including exact-input reuse. Run all six unchanged original actual diagnostic arms normal/race with original meter nil, semantic oracles and independently derived prebirth envelope. No benchmark or public Q32 allowance revision. Stop first failure.",
+  "Q32": "RED/ACK0 unchanged",
+  "utc": "2026-10-16T12:54:26.968032+00:00"
+}

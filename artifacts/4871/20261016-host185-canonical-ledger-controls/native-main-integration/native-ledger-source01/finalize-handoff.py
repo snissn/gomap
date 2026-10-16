@@ -1,0 +1,38 @@
+from pathlib import Path
+import json,hashlib,re,tarfile,difflib
+D=Path('/mnt/fast4tb/gomap-mvcc-4871-20261015');W=D/'native-integrated';O=D/'native-main-integration/native-ledger-source01';P=D/'native-main-integration/native-ledger-production-review01';B=D/'native-main-integration/native-minimum-scan-source01'
+sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest()
+put=lambda p,v:(O/p).write_text(json.dumps(v,sort_keys=True,indent=2)+'\n')
+m=json.loads((O/'source-frozen.json').read_text());pm=json.loads((P/'source-frozen.json').read_text());base=json.loads((B/'source-frozen.json').read_text());f=json.loads((O/'freeze.json').read_text());proposed=json.loads((O/'proposed-commands.json').read_text())
+changed=sorted(p for p in m if pm.get(p)!=m[p]);put('preliminary-review-reconciliation.json',{'parent_manifest_sha256':sha(P/'source-frozen.json'),'final_manifest_sha256':sha(O/'source-frozen.json'),'changed_since_preliminary':[{'path':p,'before':pm.get(p),'after':m[p]} for p in changed],'findings':{'P1':'Begin refuses same activated prefix backing before authority; actual seal retains independent original array','P2':'Final success handoff waits for all fallible defers; late error runtime=nil and exact runtime/selection stays on original generation; failed ledger/runtime Close keeps physical owner edge','P3':'Storage observation reads validated original prepared.ledgerClaim scalars; no unadmitted candidate lookup'},'new_controls':'actual four-arm late-handoff; native prefix refusal plus real producer commit/Finish; alternating pinned burn positions','go_or_runtime_executed':False})
+with tarfile.open(P/'source-frozen.tar.gz') as tf:
+ delta=[]
+ for p in changed:
+  old=tf.extractfile(p).read().decode().splitlines(True) if p in pm else []
+  delta+=difflib.unified_diff(old,(W/p).read_text().splitlines(True),fromfile='preliminary/'+p if p in pm else '/dev/null',tofile='final/'+p)
+(O/'preliminary-to-final.delta.patch').write_text(''.join(delta))
+patterns=r'\b(?:EnableOwnedCOWV6|EnableCOWV1|BeginCOWPublicationScopeV6|PublishActivatedCOWPrefix(?:V1|DeferredV6|WithWorkV6)|PublishCOWCandidateV1|ContinueOriginalV6|ContinueWithWorkV6|DrainConstructionLedgerV6|CloseReservationLedgerV6)\s*\('
+hits=[]
+for p in sorted(m):
+ if p.endswith('.go') and not p.endswith('_test.go') and (p.startswith('TreeDB/freelist/') or p.startswith('TreeDB/db/')):
+  for i,line in enumerate((W/p).read_text().splitlines(),1):
+   if re.search(patterns,line):hits.append({'path':p,'line':i,'source_sha256':m[p],'source':line.strip()})
+routes=[
+{'role':'PRIMARY startup/recovery','paths':['TreeDB/db/durable_primary_runtime_v5.go','TreeDB/db/primary_capsule_recovery_v6.go'],'disposition':'Owned before Enable/claim; init error captures exact original ordinary prepared producer before effects; drain before original physical owner release.'},
+{'role':'Rebuild temporary allocator','paths':['TreeDB/db/durable_primary_rebuild_v5.go','TreeDB/db/index_gen.go'],'disposition':'Retained in original generation construction field before Enable/Prepare; final drain before successful runtime/selection handoff; error runtime=nil and original unpublishedPrimary retains exact runtime/Sets; failed Close keeps physical owner edge.'},
+{'role':'Vacuum replacement','paths':['TreeDB/db/vacuum_online.go'],'disposition':'PRIMARY uses same actual arena Owner; non-PRIMARY stays legacy. Replacement generation owns distinct allocator ledger even when PRIMARY Owner is shared.'},
+{'role':'Legacy non-PRIMARY/reset','paths':['TreeDB/db/durable_root_runtime.go','TreeDB/db/db.go'],'disposition':'Three legacy allocator enables and reset preserve original unowned ordinary behavior; explicit native authority rejects unowned before effects.'},
+{'role':'Native cut','paths':['TreeDB/db/primary_authority_scope_v6.go','TreeDB/freelist/allocator_publication_work_v6.go'],'disposition':'Existing seal inline child and exact independently admitted prefix validated under original allocator/ledger locks; child survives actual cut.'},
+{'role':'Ordinary shared cut','paths':['TreeDB/db/root_publication_activation.go','TreeDB/db/durable_primary_runtime_v5.go','TreeDB/freelist/allocator_cow.go'],'disposition':'Deferred original seal child on real DB routes; generic ordinary adapter keeps allocator prefix backing until same synchronous child completes.'},
+{'role':'Receipt Finish','paths':['TreeDB/db/primary_seal_release_work_v6.go'],'disposition':'Native explicit work child first; ordinary synchronous same child only for original ordinary receipt. Finish precedes prefix/resources/frame/ACK and private published terminal.'},
+{'role':'Direct canonical ordinary consumers','paths':['TreeDB/db/primary_capsule_runtime_v6.go','TreeDB/db/durable_primary_runtime_v5.go','TreeDB/db/durable_root_runtime.go','TreeDB/freelist/generation_v1_reservation.go'],'disposition':'Same commit and retirement; ordinary synchronous policy, no new native fallback.'}]
+put('caller-constructor-ledger.json',{'routes':routes,'exhaustive_connected_api_source_occurrences':hits,'source_manifest_sha256':f['source_manifest_sha256'],'lock_order':'original publication/allocator -> ledger -> same metadata Owner; refund typed RemovalWork outside ledger lock','native_ordinary_distinction':'Explicit original authority/receipt origin; generic work-bearing ordinary materialization remains ordinary-compatible.'})
+invariant_paths=['TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go','TreeDB/mvcc/native_firstack_cost_v6_test.go','TreeDB/mvcc/native_prune_backend_route_v6_test.go']
+invariant_paths=[p for p in invariant_paths if p in m]
+# Identify the exact existing first-ACK meter file rather than infer its filename.
+invariant_paths+=sorted(p for p in m if p.endswith('.go') and 'firstack' in p.lower() and p not in invariant_paths)
+put('invariance.json',{'source_manifest_sha256':f['source_manifest_sha256'],'parent_manifest_sha256':sha(B/'source-frozen.json'),'protected_paths':[{'path':p,'parent':base.get(p),'final':m[p],'unchanged':base.get(p)==m[p]} for p in invariant_paths],'index_before_after':f['index_sha256'],'caps':'Original public Q32/1MiB/33/80/4096 unchanged; unit adjustments explicitly a6328ee2 only','no_go_runtime':True})
+assert all(sha(W/p)==h for p,h in m.items());assert sha(Path(f['index_path']))==f['index_sha256']
+artifacts=['source-frozen.json','source-frozen.tar.gz','source-modes.json','changed-files.json','changed-source.tar.gz','source.delta.patch','freeze.json','proposed-commands.json','test-inventory.json','README.md','pricing-retention.md','preliminary-review-reconciliation.json','preliminary-to-final.delta.patch','caller-constructor-ledger.json','invariance.json']
+put('handoff.json',{'status':'COMPLETE_SOURCE_FROZEN_UNEXECUTED_ROOT_REVIEW_AND_RUNTIME_SELECTION_REQUIRED','source_manifest_sha256':f['source_manifest_sha256'],'source_archive_sha256':f['source_archive_sha256'],'source_files':len(m),'changed_paths':f['changed_paths'],'source_lease_released':True,'runtime_lease_released':True,'source_after_matches':True,'index_unchanged':True,'Go_commands_executed':0,'focused_proposed_commands':8,'focused_top_level_per_mode':proposed['focused_per_mode_top_level_tests'],'focused_children_per_mode':proposed['focused_per_mode_child_tests'],'actual_route_commands_separate':2,'P1_P2_P3_source_corrections':'all represented with exact preliminary/final reconciliation','Q32':'RED/ACK0; no allowance/performance/product acceptance','artifacts':{p:sha(O/p) for p in artifacts}})
+print(json.dumps({'handoff_sha256':sha(O/'handoff.json'),'proposed_sha256':sha(O/'proposed-commands.json'),'preliminary_changed_paths':len(changed),'source_unchanged':True,'leases':'released'},indent=2))

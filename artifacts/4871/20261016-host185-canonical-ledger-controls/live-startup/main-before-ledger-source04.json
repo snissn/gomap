@@ -1,0 +1,10 @@
+{
+  "ref": "refs/heads/main",
+  "node_id": "REF_kwDOIdn7C69yZWZzL2hlYWRzL21haW4",
+  "url": "https://api.github.com/repos/snissn/gomap/git/refs/heads/main",
+  "object": {
+    "sha": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "type": "commit",
+    "url": "https://api.github.com/repos/snissn/gomap/git/commits/0149d78dba2574b09d7119d2631ec78a144e088d"
+  }
+}

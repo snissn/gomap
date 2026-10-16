@@ -1,0 +1,9 @@
+[
+  {
+    "after_sha256": "bc8454b00bf5de02691b16bd5e41de55bd3e9caa4243c2b7673050865a4c7975",
+    "before_sha256": "2d05bb5d23f0d9adbad44ecb1f089c2e87228280fca6635a4fac8db0547dbcfd",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/primary_construction_ledger_v6_test.go"
+  }
+]

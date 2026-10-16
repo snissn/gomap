@@ -1,0 +1,7 @@
+{
+  "time": "2026-10-16T12:03:24.439014+00:00",
+  "report_sha256": "21afe0e57436709391beeabdb89dfe09b2ba30315c17e2195ec8053c898eb0e2",
+  "manifest_sha256": "1a6fa236d5c980fbde55bb567e89f3c8eb3bb87a02cf18ba4374c006705dcfa1",
+  "source_bindings_verified": 27,
+  "disposition": "Preliminary REJECT retained. Verification is binding-only, not acceptance or runtime grant."
+}

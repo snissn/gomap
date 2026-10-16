@@ -1,0 +1,52 @@
+--- run-ledger-firstack-comparison01.py
++++ run-ledger-firstack-comparison01-continuation01.py
+@@ -31,18 +31,46 @@
+ assert a.selection.resolve().is_relative_to(D / 'native-decision')
+ assert sha(a.selection) == a.selection_sha256
+ grant = read(a.selection)
+-assert grant['scope'] == 'canonical-ledger-firstack-comparison01'
++assert grant['scope'] == 'canonical-ledger-firstack-comparison01-continuation01'
+ assert grant['actual_native_driver_authorized'] is True
+ assert grant['runner_sha256'] == sha(Path(__file__))
+ proposal_path = Path(grant['proposal'])
+ assert sha(proposal_path) == grant['proposal_sha256']
+ proposal = read(proposal_path)
+ commands = proposal['commands']
+-assert len(commands) == 6 and [c['side'] for c in commands] == list('ABBAAB')
++assert len(commands) == 5 and [c['side'] for c in commands] == list('BBAAB')
+ assert [c['name'] for c in commands] == grant['commands']
+-assert len(set(grant['commands'])) == 6
++assert grant['commands'] == ['firstack-B-02', 'firstack-B-03', 'firstack-A-04', 'firstack-A-05', 'firstack-B-06']
++assert len(set(grant['commands'])) == 5
+ assert all(c['executed'] is False for c in commands)
+ assert proposal['retries'] == 0 and proposal['stop_first_failure'] is True
++assert grant['terminal_stop_no_further_continuation'] is True
++previous = grant['interrupted_campaign']
++for name in ('selection', 'summary', 'root_receipt', 'advice', 'advice_json'):
++    assert sha(Path(previous[name])) == previous[name + '_sha256']
++previous_grant = read(Path(previous['selection']))
++previous_summary = read(Path(previous['summary']))
++assert previous_grant['scope'] == 'canonical-ledger-firstack-comparison01'
++assert previous_grant['sides'] == grant['sides']
++assert previous_grant['quietness_policy'] == grant['quietness_policy']
++assert previous_summary['all_pass'] is False
++assert [(r['name'], r['executed']) for r in previous_summary['results']] == [('firstack-A-01', True), ('firstack-B-02', False)]
++assert previous_summary['results'][0]['status'] == 'PASS'
++assert previous_summary['unexecuted_commands'] == grant['commands']
++assert all(previous_summary['final_source_verification'].values())
++previous_output = Path(previous_grant['output'])
++assert sha(previous_output / 'firstack-A-01/run.log') == previous_summary['results'][0]['raw_sha256']
++assert not (previous_output / 'firstack-B-02/process.json').exists()
++assert not (previous_output / 'firstack-B-02/run.log').exists()
++assert sorted(os.sched_getaffinity(0)) == read(previous_output / 'identity.json')['affinity']
++assert datetime.datetime.now(datetime.timezone.utc) <= datetime.datetime.fromisoformat(grant['start_not_after_utc'])
++original_commands = read(Path(previous_grant['proposal']))['commands'][1:]
++for before, after in zip(original_commands, commands, strict=True):
++    before = json.loads(json.dumps(before))
++    after = json.loads(json.dumps(after))
++    before['env'].pop('TMPDIR')
++    after['env'].pop('TMPDIR')
++    assert before == after
+ sides = grant['sides']
+ assert set(sides) == {'A', 'B'}
+ stage = 'samples'

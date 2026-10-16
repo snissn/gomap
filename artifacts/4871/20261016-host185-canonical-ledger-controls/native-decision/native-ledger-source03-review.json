@@ -1,0 +1,100 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Source03 focused-runtime readiness only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the required exact reviewer model; no hosted review requested.",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+  "source_archive_sha256": "2e95363d01a4b38314b08f550e38b6d9d1d08016e5329ec1c2e30379dae8f6b2",
+  "source_file_count": 10444,
+  "whole_archive_content_and_modes_independently_verified": true,
+  "source02_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "incremental_changed_files": {
+    "TreeDB/db/primary_construction_ledger_v6_test.go": "2d05bb5d23f0d9adbad44ecb1f089c2e87228280fca6635a4fac8db0547dbcfd",
+    "TreeDB/db/primary_runtime_disposal_work_v6_test.go": "122f949810461441033106311fc319661465c0a5b53725845b6a22b5e5a385a7"
+  },
+  "unchanged_files": 10442,
+  "all_modes_unchanged": true,
+  "production_pricing_protected_inputs_unchanged": true,
+  "production_anchor_bindings": {
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe",
+    "TreeDB/db/durable_primary_rebuild_v5.go": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd",
+    "TreeDB/db/index_gen.go": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": "5376ec6db9bca74c93f7801aa93dc055d291fda8e35ddc1910186d0647cd89ec",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5",
+    "TreeDB/db/durable_root_recovery.go": "b02d7a941f6d632ec871c0916c17d2a76bb47d7ecb3f8b9156913f7ce353c387",
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/primary_offline_pair_v6.go": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "TreeDB/internal/primaryarena/arena.go": "f1a2fd47dfd1408c75e2eadb8b82e9019a3bbdf1624c8ca2ead9b2618163456b",
+    "TreeDB/internal/primaryarena/native_terminal_price_for_test_v6.go": "7b495de07a13634b25972f22327072fd759e4f32f06ec2d69e49ba25aff5c981",
+    "TreeDB/pager/native_read_root_price_for_test_v6.go": "2042307f9329cc1b694e779b952fee993d28d7318b0b22d75f32e24263cc42e8",
+    "TreeDB/pager/primary_read_root_v6.go": "13a24b929b58abfcf7458a588e1b9cbbb649d1166d87ceb2ed6878c32f6a6469"
+  },
+  "source02_incremental_patch_sha256": "ba46a3c677f5131afbc0269b51a1319c4d701f25e65660ade37f310d5d7de120",
+  "handoff_sha256": "afb920deaafff12ac19e95d24a43d60d643b4acdbc50b6ab3a923779a9e70353",
+  "proposal_sha256": "1e6f2a85defe326c9ab1d9478196df3c14ac40bd3532b061a70f1c9519957b14",
+  "all_handoff_artifacts_verified": true,
+  "all_seven_commands_equal_source02_except_TMPDIR": true,
+  "all22_selected_test_file_bindings_verified": true,
+  "fresh_focused_calls": 5,
+  "fresh_counts": {
+    "normal": {
+      "children": 10,
+      "commands": 1,
+      "top_level": 18
+    },
+    "race": {
+      "children": 178,
+      "commands": 4,
+      "top_level": 101
+    }
+  },
+  "historical_reuse_verified": [
+    {
+      "name": "normal-mvcc-prices",
+      "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+      "raw_log_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+      "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+      "top_pass": 4,
+      "child_pass": 40,
+      "historical_not_rerun": true
+    },
+    {
+      "name": "normal-freelist-canonical",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "raw_log_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+      "result_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+      "top_pass": 26,
+      "child_pass": 92,
+      "historical_not_rerun": true
+    },
+    {
+      "name": "normal-freelist-consumers",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "raw_log_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+      "result_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+      "top_pass": 53,
+      "child_pass": 36,
+      "historical_not_rerun": true
+    }
+  ],
+  "root_reuse_receipt_sha256": "ed2702900c0f1aec7dab1d35b267b1d82985b332f69d9bc829ee6a3f0048a993",
+  "resolved": [
+    "Four-arm constructor now materializes real persistent dependencies in both selected slots before capture and retains strict original Set identity/lifetime/late-drain/Close assertions.",
+    "Old five-record refusal retained; same-phase original Drop has exact9 records and exact sizeof byte exhaustion.",
+    "Empty bank queue source unit17 supports unchanged Q32 continuations; generic worst-case nine-lookup33 is not this fixture.",
+    "Zero-work sticky observation refuses without mutation; exact3-record entry observes same receipt without callback replay."
+  ],
+  "findings": [],
+  "actual_route_commands": "Two separate all-six-arm normal/race calls remain separately gated, not granted by this review.",
+  "limits": [
+    "No source03 Go/compiler/runtime executed by reviewer and no source03 control PASS asserted.",
+    "Prior production/pricing source acceptance carries only by exact byte identity.",
+    "Failed source01/source02 evidence remains preserved.",
+    "No Q32/1MiB fit, revised allowance, full graph F, full retained union, Finish/continuing writer qualification, cache C1/C3, all19, platform/fault/format/shrink/performance/CI or merge acceptance."
+  ],
+  "lease": "released; idle"
+}

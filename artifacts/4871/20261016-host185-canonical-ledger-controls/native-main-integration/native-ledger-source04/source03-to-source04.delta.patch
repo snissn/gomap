@@ -1,0 +1,38 @@
+--- source03/TreeDB/db/primary_construction_ledger_v6_test.go
++++ source04/TreeDB/db/primary_construction_ledger_v6_test.go
+@@ -1,7 +1,6 @@
+ package db
+ 
+ import (
+-	"bytes"
+ 	"context"
+ 	"errors"
+ 	"path/filepath"
+@@ -19,22 +18,17 @@
+ 	for _, mode := range []string{"success", "late-drain", "failed-close", "runtime-release"} {
+ 		t.Run(mode, func(t *testing.T) {
+ 			dir := t.TempDir()
+-			preparePrimaryJointCrashV6(t, dir)
+-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
++			// Use the established physical producer: real persistent records,
++			// RefreshValueLogSet and two SetPointer/WriteSync publications. Backend
++			// SetSync intentionally rejects values outside its inline contract.
++			prepareOfflinePointerPairV6(t, dir)
++			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+ 			if err != nil {
+ 				t.Fatal(err)
+ 			}
+ 			defer d.Close()
+ 			if primaryOfflineScopePlatformRefusal(t, d) {
+ 				return
+-			}
+-			// The inline-only crash seed has a valid nil dependency closure. These
+-			// two genuine commits make BOTH selected slots own persistent-value
+-			// dependencies, so the strict Set handoff assertions below are real.
+-			for _, key := range []string{"ledger-value-older", "ledger-value-latest"} {
+-				if err = d.SetSync([]byte(key), bytes.Repeat([]byte(key), 16)); err != nil {
+-					t.Fatal(err)
+-				}
+ 			}
+ 			roots, err := d.CaptureRecoverableRootSetForInspection(context.Background())
+ 			if err != nil {

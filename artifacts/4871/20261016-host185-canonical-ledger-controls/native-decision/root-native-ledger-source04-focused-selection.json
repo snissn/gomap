@@ -1,0 +1,47 @@
+{
+  "scope": "focused-canonical-ledger-source04",
+  "created_utc": "2026-10-16T12:51:19.887071+00:00",
+  "source_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "source_archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "proposed_commands_sha256": "1fe1de496b0fa66afbfa9c28fa6fcfa8cac035373136801e593de48691d5733b",
+  "runner_sha256": "d68e9485e270c3657640cca4ecd921436bf020ded0fde162c74b6a0d41c14496",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source04-review.json",
+  "independent_review_sha256": "69c62a14db4584436bb0a94ad7ab8c53be4c19a4b9856ff6eba3b86604f8a859",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-verify.json",
+  "source_verify_sha256": "b886f41770d32c70fe1b4ea159e157c5a2f250cea9d0b4e6d1e126a49012ef99",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "authorized_command_names": [
+    "normal-db-construction",
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction"
+  ],
+  "actual_native_driver_authorized": false,
+  "numeric_allowance_selected": false,
+  "source_lease": "released; source stays frozen through runtime",
+  "root_disposition": "Accept exact one-test pointer-producer repair with strict custody assertions unchanged. Fresh normal DB and four races; stop first failure. Actual route and measurement remain separate.",
+  "reuse_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-focused-reuse.json",
+  "reuse_receipt_sha256": "3150e8572993530839433248ad330c1b03ba63406946f60f845e4699c6bf2197",
+  "fresh_counts": {
+    "normal": {
+      "children": 10,
+      "commands": 1,
+      "top_level": 18
+    },
+    "race": {
+      "children": 178,
+      "commands": 4,
+      "top_level": 101
+    }
+  },
+  "effective_totals_per_mode_after_reuse": {
+    "top": 101,
+    "child": 178
+  },
+  "public_Q32": "RED/ACK0 unchanged",
+  "full_graph_qualification": "OPEN"
+}

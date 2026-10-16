@@ -1,0 +1,17 @@
+# Source02 late-constructor failure diagnosis
+
+Disposition: **fixture defect; all four controls remain failed pending corrected fixture**. No product handoff defect is demonstrated. Independent read-only review: gpt-6.1-sol/high; no candidate edits or runtime.
+
+Source manifest `94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d`, archive `89756760b2d8edb2d9485051da54cce976fd6dd8c0cb19970d828b5fed7f04e7`, 10444 files. Eleven inspected source files independently match archived bytes and manifest; exact hashes are in JSON. Raw normal-db-construction log SHA256 `8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356`.
+
+`primary_construction_ledger_v6_test.go:99/111` requires every selected SlotResources entry to be nonnil. Its seed (`primary_joint_vacuum_v6_test.go:359–375`) writes only short inline values. The manifest route materializes that empty resource closure (`durable_primary_rebuild_v5.go:272–285`); `durable_root_runtime.go:2924–2925` deliberately returns `(nil,nil)` for zero dependency entries. The capsule selector propagates the exact result (`primary_capsule_recovery_v6.go:58–73,96–98`); the common selector stores it directly in the slot (`durable_root_recovery.go:155`). A valid selected capsule can therefore have no Set.
+
+The successful selection CommitSeq guard at test line92 passed. In all three error arms, lines105–107 also passed: injected cause, exactly one callback, nil returned runtime, original retained runtime/current/header and temporary allocator. Thus these arms reach the actual final drain after capsule selection; they do not fail before the intended stage. Their subsequent Close assertions have not executed.
+
+The constructor's LAST defer clears construction.slotResources only for `err==nil && handoffReady` (`durable_primary_rebuild_v5.go:93–113`). The temporary allocator drain defer executes earlier (`:193–200`). On its failure, the final defer keeps the SAME runtime at idx.unpublishedPrimary and returns nil runtime while the allocator remains attached. Original index Close drains that allocator before runtime disposal and preserves the failed generation/owner edge on either error (`index_gen.go:152–179`). No production change is justified by these nil-resource assertion failures.
+
+Smallest discriminating repair: in this test alone, use original Options.ValueLog.PointerThreshold=1 and two genuine post-open SetSync publications BEFORE roots/scope capture, so both selected slot closures contain real persistent resources. Keep nonnil/exact-pointer/not-Released assertions and actual selected capsules; do not accept vacuous nil equality or fabricate Sets. Sent directly to writer. Preserve single injected drain callback, success transfer and all original runtime/idx/owner custody checks.
+
+Preserve late-drain genuine successful Close, failed-ledger Close retention, runtime-release stale error after successful ledger drain and identical repeat Close error. The manual runtime-release Drop need not immediately make the root stale: slot aliases are disposed in phase1 before the current edge in phase2 (`primary_runtime_disposal_work_v6.go:133–178`), exposing the missing original edge later. This remains a genuine original Drop failure, not a synthetic receipt.
+
+All four post-assertion cleanup/Close obligations remain unavailable from this failed run. No runtime grant, Q32 fit, publication, whole graph, retained-union, performance or CI qualification follows. Lease released; idle.

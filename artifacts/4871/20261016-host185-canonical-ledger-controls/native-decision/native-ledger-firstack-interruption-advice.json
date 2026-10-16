@@ -1,0 +1,84 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "independent read-only bounded measurement decision advice",
+  "source_edits": false,
+  "runtime_executed": false,
+  "disposition": "RECOMMEND ONE EXPLICIT TERMINAL CONTINUATION; no execution authority granted",
+  "evidence_bindings": {
+    "native-decision/root-native-ledger-firstack-comparison01-selection.json": "47c645db76beaf5deb0741db207ce9fbf1cfbb02f8a004e5bb1e2c98340ca3d8",
+    "native-decision/root-native-ledger-firstack-comparison01-commands.json": "67b4b9acf3085021b07e37d578d996dcb2c1c2d19264e848115ec41999913ca8",
+    "native-decision/root-native-ledger-firstack-comparison-proposal.md": "9501d9b146beec60dff8a606e84dd19728ace39008f388da27c30aca090db0e5",
+    "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01.py": "0c60277b3612b43186804e3915a30f19990371c74c009ce0638db262787fd430",
+    "native-main-integration/native-ledger-firstack-comparison01/identity.json": "152af0adeb71d36fdff88397eaf58fa27037e18782a4a78cd4614789290a6105",
+    "native-main-integration/native-ledger-firstack-comparison01/summary.json": "0ad91110d320fd8d4f44e9a61ace9ce1212b49767ed3f4767fa400fb55bb4a97",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/run.log": "fca0be0b29cfcc6d6e1882fe59130c1037b14956f4667c2553eaa5a1b6c39039",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/command.json": "2801f2b96d71d2cc2e457660530e0375936964e337b5fa38d58b29c61cd7c8b9",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/result.json": "b0cbf084270dc33c8d1295c262932755f3d4e43841352534ffa711dbda9baede",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/process.json": "ff8f1f7f19785b257770c1d0f27c1cedc22643e186b0819f1735b844a9b1c309",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/quiet-preflight.json": "8a3831a71c0c0c3d34e67390b9a020b7b9a40c060f5763ccdff03d67228e99c6",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/host-window.json": "64fa9560f433af6ec681dea77c9233bcb72654b753ddd0c994defa27ec67bf87",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/result.json": "9940d6b9403d7d1a7c9961327e8f38a9b0756d024018604720f4d118d7b55fbf",
+    "native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/quiet-preflight.json": "23f5a332df02cee0136994d09f172b7a41dc16b6e79f2744aa6ffdb1d029c4d9",
+    "skills/go-performance-optimization/SKILL.md": "567167fe1a7c6007a7448d87341b5899f949adc82af033f0286cccb858a83109",
+    "skills/go-performance-optimization/references/profiling-and-measurement.md": "235b3ab65e9f8bc1181bc8e171e989526538fdf40ddc00be880acede79457379"
+  },
+  "source_bindings": {
+    "A": {
+      "manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+      "archive_sha256": "2e00a4efb13333c24a2a41490a15ea5a3d8869e12f226605ebd7f25f788483e4",
+      "elf_sha256": "6e9707c41b08d87fe19fc2a3f293f4af79d6348340fba5b9c8b26693a76d5d9d",
+      "benchmark_source_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230"
+    },
+    "B": {
+      "manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+      "archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+      "elf_sha256": "c02b67d663db0994062839294cd3fa408fbea3bab5653a8e8be5426b8afbf177",
+      "benchmark_source_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230"
+    }
+  },
+  "established": {
+    "A01_public_call_nanos": 13390312,
+    "A01_birth_to_ACK_nanos": 23499026,
+    "A01_calls": 8,
+    "A01_quiet_preflight_aggregate_percent": [
+      0.6633499170812603,
+      0.8264462809917356
+    ],
+    "A01_host_window_aggregate_percent": 3.9285714285714284,
+    "B02_preflight_aggregate_percent": [
+      0.9925558312655087,
+      8.340214698596201
+    ],
+    "B02_launched": false,
+    "other_four_launched": false
+  },
+  "continuation_conditions": [
+    "Root must explicitly revise stopped collection plan before execution; original stop-first-failure/retries0 grant does not auto-resume.",
+    "Fresh append-only continuation evidence directory and linked immutable original summary/A01/refused B02 preflight. Never overwrite old result or call it an executed B sample.",
+    "Only the five listed originally unexecuted samples in exact order; each at most one process launch; A01 never rerun/replaced.",
+    "One original two-window1s preflight per remaining slot; no polling, extra scout attempts, sleeps-until-pass or restarted continuation after another gate failure. Fix start occasion/deadline before launch, not from benchmark results.",
+    "Preserve source/ELF/toolchain/affinity/env/argv/fixture/work/oracles/thresholds/metadata; only reviewed continuation runner/output/TMP paths may differ.",
+    "Preserve two preflight windows aggregate<=5%, per-other-process<=15% one-core, available memory>=8GiB; preserve existing whole-process competing-CPU gate and telemetry limitations.",
+    "Stop permanently for this continuation at first preflight refusal, semantic failure, timeout, drift, leak or observed measurement contamination; retain every attempted and executed result.",
+    "No unrelated-service interventions or threshold relaxation; serialize task heavy work as originally selected.",
+    "Actual root authorization and exact continuation runner review/binding still required."
+  ],
+  "remaining_order": [
+    "firstack-B-02",
+    "firstack-B-03",
+    "firstack-A-04",
+    "firstack-A-05",
+    "firstack-B-06"
+  ],
+  "inference_limits": [
+    "Not the original uninterrupted campaign; disclose pause duration and session boundary after A01.",
+    "If all finish, report all six individual observations and descriptive side summaries only; do not claim clean adjacent pairs for interrupted A01/B02 or statistical significance.",
+    "Keep any contemplated ordinal pairing fixed and show interrupted pair explicitly; no posthoc deletion/reweighting/session adjustment.",
+    "Not isolated ledger effect: B includes intervening minimum scan and allowance/call differences.",
+    "No allocation/residency, throughput, matched-quantum, Q32 or full graph/performance qualification.",
+    "Host counters do not prove millisecond public windows free of interference or identify cause of the refusal; exited processes, caches, disk effects remain unmeasured."
+  ],
+  "if_busy_again": "Terminate this campaign incomplete. Retain A01 as one source-specific observation; no A/B conclusion exists. Use existing source/correctness/work-envelope evidence for next source decision; any later measurement or concrete-hypothesis diagnostic requires a distinct rationale and selection, never replacement samples or a new quietness retry loop."
+}

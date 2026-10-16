@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "f595dfec6b394856f61a91b9b338a89a5d4b5cfa6e2ea6732886b487b3aa169c",
+  "disposition": "Historical source01: normal mvcc passed; canonical package failed and runner stopped. Source02 has no executed bodies.",
+  "files": {
+    "controls/normal-freelist-canonical/result.json": "cb3544fc7f96a621065beb00ff24db9920515d3fa40873cfca144bd8095ad2e2",
+    "controls/normal-freelist-canonical/run.log": "364498e5178384d45a761babc8c1d0543f82d9da2b1ebb257144dc5cc15084c1",
+    "controls/normal-mvcc-prices/result.json": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+    "controls/normal-mvcc-prices/run.log": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+    "controls/summary.json": "871dd5782b68ef541ee4d21b7aeba472dc8f7d912d15ab77e91fefb79ac517aa"
+  },
+  "manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01"
+}

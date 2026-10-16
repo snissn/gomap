@@ -1,0 +1,24 @@
+{
+  "utc": "2026-10-16T12:26:02.196745+00:00",
+  "decision": "REUSE normal-mvcc-prices from source01 for source02 only",
+  "original_source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "current_source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "changed_paths": [
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go",
+    "TreeDB/freelist/private_control_capacity_v6_test.go",
+    "TreeDB/freelist/reservation_canonical_storage_v6_test.go"
+  ],
+  "all_other_10441_files_equal": true,
+  "all_modes_equal": true,
+  "reason": "Only freelist test-package sources differ. Complete mvcc test package, every production dependency and build configuration are identical. Changed freelist _test.go sources are not compiled as imported dependency of mvcc tests.",
+  "original_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+  "original_result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+  "original_raw_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+  "original_counts": {
+    "top_pass": 4,
+    "child_pass": 40
+  },
+  "root_failure_receipt_sha256": "2370c97ab22288c894fbda9e9d60737440cda53f90a996f84df931378c28ae8e",
+  "public_allowance_or_actual_route_accepted": false,
+  "other_focus_commands": "7 fresh calls required; failure stop remains"
+}

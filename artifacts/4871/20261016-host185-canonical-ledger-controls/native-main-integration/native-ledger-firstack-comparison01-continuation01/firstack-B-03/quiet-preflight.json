@@ -1,0 +1,126 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 2.9632741820420847,
+        "pid": 6357
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9755161213613899,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9755161213613899,
+        "pid": 1949
+      },
+      {
+        "comm": "ksoftirqd/0",
+        "one_core_cpu_percent": 0.9877580606806949,
+        "pid": 16
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9877580606806949,
+        "pid": 120874
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9877580606806949,
+        "pid": 681192
+      },
+      {
+        "comm": "cloudflared",
+        "one_core_cpu_percent": 0.9877580606806949,
+        "pid": 1737473
+      }
+    ],
+    "aggregate_busy_percent": 0.7450331125827815,
+    "mem_available_kib": 18686484,
+    "seconds": 1.012393661774695
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 5.926030865754078,
+        "pid": 128239
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 6357
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 681192
+      },
+      {
+        "comm": "top",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 874030
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 1194972
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.975343621918026,
+        "pid": 3140140
+      },
+      {
+        "comm": "ksoftirqd/4",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 42
+      },
+      {
+        "comm": "ksoftirqd/9",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 72
+      },
+      {
+        "comm": "ksoftirqd/11",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 84
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 19242
+      },
+      {
+        "comm": "systemd-oomd",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 213744
+      },
+      {
+        "comm": "postgres",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 1505438
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.987671810959013,
+        "pid": 3434909
+      }
+    ],
+    "aggregate_busy_percent": 3.3057851239669422,
+    "mem_available_kib": 18734368,
+    "seconds": 1.012482070364058
+  }
+]

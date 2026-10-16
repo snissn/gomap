@@ -1,0 +1,322 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 10,
+  "elapsed_seconds": 42.70754799898714,
+  "ended_utc": "2026-10-16T12:28:35.394608+00:00",
+  "exit_code": 1,
+  "expected_child_RUN_names": [
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/success",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-primary-create",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-data-create",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6"
+  ],
+  "name": "normal-db-construction",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1545577,
+      "pid": 1545577,
+      "ppid": 1545101,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545591,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545595,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545737,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545741,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545814,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545826,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1545830,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1546005,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1546014,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1546018,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1546022,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1545577,
+      "pid": 1546026,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1545577,
+      "pid": 1546038,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546057,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546122,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546126,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546131,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546141,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1545577,
+      "pid": 1546169,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    },
+    {
+      "comm": "db.test",
+      "pgid": 1545577,
+      "pid": 1546175,
+      "ppid": 1545577,
+      "session": 1545577,
+      "state": "S"
+    }
+  ],
+  "pgid": 1545577,
+  "pid": 1545577,
+  "raw_log_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+    "TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6",
+    "TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6",
+    "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor",
+    "TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6",
+    "TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow",
+    "TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6",
+    "TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+    "TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T12:27:52.687059+00:00",
+  "status": "STOP",
+  "stop_reasons": [
+    "nonzero exit",
+    "top RUN inventory",
+    "RUN without PASS or FAIL"
+  ],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/success",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6"
+  ],
+  "test_PASS_names": [
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+    "TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6",
+    "TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6",
+    "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-primary-create",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-data-create",
+    "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered",
+    "TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot",
+    "TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow",
+    "TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6",
+    "TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6",
+    "TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement"
+  ],
+  "test_RUN_names": [
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+    "TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6",
+    "TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6",
+    "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/success",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-primary-create",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent/before-offline-data-create",
+    "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/fresh",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor/recovered",
+    "TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6",
+    "TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow",
+    "TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6",
+    "TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6",
+    "TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+    "TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6",
+    "TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6",
+    "TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure",
+    "TestPrimaryOfflinePairV6ConstructionUsesRetainedParent",
+    "TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestOriginalPrimaryRuntimeLastRootRefusalRetainsDescriptor",
+    "TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6",
+    "TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow",
+    "TestPrimaryRuntimeNativeBackingTransfersDetachedAccountingV6",
+    "TestPrimaryRuntimeDebtFullBackingSurvivesPrefixAdvanceV6",
+    "TestVacuumIndexOnlinePostSwapWriteCheckpointAndReopenUseReplacement"
+  ],
+  "top_level_pass_count": 15,
+  "unexpected_top_RUN": []
+}

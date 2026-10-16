@@ -1,0 +1,96 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 3.9514287180353818,
+        "pid": 3140140
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9757143590176909,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9757143590176909,
+        "pid": 1949
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9757143590176909,
+        "pid": 128239
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9757143590176909,
+        "pid": 681192
+      },
+      {
+        "comm": "rcu_preempt",
+        "one_core_cpu_percent": 0.9878571795088454,
+        "pid": 17
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9878571795088454,
+        "pid": 120874
+      },
+      {
+        "comm": "codex-code-mode",
+        "one_core_cpu_percent": 0.9878571795088454,
+        "pid": 128935
+      },
+      {
+        "comm": "polystore_gatew",
+        "one_core_cpu_percent": 0.9878571795088454,
+        "pid": 684331
+      }
+    ],
+    "aggregate_busy_percent": 4.149377593360996,
+    "mem_available_kib": 18732804,
+    "seconds": 1.0122920810244977
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 2.9641267742119495,
+        "pid": 6357
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9760845161412994,
+        "pid": 1881
+      },
+      {
+        "comm": "ksoftirqd/7",
+        "one_core_cpu_percent": 0.9880422580706497,
+        "pid": 60
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9880422580706497,
+        "pid": 1949
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9880422580706497,
+        "pid": 19242
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9880422580706497,
+        "pid": 681192
+      },
+      {
+        "comm": "postgres",
+        "one_core_cpu_percent": 0.9880422580706497,
+        "pid": 1505438
+      }
+    ],
+    "aggregate_busy_percent": 0.6622516556291391,
+    "mem_available_kib": 18753128,
+    "seconds": 1.0121024600230157
+  }
+]

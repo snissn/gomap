@@ -1,0 +1,73 @@
+{
+  "utc": "2026-10-16T12:51:19.887071+00:00",
+  "scope": "Exact unchanged-input reuse for source04 normal focused groups",
+  "accepted": true,
+  "source_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "source03_incremental": "one DB test file only; 10443 other files and all modes identical",
+  "handoff_sha256": "dce2577db0b186f17b1c967bf583a7d5b0e6c44dd9ae77f617f451dcac64ea0d",
+  "handoff_artifact_bindings_checked": 19,
+  "proposal_commands_equal_source03_except_fresh_TMPDIR": [
+    "normal-db-construction",
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction",
+    "normal-all-shared-arms",
+    "race-all-shared-arms"
+  ],
+  "results": [
+    {
+      "name": "normal-mvcc-prices",
+      "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01",
+      "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+      "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+      "raw_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+      "source_delta": [
+        "TreeDB/db/primary_construction_ledger_v6_test.go",
+        "TreeDB/db/primary_runtime_disposal_work_v6_test.go",
+        "TreeDB/freelist/allocator_preparation_work_v6_test.go",
+        "TreeDB/freelist/private_control_capacity_v6_test.go",
+        "TreeDB/freelist/reservation_canonical_storage_v6_test.go"
+      ],
+      "all_changed_files_are_other_package_test_only": true,
+      "all_production_build_and_target_tests_identical": true,
+      "top_pass": 4,
+      "child_pass": 40
+    },
+    {
+      "name": "normal-freelist-canonical",
+      "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "result_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+      "raw_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+      "source_delta": [
+        "TreeDB/db/primary_construction_ledger_v6_test.go",
+        "TreeDB/db/primary_runtime_disposal_work_v6_test.go"
+      ],
+      "all_changed_files_are_other_package_test_only": true,
+      "all_production_build_and_target_tests_identical": true,
+      "top_pass": 26,
+      "child_pass": 92
+    },
+    {
+      "name": "normal-freelist-consumers",
+      "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02",
+      "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+      "result_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+      "raw_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+      "source_delta": [
+        "TreeDB/db/primary_construction_ledger_v6_test.go",
+        "TreeDB/db/primary_runtime_disposal_work_v6_test.go"
+      ],
+      "all_changed_files_are_other_package_test_only": true,
+      "all_production_build_and_target_tests_identical": true,
+      "top_pass": 53,
+      "child_pass": 36
+    }
+  ],
+  "totals": {
+    "top": 83,
+    "child": 168
+  },
+  "historical_results_not_reexecuted": true
+}

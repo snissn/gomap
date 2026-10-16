@@ -1,0 +1,27 @@
+{
+  "caps": "Original public Q32/1MiB/33/80/4096 unchanged; unit adjustments explicitly a6328ee2 only",
+  "index_before_after": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "no_go_runtime": true,
+  "parent_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "protected_paths": [
+    {
+      "final": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+      "parent": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+      "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+      "unchanged": true
+    },
+    {
+      "final": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+      "parent": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+      "path": "TreeDB/mvcc/native_firstack_cost_v6_test.go",
+      "unchanged": true
+    },
+    {
+      "final": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a",
+      "parent": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a",
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "unchanged": true
+    }
+  ],
+  "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf"
+}

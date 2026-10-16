@@ -1,0 +1,160 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Frozen source readiness for root-selected focused normal/race controls only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin the explicitly required gpt-6.1-sol model; independent exact-model internal fallback used.",
+  "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "source_archive_sha256": "f595dfec6b394856f61a91b9b338a89a5d4b5cfa6e2ea6732886b487b3aa169c",
+  "source_files": 10444,
+  "delta_sha256": "39c1010389b9c5c04f79a873d202adce4bab4abd0c53d2e19fea8c16a1f85675",
+  "source_modes_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "independent_binding_checks": [
+    "All archive contents verified against manifest during extraction",
+    "Exact archive regular-file set equals manifest:10444",
+    "All archived modes match source-modes.json",
+    "Final versus preliminary exact nine-path reconciliation",
+    "All22 proposed test-file hashes match frozen source",
+    "All proposed anchored top selectors resolve to real test functions; declared top and child-path counts reconcile"
+  ],
+  "prior_reject_preserved": {
+    "md": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-production-review01-review.md",
+    "sha256": "a2cd0ba5e421a0315bdfb018928fd95da31fcdccb786f69df62b8a2d83235e33"
+  },
+  "resolved_findings": [
+    {
+      "id": "P1",
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go:65",
+      "resolution": "Begin rejects activated-backing alias before binding child or returning authority; Commit guard retained."
+    },
+    {
+      "id": "P2",
+      "paths": [
+        "TreeDB/db/durable_primary_rebuild_v5.go:94",
+        "TreeDB/db/index_gen.go:167"
+      ],
+      "resolution": "Final constructor defer observes all late errors; success alone hands off slot Sets. Failure retains exact unpublished runtime and temporary allocator on original generation; failed drain/runtime disposal retains existing failed-generation owner edge."
+    },
+    {
+      "id": "P3",
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go:623",
+      "resolution": "Price uses validated exact prepared.ledgerClaim handle/scalars, with fail-closed missing-handle guard, without hidden candidate-tree lookup."
+    }
+  ],
+  "blocking_findings": [],
+  "coverage": {
+    "production_and_prices": {
+      "TreeDB/db/durable_primary_rebuild_v5.go": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd",
+      "TreeDB/db/durable_primary_runtime_v5.go": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f",
+      "TreeDB/db/index_gen.go": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15",
+      "TreeDB/db/primary_authority_scope_v6.go": "03fc589b020f08f375d7fb18137d4dcf50235ad8cf783b542d92ba871c799526",
+      "TreeDB/db/primary_capsule_recovery_v6.go": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5",
+      "TreeDB/db/primary_seal_release_work_v6.go": "8920df6e6dffa38f96248a9a45c3b9f09f0ebf848579922739acca54bfeb1295",
+      "TreeDB/db/root_publication_activation.go": "525bcaa5f10dc7ba54032f22d27077cb3c6a0092480b1546867b4b41f7b1fe37",
+      "TreeDB/db/vacuum_online.go": "b9f685fe9740b048e904a00eabea0160a351391ad82ca917d8f00176cbe2219f",
+      "TreeDB/freelist/allocator_cow.go": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35",
+      "TreeDB/freelist/allocator_preparation_work_v6.go": "6c077d3fb4a7f5051064d1a8504c6414e7bde42d8fa32595fa65840c8a237377",
+      "TreeDB/freelist/allocator_publication_work_v6.go": "1a6855f477564ba08bc996613abbbd8a47c895e86abcd2ad6c74d449284b69d0",
+      "TreeDB/freelist/append_work.go": "b13f7f595b7017abef6cc44b398c0818d846377cb665ec6c1595eb50bb4e48f1",
+      "TreeDB/freelist/generation_v1_metadata_claim_work.go": "4411d1b609b877d2fb71a6afc1c2ddfc0240c397f727dadc9eddf3aeebe0e1c4",
+      "TreeDB/freelist/generation_v1_metadata_reuse.go": "1acba48cc8b1afdcf07059ced2ab0f22e612b109ed33b2abb0bc3401df2ecdb5",
+      "TreeDB/freelist/generation_v1_metadata_reuse_work.go": "f925f0e7b8b529a15018b74460f6f44f1d199575afc8e019314ff089add3280f",
+      "TreeDB/freelist/generation_v1_publication_work_v6.go": "d4d82d0fb1624cc189c690f45f2db8bafa67c4e3bce6699730413e54aa6b6cce",
+      "TreeDB/freelist/generation_v1_reservation.go": "a5c28c641653bd06145b64a4d9a28555414fba1d7ca92757f54e76430a1dd3fd",
+      "TreeDB/freelist/native_pre_cursor_for_test_v6.go": "8b6f22c10952c91a12ec70789968ae91714c0699f99f0c50650ccf8a05af82a4",
+      "TreeDB/freelist/native_progress_price_for_test_v6.go": "2a261fa3bb9fdd09d7097c5d027dccc113774aeda076e892094cc52342f41845",
+      "TreeDB/freelist/native_publication_bound_v6.go": "acfd0371f927e615cafb8e7165c87c1cd9c434f91a5a9df6b886803eddb0b6dd",
+      "TreeDB/freelist/private_ledger_for_test_v6.go": "7f5d61090736e4766805ae07f49a44a53fed58da0824c97f8d4af03a3e6f815b",
+      "TreeDB/freelist/reservation_close_v6.go": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33",
+      "TreeDB/freelist/reservation_index_v6.go": "a33db48a1cf5066606b372585084999817aeabcce3c08e082b7a71f4ee2bf5e5",
+      "TreeDB/freelist/reservation_price_for_test_v6.go": "dbdc76500f20858188b53c64f1120a1a8878d9c5c5ce87f0948e5465880e2e5d",
+      "TreeDB/freelist/reservation_retirement_work_v6.go": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c",
+      "TreeDB/freelist/reservation_rollback_work_v6.go": "b0bd0fcdce884771e07ac286352a963e2d9f043f23175699b92b0fb00af311f7",
+      "TreeDB/freelist/reservation_storage_v6.go": "be39f1f32f21f11cbe3fda76b9f1fbc9e2f62414ab7a6426d988c726b3b23798"
+    },
+    "final_controls": {
+      "TreeDB/freelist/allocator_cow_test.go": "5ae944bf2d2042ed6496c955ed1fd96492e6fe3ab9adb4a2881a6c96005b6216",
+      "TreeDB/freelist/allocator_preparation_work_v6_test.go": "c5790699963936a534aa9f11bfbce0a57ca99b94db5e6c80ad172666038b2906",
+      "TreeDB/freelist/allocator_publication_work_v6_test.go": "098a9908317aa5e4705a367a6dd3acbf5ca79b912cf72bc5ed2978d1072b04fd",
+      "TreeDB/freelist/generation_v1_materialize_work_test.go": "9ad4a21c795d71a4c19279a4fb61cffdecbfb3ccb74c1de2c968b500fcac5045",
+      "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "fc28378689d8fd996e20ea885b8203460997ab5537549afd44531265850e4943",
+      "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "e424eb81dc290d14158fdd1efcc0688a7d325355db93fa118100230436cac673",
+      "TreeDB/freelist/generation_v1_reservation_work_test.go": "5bd27791edd0398edc7f6dc4b26442e60b68d6f78de251c1772973ad8a262420",
+      "TreeDB/freelist/private_control_capacity_v6_test.go": "520e5ef0fc06f32f8431da6f2323f9fb86998405b6931e1c39d38a6b3728d2e2",
+      "TreeDB/freelist/reservation_canonical_storage_v6_test.go": "3403cdb0d679d6e14d6d7ad7c6eb4c36c5d99bf89899d891a2e970bb458f9f60",
+      "TreeDB/freelist/reservation_index_fixture_v6_test.go": "00436e139cd2f6e083429d8cade91dce5bc3957570f2548a4242dad4cc47e8d9",
+      "TreeDB/freelist/reservation_owned_fixture_v6_test.go": "84d3ec8eca1975013b312d325258ab24b79e141db1b7ce70f8361cb527de6e60",
+      "TreeDB/mvcc/native_finaldriver_envelope_test.go": "05e146fae55722ea2f80324be8750ab09dfa129d622b733f14d863a065af6c5e",
+      "TreeDB/mvcc/native_selected_ledger_test.go": "d1b77315b8f913494371d760fa55383c3583a491a1581ac020bdce1253064b67",
+      "TreeDB/db/primary_construction_ledger_v6_test.go": "fcded47738c4a709d63a7d225ebda66255046d1d5e70751104ea7468258b579c"
+    },
+    "incremental_paths": [
+      "TreeDB/db/durable_primary_rebuild_v5.go",
+      "TreeDB/db/index_gen.go",
+      "TreeDB/db/primary_construction_ledger_v6_test.go",
+      "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "TreeDB/freelist/allocator_preparation_work_v6_test.go",
+      "TreeDB/freelist/allocator_publication_work_v6.go",
+      "TreeDB/freelist/allocator_publication_work_v6_test.go",
+      "TreeDB/freelist/generation_v1_metadata_claim_work.go",
+      "TreeDB/freelist/reservation_canonical_storage_v6_test.go"
+    ],
+    "proposal_test_file_bindings": {
+      "TreeDB/db/primary_capsule_v6_test.go": "a525982b81498d652c220af4bcc84953730bba46894a9ec601e94ecda47923c8",
+      "TreeDB/db/primary_construction_ledger_v6_test.go": "fcded47738c4a709d63a7d225ebda66255046d1d5e70751104ea7468258b579c",
+      "TreeDB/db/primary_offline_pair_v6_test.go": "26512332a0b1a5061c44eb28d219023e611c9e83f55630d067bc3537103d8672",
+      "TreeDB/db/primary_runtime_cleanup_test.go": "a5cdcefcd77880fdbf70392b185e68af5f51ac363c5c8b38e35786d2fbff44ad",
+      "TreeDB/db/primary_runtime_disposal_work_v6_test.go": "18d1e3cb7fa04fc00fc4a7f7ae9603d34f5876cc673cc61493d371fdaa235323",
+      "TreeDB/db/primary_runtime_metadata_test.go": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d",
+      "TreeDB/db/vacuum_online_legacy_test.go": "7de398fbc4901a114e5b0ea32c828b24fbe7c0ebe010e2a0408d2ecf502274e6",
+      "TreeDB/freelist/allocator_cow_test.go": "5ae944bf2d2042ed6496c955ed1fd96492e6fe3ab9adb4a2881a6c96005b6216",
+      "TreeDB/freelist/allocator_preparation_work_v6_test.go": "c5790699963936a534aa9f11bfbce0a57ca99b94db5e6c80ad172666038b2906",
+      "TreeDB/freelist/allocator_publication_work_v6_test.go": "098a9908317aa5e4705a367a6dd3acbf5ca79b912cf72bc5ed2978d1072b04fd",
+      "TreeDB/freelist/generation_v1_materialize_work_test.go": "9ad4a21c795d71a4c19279a4fb61cffdecbfb3ccb74c1de2c968b500fcac5045",
+      "TreeDB/freelist/generation_v1_metadata_cursor_test.go": "fc28378689d8fd996e20ea885b8203460997ab5537549afd44531265850e4943",
+      "TreeDB/freelist/generation_v1_metadata_reuse_test.go": "e424eb81dc290d14158fdd1efcc0688a7d325355db93fa118100230436cac673",
+      "TreeDB/freelist/generation_v1_reservation_work_test.go": "5bd27791edd0398edc7f6dc4b26442e60b68d6f78de251c1772973ad8a262420",
+      "TreeDB/freelist/generation_v1_test.go": "d0539c7873758493c3649a09794e2117a2c62a7a6c835d577dfe722e5e466417",
+      "TreeDB/freelist/private_control_capacity_v6_test.go": "520e5ef0fc06f32f8431da6f2323f9fb86998405b6931e1c39d38a6b3728d2e2",
+      "TreeDB/freelist/reservation_canonical_storage_v6_test.go": "3403cdb0d679d6e14d6d7ad7c6eb4c36c5d99bf89899d891a2e970bb458f9f60",
+      "TreeDB/freelist/reservation_index_fixture_v6_test.go": "00436e139cd2f6e083429d8cade91dce5bc3957570f2548a4242dad4cc47e8d9",
+      "TreeDB/freelist/reservation_owned_fixture_v6_test.go": "84d3ec8eca1975013b312d325258ab24b79e141db1b7ce70f8361cb527de6e60",
+      "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a",
+      "TreeDB/mvcc/native_finaldriver_envelope_test.go": "05e146fae55722ea2f80324be8750ab09dfa129d622b733f14d863a065af6c5e",
+      "TreeDB/mvcc/native_selected_ledger_test.go": "d1b77315b8f913494371d760fa55383c3583a491a1581ac020bdce1253064b67"
+    }
+  },
+  "artifact_bindings": {
+    "README.md": "e6db9327a0bb970bba3f07406cba5909275756db1be457703ad4cd5ef0c7557d",
+    "pricing-retention.md": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "proposed-commands.json": "bb9714998cc5a6a74fb254eac0f9dafe9b2943e6d414be0df752533c4ea83aa4",
+    "test-inventory.json": "9ad5e17f4843d4c645b4810df09b251c2abe927d4316a2faa6d040bb5f629ca7",
+    "freeze.json": "38c623becf0ba52adc4652744ec819cf79f57193d359b5ba89abec1793e6662b"
+  },
+  "commands_reviewed": {
+    "focused_calls": 8,
+    "focused_tops_per_mode": 101,
+    "focused_named_child_paths_per_mode": 178,
+    "actual_route_calls_separate_grant_only": 2,
+    "actual_route_arms_each": 6,
+    "Go_executed_by_reviewer": 0,
+    "compiler_or_runtime_evidence_claimed": false
+  },
+  "protected_unchanged": {
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "db2ce37cebd369141db9b687530225c745277a66bae9f621b798f4f46545163a"
+  },
+  "remaining_limits": [
+    "No focused runtime result yet; source review is not a test PASS",
+    "No actual-route/publication runtime authorization",
+    "Remaining interval/burned-descriptor and placement scans, duplicate-input loops, synchronous shutdown remain variable",
+    "No full graph F/retained union/Finish or continuing-writer bound",
+    "No Q32 fit, diagnostic G allowance, performance, platform/fault/format/shrink/C1/C3/all19 or merge qualification"
+  ],
+  "lease": "Released after report; idle"
+}

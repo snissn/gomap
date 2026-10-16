@@ -1,0 +1,16 @@
+[
+  {
+    "after_sha256": "2d05bb5d23f0d9adbad44ecb1f089c2e87228280fca6635a4fac8db0547dbcfd",
+    "before_sha256": "fcded47738c4a709d63a7d225ebda66255046d1d5e70751104ea7468258b579c",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/primary_construction_ledger_v6_test.go"
+  },
+  {
+    "after_sha256": "122f949810461441033106311fc319661465c0a5b53725845b6a22b5e5a385a7",
+    "before_sha256": "18d1e3cb7fa04fc00fc4a7f7ae9603d34f5876cc673cc61493d371fdaa235323",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/db/primary_runtime_disposal_work_v6_test.go"
+  }
+]

@@ -1,0 +1,80 @@
+{
+  "Go_compiler_runtime_executed": false,
+  "anchors": {
+    "TreeDB/batch/batch.go": {
+      "anchors": {
+        "value exceeds inline threshold": [
+          17
+        ]
+      },
+      "source03_sha256": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a",
+      "source04_sha256": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a"
+    },
+    "TreeDB/db/primary_construction_ledger_v6_test.go": {
+      "anchors": {
+        "d, err := Open(Options{Dir: dir": [
+          25
+        ],
+        "failed generation/runtime owner edge lost": [
+          149
+        ],
+        "late error transferred/released selected Set": [
+          117
+        ],
+        "older.resources == nil": [
+          84
+        ],
+        "prepareOfflinePointerPairV6(t, dir)": [
+          24
+        ],
+        "successful Set handoff": [
+          105
+        ]
+      },
+      "source03_sha256": "2d05bb5d23f0d9adbad44ecb1f089c2e87228280fca6635a4fac8db0547dbcfd",
+      "source04_sha256": "bc8454b00bf5de02691b16bd5e41de55bd3e9caa4243c2b7673050865a4c7975"
+    },
+    "TreeDB/db/primary_offline_pair_v6_test.go": {
+      "anchors": {
+        "appendPointersInNewSegment": [
+          30,
+          300
+        ],
+        "b.SetPointer": [
+          36,
+          306
+        ],
+        "b.WriteSync(), b.Close()": [
+          39,
+          314
+        ],
+        "cache.counts[ptrs[0].FileID] != 2": [
+          55
+        ],
+        "d.RefreshValueLogSet()": [
+          31,
+          301
+        ],
+        "func prepareOfflinePointerPairV6": [
+          23
+        ]
+      },
+      "source03_sha256": "26512332a0b1a5061c44eb28d219023e611c9e83f55630d067bc3537103d8672",
+      "source04_sha256": "26512332a0b1a5061c44eb28d219023e611c9e83f55630d067bc3537103d8672"
+    }
+  },
+  "cause": "Backend SetSync intentionally refuses noninline values; PointerThreshold1 does not create a persistent-value producer. All four source03 children stopped at fixture setup, before selector/late-drain/error/Close assertions. Both source03 disposal controls passed.",
+  "independent_producer_diagnosis": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-pointer-fixture-diagnosis.md",
+  "independent_producer_diagnosis_json_sha256": "67c55dfa59b99e8cf741ad7d8d1d6ea843f191a33cf565abade25145c3998f37",
+  "independent_producer_diagnosis_sha256": "2a5f2dadcc2aba02ec91651f57255f4510794a416ee66992cb40e8a0df8ccd43",
+  "limits_pricing_G_P_change": false,
+  "production_change": false,
+  "repair": "Reuse existing prepareOfflinePointerPairV6: real two512B value-log records, RefreshValueLogSet, two SetPointer+WriteSync+Close publications, DB Close and exact refcount-cache2 validation. Restore plain Open, remove failed SetSync loop and bytes import. Keep nonnil rebuilt closures and EVERY downstream selector/Set/owner/drain/runtime/Close oracle unchanged.",
+  "root_failure_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-focused-failure.json",
+  "root_failure_receipt_sha256": "dd86df779a444bb327356fe7a59c400f01677239ca732f70391c271a74e26e0a",
+  "root_selected_reviewer_recommendation": "Independent producer diagnosis2a5f2dad/67c55dfa explicitly confirms this existing helper and supersedes historical producer recommendation; exact files and helper source are bound. Historical source03 readiness ACCEPT did not trace backend SetSync refusal and is superseded on this fixture route by actual failure. No source04 runtime PASS is asserted.",
+  "source03_manifest_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+  "source04_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "status": "SOURCE04_SINGLE_TEST_FIXTURE_REPAIR_UNEXECUTED",
+  "uncertainty": "No source04 test body executed. Real nonempty selected resources may expose later failures; stop-first-failure remains mandatory."
+}

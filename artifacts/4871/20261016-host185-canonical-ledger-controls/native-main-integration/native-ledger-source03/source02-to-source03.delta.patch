@@ -1,0 +1,111 @@
+--- source02/TreeDB/db/primary_construction_ledger_v6_test.go
++++ source03/TreeDB/db/primary_construction_ledger_v6_test.go
+@@ -1,6 +1,7 @@
+ package db
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"errors"
+ 	"path/filepath"
+@@ -19,13 +20,21 @@
+ 		t.Run(mode, func(t *testing.T) {
+ 			dir := t.TempDir()
+ 			preparePrimaryJointCrashV6(t, dir)
+-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
++			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+ 			if err != nil {
+ 				t.Fatal(err)
+ 			}
+ 			defer d.Close()
+ 			if primaryOfflineScopePlatformRefusal(t, d) {
+ 				return
++			}
++			// The inline-only crash seed has a valid nil dependency closure. These
++			// two genuine commits make BOTH selected slots own persistent-value
++			// dependencies, so the strict Set handoff assertions below are real.
++			for _, key := range []string{"ledger-value-older", "ledger-value-latest"} {
++				if err = d.SetSync([]byte(key), bytes.Repeat([]byte(key), 16)); err != nil {
++					t.Fatal(err)
++				}
+ 			}
+ 			roots, err := d.CaptureRecoverableRootSetForInspection(context.Background())
+ 			if err != nil {
+@@ -78,6 +87,9 @@
+ 					t.Error(e)
+ 				}
+ 			}()
++			if older.resources == nil || latest.resources == nil {
++				t.Fatal("pointer-backed rebuilt slots lost their real dependency closures")
++			}
+ 			older.meta.LastCommitHeight = source.slotRecord[source.slot^1].LastCommitHeight
+ 			latest.meta.LastCommitHeight = source.slotRecord[source.slot].LastCommitHeight
+ 			injected := errors.New("original final construction drain")
+--- source02/TreeDB/db/primary_runtime_disposal_work_v6_test.go
++++ source03/TreeDB/db/primary_runtime_disposal_work_v6_test.go
+@@ -5,9 +5,11 @@
+ 	"os"
+ 	"path/filepath"
+ 	"testing"
++	"unsafe"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
++	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+ )
+ 
+@@ -56,10 +58,24 @@
+ 	if _, ready, err := continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{}, release); ready || err != nil || r.disposalPhase != 0 || r.records[0] != ref || a.MetadataOwner().Bytes() != before {
+ 		t.Fatalf("before-effects refusal changed original descriptor: %t %v", ready, err)
+ 	}
+-	// Admit initialization, the slot's alias scrub, original Drop and no later
+-	// progress. Ordinary cleanup cannot drain this native-owned physical queue.
++	// Preserve the old five-record probe as an explicit pre-Drop refusal:
++	// descriptor3 + queue initialization1 + slot alias scrub1 consume it.
++	dropsBefore := a.Counters().RootDrops
+ 	_, ready, err = continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{RecordLimit: 5, ByteLimit: 1 << 20}, release)
+-	if ready || err != nil || r.records[0] != (primaryarena.Ref{}) || effects != 0 {
++	if ready || err != nil || r.disposalPhase != 1 || r.disposalIndex != 0 || r.records[0] != ref || a.Counters().RootDrops != dropsBefore || effects != 0 || a.MetadataOwner().Bytes() != before {
++		t.Fatalf("pre-Drop refusal changed original custody: %t %v phase%d", ready, err, r.disposalPhase)
++	}
++	// The SAME initialized descriptor now needs entry3 + alias scrub1 +
++	// ref1 + actual arena Drop (including this one RAM-root lookup). Exactly
++	// that unit consumes the root and cannot advance the next slot.
++	dropRecords, dropBytes, _, _, complete := primaryarena.NativeReleaseUnitForTestV6(1, 0, 0)
++	if !complete {
++		t.Fatal("original Drop price unavailable")
++	}
++	entryBytes := 2*uint64(unsafe.Sizeof(*r)) + 2*uint64(unsafe.Sizeof(r.disposalFailure)) + 2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))
++	dropWork := &iterator.OrdinalScanWork{RecordLimit: 3 + 1 + 1 + dropRecords, ByteLimit: entryBytes + 2*uint64(unsafe.Sizeof(r.capsuleImages[0])) + 2*uint64(unsafe.Sizeof(r.capsuleViews[0])) + 2*uint64(unsafe.Sizeof(ref)) + dropBytes}
++	_, ready, err = continuePrimaryRuntimeDisposalV6(a, r, dropWork, release)
++	if ready || err != nil || r.disposalPhase != 1 || r.disposalIndex != 1 || r.records[0] != (primaryarena.Ref{}) || a.Counters().RootDrops != dropsBefore+1 || effects != 0 || dropWork.Records != dropWork.RecordLimit || dropWork.Bytes != dropWork.ByteLimit {
+ 		t.Fatalf("drop pause: %t %v phase%d", ready, err, r.disposalPhase)
+ 	}
+ 	drops, freed := a.Counters().RootDrops, a.Counters().BanksFreed
+@@ -75,6 +91,9 @@
+ 		return release(s, w)
+ 	}
+ 	var completion primaryRuntimeDisposalCompletionV6
++	// This fixture has no groups or child edges: its bank unit is entry3 +
++	// queue10 + one lookup2 + removal2 =17 records. The saved refund cursor
++	// and later empty checks advance in subsequent SAME Q32 calls.
+ 	for i := 0; i < 16 && r.disposalPhase < 6; i++ {
+ 		completion, ready, err = continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}, paused)
+ 		if ready || err != nil {
+@@ -145,7 +164,14 @@
+ 		t.Fatalf("physical refusal lost original custody: %t %v calls%d", ready, first, calls)
+ 	}
+ 	_, ready, again := continuePrimaryRuntimeDisposalV6(a, r, &iterator.OrdinalScanWork{}, release)
+-	if ready || again != first || calls != 1 || r.slotResources[0] != set {
++	if ready || again != nil || calls != 1 || r.disposalErr != first || r.slotResources[0] != set || r.metadataCharge != charge {
++		t.Fatal("unadmitted sticky observation changed original failure custody")
++	}
++	// Admit only the actual descriptor/first-error observation. It returns
++	// the SAME receipt before any queue/resource callback or alias mutation.
++	entry := &iterator.OrdinalScanWork{RecordLimit: 3, ByteLimit: 2*uint64(unsafe.Sizeof(*r)) + 2*uint64(unsafe.Sizeof(r.disposalFailure)) + 2*uint64(unsafe.Sizeof(retainedalloc.Owner{}))}
++	_, ready, again = continuePrimaryRuntimeDisposalV6(a, r, entry, release)
++	if ready || again != first || calls != 1 || r.disposalErr != first || r.slotResources[0] != set || r.metadataCharge != charge || entry.Records != entry.RecordLimit || entry.Bytes != entry.ByteLimit {
+ 		t.Fatal("original physical callback replayed or first receipt replaced")
+ 	}
+ }

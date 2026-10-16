@@ -1,0 +1,112 @@
+{
+  "utc": "2026-10-16T12:54:10.793698+00:00",
+  "scope": "Complete ledger focused normal/race controls with exact-input historical normal reuse",
+  "accepted": true,
+  "source_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "summary_sha256": "df491648df9700e0c09658453a079e10287b04ec59833c839bc7606d700153ea",
+  "checks": [
+    {
+      "name": "normal-db-construction",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/result.json",
+      "result_sha256": "fff6fa53bdfeebbf04b95626ca684adb7a86ba9258cb11560ab2548e17007261",
+      "raw_sha256": "d41278df391dd596524136e3bb298949ff9be84998a13a029c8ca348283cfef2",
+      "top_pass": 18,
+      "child_pass": 10,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "race-mvcc-prices",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/result.json",
+      "result_sha256": "164621c474e10ea1fc6a732aeea8c9fddfc41d752a01d0228a3a49d3ef618bf9",
+      "raw_sha256": "caf72625a004984a4c28cb1db49f446a6dcd5ace681dcef10ae458e063b86ca5",
+      "top_pass": 4,
+      "child_pass": 40,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "race-freelist-canonical",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/result.json",
+      "result_sha256": "2a7c78ee5812e67334aabbd003787541ca50571017cc9c3d22b9539cda94a0c1",
+      "raw_sha256": "70fc448431dc86cc9b57f1e9d54b3e3b10e15485006829c645aab6e3f6ef3ff8",
+      "top_pass": 26,
+      "child_pass": 92,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "race-freelist-consumers",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/result.json",
+      "result_sha256": "f1f2ceb6f830a12d6956788c2ca1a1477a12bea73e4c99a0727591595e03efdf",
+      "raw_sha256": "a990a426f1f063ec49e2fb642b136a340a5a0cb4dc7c9ff982a2c1f263a74390",
+      "top_pass": 53,
+      "child_pass": 36,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "race-db-construction",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/result.json",
+      "result_sha256": "7f69785759a9c7298638ace67dba892588740e6e4faae7c4ef89c72c808e9319",
+      "raw_sha256": "6446ddb51afea42a301462272592b0873484b2d5fa04a0a33958012ed9c16681",
+      "top_pass": 18,
+      "child_pass": 10,
+      "groups_empty": true,
+      "source_equal": true
+    }
+  ],
+  "fresh": {
+    "normal": {
+      "top": 18,
+      "child": 10
+    },
+    "race": {
+      "top": 101,
+      "child": 178
+    }
+  },
+  "reuse_receipt_sha256": "3150e8572993530839433248ad330c1b03ba63406946f60f845e4699c6bf2197",
+  "reused": [
+    {
+      "name": "normal-mvcc-prices",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+      "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+      "raw_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+      "top_pass": 4,
+      "child_pass": 40,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "normal-freelist-canonical",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/result.json",
+      "result_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+      "raw_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+      "top_pass": 26,
+      "child_pass": 92,
+      "groups_empty": true,
+      "source_equal": true
+    },
+    {
+      "name": "normal-freelist-consumers",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/result.json",
+      "result_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+      "raw_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+      "top_pass": 53,
+      "child_pass": 36,
+      "groups_empty": true,
+      "source_equal": true
+    }
+  ],
+  "effective_per_mode": {
+    "top": 101,
+    "child": 178
+  },
+  "full_source_and_index_unchanged": true,
+  "all_groups_empty": true,
+  "source01_02_03_failures_preserved": true,
+  "actual_publication_accepted": false,
+  "Q32": "original RED/ACK0",
+  "graph_qualification": "OPEN"
+}

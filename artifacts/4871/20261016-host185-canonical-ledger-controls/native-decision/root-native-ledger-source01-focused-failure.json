@@ -1,0 +1,53 @@
+{
+  "created_utc": "2026-10-16T12:21:51.902968+00:00",
+  "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "summary_sha256": "871dd5782b68ef541ee4d21b7aeba472dc8f7d912d15ab77e91fefb79ac517aa",
+  "root_recomputed_from_raw": [
+    {
+      "name": "normal-mvcc-prices",
+      "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+      "log_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+      "top_pass": 4,
+      "child_run": 40,
+      "top_fail": 0,
+      "all_names_executed": true,
+      "original_source_before_after_equal": true,
+      "groups_joined_empty": true,
+      "failed_top_names": []
+    },
+    {
+      "name": "normal-freelist-canonical",
+      "result_sha256": "cb3544fc7f96a621065beb00ff24db9920515d3fa40873cfca144bd8095ad2e2",
+      "log_sha256": "364498e5178384d45a761babc8c1d0543f82d9da2b1ebb257144dc5cc15084c1",
+      "top_pass": 19,
+      "child_run": 92,
+      "top_fail": 7,
+      "all_names_executed": true,
+      "original_source_before_after_equal": true,
+      "groups_joined_empty": true,
+      "failed_top_names": [
+        "TestPrivateCOWAtomicAdoptionActivationRefusesBeforeSlotOrLedgerEffectsV6",
+        "TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6",
+        "TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6",
+        "TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6",
+        "TestPrivateCOWCanonicalAtomicAdmissionBoundaryV6",
+        "TestPrivateCapacityPartialCloneAdmissionCancelV6",
+        "TestCanonicalLedgerCommittedRetirementInterleavesPinnedBurnsV6"
+      ]
+    }
+  ],
+  "controls_accepted": false,
+  "runner_label_note": "top RUN inventory includes failed tops; all expected top/child RUN names were present. RUN without PASS or FAIL label includes explicit FAIL. No missing execution hidden by these labels.",
+  "remaining_six_unexecuted": [
+    "normal-freelist-consumers",
+    "normal-db-construction",
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction"
+  ],
+  "source_only_fix_lease": "native_prerequisite; source01 immutable; next source02",
+  "no_actual_publication": true,
+  "original_public_Q32": "RED/ACK0",
+  "graph_open": true
+}

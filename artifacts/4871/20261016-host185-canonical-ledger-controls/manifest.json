@@ -1,0 +1,2801 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/canonical-before-ledger-source04.json",
+    "path": "live-startup/canonical-before-ledger-source04.json.gz",
+    "source_bytes": 66258,
+    "source_sha256": "2372e2d2c94b2b4d7c593727dd9d347bb96368e540d0eaf64ddb1b287f3b5472",
+    "stored_bytes": 23316,
+    "stored_sha256": "fd62aba397a3e44afe33a445126b6ec1c8abe0a677747e9b33410fafa7a10549",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/issue4878-before-ledger-source04.json",
+    "path": "live-startup/issue4878-before-ledger-source04.json.gz",
+    "source_bytes": 69279,
+    "source_sha256": "93f67e49adb0ae722ab3a83a10cd1d2d952f52a7b300a32f26a4f6e375a99e99",
+    "stored_bytes": 24585,
+    "stored_sha256": "fe35acac23ee15e2dc0f4f4dea11513fd6e8197753f1198042ee08be84c70773",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/main-before-ledger-source04.json",
+    "path": "live-startup/main-before-ledger-source04.json",
+    "source_bytes": 361,
+    "source_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "stored_bytes": 361,
+    "stored_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-firstack-interruption-advice.json",
+    "path": "native-decision/native-ledger-firstack-interruption-advice.json",
+    "source_bytes": 6909,
+    "source_sha256": "0a9bf7b3e20578cdbc6661a8bd15b27e6bf57964d3b7df90dd504a957dd02ce0",
+    "stored_bytes": 6909,
+    "stored_sha256": "0a9bf7b3e20578cdbc6661a8bd15b27e6bf57964d3b7df90dd504a957dd02ce0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-firstack-interruption-advice.md",
+    "path": "native-decision/native-ledger-firstack-interruption-advice.md",
+    "source_bytes": 4211,
+    "source_sha256": "906218f888ef2552bd98e58e9706e1c23c35675ef4d4195d964d61fadf602a76",
+    "stored_bytes": 4211,
+    "stored_sha256": "906218f888ef2552bd98e58e9706e1c23c35675ef4d4195d964d61fadf602a76",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-production-review01-review.json",
+    "path": "native-decision/native-ledger-production-review01-review.json",
+    "source_bytes": 11169,
+    "source_sha256": "21afe0e57436709391beeabdb89dfe09b2ba30315c17e2195ec8053c898eb0e2",
+    "stored_bytes": 11169,
+    "stored_sha256": "21afe0e57436709391beeabdb89dfe09b2ba30315c17e2195ec8053c898eb0e2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-production-review01-review.md",
+    "path": "native-decision/native-ledger-production-review01-review.md",
+    "source_bytes": 7163,
+    "source_sha256": "a2cd0ba5e421a0315bdfb018928fd95da31fcdccb786f69df62b8a2d83235e33",
+    "stored_bytes": 7163,
+    "stored_sha256": "a2cd0ba5e421a0315bdfb018928fd95da31fcdccb786f69df62b8a2d83235e33",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source01-focused-failure-diagnosis.json",
+    "path": "native-decision/native-ledger-source01-focused-failure-diagnosis.json",
+    "source_bytes": 3233,
+    "source_sha256": "05aa99efc8e176762aebdeb39f6a8aebf81a2fffcb3be814f1e0ab2204d92abd",
+    "stored_bytes": 3233,
+    "stored_sha256": "05aa99efc8e176762aebdeb39f6a8aebf81a2fffcb3be814f1e0ab2204d92abd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source01-focused-failure-diagnosis.md",
+    "path": "native-decision/native-ledger-source01-focused-failure-diagnosis.md",
+    "source_bytes": 1805,
+    "source_sha256": "6dd59a6050ae414e892badd6a71b430f2fba6e9195c5c0a941abcc9529f35ae9",
+    "stored_bytes": 1805,
+    "stored_sha256": "6dd59a6050ae414e892badd6a71b430f2fba6e9195c5c0a941abcc9529f35ae9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source01-review.json",
+    "path": "native-decision/native-ledger-source01-review.json",
+    "source_bytes": 12702,
+    "source_sha256": "f08e1d3b7cfae63cb60d1ec17acf750a3cade67fcef7b3639d453ea7b1cb683c",
+    "stored_bytes": 12702,
+    "stored_sha256": "f08e1d3b7cfae63cb60d1ec17acf750a3cade67fcef7b3639d453ea7b1cb683c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source01-review.md",
+    "path": "native-decision/native-ledger-source01-review.md",
+    "source_bytes": 6247,
+    "source_sha256": "eaa9ef291999ebe4422eb41f2e5ca4a2b3137cb37559772f2af801f2ae019d32",
+    "stored_bytes": 6247,
+    "stored_sha256": "eaa9ef291999ebe4422eb41f2e5ca4a2b3137cb37559772f2af801f2ae019d32",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source02-late-constructor-failure-diagnosis.json",
+    "path": "native-decision/native-ledger-source02-late-constructor-failure-diagnosis.json",
+    "source_bytes": 2965,
+    "source_sha256": "b8537e50483225e3c7ebedc4cee6ef8eeb9469ccf075413a341cbf72d5bea6e6",
+    "stored_bytes": 2965,
+    "stored_sha256": "b8537e50483225e3c7ebedc4cee6ef8eeb9469ccf075413a341cbf72d5bea6e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source02-late-constructor-failure-diagnosis.md",
+    "path": "native-decision/native-ledger-source02-late-constructor-failure-diagnosis.md",
+    "source_bytes": 3498,
+    "source_sha256": "f2b84cb445c4bc11d993954aacb7a859361169b0d3531617c5e4fd8d5f217732",
+    "stored_bytes": 3498,
+    "stored_sha256": "f2b84cb445c4bc11d993954aacb7a859361169b0d3531617c5e4fd8d5f217732",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source02-review.json",
+    "path": "native-decision/native-ledger-source02-review.json",
+    "source_bytes": 5412,
+    "source_sha256": "df5b491bbc9fae0be5271a3571c4bb150768ae68bf569e5dee642e6e00ee2748",
+    "stored_bytes": 5412,
+    "stored_sha256": "df5b491bbc9fae0be5271a3571c4bb150768ae68bf569e5dee642e6e00ee2748",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source02-review.md",
+    "path": "native-decision/native-ledger-source02-review.md",
+    "source_bytes": 3776,
+    "source_sha256": "c5d9c5efcc3c50035f7ed9f0513e9df745845b411ddc447720ec2d81bb2eceea",
+    "stored_bytes": 3776,
+    "stored_sha256": "c5d9c5efcc3c50035f7ed9f0513e9df745845b411ddc447720ec2d81bb2eceea",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-pointer-fixture-diagnosis.json",
+    "path": "native-decision/native-ledger-source03-pointer-fixture-diagnosis.json",
+    "source_bytes": 4564,
+    "source_sha256": "67c55dfa59b99e8cf741ad7d8d1d6ea843f191a33cf565abade25145c3998f37",
+    "stored_bytes": 4564,
+    "stored_sha256": "67c55dfa59b99e8cf741ad7d8d1d6ea843f191a33cf565abade25145c3998f37",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-pointer-fixture-diagnosis.md",
+    "path": "native-decision/native-ledger-source03-pointer-fixture-diagnosis.md",
+    "source_bytes": 3799,
+    "source_sha256": "2a5f2dadcc2aba02ec91651f57255f4510794a416ee66992cb40e8a0df8ccd43",
+    "stored_bytes": 3799,
+    "stored_sha256": "2a5f2dadcc2aba02ec91651f57255f4510794a416ee66992cb40e8a0df8ccd43",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-review.json",
+    "path": "native-decision/native-ledger-source03-review.json",
+    "source_bytes": 5967,
+    "source_sha256": "fcd52a15007e852cc57c81754197f485f54491c00adb31ac27ac67e4c892010c",
+    "stored_bytes": 5967,
+    "stored_sha256": "fcd52a15007e852cc57c81754197f485f54491c00adb31ac27ac67e4c892010c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source03-review.md",
+    "path": "native-decision/native-ledger-source03-review.md",
+    "source_bytes": 4283,
+    "source_sha256": "574e1fd8c2bc4555e56ef224fb6f425b14427d265a292cec2df639a40d7380ae",
+    "stored_bytes": 4283,
+    "stored_sha256": "574e1fd8c2bc4555e56ef224fb6f425b14427d265a292cec2df639a40d7380ae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source04-review.json",
+    "path": "native-decision/native-ledger-source04-review.json",
+    "source_bytes": 3948,
+    "source_sha256": "69c62a14db4584436bb0a94ad7ab8c53be4c19a4b9856ff6eba3b86604f8a859",
+    "stored_bytes": 3948,
+    "stored_sha256": "69c62a14db4584436bb0a94ad7ab8c53be4c19a4b9856ff6eba3b86604f8a859",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-ledger-source04-review.md",
+    "path": "native-decision/native-ledger-source04-review.md",
+    "source_bytes": 3587,
+    "source_sha256": "f5157ba87513105e1ec598b69b20f6350b2f8a8cfd20285069c6745cb2f66541",
+    "stored_bytes": 3587,
+    "stored_sha256": "f5157ba87513105e1ec598b69b20f6350b2f8a8cfd20285069c6745cb2f66541",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison-proposal.md",
+    "path": "native-decision/root-native-ledger-firstack-comparison-proposal.md",
+    "source_bytes": 3232,
+    "source_sha256": "9501d9b146beec60dff8a606e84dd19728ace39008f388da27c30aca090db0e5",
+    "stored_bytes": 3232,
+    "stored_sha256": "9501d9b146beec60dff8a606e84dd19728ace39008f388da27c30aca090db0e5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-commands.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-commands.json",
+    "source_bytes": 8343,
+    "source_sha256": "67b4b9acf3085021b07e37d578d996dcb2c1c2d19264e848115ec41999913ca8",
+    "stored_bytes": 8343,
+    "stored_sha256": "67b4b9acf3085021b07e37d578d996dcb2c1c2d19264e848115ec41999913ca8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-continuation01-commands.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-continuation01-commands.json",
+    "source_bytes": 7309,
+    "source_sha256": "3eafcf14a82c8cfccb8b0f4e77cd00586426efab37120c02cf86292797388c21",
+    "stored_bytes": 7309,
+    "stored_sha256": "3eafcf14a82c8cfccb8b0f4e77cd00586426efab37120c02cf86292797388c21",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-continuation01-selection.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-continuation01-selection.json",
+    "source_bytes": 7633,
+    "source_sha256": "8b926dd4db31cbb17c2eb1bfc8039549bc2700581e3ce31c9eec27985160959d",
+    "stored_bytes": 7633,
+    "stored_sha256": "8b926dd4db31cbb17c2eb1bfc8039549bc2700581e3ce31c9eec27985160959d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-final-analysis.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-final-analysis.json",
+    "source_bytes": 10148,
+    "source_sha256": "656eb6fa3f970fb1787e76f43d69094aae06354833e5b434f6fea8c6a216a50b",
+    "stored_bytes": 10148,
+    "stored_sha256": "656eb6fa3f970fb1787e76f43d69094aae06354833e5b434f6fea8c6a216a50b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-interruption.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-interruption.json",
+    "source_bytes": 1730,
+    "source_sha256": "cccc48b6f60580c8ee960bf300a0a9f4e7af5c0f593602a7dd52faf126e257e3",
+    "stored_bytes": 1730,
+    "stored_sha256": "cccc48b6f60580c8ee960bf300a0a9f4e7af5c0f593602a7dd52faf126e257e3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-comparison01-selection.json",
+    "path": "native-decision/root-native-ledger-firstack-comparison01-selection.json",
+    "source_bytes": 6237,
+    "source_sha256": "47c645db76beaf5deb0741db207ce9fbf1cfbb02f8a004e5bb1e2c98340ca3d8",
+    "stored_bytes": 6237,
+    "stored_sha256": "47c645db76beaf5deb0741db207ce9fbf1cfbb02f8a004e5bb1e2c98340ca3d8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-source-comparison02.json",
+    "path": "native-decision/root-native-ledger-firstack-source-comparison02.json",
+    "source_bytes": 15431,
+    "source_sha256": "b43f60efda89fbff290f4062cf69ddc6a1e14b86ccdde4b3a637df95aaf71add",
+    "stored_bytes": 15431,
+    "stored_sha256": "b43f60efda89fbff290f4062cf69ddc6a1e14b86ccdde4b3a637df95aaf71add",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-source-comparison03.json",
+    "path": "native-decision/root-native-ledger-firstack-source-comparison03.json",
+    "source_bytes": 16125,
+    "source_sha256": "1327c14ec6be902238e8b08139d40b641e54e55da05ab8392c7433d1087779f4",
+    "stored_bytes": 16125,
+    "stored_sha256": "1327c14ec6be902238e8b08139d40b641e54e55da05ab8392c7433d1087779f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-firstack-source-comparison04.json",
+    "path": "native-decision/root-native-ledger-firstack-source-comparison04.json",
+    "source_bytes": 16289,
+    "source_sha256": "fd664ad5aa65a338f1b4b479869ede6f3683d83970cd46a998818e4aa02952cb",
+    "stored_bytes": 16289,
+    "stored_sha256": "fd664ad5aa65a338f1b4b479869ede6f3683d83970cd46a998818e4aa02952cb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-production-review01-review-bindings.json",
+    "path": "native-decision/root-native-ledger-production-review01-review-bindings.json",
+    "source_bytes": 371,
+    "source_sha256": "2339dc50811880fc98c43cd58d090db937ec9a21a7a52d3f2cf57c3c91a93696",
+    "stored_bytes": 371,
+    "stored_sha256": "2339dc50811880fc98c43cd58d090db937ec9a21a7a52d3f2cf57c3c91a93696",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-production-review01-verify.json",
+    "path": "native-decision/root-native-ledger-production-review01-verify.json",
+    "source_bytes": 3533,
+    "source_sha256": "a93dd07dbf9096b721578d66e218486b25aca76f6e212af5098c58b034b04eb2",
+    "stored_bytes": 3533,
+    "stored_sha256": "a93dd07dbf9096b721578d66e218486b25aca76f6e212af5098c58b034b04eb2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source01-focused-failure.json",
+    "path": "native-decision/root-native-ledger-source01-focused-failure.json",
+    "source_bytes": 2291,
+    "source_sha256": "2370c97ab22288c894fbda9e9d60737440cda53f90a996f84df931378c28ae8e",
+    "stored_bytes": 2291,
+    "stored_sha256": "2370c97ab22288c894fbda9e9d60737440cda53f90a996f84df931378c28ae8e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source01-focused-selection.json",
+    "path": "native-decision/root-native-ledger-source01-focused-selection.json",
+    "source_bytes": 1973,
+    "source_sha256": "3cbb2037a915b985912249b32b58fc6a72c06f8b814eaf89502a48ef5dbfaecd",
+    "stored_bytes": 1973,
+    "stored_sha256": "3cbb2037a915b985912249b32b58fc6a72c06f8b814eaf89502a48ef5dbfaecd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source01-preliminary-reconciliation.json",
+    "path": "native-decision/root-native-ledger-source01-preliminary-reconciliation.json",
+    "source_bytes": 2605,
+    "source_sha256": "b06ecf0a513815233d287a418ecb2e7426aefc0a1f3c9975453e79cef3502f04",
+    "stored_bytes": 2605,
+    "stored_sha256": "b06ecf0a513815233d287a418ecb2e7426aefc0a1f3c9975453e79cef3502f04",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source01-verify.json",
+    "path": "native-decision/root-native-ledger-source01-verify.json",
+    "source_bytes": 941,
+    "source_sha256": "a7a425274a242b348a3141f0e9fb9a409376b6e4840ffcff84ecb6f594cffd50",
+    "stored_bytes": 941,
+    "stored_sha256": "a7a425274a242b348a3141f0e9fb9a409376b6e4840ffcff84ecb6f594cffd50",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source02-db-unit-diagnosis.json",
+    "path": "native-decision/root-native-ledger-source02-db-unit-diagnosis.json",
+    "source_bytes": 3183,
+    "source_sha256": "909d06e21144e384c6c607208f1ee57e74de894b5f2a526d5e3a82a31fc84add",
+    "stored_bytes": 3183,
+    "stored_sha256": "909d06e21144e384c6c607208f1ee57e74de894b5f2a526d5e3a82a31fc84add",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source02-focused-failure.json",
+    "path": "native-decision/root-native-ledger-source02-focused-failure.json",
+    "source_bytes": 2443,
+    "source_sha256": "36a39c142745179020e539d562812022f702987ff67c5cc2b3cbea5542bb3425",
+    "stored_bytes": 2443,
+    "stored_sha256": "36a39c142745179020e539d562812022f702987ff67c5cc2b3cbea5542bb3425",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source02-focused-selection.json",
+    "path": "native-decision/root-native-ledger-source02-focused-selection.json",
+    "source_bytes": 2296,
+    "source_sha256": "3019d257f90346c1bd0e8f7971e76f00976429b33967f1056590fbe3e7bdff77",
+    "stored_bytes": 2296,
+    "stored_sha256": "3019d257f90346c1bd0e8f7971e76f00976429b33967f1056590fbe3e7bdff77",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source02-prices-reuse.json",
+    "path": "native-decision/root-native-ledger-source02-prices-reuse.json",
+    "source_bytes": 1483,
+    "source_sha256": "54f19df2961f8aad06f82dbe7df5080d2aef25221ee146e4df9ce50fba955be7",
+    "stored_bytes": 1483,
+    "stored_sha256": "54f19df2961f8aad06f82dbe7df5080d2aef25221ee146e4df9ce50fba955be7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source02-verify.json",
+    "path": "native-decision/root-native-ledger-source02-verify.json",
+    "source_bytes": 941,
+    "source_sha256": "c63455fee1ef60eff3bb9042cd58d80d820700a3308259066925d4d1f5c7551d",
+    "stored_bytes": 941,
+    "stored_sha256": "c63455fee1ef60eff3bb9042cd58d80d820700a3308259066925d4d1f5c7551d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-focused-failure.json",
+    "path": "native-decision/root-native-ledger-source03-focused-failure.json",
+    "source_bytes": 3196,
+    "source_sha256": "dd86df779a444bb327356fe7a59c400f01677239ca732f70391c271a74e26e0a",
+    "stored_bytes": 3196,
+    "stored_sha256": "dd86df779a444bb327356fe7a59c400f01677239ca732f70391c271a74e26e0a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-focused-reuse.json",
+    "path": "native-decision/root-native-ledger-source03-focused-reuse.json",
+    "source_bytes": 3321,
+    "source_sha256": "ed2702900c0f1aec7dab1d35b267b1d82985b332f69d9bc829ee6a3f0048a993",
+    "stored_bytes": 3321,
+    "stored_sha256": "ed2702900c0f1aec7dab1d35b267b1d82985b332f69d9bc829ee6a3f0048a993",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-focused-selection.json",
+    "path": "native-decision/root-native-ledger-source03-focused-selection.json",
+    "source_bytes": 2192,
+    "source_sha256": "4c0c44eb129612247c282711be1505e9a249f574befd3d3a69e6b7749e94019f",
+    "stored_bytes": 2192,
+    "stored_sha256": "4c0c44eb129612247c282711be1505e9a249f574befd3d3a69e6b7749e94019f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source03-verify.json",
+    "path": "native-decision/root-native-ledger-source03-verify.json",
+    "source_bytes": 941,
+    "source_sha256": "501121dba6cd7085c831a8dc0658cab77c43a1ba796cd76868baf7a5aecef6dd",
+    "stored_bytes": 941,
+    "stored_sha256": "501121dba6cd7085c831a8dc0658cab77c43a1ba796cd76868baf7a5aecef6dd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-actual-selection.json",
+    "path": "native-decision/root-native-ledger-source04-actual-selection.json",
+    "source_bytes": 1726,
+    "source_sha256": "fc1af8fe7ffdee1aafd5df5acc97ff7c33cf55873f834f090304b1b8174bf7cb",
+    "stored_bytes": 1726,
+    "stored_sha256": "fc1af8fe7ffdee1aafd5df5acc97ff7c33cf55873f834f090304b1b8174bf7cb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-actual-verification.json",
+    "path": "native-decision/root-native-ledger-source04-actual-verification.json",
+    "source_bytes": 9309,
+    "source_sha256": "a4c8ea361992a4380fea50e13ea42ff75641ce080855aebb27d4fcacb65261a8",
+    "stored_bytes": 9309,
+    "stored_sha256": "a4c8ea361992a4380fea50e13ea42ff75641ce080855aebb27d4fcacb65261a8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-build-selection.json",
+    "path": "native-decision/root-native-ledger-source04-build-selection.json",
+    "source_bytes": 1748,
+    "source_sha256": "e3e3efe9655d5d947a8b68cd89b62f7f0a1f0f789ef99265d943c334880d90bb",
+    "stored_bytes": 1748,
+    "stored_sha256": "e3e3efe9655d5d947a8b68cd89b62f7f0a1f0f789ef99265d943c334880d90bb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-focused-reuse.json",
+    "path": "native-decision/root-native-ledger-source04-focused-reuse.json",
+    "source_bytes": 3321,
+    "source_sha256": "3150e8572993530839433248ad330c1b03ba63406946f60f845e4699c6bf2197",
+    "stored_bytes": 3321,
+    "stored_sha256": "3150e8572993530839433248ad330c1b03ba63406946f60f845e4699c6bf2197",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-focused-selection.json",
+    "path": "native-decision/root-native-ledger-source04-focused-selection.json",
+    "source_bytes": 2190,
+    "source_sha256": "676290bab7ce1ceeb268463f2cc2bd3b44b9666eeb441095416279211469e950",
+    "stored_bytes": 2190,
+    "stored_sha256": "676290bab7ce1ceeb268463f2cc2bd3b44b9666eeb441095416279211469e950",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-focused-verification.json",
+    "path": "native-decision/root-native-ledger-source04-focused-verification.json",
+    "source_bytes": 4736,
+    "source_sha256": "06e7ca622240610cf1dafc226f6cfee52e258f9a496efa4ef3ea597da567761e",
+    "stored_bytes": 4736,
+    "stored_sha256": "06e7ca622240610cf1dafc226f6cfee52e258f9a496efa4ef3ea597da567761e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-ledger-source04-verify.json",
+    "path": "native-decision/root-native-ledger-source04-verify.json",
+    "source_bytes": 941,
+    "source_sha256": "b886f41770d32c70fe1b4ea159e157c5a2f250cea9d0b4e6d1e126a49012ef99",
+    "stored_bytes": 941,
+    "stored_sha256": "b886f41770d32c70fe1b4ea159e157c5a2f250cea9d0b4e6d1e126a49012ef99",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source-selection.json",
+    "path": "native-decision/root-native-registry-api-source-selection.json",
+    "source_bytes": 2116,
+    "source_sha256": "4dae369b56b0d09bd64f29ac0947ca3c9555af16ea6dd8c41815e83ed99bdf31",
+    "stored_bytes": 2116,
+    "stored_sha256": "4dae369b56b0d09bd64f29ac0947ca3c9555af16ea6dd8c41815e83ed99bdf31",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source-selection.md",
+    "path": "native-decision/root-native-registry-api-source-selection.md",
+    "source_bytes": 4470,
+    "source_sha256": "98ebb64fa4d7e6ff89d19e96b33137402aa89e8bcbcc20ea4461f0c2ff75b79b",
+    "stored_bytes": 4470,
+    "stored_sha256": "98ebb64fa4d7e6ff89d19e96b33137402aa89e8bcbcc20ea4461f0c2ff75b79b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source02.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source02.delta.patch",
+    "source_bytes": 2415,
+    "source_sha256": "979b4f2947c33d6ea02224a43c06cc0ecd37450bd90277fc5e9c2fbdbb9eb707",
+    "stored_bytes": 2415,
+    "stored_sha256": "979b4f2947c33d6ea02224a43c06cc0ecd37450bd90277fc5e9c2fbdbb9eb707",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source02.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source02.py",
+    "source_bytes": 14113,
+    "source_sha256": "6cf4ca67d444e598de20cb52b37b22010d6eac3cac0d08f4cdb1334d28598cfc",
+    "stored_bytes": 14113,
+    "stored_sha256": "6cf4ca67d444e598de20cb52b37b22010d6eac3cac0d08f4cdb1334d28598cfc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source03.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source03.delta.patch",
+    "source_bytes": 987,
+    "source_sha256": "2048acb443a86bf3624a9a4c5d089aefd0456670a09abfabf122efc13bf4f8c4",
+    "stored_bytes": 987,
+    "stored_sha256": "2048acb443a86bf3624a9a4c5d089aefd0456670a09abfabf122efc13bf4f8c4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source03.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source03.py",
+    "source_bytes": 14113,
+    "source_sha256": "151bd55c0b95eff933336891edb0213adf4e04fb404c3d36f545cb65f23bce0d",
+    "stored_bytes": 14113,
+    "stored_sha256": "151bd55c0b95eff933336891edb0213adf4e04fb404c3d36f545cb65f23bce0d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source04.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source04.delta.patch",
+    "source_bytes": 987,
+    "source_sha256": "04ce19b084fb31a212ff94e2e4fd6fcd15f7196917ef34a986dd6b37d1c2791d",
+    "stored_bytes": 987,
+    "stored_sha256": "04ce19b084fb31a212ff94e2e4fd6fcd15f7196917ef34a986dd6b37d1c2791d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-actual-source04.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-actual-source04.py",
+    "source_bytes": 14113,
+    "source_sha256": "d3220d7c8653db4c00a0c406bca55d857fea7c17018b769e10590d23f9cbb573",
+    "stored_bytes": 14113,
+    "stored_sha256": "d3220d7c8653db4c00a0c406bca55d857fea7c17018b769e10590d23f9cbb573",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source01.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source01.py",
+    "source_bytes": 13168,
+    "source_sha256": "c4170dfd33a5226a0fce11d177688093fe0698af0d07f0c476f0f42a85ba2d69",
+    "stored_bytes": 13168,
+    "stored_sha256": "c4170dfd33a5226a0fce11d177688093fe0698af0d07f0c476f0f42a85ba2d69",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source02.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source02.py",
+    "source_bytes": 13168,
+    "source_sha256": "0d15ba4024ff36df562406788f042f876469635cf34af943fbf820fee761d0a6",
+    "stored_bytes": 13168,
+    "stored_sha256": "0d15ba4024ff36df562406788f042f876469635cf34af943fbf820fee761d0a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source03.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source03.delta.patch",
+    "source_bytes": 873,
+    "source_sha256": "a8b45318fea53f70234cb6d9d28d11fa147b92e9a6ef3cd9019dfc35593ed237",
+    "stored_bytes": 873,
+    "stored_sha256": "a8b45318fea53f70234cb6d9d28d11fa147b92e9a6ef3cd9019dfc35593ed237",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source03.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source03.py",
+    "source_bytes": 13168,
+    "source_sha256": "147bb95b9dd7b615791ca9479621be6fae8b28f0f6ee785f913a9a68b12d0f61",
+    "stored_bytes": 13168,
+    "stored_sha256": "147bb95b9dd7b615791ca9479621be6fae8b28f0f6ee785f913a9a68b12d0f61",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source04.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source04.delta.patch",
+    "source_bytes": 873,
+    "source_sha256": "7bf161091d10b33f9ad4e2c8b443e31ca16f8a5934b6b2e5f2d31c5a4e3fd442",
+    "stored_bytes": 873,
+    "stored_sha256": "7bf161091d10b33f9ad4e2c8b443e31ca16f8a5934b6b2e5f2d31c5a4e3fd442",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-controls-source04.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-controls-source04.py",
+    "source_bytes": 13168,
+    "source_sha256": "d68e9485e270c3657640cca4ecd921436bf020ded0fde162c74b6a0d41c14496",
+    "stored_bytes": 13168,
+    "stored_sha256": "d68e9485e270c3657640cca4ecd921436bf020ded0fde162c74b6a0d41c14496",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source03.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source03.delta.patch",
+    "source_bytes": 5046,
+    "source_sha256": "7031618ca02d7ba862fb9ea194e5693cb2559fb44b828fc92df235b83bb96bbe",
+    "stored_bytes": 5046,
+    "stored_sha256": "7031618ca02d7ba862fb9ea194e5693cb2559fb44b828fc92df235b83bb96bbe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source03.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source03.py",
+    "source_bytes": 14280,
+    "source_sha256": "9386a9cd61237adc1972210df8c70bc49f86f9bdde63f4d139774f06b3e8d330",
+    "stored_bytes": 14280,
+    "stored_sha256": "9386a9cd61237adc1972210df8c70bc49f86f9bdde63f4d139774f06b3e8d330",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source04.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source04.delta.patch",
+    "source_bytes": 1093,
+    "source_sha256": "e259aef83d9094fdec0e36580d434a05a9e4ad1659e8eee97621644663b6a46d",
+    "stored_bytes": 1093,
+    "stored_sha256": "e259aef83d9094fdec0e36580d434a05a9e4ad1659e8eee97621644663b6a46d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source04.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-build-source04.py",
+    "source_bytes": 14280,
+    "source_sha256": "ca79d58f3c5d05fd1e50e3996739c0914cfc2a8b62b293a769ba3929d32365eb",
+    "stored_bytes": 14280,
+    "stored_sha256": "ca79d58f3c5d05fd1e50e3996739c0914cfc2a8b62b293a769ba3929d32365eb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01-continuation01.delta.patch",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01-continuation01.delta.patch",
+    "source_bytes": 3050,
+    "source_sha256": "0b33cd634c185b0dbdb2450fc1f07208f26319bd3bd10d83e11516d54850d9f5",
+    "stored_bytes": 3050,
+    "stored_sha256": "0b33cd634c185b0dbdb2450fc1f07208f26319bd3bd10d83e11516d54850d9f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01-continuation01.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01-continuation01.py",
+    "source_bytes": 16510,
+    "source_sha256": "82dfdff40568700caa2db6d57c6f841f8f495c75fd6a6a1a202ca6ff25db0173",
+    "stored_bytes": 16510,
+    "stored_sha256": "82dfdff40568700caa2db6d57c6f841f8f495c75fd6a6a1a202ca6ff25db0173",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01.py",
+    "path": "native-main-integration/finaldriver-focused-controls/run-ledger-firstack-comparison01.py",
+    "source_bytes": 14656,
+    "source_sha256": "0c60277b3612b43186804e3915a30f19990371c74c009ce0638db262787fd430",
+    "stored_bytes": 14656,
+    "stored_sha256": "0c60277b3612b43186804e3915a30f19990371c74c009ce0638db262787fd430",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/quiet-preflight.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/quiet-preflight.json",
+    "source_bytes": 3227,
+    "source_sha256": "119ab110623a62ca1f4d623059fc5a492374cd134aa3e21836ddc011e617660a",
+    "stored_bytes": 3227,
+    "stored_sha256": "119ab110623a62ca1f4d623059fc5a492374cd134aa3e21836ddc011e617660a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/result.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/result.json",
+    "source_bytes": 152,
+    "source_sha256": "464d01ae7705c9d3a0585b1ab37c845b7317d1b38b191d09a6a4b2eeff95ce77",
+    "stored_bytes": 152,
+    "stored_sha256": "464d01ae7705c9d3a0585b1ab37c845b7317d1b38b191d09a6a4b2eeff95ce77",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/source-before.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-A-04/source-before.json.gz",
+    "source_bytes": 1596507,
+    "source_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "stored_bytes": 466469,
+    "stored_sha256": "9cf5a12b27417bc0f2eb7058d4790f12916abfc3ffc29ed1d1e5830d152ec6be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/command.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/command.json",
+    "source_bytes": 1226,
+    "source_sha256": "7ca017be5ed52acd2881d023ceb7270f2d57e3ad639ccb15658370a65de79268",
+    "stored_bytes": 1226,
+    "stored_sha256": "7ca017be5ed52acd2881d023ceb7270f2d57e3ad639ccb15658370a65de79268",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/environment.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/environment.json",
+    "source_bytes": 1933,
+    "source_sha256": "c430cf64ac60e0649f1ff957c27eb4ca86678f7c25d07282ca35942be85a0b44",
+    "stored_bytes": 1933,
+    "stored_sha256": "c430cf64ac60e0649f1ff957c27eb4ca86678f7c25d07282ca35942be85a0b44",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/host-window.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/host-window.json.gz",
+    "source_bytes": 212594,
+    "source_sha256": "60777f7baef6f937926d8d7c440523370074c757294ca4c39edbea908a1c915c",
+    "stored_bytes": 21512,
+    "stored_sha256": "f74cfa53b874b1eb3c54dac341ad04e9693fc80ed8035de5b04943f3624fc973",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/process.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/process.json",
+    "source_bytes": 106,
+    "source_sha256": "c01c9f9b84440fed0f96bd5f6bfce8f3db03e25a3d91e91dd93845f35a389283",
+    "stored_bytes": 106,
+    "stored_sha256": "c01c9f9b84440fed0f96bd5f6bfce8f3db03e25a3d91e91dd93845f35a389283",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/quiet-preflight.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/quiet-preflight.json",
+    "source_bytes": 2264,
+    "source_sha256": "05c3ce127d62c92f855c93ff30a4707589e1b37a7dbd2a425d057dcd2c85f480",
+    "stored_bytes": 2264,
+    "stored_sha256": "05c3ce127d62c92f855c93ff30a4707589e1b37a7dbd2a425d057dcd2c85f480",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/result.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/result.json",
+    "source_bytes": 769,
+    "source_sha256": "a1168f1e4b6df6b992282f0ac92fbf1b69754c06362f293419a58d34f8b7b21e",
+    "stored_bytes": 769,
+    "stored_sha256": "a1168f1e4b6df6b992282f0ac92fbf1b69754c06362f293419a58d34f8b7b21e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/run.log",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/run.log",
+    "source_bytes": 11130,
+    "source_sha256": "543609d767845c95502e521a00e6ccf18003380553c0efe87c1e73ca463ff828",
+    "stored_bytes": 11130,
+    "stored_sha256": "543609d767845c95502e521a00e6ccf18003380553c0efe87c1e73ca463ff828",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/source-after.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/source-before.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-02/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/command.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/command.json",
+    "source_bytes": 1226,
+    "source_sha256": "16d7a64484fe58916f0a050aa21cfbd592f1b6567d7c2cfa276fd0a595eed423",
+    "stored_bytes": 1226,
+    "stored_sha256": "16d7a64484fe58916f0a050aa21cfbd592f1b6567d7c2cfa276fd0a595eed423",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/environment.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/environment.json",
+    "source_bytes": 1933,
+    "source_sha256": "df4d04e98bdf2019708254e59266b26b569e830fa67c5c78662b7e0f4594cadc",
+    "stored_bytes": 1933,
+    "stored_sha256": "df4d04e98bdf2019708254e59266b26b569e830fa67c5c78662b7e0f4594cadc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/host-window.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/host-window.json.gz",
+    "source_bytes": 212497,
+    "source_sha256": "b730e7434a41e6ffb9d32c11dd2df9510e011f6f72946695227c8ef60120f8c9",
+    "stored_bytes": 21490,
+    "stored_sha256": "387c1a7044e79c45e223bb443cc653e60949a320a60bd8021d784ad04151abe9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/process.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/process.json",
+    "source_bytes": 106,
+    "source_sha256": "35c883dc6a04d4ceba5b0ff7729d440e42c01c263aeba3fb9d18ad7f3051549e",
+    "stored_bytes": 106,
+    "stored_sha256": "35c883dc6a04d4ceba5b0ff7729d440e42c01c263aeba3fb9d18ad7f3051549e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/quiet-preflight.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/quiet-preflight.json",
+    "source_bytes": 2951,
+    "source_sha256": "638e1ca49f3166fceba498a1929d69b46486cb685d2135f3ad9ff1858532465b",
+    "stored_bytes": 2951,
+    "stored_sha256": "638e1ca49f3166fceba498a1929d69b46486cb685d2135f3ad9ff1858532465b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/result.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/result.json",
+    "source_bytes": 770,
+    "source_sha256": "276ffd1f5c82f23e861b881828fa6efb47255ee7a7493f4f3741d6f9f8471e3f",
+    "stored_bytes": 770,
+    "stored_sha256": "276ffd1f5c82f23e861b881828fa6efb47255ee7a7493f4f3741d6f9f8471e3f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/run.log",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/run.log",
+    "source_bytes": 11130,
+    "source_sha256": "4496085870958e8d362e85a80433522bfc6f4c9822bf8d1530ced46c33e76705",
+    "stored_bytes": 11130,
+    "stored_sha256": "4496085870958e8d362e85a80433522bfc6f4c9822bf8d1530ced46c33e76705",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/source-after.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/source-before.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/firstack-B-03/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/identity.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/identity.json",
+    "source_bytes": 5354,
+    "source_sha256": "eaebb196db406635af34551ab295088e15bc0142c76ec5743aec75859d0e1bab",
+    "stored_bytes": 5354,
+    "stored_sha256": "eaebb196db406635af34551ab295088e15bc0142c76ec5743aec75859d0e1bab",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01-continuation01/summary.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01-continuation01/summary.json",
+    "source_bytes": 2290,
+    "source_sha256": "3534b769b292353a8488d0726e9c6576dd7d76111a00a1efd4a7d9c5ed661c51",
+    "stored_bytes": 2290,
+    "stored_sha256": "3534b769b292353a8488d0726e9c6576dd7d76111a00a1efd4a7d9c5ed661c51",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/command.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/command.json",
+    "source_bytes": 1237,
+    "source_sha256": "2801f2b96d71d2cc2e457660530e0375936964e337b5fa38d58b29c61cd7c8b9",
+    "stored_bytes": 1237,
+    "stored_sha256": "2801f2b96d71d2cc2e457660530e0375936964e337b5fa38d58b29c61cd7c8b9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/environment.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/environment.json",
+    "source_bytes": 1918,
+    "source_sha256": "1ab5679171bbb9c1bed7fa995797b3018a9b8e744690d11b518996126b7f5746",
+    "stored_bytes": 1918,
+    "stored_sha256": "1ab5679171bbb9c1bed7fa995797b3018a9b8e744690d11b518996126b7f5746",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/host-window.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/host-window.json.gz",
+    "source_bytes": 212095,
+    "source_sha256": "64fa9560f433af6ec681dea77c9233bcb72654b753ddd0c994defa27ec67bf87",
+    "stored_bytes": 21318,
+    "stored_sha256": "d54e8c14c9878a200acdd778e43cb7d0fe56730d70d885c96c2816eaeec09bf3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/process.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/process.json",
+    "source_bytes": 106,
+    "source_sha256": "ff8f1f7f19785b257770c1d0f27c1cedc22643e186b0819f1735b844a9b1c309",
+    "stored_bytes": 106,
+    "stored_sha256": "ff8f1f7f19785b257770c1d0f27c1cedc22643e186b0819f1735b844a9b1c309",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/quiet-preflight.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/quiet-preflight.json",
+    "source_bytes": 2247,
+    "source_sha256": "8a3831a71c0c0c3d34e67390b9a020b7b9a40c060f5763ccdff03d67228e99c6",
+    "stored_bytes": 2247,
+    "stored_sha256": "8a3831a71c0c0c3d34e67390b9a020b7b9a40c060f5763ccdff03d67228e99c6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/result.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/result.json",
+    "source_bytes": 770,
+    "source_sha256": "b0cbf084270dc33c8d1295c262932755f3d4e43841352534ffa711dbda9baede",
+    "stored_bytes": 770,
+    "stored_sha256": "b0cbf084270dc33c8d1295c262932755f3d4e43841352534ffa711dbda9baede",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/run.log",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/run.log",
+    "source_bytes": 10533,
+    "source_sha256": "fca0be0b29cfcc6d6e1882fe59130c1037b14956f4667c2553eaa5a1b6c39039",
+    "stored_bytes": 10533,
+    "stored_sha256": "fca0be0b29cfcc6d6e1882fe59130c1037b14956f4667c2553eaa5a1b6c39039",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/source-after.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/source-after.json.gz",
+    "source_bytes": 1596507,
+    "source_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "stored_bytes": 466469,
+    "stored_sha256": "9cf5a12b27417bc0f2eb7058d4790f12916abfc3ffc29ed1d1e5830d152ec6be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/source-before.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-A-01/source-before.json.gz",
+    "source_bytes": 1596507,
+    "source_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+    "stored_bytes": 466469,
+    "stored_sha256": "9cf5a12b27417bc0f2eb7058d4790f12916abfc3ffc29ed1d1e5830d152ec6be",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/quiet-preflight.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/quiet-preflight.json",
+    "source_bytes": 2842,
+    "source_sha256": "23f5a332df02cee0136994d09f172b7a41dc16b6e79f2744aa6ffdb1d029c4d9",
+    "stored_bytes": 2842,
+    "stored_sha256": "23f5a332df02cee0136994d09f172b7a41dc16b6e79f2744aa6ffdb1d029c4d9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/result.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/result.json",
+    "source_bytes": 152,
+    "source_sha256": "9940d6b9403d7d1a7c9961327e8f38a9b0756d024018604720f4d118d7b55fbf",
+    "stored_bytes": 152,
+    "stored_sha256": "9940d6b9403d7d1a7c9961327e8f38a9b0756d024018604720f4d118d7b55fbf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/source-before.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/firstack-B-02/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/identity.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/identity.json",
+    "source_bytes": 5354,
+    "source_sha256": "152af0adeb71d36fdff88397eaf58fa27037e18782a4a78cd4614789290a6105",
+    "stored_bytes": 5354,
+    "stored_sha256": "152af0adeb71d36fdff88397eaf58fa27037e18782a4a78cd4614789290a6105",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-firstack-comparison01/summary.json",
+    "path": "native-main-integration/native-ledger-firstack-comparison01/summary.json",
+    "source_bytes": 1434,
+    "source_sha256": "0ad91110d320fd8d4f44e9a61ace9ce1212b49767ed3f4767fa400fb55bb4a97",
+    "stored_bytes": 1434,
+    "stored_sha256": "0ad91110d320fd8d4f44e9a61ace9ce1212b49767ed3f4767fa400fb55bb4a97",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/README.md",
+    "path": "native-main-integration/native-ledger-source01/README.md",
+    "source_bytes": 7746,
+    "source_sha256": "e6db9327a0bb970bba3f07406cba5909275756db1be457703ad4cd5ef0c7557d",
+    "stored_bytes": 7746,
+    "stored_sha256": "e6db9327a0bb970bba3f07406cba5909275756db1be457703ad4cd5ef0c7557d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/assemble-proposal.py",
+    "path": "native-main-integration/native-ledger-source01/assemble-proposal.py",
+    "source_bytes": 9858,
+    "source_sha256": "ca8e2379f6a9bda9164aed37964e85bb4d38565b22a04e5220c975c8a2865b9c",
+    "stored_bytes": 9858,
+    "stored_sha256": "ca8e2379f6a9bda9164aed37964e85bb4d38565b22a04e5220c975c8a2865b9c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/caller-constructor-ledger.json",
+    "path": "native-main-integration/native-ledger-source01/caller-constructor-ledger.json",
+    "source_bytes": 15156,
+    "source_sha256": "cb8cb1ae4cb8b984d999152cfa4fb10cb1743344bf287ee17a8d36a1d2f44aec",
+    "stored_bytes": 15156,
+    "stored_sha256": "cb8cb1ae4cb8b984d999152cfa4fb10cb1743344bf287ee17a8d36a1d2f44aec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/changed-files.json",
+    "path": "native-main-integration/native-ledger-source01/changed-files.json",
+    "source_bytes": 11353,
+    "source_sha256": "a5d6f7e8e310411fb07b84598cbabc4b30f421ab4384ed94ce5fcac1e0ca0782",
+    "stored_bytes": 11353,
+    "stored_sha256": "a5d6f7e8e310411fb07b84598cbabc4b30f421ab4384ed94ce5fcac1e0ca0782",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source01/changed-source.tar.gz.gz",
+    "source_bytes": 153985,
+    "source_sha256": "bd9c4d74b92759102e39aea9f1d8ff607e1dfe547c4fae2323238484fcad682e",
+    "stored_bytes": 154053,
+    "stored_sha256": "ab8799db87f6ebf33ebb2d9999c729edccb410679a5416b19bcfba1dea9eb285",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/identity.json",
+    "path": "native-main-integration/native-ledger-source01/controls/identity.json",
+    "source_bytes": 3840,
+    "source_sha256": "c7b9ca20dc45c1c17a86bd262b408978d98073799a3c5aa5a3a207a1620693f6",
+    "stored_bytes": 3840,
+    "stored_sha256": "c7b9ca20dc45c1c17a86bd262b408978d98073799a3c5aa5a3a207a1620693f6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/command.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/command.json",
+    "source_bytes": 7205,
+    "source_sha256": "06604cab8f69ab2139aa4b860287ddf05675abb288863fdf5e4b657fe2dfeda6",
+    "stored_bytes": 7205,
+    "stored_sha256": "06604cab8f69ab2139aa4b860287ddf05675abb288863fdf5e4b657fe2dfeda6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/environment.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/environment.json",
+    "source_bytes": 1710,
+    "source_sha256": "1db990ef42093d145489ee4790d0b6dd3e29ff42baacf2f5ceb25c8f1a9bdbe0",
+    "stored_bytes": 1710,
+    "stored_sha256": "1db990ef42093d145489ee4790d0b6dd3e29ff42baacf2f5ceb25c8f1a9bdbe0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/process.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/process.json",
+    "source_bytes": 144,
+    "source_sha256": "c0d7be547ff2a182cf76f6d8b36938fe39e7eae8cd8d639389e5c42cbc108fee",
+    "stored_bytes": 144,
+    "stored_sha256": "c0d7be547ff2a182cf76f6d8b36938fe39e7eae8cd8d639389e5c42cbc108fee",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/result.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/result.json.gz",
+    "source_bytes": 26409,
+    "source_sha256": "cb3544fc7f96a621065beb00ff24db9920515d3fa40873cfca144bd8095ad2e2",
+    "stored_bytes": 2001,
+    "stored_sha256": "0c721e99e8dbc1fca29114ce5b900c3a3bc4cc07daf29dffc961fb4d3042244b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/run.log",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/run.log",
+    "source_bytes": 18172,
+    "source_sha256": "364498e5178384d45a761babc8c1d0543f82d9da2b1ebb257144dc5cc15084c1",
+    "stored_bytes": 18172,
+    "stored_sha256": "364498e5178384d45a761babc8c1d0543f82d9da2b1ebb257144dc5cc15084c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/source-after.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "stored_bytes": 466948,
+    "stored_sha256": "94c37e06618ed4cb125d521b6e6b86e0f319ae4cc8fe9ad8fb9df81cdc7d96e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/source-before.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-freelist-canonical/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "stored_bytes": 466948,
+    "stored_sha256": "94c37e06618ed4cb125d521b6e6b86e0f319ae4cc8fe9ad8fb9df81cdc7d96e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/command.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/command.json",
+    "source_bytes": 3566,
+    "source_sha256": "26503135479760cc893ed42f80c6328c85b01b4df310e4a9ba08d447f4de38bf",
+    "stored_bytes": 3566,
+    "stored_sha256": "26503135479760cc893ed42f80c6328c85b01b4df310e4a9ba08d447f4de38bf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/environment.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/environment.json",
+    "source_bytes": 1703,
+    "source_sha256": "39d52e62c3cacd6f78b9d28f5b5250090d8466a197957adbacc3997e3c7bdc11",
+    "stored_bytes": 1703,
+    "stored_sha256": "39d52e62c3cacd6f78b9d28f5b5250090d8466a197957adbacc3997e3c7bdc11",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/process.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/process.json",
+    "source_bytes": 144,
+    "source_sha256": "9b3588f5826da624c0a63764d7f3420f1e2fb4861d438393dab7624c0510a44b",
+    "stored_bytes": 144,
+    "stored_sha256": "9b3588f5826da624c0a63764d7f3420f1e2fb4861d438393dab7624c0510a44b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+    "source_bytes": 14516,
+    "source_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+    "stored_bytes": 14516,
+    "stored_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/run.log",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/run.log",
+    "source_bytes": 7193,
+    "source_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+    "stored_bytes": 7193,
+    "stored_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/source-after.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "stored_bytes": 466948,
+    "stored_sha256": "94c37e06618ed4cb125d521b6e6b86e0f319ae4cc8fe9ad8fb9df81cdc7d96e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/source-before.json",
+    "path": "native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "stored_bytes": 466948,
+    "stored_sha256": "94c37e06618ed4cb125d521b6e6b86e0f319ae4cc8fe9ad8fb9df81cdc7d96e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/summary.json",
+    "path": "native-main-integration/native-ledger-source01/controls/summary.json",
+    "source_bytes": 1267,
+    "source_sha256": "871dd5782b68ef541ee4d21b7aeba472dc8f7d912d15ab77e91fefb79ac517aa",
+    "stored_bytes": 1267,
+    "stored_sha256": "871dd5782b68ef541ee4d21b7aeba472dc8f7d912d15ab77e91fefb79ac517aa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/finalize-handoff.py",
+    "path": "native-main-integration/native-ledger-source01/finalize-handoff.py",
+    "source_bytes": 7678,
+    "source_sha256": "8b2b359ab7eb021034bc200790b9d53e6b69f7fbe418947321a53a711a6f24b6",
+    "stored_bytes": 7678,
+    "stored_sha256": "8b2b359ab7eb021034bc200790b9d53e6b69f7fbe418947321a53a711a6f24b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/freeze-source.py",
+    "path": "native-main-integration/native-ledger-source01/freeze-source.py",
+    "source_bytes": 3413,
+    "source_sha256": "fcdc2042905ca07d0b69873f031c70a936ff51962bf8d552303a189f3b0f4a3c",
+    "stored_bytes": 3413,
+    "stored_sha256": "fcdc2042905ca07d0b69873f031c70a936ff51962bf8d552303a189f3b0f4a3c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/freeze.json",
+    "path": "native-main-integration/native-ledger-source01/freeze.json",
+    "source_bytes": 1393,
+    "source_sha256": "38c623becf0ba52adc4652744ec819cf79f57193d359b5ba89abec1793e6662b",
+    "stored_bytes": 1393,
+    "stored_sha256": "38c623becf0ba52adc4652744ec819cf79f57193d359b5ba89abec1793e6662b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/handoff.json",
+    "path": "native-main-integration/native-ledger-source01/handoff.json",
+    "source_bytes": 2266,
+    "source_sha256": "258a3434df54d6af795183e4d62d6a4a4e2dfd4b14819853d72aa96cd33f5313",
+    "stored_bytes": 2266,
+    "stored_sha256": "258a3434df54d6af795183e4d62d6a4a4e2dfd4b14819853d72aa96cd33f5313",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/invariance.json",
+    "path": "native-main-integration/native-ledger-source01/invariance.json",
+    "source_bytes": 1251,
+    "source_sha256": "d63e33c5583b46121afd38b7c60208f5d0ba3bb621a515df6c71105b1ec0ee51",
+    "stored_bytes": 1251,
+    "stored_sha256": "d63e33c5583b46121afd38b7c60208f5d0ba3bb621a515df6c71105b1ec0ee51",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/preliminary-review-reconciliation.json",
+    "path": "native-main-integration/native-ledger-source01/preliminary-review-reconciliation.json",
+    "source_bytes": 2999,
+    "source_sha256": "0e1711cbac7b93b250ac47570c9fa128aa3bf9aa59d8b6beeb478ddd2f89a14c",
+    "stored_bytes": 2999,
+    "stored_sha256": "0e1711cbac7b93b250ac47570c9fa128aa3bf9aa59d8b6beeb478ddd2f89a14c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/preliminary-to-final.delta.patch",
+    "path": "native-main-integration/native-ledger-source01/preliminary-to-final.delta.patch.gz",
+    "source_bytes": 25020,
+    "source_sha256": "51a7341ff799f38978cf9d28981e01ef68089a2d31676718615dbbfcdab35716",
+    "stored_bytes": 7174,
+    "stored_sha256": "9060fdb40f206e25d98c94b41d138609c9d62af6701b214d1b324362f888104b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/pricing-retention.md",
+    "path": "native-main-integration/native-ledger-source01/pricing-retention.md",
+    "source_bytes": 5600,
+    "source_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "stored_bytes": 5600,
+    "stored_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/proposed-commands.json",
+    "path": "native-main-integration/native-ledger-source01/proposed-commands.json.gz",
+    "source_bytes": 58176,
+    "source_sha256": "bb9714998cc5a6a74fb254eac0f9dafe9b2943e6d414be0df752533c4ea83aa4",
+    "stored_bytes": 6950,
+    "stored_sha256": "81b69a582cc78244346ca8784416408ba62938997c7f616d4fc273a5299b6a7c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/source-frozen.json",
+    "path": "native-main-integration/native-ledger-source01/source-frozen.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "stored_bytes": 466948,
+    "stored_sha256": "94c37e06618ed4cb125d521b6e6b86e0f319ae4cc8fe9ad8fb9df81cdc7d96e2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/source-modes.json",
+    "path": "native-main-integration/native-ledger-source01/source-modes.json.gz",
+    "source_bytes": 981532,
+    "source_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "stored_bytes": 71911,
+    "stored_sha256": "be33fe3f38672d584a69b6f0769ac4473e230554ef1be234ff9d903581a0e0f3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/source.delta.patch",
+    "path": "native-main-integration/native-ledger-source01/source.delta.patch.gz",
+    "source_bytes": 194935,
+    "source_sha256": "39c1010389b9c5c04f79a873d202adce4bab4abd0c53d2e19fea8c16a1f85675",
+    "stored_bytes": 45179,
+    "stored_sha256": "b11d29f35dd189eea5d4344011043ffd1e8a9bdbf62c0d2faae7bc324be6446b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/test-inventory.json",
+    "path": "native-main-integration/native-ledger-source01/test-inventory.json",
+    "source_bytes": 17836,
+    "source_sha256": "9ad5e17f4843d4c645b4810df09b251c2abe927d4316a2faa6d040bb5f629ca7",
+    "stored_bytes": 17836,
+    "stored_sha256": "9ad5e17f4843d4c645b4810df09b251c2abe927d4316a2faa6d040bb5f629ca7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/README.md",
+    "path": "native-main-integration/native-ledger-source02/README.md",
+    "source_bytes": 1590,
+    "source_sha256": "6db216334a906c067cb16a5dcd4febc6429ba26c267e13de70a0e337daa148ce",
+    "stored_bytes": 1590,
+    "stored_sha256": "6db216334a906c067cb16a5dcd4febc6429ba26c267e13de70a0e337daa148ce",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/assemble-handoff.py",
+    "path": "native-main-integration/native-ledger-source02/assemble-handoff.py",
+    "source_bytes": 14946,
+    "source_sha256": "f6663d34840dbf11c3d8f803d1eca97f085485c1ad731257209b43cb5a76cea4",
+    "stored_bytes": 14946,
+    "stored_sha256": "f6663d34840dbf11c3d8f803d1eca97f085485c1ad731257209b43cb5a76cea4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/caller-constructor-ledger.json",
+    "path": "native-main-integration/native-ledger-source02/caller-constructor-ledger.json",
+    "source_bytes": 15207,
+    "source_sha256": "b5ccd53b54466e1736f9abcc8a4b68d4b0ee55c637adde9ff99e7f6f3ab9d2ac",
+    "stored_bytes": 15207,
+    "stored_sha256": "b5ccd53b54466e1736f9abcc8a4b68d4b0ee55c637adde9ff99e7f6f3ab9d2ac",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/changed-files.json",
+    "path": "native-main-integration/native-ledger-source02/changed-files.json",
+    "source_bytes": 11353,
+    "source_sha256": "9939be22a73f956da7ac1fff9b392d6251d1208a85a1cb0158ee007238819f2e",
+    "stored_bytes": 11353,
+    "stored_sha256": "9939be22a73f956da7ac1fff9b392d6251d1208a85a1cb0158ee007238819f2e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source02/changed-source.tar.gz.gz",
+    "source_bytes": 154659,
+    "source_sha256": "ed8bcb1f816d2b2fafbd4a6d7fbf05b23cc2ed324a0287d5b9d9332c4d87751d",
+    "stored_bytes": 154727,
+    "stored_sha256": "46f153d67c621bc2b6e42d856e5c6854945a39b448c14987f437b7a8bce82be0",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/identity.json",
+    "path": "native-main-integration/native-ledger-source02/controls/identity.json",
+    "source_bytes": 3840,
+    "source_sha256": "c7e61560a0f37ac2e2711e4d3349940f1b7f72580d73a18a3021d87e7df41c41",
+    "stored_bytes": 3840,
+    "stored_sha256": "c7e61560a0f37ac2e2711e4d3349940f1b7f72580d73a18a3021d87e7df41c41",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/command.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/command.json",
+    "source_bytes": 4579,
+    "source_sha256": "0c55f877b93c51b9da451e689f18ec84e3dff0cf7ce5ffe03deb46a1a82daa65",
+    "stored_bytes": 4579,
+    "stored_sha256": "0c55f877b93c51b9da451e689f18ec84e3dff0cf7ce5ffe03deb46a1a82daa65",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/environment.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/environment.json",
+    "source_bytes": 2028,
+    "source_sha256": "a8c0499932313eb83604f19f7d029707a0fb6f8cb9b418bedf54506d96d2665c",
+    "stored_bytes": 2028,
+    "stored_sha256": "a8c0499932313eb83604f19f7d029707a0fb6f8cb9b418bedf54506d96d2665c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/process.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/process.json",
+    "source_bytes": 144,
+    "source_sha256": "875770011fa4dba00ef9e910b60d35f71863116c792a4e57c453200c1703eb76",
+    "stored_bytes": 144,
+    "stored_sha256": "875770011fa4dba00ef9e910b60d35f71863116c792a4e57c453200c1703eb76",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/result.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/result.json",
+    "source_bytes": 11697,
+    "source_sha256": "81daddad1b11c8da3dbf6f70ab13895768c75817f4b023eb436d9fb3bfd444fc",
+    "stored_bytes": 11697,
+    "stored_sha256": "81daddad1b11c8da3dbf6f70ab13895768c75817f4b023eb436d9fb3bfd444fc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/run.log",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/run.log",
+    "source_bytes": 5135,
+    "source_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+    "stored_bytes": 5135,
+    "stored_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/source-after.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-db-construction/source-before.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-db-construction/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/command.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/command.json",
+    "source_bytes": 7205,
+    "source_sha256": "3d3f090e8c59d9d01d8461fbca847d75d951d2cfed3e4d079132e80111d6aa0c",
+    "stored_bytes": 7205,
+    "stored_sha256": "3d3f090e8c59d9d01d8461fbca847d75d951d2cfed3e4d079132e80111d6aa0c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/environment.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/environment.json",
+    "source_bytes": 2031,
+    "source_sha256": "a481c6b665d8d03cf5861e1978bc62669cb5fe6e041984d4abce0fa98785d90f",
+    "stored_bytes": 2031,
+    "stored_sha256": "a481c6b665d8d03cf5861e1978bc62669cb5fe6e041984d4abce0fa98785d90f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/process.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/process.json",
+    "source_bytes": 144,
+    "source_sha256": "a7d68c5f07155cb9d1b362a0cf129f395582a5175414120b34c7df87b51994f5",
+    "stored_bytes": 144,
+    "stored_sha256": "a7d68c5f07155cb9d1b362a0cf129f395582a5175414120b34c7df87b51994f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/result.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/result.json.gz",
+    "source_bytes": 25714,
+    "source_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+    "stored_bytes": 1893,
+    "stored_sha256": "ebe202923808aa989e1eecfb0a3aef18a74290d9f1d294a0a3eb583c5b7bc8f5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/run.log",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/run.log",
+    "source_bytes": 17151,
+    "source_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+    "stored_bytes": 17151,
+    "stored_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/source-after.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/source-before.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-canonical/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/command.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/command.json",
+    "source_bytes": 9356,
+    "source_sha256": "f977fc1c221e6f29a46e84de193e9f22c47dd7ac37d975753ac9d77469c4c1ba",
+    "stored_bytes": 9356,
+    "stored_sha256": "f977fc1c221e6f29a46e84de193e9f22c47dd7ac37d975753ac9d77469c4c1ba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/environment.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/environment.json",
+    "source_bytes": 2031,
+    "source_sha256": "64707caee93ff8b8414a74b555df7b19b449410a860bc81ffe1909b60fc09123",
+    "stored_bytes": 2031,
+    "stored_sha256": "64707caee93ff8b8414a74b555df7b19b449410a860bc81ffe1909b60fc09123",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/process.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/process.json",
+    "source_bytes": 144,
+    "source_sha256": "0496117051f2b89319f1ae4aae156278f4aa5352b05a46be8c289f71def05188",
+    "stored_bytes": 144,
+    "stored_sha256": "0496117051f2b89319f1ae4aae156278f4aa5352b05a46be8c289f71def05188",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/result.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/result.json.gz",
+    "source_bytes": 22308,
+    "source_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+    "stored_bytes": 2253,
+    "stored_sha256": "a5b369161ef5f5825024155d81fa2967b6f36df42134e7804c062ace66770c77",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/run.log",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/run.log",
+    "source_bytes": 14628,
+    "source_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+    "stored_bytes": 14628,
+    "stored_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/source-after.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/source-before.json",
+    "path": "native-main-integration/native-ledger-source02/controls/normal-freelist-consumers/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/controls/summary.json",
+    "path": "native-main-integration/native-ledger-source02/controls/summary.json",
+    "source_bytes": 1464,
+    "source_sha256": "e029b4faf55a80122a908377f7d8f9a224577e4774e9f8cea04f536d583d685c",
+    "stored_bytes": 1464,
+    "stored_sha256": "e029b4faf55a80122a908377f7d8f9a224577e4774e9f8cea04f536d583d685c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/failure-diagnosis.json",
+    "path": "native-main-integration/native-ledger-source02/failure-diagnosis.json",
+    "source_bytes": 6229,
+    "source_sha256": "a0928f3806bf52be1a82f59b3cc45de6a8c44c3fc2305e125164a87bb6949beb",
+    "stored_bytes": 6229,
+    "stored_sha256": "a0928f3806bf52be1a82f59b3cc45de6a8c44c3fc2305e125164a87bb6949beb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/failure-diagnosis.md",
+    "path": "native-main-integration/native-ledger-source02/failure-diagnosis.md",
+    "source_bytes": 1395,
+    "source_sha256": "792943b36ab613f51d8e1f6057a2d7877baf6e0b25e12a535716820a5eb151e2",
+    "stored_bytes": 1395,
+    "stored_sha256": "792943b36ab613f51d8e1f6057a2d7877baf6e0b25e12a535716820a5eb151e2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/freeze-source.py",
+    "path": "native-main-integration/native-ledger-source02/freeze-source.py",
+    "source_bytes": 3428,
+    "source_sha256": "e7acc22b106a96aafc36731be42bf808149dfe99574e8e346ad5eeeffb220cbd",
+    "stored_bytes": 3428,
+    "stored_sha256": "e7acc22b106a96aafc36731be42bf808149dfe99574e8e346ad5eeeffb220cbd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/freeze.json",
+    "path": "native-main-integration/native-ledger-source02/freeze.json",
+    "source_bytes": 1408,
+    "source_sha256": "7df38b43576f51b77e420513a60ecc87a82b0f2bec8b391a88408a091b9378c8",
+    "stored_bytes": 1408,
+    "stored_sha256": "7df38b43576f51b77e420513a60ecc87a82b0f2bec8b391a88408a091b9378c8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/handoff.json",
+    "path": "native-main-integration/native-ledger-source02/handoff.json",
+    "source_bytes": 3739,
+    "source_sha256": "7b71394e7ada8a1eaf81fd10773d09a6a53deb77cc09a9e5f641b7cb48c3082d",
+    "stored_bytes": 3739,
+    "stored_sha256": "7b71394e7ada8a1eaf81fd10773d09a6a53deb77cc09a9e5f641b7cb48c3082d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/invariance.json",
+    "path": "native-main-integration/native-ledger-source02/invariance.json",
+    "source_bytes": 1656,
+    "source_sha256": "f4a9a4ca77e92ce4049c1aa2e37711d16c5bc6eda3721b0f8a8978b1b4808a66",
+    "stored_bytes": 1656,
+    "stored_sha256": "f4a9a4ca77e92ce4049c1aa2e37711d16c5bc6eda3721b0f8a8978b1b4808a66",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/pricing-retention.md",
+    "path": "native-main-integration/native-ledger-source02/pricing-retention.md",
+    "source_bytes": 5600,
+    "source_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "stored_bytes": 5600,
+    "stored_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/proposed-commands.json",
+    "path": "native-main-integration/native-ledger-source02/proposed-commands.json.gz",
+    "source_bytes": 55819,
+    "source_sha256": "c9f62a70672263e1a58c360adfffd016965542fc18267a6b3745a8bae95e4ee4",
+    "stored_bytes": 7316,
+    "stored_sha256": "7714543f1516c99e7a6e1e42db54e8e8fefbfbc26cd76892c7b438070137398a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source-frozen.json",
+    "path": "native-main-integration/native-ledger-source02/source-frozen.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "stored_bytes": 466940,
+    "stored_sha256": "022404f8a8b7285c3aa78bee498b9d1802fe9b4e909eef0d2413be7818648e8a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source-modes.json",
+    "path": "native-main-integration/native-ledger-source02/source-modes.json.gz",
+    "source_bytes": 981532,
+    "source_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "stored_bytes": 71911,
+    "stored_sha256": "be33fe3f38672d584a69b6f0769ac4473e230554ef1be234ff9d903581a0e0f3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source.delta.patch",
+    "path": "native-main-integration/native-ledger-source02/source.delta.patch.gz",
+    "source_bytes": 199008,
+    "source_sha256": "96a2917ee42ec623cf19f7437563756b21d9cecd30bc8d838d1f0203fc44d05d",
+    "stored_bytes": 46168,
+    "stored_sha256": "f3eb25e42f000a7919e169d56d8deee15904d42df9ae708971ba42afcfc90a75",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source01-evidence.json",
+    "path": "native-main-integration/native-ledger-source02/source01-evidence.json",
+    "source_bytes": 999,
+    "source_sha256": "e6c18cc0e0e330f0a5d174005849668492e9c09eec42397462994de20af46da3",
+    "stored_bytes": 999,
+    "stored_sha256": "e6c18cc0e0e330f0a5d174005849668492e9c09eec42397462994de20af46da3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source01-to-source02.changed-files.json",
+    "path": "native-main-integration/native-ledger-source02/source01-to-source02.changed-files.json",
+    "source_bytes": 901,
+    "source_sha256": "bd09347aebb49fc76365186dde454367dddb87295481da7ee02fc5387d62c0be",
+    "stored_bytes": 901,
+    "stored_sha256": "bd09347aebb49fc76365186dde454367dddb87295481da7ee02fc5387d62c0be",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source01-to-source02.changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source02/source01-to-source02.changed-source.tar.gz",
+    "source_bytes": 13728,
+    "source_sha256": "fa5dc02e04ba528f2af3cac205bc4287723166cf0dde4c7557bf0d8d9bacda10",
+    "stored_bytes": 13728,
+    "stored_sha256": "fa5dc02e04ba528f2af3cac205bc4287723166cf0dde4c7557bf0d8d9bacda10",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/source01-to-source02.delta.patch",
+    "path": "native-main-integration/native-ledger-source02/source01-to-source02.delta.patch",
+    "source_bytes": 7744,
+    "source_sha256": "b4e0ade4bd458c8443583d34898bfce89657b55f49934b07dd96f8e4cb559691",
+    "stored_bytes": 7744,
+    "stored_sha256": "b4e0ade4bd458c8443583d34898bfce89657b55f49934b07dd96f8e4cb559691",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02/test-inventory.json",
+    "path": "native-main-integration/native-ledger-source02/test-inventory.json.gz",
+    "source_bytes": 21809,
+    "source_sha256": "3248b7748b0b303f850f3c7a4774daf320425ceafc5a108b1672552cb58d2e75",
+    "stored_bytes": 5788,
+    "stored_sha256": "061ab7ab0f83d7736003aa3e994cbd59a825ec62b2d341d0daec9a07c917bcd6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/README.md",
+    "path": "native-main-integration/native-ledger-source03/README.md",
+    "source_bytes": 1696,
+    "source_sha256": "346057062bc317cb6a27c56ee9a7f1babb2e3e8065d3581b869784bab4391cc9",
+    "stored_bytes": 1696,
+    "stored_sha256": "346057062bc317cb6a27c56ee9a7f1babb2e3e8065d3581b869784bab4391cc9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/assemble-handoff.py",
+    "path": "native-main-integration/native-ledger-source03/assemble-handoff.py",
+    "source_bytes": 17172,
+    "source_sha256": "3a5b57b981c0715f20f7d8a626a57a9dd55529e95b0b27c96194150e976ff54d",
+    "stored_bytes": 17172,
+    "stored_sha256": "3a5b57b981c0715f20f7d8a626a57a9dd55529e95b0b27c96194150e976ff54d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/caller-constructor-ledger.json",
+    "path": "native-main-integration/native-ledger-source03/caller-constructor-ledger.json",
+    "source_bytes": 15258,
+    "source_sha256": "b9e874d7fa7c1fac4016b7fc0fbd2e0ae99bb42f0a33534363af5d8d7884c888",
+    "stored_bytes": 15258,
+    "stored_sha256": "b9e874d7fa7c1fac4016b7fc0fbd2e0ae99bb42f0a33534363af5d8d7884c888",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/changed-files.json",
+    "path": "native-main-integration/native-ledger-source03/changed-files.json",
+    "source_bytes": 11649,
+    "source_sha256": "e39cd2b6101c3e17e0129536d19b8de3a74a5b2013044280d5850a1400ceed54",
+    "stored_bytes": 11649,
+    "stored_sha256": "e39cd2b6101c3e17e0129536d19b8de3a74a5b2013044280d5850a1400ceed54",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source03/changed-source.tar.gz.gz",
+    "source_bytes": 156947,
+    "source_sha256": "a31882ebf2aa3c3efb1ff137eb84869212ffdaf2b5d95d0b8f8a8efde2d2fdca",
+    "stored_bytes": 157015,
+    "stored_sha256": "ee3e3bb1d8a02776bc6cca24604c7c0a3a412fd21ef2e728539e51538107885b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/identity.json",
+    "path": "native-main-integration/native-ledger-source03/controls/identity.json",
+    "source_bytes": 3840,
+    "source_sha256": "b3287995cc7931578a6ed6595692d9d4c31e2f05ce92e2cf9bc8f25bc05ea47a",
+    "stored_bytes": 3840,
+    "stored_sha256": "b3287995cc7931578a6ed6595692d9d4c31e2f05ce92e2cf9bc8f25bc05ea47a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/command.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/command.json",
+    "source_bytes": 4579,
+    "source_sha256": "53098fb3f8c8e77144eca76f3a791e52631fc580fc353a5ffc8dd18f964ca565",
+    "stored_bytes": 4579,
+    "stored_sha256": "53098fb3f8c8e77144eca76f3a791e52631fc580fc353a5ffc8dd18f964ca565",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/environment.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/environment.json",
+    "source_bytes": 1707,
+    "source_sha256": "738dbc7ef414eeaf414e525f357264170c3ce077a8d06f06ee02a4f91f1b65c1",
+    "stored_bytes": 1707,
+    "stored_sha256": "738dbc7ef414eeaf414e525f357264170c3ce077a8d06f06ee02a4f91f1b65c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/process.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/process.json",
+    "source_bytes": 144,
+    "source_sha256": "31cfeb7096d601dc9c64c837566b4bfa945bce7c367131978f795a1fb7ac6c3f",
+    "stored_bytes": 144,
+    "stored_sha256": "31cfeb7096d601dc9c64c837566b4bfa945bce7c367131978f795a1fb7ac6c3f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/result.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/result.json",
+    "source_bytes": 11404,
+    "source_sha256": "b460adde1a3721ea8d005adf9531a8091bc96ea0cf420de59a6cf18f666a1209",
+    "stored_bytes": 11404,
+    "stored_sha256": "b460adde1a3721ea8d005adf9531a8091bc96ea0cf420de59a6cf18f666a1209",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/run.log",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/run.log",
+    "source_bytes": 4970,
+    "source_sha256": "aa22d591155ccbe57d439f388350950064469fdbbf31eb1106354e4d4d93b9fd",
+    "stored_bytes": 4970,
+    "stored_sha256": "aa22d591155ccbe57d439f388350950064469fdbbf31eb1106354e4d4d93b9fd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/source-after.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+    "stored_bytes": 466939,
+    "stored_sha256": "0b9f5928c99508181b2e4f42db43b9ab58862e7a570be119b883ab81beeab458",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/source-before.json",
+    "path": "native-main-integration/native-ledger-source03/controls/normal-db-construction/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+    "stored_bytes": 466939,
+    "stored_sha256": "0b9f5928c99508181b2e4f42db43b9ab58862e7a570be119b883ab81beeab458",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/summary.json",
+    "path": "native-main-integration/native-ledger-source03/controls/summary.json",
+    "source_bytes": 960,
+    "source_sha256": "dcdd3d7828a9cdd2856e090c603bd8f3f51b21d72c039fc1f48bfd34124cf7c0",
+    "stored_bytes": 960,
+    "stored_sha256": "dcdd3d7828a9cdd2856e090c603bd8f3f51b21d72c039fc1f48bfd34124cf7c0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/failure-diagnosis.json",
+    "path": "native-main-integration/native-ledger-source03/failure-diagnosis.json",
+    "source_bytes": 7733,
+    "source_sha256": "c229ed30b042ca08f1e75ec6dbfcd541eb782970e884a2dbdacfe9e0533be124",
+    "stored_bytes": 7733,
+    "stored_sha256": "c229ed30b042ca08f1e75ec6dbfcd541eb782970e884a2dbdacfe9e0533be124",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/failure-diagnosis.md",
+    "path": "native-main-integration/native-ledger-source03/failure-diagnosis.md",
+    "source_bytes": 1700,
+    "source_sha256": "cfbdeddf08bd18cac6f7bfdcb79e5b81670391e7fb27d92eac6339b6196fd2cc",
+    "stored_bytes": 1700,
+    "stored_sha256": "cfbdeddf08bd18cac6f7bfdcb79e5b81670391e7fb27d92eac6339b6196fd2cc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/freeze-source.py",
+    "path": "native-main-integration/native-ledger-source03/freeze-source.py",
+    "source_bytes": 3431,
+    "source_sha256": "f3bd788317676f73b1a584690f47fa196a28cdd92e467db50650d983267b7a9b",
+    "stored_bytes": 3431,
+    "stored_sha256": "f3bd788317676f73b1a584690f47fa196a28cdd92e467db50650d983267b7a9b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/freeze.json",
+    "path": "native-main-integration/native-ledger-source03/freeze.json",
+    "source_bytes": 1411,
+    "source_sha256": "af8ad265737e3e2aec98d97d0756e51ab72a6675763e89ade5e0d31c24f140c2",
+    "stored_bytes": 1411,
+    "stored_sha256": "af8ad265737e3e2aec98d97d0756e51ab72a6675763e89ade5e0d31c24f140c2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/handoff.json",
+    "path": "native-main-integration/native-ledger-source03/handoff.json",
+    "source_bytes": 5614,
+    "source_sha256": "afb920deaafff12ac19e95d24a43d60d643b4acdbc50b6ab3a923779a9e70353",
+    "stored_bytes": 5614,
+    "stored_sha256": "afb920deaafff12ac19e95d24a43d60d643b4acdbc50b6ab3a923779a9e70353",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/invariance.json",
+    "path": "native-main-integration/native-ledger-source03/invariance.json",
+    "source_bytes": 2244,
+    "source_sha256": "344c14c2fff7ebf20e0c1241a3caed7aa4ed2d726b5c3e08b13989ea97382490",
+    "stored_bytes": 2244,
+    "stored_sha256": "344c14c2fff7ebf20e0c1241a3caed7aa4ed2d726b5c3e08b13989ea97382490",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/packaging-disposition.json",
+    "path": "native-main-integration/native-ledger-source03/packaging-disposition.json",
+    "source_bytes": 395,
+    "source_sha256": "8acd441441b556516cc24240b1e46a3580d14d8d13cd156b2bc298ff77325a65",
+    "stored_bytes": 395,
+    "stored_sha256": "8acd441441b556516cc24240b1e46a3580d14d8d13cd156b2bc298ff77325a65",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/pricing-retention.md",
+    "path": "native-main-integration/native-ledger-source03/pricing-retention.md",
+    "source_bytes": 5600,
+    "source_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "stored_bytes": 5600,
+    "stored_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/proposed-build-root01.json",
+    "path": "native-main-integration/native-ledger-source03/proposed-build-root01.json",
+    "source_bytes": 1629,
+    "source_sha256": "371a874a065241eef7c52021d6ff47a5a2ddade0978474131f3e7cd75fc2042a",
+    "stored_bytes": 1629,
+    "stored_sha256": "371a874a065241eef7c52021d6ff47a5a2ddade0978474131f3e7cd75fc2042a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/proposed-commands.json",
+    "path": "native-main-integration/native-ledger-source03/proposed-commands.json.gz",
+    "source_bytes": 40486,
+    "source_sha256": "1e6f2a85defe326c9ab1d9478196df3c14ac40bd3532b061a70f1c9519957b14",
+    "stored_bytes": 7448,
+    "stored_sha256": "31c393e54400b61178817b5a409591df7e5d6222863a47b1fc2e86ba6518e5cd",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source-frozen.json",
+    "path": "native-main-integration/native-ledger-source03/source-frozen.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+    "stored_bytes": 466939,
+    "stored_sha256": "0b9f5928c99508181b2e4f42db43b9ab58862e7a570be119b883ab81beeab458",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source-modes.json",
+    "path": "native-main-integration/native-ledger-source03/source-modes.json.gz",
+    "source_bytes": 981532,
+    "source_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "stored_bytes": 71911,
+    "stored_sha256": "be33fe3f38672d584a69b6f0769ac4473e230554ef1be234ff9d903581a0e0f3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source.delta.patch",
+    "path": "native-main-integration/native-ledger-source03/source.delta.patch.gz",
+    "source_bytes": 204159,
+    "source_sha256": "7aa9826d03b4c029b2f5f1471c38f40c85c96aadd79c363c6cce1e8e4d961b39",
+    "stored_bytes": 47506,
+    "stored_sha256": "bf1b09a13371d127095921fa53ddf19cc9713720945cfa676a4d9b819d6931a7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source02-evidence.json",
+    "path": "native-main-integration/native-ledger-source03/source02-evidence.json",
+    "source_bytes": 1323,
+    "source_sha256": "3de7ff8433bbc60260b107ad7c94d332e32a5198fa523c185942f2b7019e2339",
+    "stored_bytes": 1323,
+    "stored_sha256": "3de7ff8433bbc60260b107ad7c94d332e32a5198fa523c185942f2b7019e2339",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source02-to-source03.changed-files.json",
+    "path": "native-main-integration/native-ledger-source03/source02-to-source03.changed-files.json",
+    "source_bytes": 593,
+    "source_sha256": "76000c1fdef35e746df6344a68b4dbf385d285f38d60ce836ba0440339962111",
+    "stored_bytes": 593,
+    "stored_sha256": "76000c1fdef35e746df6344a68b4dbf385d285f38d60ce836ba0440339962111",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source02-to-source03.changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source03/source02-to-source03.changed-source.tar.gz",
+    "source_bytes": 4689,
+    "source_sha256": "7fb54935755f8ffa61509d51ba119265c1812eee686f064b4c5ecfccd1100910",
+    "stored_bytes": 4689,
+    "stored_sha256": "7fb54935755f8ffa61509d51ba119265c1812eee686f064b4c5ecfccd1100910",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/source02-to-source03.delta.patch",
+    "path": "native-main-integration/native-ledger-source03/source02-to-source03.delta.patch",
+    "source_bytes": 6282,
+    "source_sha256": "ba46a3c677f5131afbc0269b51a1319c4d701f25e65660ade37f310d5d7de120",
+    "stored_bytes": 6282,
+    "stored_sha256": "ba46a3c677f5131afbc0269b51a1319c4d701f25e65660ade37f310d5d7de120",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/test-inventory.json",
+    "path": "native-main-integration/native-ledger-source03/test-inventory.json.gz",
+    "source_bytes": 23580,
+    "source_sha256": "78d6ffd05312d58af12311090b8092d07f86a12062867bbccb2a4a1d660898bc",
+    "stored_bytes": 6145,
+    "stored_sha256": "288d5932c0113141d7ac9eb37c363d05445d8fbba4bab5c436b134fc5df7bc4b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/README.md",
+    "path": "native-main-integration/native-ledger-source04/README.md",
+    "source_bytes": 1602,
+    "source_sha256": "f33f779b0c580f85f83686960ab5396966891c3a437c10d446bd2478707a1aa8",
+    "stored_bytes": 1602,
+    "stored_sha256": "f33f779b0c580f85f83686960ab5396966891c3a437c10d446bd2478707a1aa8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/command.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/command.json",
+    "source_bytes": 1813,
+    "source_sha256": "875bd068320e859c91b43e9bb7d7953abcf15fdc1df27604ca019e8fc94f452c",
+    "stored_bytes": 1813,
+    "stored_sha256": "875bd068320e859c91b43e9bb7d7953abcf15fdc1df27604ca019e8fc94f452c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/environment.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/environment.json",
+    "source_bytes": 1930,
+    "source_sha256": "4f0e2094c748104d54acc858de9d762c5a5b1e3f6535ea61bc26f5fdad886653",
+    "stored_bytes": 1930,
+    "stored_sha256": "4f0e2094c748104d54acc858de9d762c5a5b1e3f6535ea61bc26f5fdad886653",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/host-window.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/host-window.json.gz",
+    "source_bytes": 213145,
+    "source_sha256": "0cba13309d176ca7ea52aa3aceec950b13f5daf27a81b3b6fea217c21c275b74",
+    "stored_bytes": 21508,
+    "stored_sha256": "0248a828af6f74f94c8dba47d170bc808a0d915cfd373c41dcae47ef4ce4dcbf",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/process.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/process.json",
+    "source_bytes": 106,
+    "source_sha256": "799d1ff0fdd7d3c596bf8275e779168899b8f34094848d4b0ce075756970655b",
+    "stored_bytes": 106,
+    "stored_sha256": "799d1ff0fdd7d3c596bf8275e779168899b8f34094848d4b0ce075756970655b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/result.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/result.json",
+    "source_bytes": 1953,
+    "source_sha256": "5bb5138803fba4006c838327142ab4a1fb270df98192905bf7e4dd449db91734",
+    "stored_bytes": 1953,
+    "stored_sha256": "5bb5138803fba4006c838327142ab4a1fb270df98192905bf7e4dd449db91734",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/run.log",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/run.log.gz",
+    "source_bytes": 56961,
+    "source_sha256": "6f27e47c4e9259d2c0e6887a0d512471c5f4933e07e9bdf0b5c19a03516018ee",
+    "stored_bytes": 2606,
+    "stored_sha256": "d672f991810fe1a9b053086c7c00c58c2a3b29c72ac1e5d9f3126b168b24fc6b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/normal-all-shared-arms/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/command.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/command.json",
+    "source_bytes": 1822,
+    "source_sha256": "651b5737733357f76cd83768aba6f61c4313ae8a71074280b7a7dd704b3da387",
+    "stored_bytes": 1822,
+    "stored_sha256": "651b5737733357f76cd83768aba6f61c4313ae8a71074280b7a7dd704b3da387",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/environment.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/environment.json",
+    "source_bytes": 1928,
+    "source_sha256": "5e0d5463083b916c0ce868ad999c17a7dd2a6ff972d44caf0c96dd55ab3ca03c",
+    "stored_bytes": 1928,
+    "stored_sha256": "5e0d5463083b916c0ce868ad999c17a7dd2a6ff972d44caf0c96dd55ab3ca03c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/host-window.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/host-window.json.gz",
+    "source_bytes": 214361,
+    "source_sha256": "e91171f87d80729dff1843f1cbeaf1bd0d0166c33f9ea6b017b98a943b91f8cb",
+    "stored_bytes": 21679,
+    "stored_sha256": "fb1c454c0aa920802c8c4a7bbabdd0bf90785dcdb02a35918548a6267c5a084f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/process.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/process.json",
+    "source_bytes": 106,
+    "source_sha256": "de9e844800127bb7ae353979d96edac71162e9583d074fafa519dd11753f1c29",
+    "stored_bytes": 106,
+    "stored_sha256": "de9e844800127bb7ae353979d96edac71162e9583d074fafa519dd11753f1c29",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/result.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/result.json",
+    "source_bytes": 1952,
+    "source_sha256": "f779b7fd23fa5904435167ed3207504f8ad00967e19ff6daba3f6bf89fe7a887",
+    "stored_bytes": 1952,
+    "stored_sha256": "f779b7fd23fa5904435167ed3207504f8ad00967e19ff6daba3f6bf89fe7a887",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/run.log",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/run.log.gz",
+    "source_bytes": 56961,
+    "source_sha256": "5c1f880cf4bdec7bd2082d77c5e7e4cae129ae14e697740b1ee624be56d83455",
+    "stored_bytes": 2604,
+    "stored_sha256": "040e398032017a232ec449c27afac19af187c4b18502f0f4869f4c3396492e85",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/actual-controls/race-all-shared-arms/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/assemble-handoff.py",
+    "path": "native-main-integration/native-ledger-source04/assemble-handoff.py",
+    "source_bytes": 12975,
+    "source_sha256": "0b358b33f39759c3fccb546ef47b190d1249b9c816fd0383eb72df96fcb479eb",
+    "stored_bytes": 12975,
+    "stored_sha256": "0b358b33f39759c3fccb546ef47b190d1249b9c816fd0383eb72df96fcb479eb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/command.json",
+    "path": "native-main-integration/native-ledger-source04/build/command.json",
+    "source_bytes": 1354,
+    "source_sha256": "3e40fae593a92293fc09e81814d6b390e133f0dc1509a14d12826132c3f8c1b7",
+    "stored_bytes": 1354,
+    "stored_sha256": "3e40fae593a92293fc09e81814d6b390e133f0dc1509a14d12826132c3f8c1b7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/environment.json",
+    "path": "native-main-integration/native-ledger-source04/build/environment.json",
+    "source_bytes": 1897,
+    "source_sha256": "4a031cb851632178dc35b2207ae830ffa71ee420c872045ef87e65f3bcc89f01",
+    "stored_bytes": 1897,
+    "stored_sha256": "4a031cb851632178dc35b2207ae830ffa71ee420c872045ef87e65f3bcc89f01",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/host-window.json",
+    "path": "native-main-integration/native-ledger-source04/build/host-window.json.gz",
+    "source_bytes": 212749,
+    "source_sha256": "2513095cf0cb31d1be102c7e78b21940c9a1bc6fc76a4fdd2f590ae81c2cb6c9",
+    "stored_bytes": 21465,
+    "stored_sha256": "92fe1cc7490cc44b54587493b6ba75e2f638351bf23b317a19dfae30f4c5122f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/process.json",
+    "path": "native-main-integration/native-ledger-source04/build/process.json",
+    "source_bytes": 106,
+    "source_sha256": "ddaeea17e833e3eac3aa2874e8b20261ffc166f41cfe58df51be567ac8b45365",
+    "stored_bytes": 106,
+    "stored_sha256": "ddaeea17e833e3eac3aa2874e8b20261ffc166f41cfe58df51be567ac8b45365",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/result.json",
+    "path": "native-main-integration/native-ledger-source04/build/result.json",
+    "source_bytes": 921,
+    "source_sha256": "a4922a8639fabd975990e7e37a6bb3ef6811031566267e35c4991a1315c2d8b3",
+    "stored_bytes": 921,
+    "stored_sha256": "a4922a8639fabd975990e7e37a6bb3ef6811031566267e35c4991a1315c2d8b3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/run.log",
+    "path": "native-main-integration/native-ledger-source04/build/run.log",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/build/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/build/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/build/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/caller-constructor-ledger.json",
+    "path": "native-main-integration/native-ledger-source04/caller-constructor-ledger.json",
+    "source_bytes": 15309,
+    "source_sha256": "31a06348dac915d46adf439820145c9e8702c70969d70bc37ae89d041cfeef23",
+    "stored_bytes": 15309,
+    "stored_sha256": "31a06348dac915d46adf439820145c9e8702c70969d70bc37ae89d041cfeef23",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/changed-files.json",
+    "path": "native-main-integration/native-ledger-source04/changed-files.json",
+    "source_bytes": 11649,
+    "source_sha256": "9498f328600bddbc6c731e96bc81a333e321ddf89fc6190cc7b027b015774a18",
+    "stored_bytes": 11649,
+    "stored_sha256": "9498f328600bddbc6c731e96bc81a333e321ddf89fc6190cc7b027b015774a18",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source04/changed-source.tar.gz.gz",
+    "source_bytes": 156858,
+    "source_sha256": "73d58293bdf3c2ffc9d45c04646246fbe2a7441faf1e1db464460734ff2670d2",
+    "stored_bytes": 156926,
+    "stored_sha256": "d54753020caba2f52a4ff065e4eae94e2cd2fec0d717603feb7c651caf8e6117",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/identity.json",
+    "path": "native-main-integration/native-ledger-source04/controls/identity.json",
+    "source_bytes": 3840,
+    "source_sha256": "882b0e96619560b3c1bbf525e494b08814e5a8a23ff1b4198295751a2f7e0977",
+    "stored_bytes": 3840,
+    "stored_sha256": "882b0e96619560b3c1bbf525e494b08814e5a8a23ff1b4198295751a2f7e0977",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/command.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/command.json",
+    "source_bytes": 4579,
+    "source_sha256": "fb789e748dbd6ea9822d95c9a4fd45cfc3e07931f38fe939d10537d7b4f17fd2",
+    "stored_bytes": 4579,
+    "stored_sha256": "fb789e748dbd6ea9822d95c9a4fd45cfc3e07931f38fe939d10537d7b4f17fd2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/environment.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/environment.json",
+    "source_bytes": 2028,
+    "source_sha256": "4ac9c8cd4b05368dee429b829726e7a6fe15bc3eeeca2963a58e0a202bf97ebc",
+    "stored_bytes": 2028,
+    "stored_sha256": "4ac9c8cd4b05368dee429b829726e7a6fe15bc3eeeca2963a58e0a202bf97ebc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/process.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/process.json",
+    "source_bytes": 144,
+    "source_sha256": "7ad04b9c32df92143e167eb881b67b55ef5b5910ce138ce84a8377049bc71fec",
+    "stored_bytes": 144,
+    "stored_sha256": "7ad04b9c32df92143e167eb881b67b55ef5b5910ce138ce84a8377049bc71fec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/result.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/result.json",
+    "source_bytes": 11415,
+    "source_sha256": "fff6fa53bdfeebbf04b95626ca684adb7a86ba9258cb11560ab2548e17007261",
+    "stored_bytes": 11415,
+    "stored_sha256": "fff6fa53bdfeebbf04b95626ca684adb7a86ba9258cb11560ab2548e17007261",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/run.log",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/run.log",
+    "source_bytes": 4589,
+    "source_sha256": "d41278df391dd596524136e3bb298949ff9be84998a13a029c8ca348283cfef2",
+    "stored_bytes": 4589,
+    "stored_sha256": "d41278df391dd596524136e3bb298949ff9be84998a13a029c8ca348283cfef2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/normal-db-construction/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/controls/normal-db-construction/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/command.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/command.json",
+    "source_bytes": 4588,
+    "source_sha256": "65e7b4af68d67c3619291712b74e0128e18090afe1ac07005ddc0ba2c63bc1aa",
+    "stored_bytes": 4588,
+    "stored_sha256": "65e7b4af68d67c3619291712b74e0128e18090afe1ac07005ddc0ba2c63bc1aa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/environment.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/environment.json",
+    "source_bytes": 2026,
+    "source_sha256": "7868ac55c70cbf4b015a4503c71633a223152d6ea388b78cbf9d3a8597046d8b",
+    "stored_bytes": 2026,
+    "stored_sha256": "7868ac55c70cbf4b015a4503c71633a223152d6ea388b78cbf9d3a8597046d8b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/process.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/process.json",
+    "source_bytes": 144,
+    "source_sha256": "aaada1a5ed505c006b15034a6f64c5fdb5b818d33223f83af142898e633d7833",
+    "stored_bytes": 144,
+    "stored_sha256": "aaada1a5ed505c006b15034a6f64c5fdb5b818d33223f83af142898e633d7833",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/result.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/result.json",
+    "source_bytes": 11269,
+    "source_sha256": "7f69785759a9c7298638ace67dba892588740e6e4faae7c4ef89c72c808e9319",
+    "stored_bytes": 11269,
+    "stored_sha256": "7f69785759a9c7298638ace67dba892588740e6e4faae7c4ef89c72c808e9319",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/run.log",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/run.log",
+    "source_bytes": 4589,
+    "source_sha256": "6446ddb51afea42a301462272592b0873484b2d5fa04a0a33958012ed9c16681",
+    "stored_bytes": 4589,
+    "stored_sha256": "6446ddb51afea42a301462272592b0873484b2d5fa04a0a33958012ed9c16681",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-db-construction/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-db-construction/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/command.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/command.json",
+    "source_bytes": 7214,
+    "source_sha256": "64ac68a85ef63eae69c8bd98154458dd868fcdf8ee74933bb6592aa1c79076d2",
+    "stored_bytes": 7214,
+    "stored_sha256": "64ac68a85ef63eae69c8bd98154458dd868fcdf8ee74933bb6592aa1c79076d2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/environment.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/environment.json",
+    "source_bytes": 2029,
+    "source_sha256": "64fd0f52eb9710603168e64dba89d29b204cfc53a6883564c6029c38c25db0a1",
+    "stored_bytes": 2029,
+    "stored_sha256": "64fd0f52eb9710603168e64dba89d29b204cfc53a6883564c6029c38c25db0a1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/process.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/process.json",
+    "source_bytes": 144,
+    "source_sha256": "78a5b39ae7fb382f25523bffe25d642194c532f50c7bade8f2d1235cfa8d0161",
+    "stored_bytes": 144,
+    "stored_sha256": "78a5b39ae7fb382f25523bffe25d642194c532f50c7bade8f2d1235cfa8d0161",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/result.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/result.json.gz",
+    "source_bytes": 25866,
+    "source_sha256": "2a7c78ee5812e67334aabbd003787541ca50571017cc9c3d22b9539cda94a0c1",
+    "stored_bytes": 1919,
+    "stored_sha256": "31c9d77c8f9e65f94d8fb7d0a18ad64b8db6b13fc4444e34a4421cd1f1f1f113",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/run.log",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/run.log",
+    "source_bytes": 17151,
+    "source_sha256": "70fc448431dc86cc9b57f1e9d54b3e3b10e15485006829c645aab6e3f6ef3ff8",
+    "stored_bytes": 17151,
+    "stored_sha256": "70fc448431dc86cc9b57f1e9d54b3e3b10e15485006829c645aab6e3f6ef3ff8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-canonical/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-canonical/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/command.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/command.json",
+    "source_bytes": 9365,
+    "source_sha256": "40ff244f9b060acd42047edf53568d8987b41e694246eac68967cc50f1f213f5",
+    "stored_bytes": 9365,
+    "stored_sha256": "40ff244f9b060acd42047edf53568d8987b41e694246eac68967cc50f1f213f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/environment.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/environment.json",
+    "source_bytes": 2029,
+    "source_sha256": "da7d7905887fee5887f01d6e0c53733f8569bc780f41958858c246ec909ceaa5",
+    "stored_bytes": 2029,
+    "stored_sha256": "da7d7905887fee5887f01d6e0c53733f8569bc780f41958858c246ec909ceaa5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/process.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/process.json",
+    "source_bytes": 144,
+    "source_sha256": "668349749337a17f006111dde6e730222b87e16b3aabbee702125f54adbf0935",
+    "stored_bytes": 144,
+    "stored_sha256": "668349749337a17f006111dde6e730222b87e16b3aabbee702125f54adbf0935",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/result.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/result.json.gz",
+    "source_bytes": 22463,
+    "source_sha256": "f1f2ceb6f830a12d6956788c2ca1a1477a12bea73e4c99a0727591595e03efdf",
+    "stored_bytes": 2278,
+    "stored_sha256": "4e29636ae2cd1d57c7976d3400a81980d3d676ad1f9b7f4415c958fa5c08e82a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/run.log",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/run.log",
+    "source_bytes": 14628,
+    "source_sha256": "a990a426f1f063ec49e2fb642b136a340a5a0cb4dc7c9ff982a2c1f263a74390",
+    "stored_bytes": 14628,
+    "stored_sha256": "a990a426f1f063ec49e2fb642b136a340a5a0cb4dc7c9ff982a2c1f263a74390",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-freelist-consumers/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-freelist-consumers/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/command.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/command.json",
+    "source_bytes": 3575,
+    "source_sha256": "fb118ccffe65f05fc85deb0fd67a1d559b584450abb9c685e99b472afdf9a8a1",
+    "stored_bytes": 3575,
+    "stored_sha256": "fb118ccffe65f05fc85deb0fd67a1d559b584450abb9c685e99b472afdf9a8a1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/environment.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/environment.json",
+    "source_bytes": 2022,
+    "source_sha256": "2bd4e9789158015ec0b7c4a5b9722bfaf7d376b25372caf32b9924d0cd756dc5",
+    "stored_bytes": 2022,
+    "stored_sha256": "2bd4e9789158015ec0b7c4a5b9722bfaf7d376b25372caf32b9924d0cd756dc5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/process.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/process.json",
+    "source_bytes": 144,
+    "source_sha256": "0b1a3a318936e27b094c6ce3c2542ad8877158a3eb2db3afc020f9d72141003f",
+    "stored_bytes": 144,
+    "stored_sha256": "0b1a3a318936e27b094c6ce3c2542ad8877158a3eb2db3afc020f9d72141003f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/result.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/result.json",
+    "source_bytes": 14817,
+    "source_sha256": "164621c474e10ea1fc6a732aeea8c9fddfc41d752a01d0228a3a49d3ef618bf9",
+    "stored_bytes": 14817,
+    "stored_sha256": "164621c474e10ea1fc6a732aeea8c9fddfc41d752a01d0228a3a49d3ef618bf9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/run.log",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/run.log",
+    "source_bytes": 7193,
+    "source_sha256": "caf72625a004984a4c28cb1db49f446a6dcd5ace681dcef10ae458e063b86ca5",
+    "stored_bytes": 7193,
+    "stored_sha256": "caf72625a004984a4c28cb1db49f446a6dcd5ace681dcef10ae458e063b86ca5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/source-after.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/source-after.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/race-mvcc-prices/source-before.json",
+    "path": "native-main-integration/native-ledger-source04/controls/race-mvcc-prices/source-before.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/controls/summary.json",
+    "path": "native-main-integration/native-ledger-source04/controls/summary.json",
+    "source_bytes": 1818,
+    "source_sha256": "df491648df9700e0c09658453a079e10287b04ec59833c839bc7606d700153ea",
+    "stored_bytes": 1818,
+    "stored_sha256": "df491648df9700e0c09658453a079e10287b04ec59833c839bc7606d700153ea",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/failure-diagnosis.json",
+    "path": "native-main-integration/native-ledger-source04/failure-diagnosis.json",
+    "source_bytes": 3923,
+    "source_sha256": "b32d0aba70aecdacc87c27b98c7f460687b8c42f717986964a4be4e9dc446e5a",
+    "stored_bytes": 3923,
+    "stored_sha256": "b32d0aba70aecdacc87c27b98c7f460687b8c42f717986964a4be4e9dc446e5a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/failure-diagnosis.md",
+    "path": "native-main-integration/native-ledger-source04/failure-diagnosis.md",
+    "source_bytes": 1258,
+    "source_sha256": "a24c32ecbb8b4e0b44f21ea3ecfb563a9aa9f0a9cf97ef7fcfd8cebd7ca4bd80",
+    "stored_bytes": 1258,
+    "stored_sha256": "a24c32ecbb8b4e0b44f21ea3ecfb563a9aa9f0a9cf97ef7fcfd8cebd7ca4bd80",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/freeze-source.py",
+    "path": "native-main-integration/native-ledger-source04/freeze-source.py",
+    "source_bytes": 3439,
+    "source_sha256": "311875105b67090f47d56c5b04d8542bf5f29216eb61c7e7c585c8a1e75cdd80",
+    "stored_bytes": 3439,
+    "stored_sha256": "311875105b67090f47d56c5b04d8542bf5f29216eb61c7e7c585c8a1e75cdd80",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/freeze.json",
+    "path": "native-main-integration/native-ledger-source04/freeze.json",
+    "source_bytes": 1419,
+    "source_sha256": "143bb80df11ec32b090a69f55fcb88d37a965d3cbc0c7977bce3d19e973bdfd8",
+    "stored_bytes": 1419,
+    "stored_sha256": "143bb80df11ec32b090a69f55fcb88d37a965d3cbc0c7977bce3d19e973bdfd8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/handoff.json",
+    "path": "native-main-integration/native-ledger-source04/handoff.json",
+    "source_bytes": 5872,
+    "source_sha256": "dce2577db0b186f17b1c967bf583a7d5b0e6c44dd9ae77f617f451dcac64ea0d",
+    "stored_bytes": 5872,
+    "stored_sha256": "dce2577db0b186f17b1c967bf583a7d5b0e6c44dd9ae77f617f451dcac64ea0d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/invariance.json",
+    "path": "native-main-integration/native-ledger-source04/invariance.json",
+    "source_bytes": 1522,
+    "source_sha256": "42624d8971e49e4ab0493edafd30ff0f1c799ca2786d1b46d8a8f8b7b9b3de89",
+    "stored_bytes": 1522,
+    "stored_sha256": "42624d8971e49e4ab0493edafd30ff0f1c799ca2786d1b46d8a8f8b7b9b3de89",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/pricing-retention.md",
+    "path": "native-main-integration/native-ledger-source04/pricing-retention.md",
+    "source_bytes": 5600,
+    "source_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "stored_bytes": 5600,
+    "stored_sha256": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/proposed-build-root01.json",
+    "path": "native-main-integration/native-ledger-source04/proposed-build-root01.json",
+    "source_bytes": 1629,
+    "source_sha256": "6b5c046c666c8aebe2cfbd9e91ef74e7a98e9aa413c186ba4a29c6507977b60c",
+    "stored_bytes": 1629,
+    "stored_sha256": "6b5c046c666c8aebe2cfbd9e91ef74e7a98e9aa413c186ba4a29c6507977b60c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/proposed-commands.json",
+    "path": "native-main-integration/native-ledger-source04/proposed-commands.json.gz",
+    "source_bytes": 40816,
+    "source_sha256": "1fe1de496b0fa66afbfa9c28fa6fcfa8cac035373136801e593de48691d5733b",
+    "stored_bytes": 7479,
+    "stored_sha256": "61ab8f97d654218477b2d239699316c16fcb93298ec4b65515aace18ae958b17",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/runtime-stages/actual-controls/identity.json",
+    "path": "native-main-integration/native-ledger-source04/runtime-stages/actual-controls/identity.json",
+    "source_bytes": 994,
+    "source_sha256": "0782b43cf662a71252fa9a96a89de47321ca18c0fdea329e7d93f32f6c5dc07b",
+    "stored_bytes": 994,
+    "stored_sha256": "0782b43cf662a71252fa9a96a89de47321ca18c0fdea329e7d93f32f6c5dc07b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/runtime-stages/actual-controls/summary.json",
+    "path": "native-main-integration/native-ledger-source04/runtime-stages/actual-controls/summary.json",
+    "source_bytes": 4599,
+    "source_sha256": "74519d79da316888161cacc72ebc3a750a56e27c64f9c1cad4701772b95dcae2",
+    "stored_bytes": 4599,
+    "stored_sha256": "74519d79da316888161cacc72ebc3a750a56e27c64f9c1cad4701772b95dcae2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/runtime-stages/build/identity.json",
+    "path": "native-main-integration/native-ledger-source04/runtime-stages/build/identity.json",
+    "source_bytes": 994,
+    "source_sha256": "a1422254d3803ec4f21f851a44d4080bba23c3bb6e097ab02e2ce688d5af69c8",
+    "stored_bytes": 994,
+    "stored_sha256": "a1422254d3803ec4f21f851a44d4080bba23c3bb6e097ab02e2ce688d5af69c8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/runtime-stages/build/summary.json",
+    "path": "native-main-integration/native-ledger-source04/runtime-stages/build/summary.json",
+    "source_bytes": 1251,
+    "source_sha256": "f5f499b98891840a16a3472b68a3ff32e650a6da5e6464182d86f4800aa4f50e",
+    "stored_bytes": 1251,
+    "stored_sha256": "f5f499b98891840a16a3472b68a3ff32e650a6da5e6464182d86f4800aa4f50e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source-frozen.json",
+    "path": "native-main-integration/native-ledger-source04/source-frozen.json.gz",
+    "source_bytes": 1597728,
+    "source_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "stored_bytes": 466936,
+    "stored_sha256": "364df066d9b8b36adf9849fedb57d78a64c4aee2e258b8d89b9602e27a7ee646",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source-modes.json",
+    "path": "native-main-integration/native-ledger-source04/source-modes.json.gz",
+    "source_bytes": 981532,
+    "source_sha256": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "stored_bytes": 71911,
+    "stored_sha256": "be33fe3f38672d584a69b6f0769ac4473e230554ef1be234ff9d903581a0e0f3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source.delta.patch",
+    "path": "native-main-integration/native-ledger-source04/source.delta.patch.gz",
+    "source_bytes": 203906,
+    "source_sha256": "0069fdb5a01d8023a691c47f30647f29949fac10c4dec0e7a384babb176ed156",
+    "stored_bytes": 47417,
+    "stored_sha256": "59598d653ae30b94104b44f580e55ca901ce0b10cf451d2cadab54a29bf0c95b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source03-evidence.json",
+    "path": "native-main-integration/native-ledger-source04/source03-evidence.json",
+    "source_bytes": 1689,
+    "source_sha256": "37c18419083ba7b7fb2ce76372c5ce79cf3cbf596dc249a90ccff93d16e707d8",
+    "stored_bytes": 1689,
+    "stored_sha256": "37c18419083ba7b7fb2ce76372c5ce79cf3cbf596dc249a90ccff93d16e707d8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source03-to-source04.changed-files.json",
+    "path": "native-main-integration/native-ledger-source04/source03-to-source04.changed-files.json",
+    "source_bytes": 297,
+    "source_sha256": "7699bb229b42f18b736a58a5a3b459d641779223aec4690785308364f9eeb930",
+    "stored_bytes": 297,
+    "stored_sha256": "7699bb229b42f18b736a58a5a3b459d641779223aec4690785308364f9eeb930",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source03-to-source04.changed-source.tar.gz",
+    "path": "native-main-integration/native-ledger-source04/source03-to-source04.changed-source.tar.gz",
+    "source_bytes": 2341,
+    "source_sha256": "e7cd9cb310092131fcb66764acdc084ac7a6eba2bf5397378416ee329ba47b6a",
+    "stored_bytes": 2341,
+    "stored_sha256": "e7cd9cb310092131fcb66764acdc084ac7a6eba2bf5397378416ee329ba47b6a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/source03-to-source04.delta.patch",
+    "path": "native-main-integration/native-ledger-source04/source03-to-source04.delta.patch",
+    "source_bytes": 1666,
+    "source_sha256": "1aaefdc5957b234c2d44c801283fbc3c1bf8aa8a31890adeaa1951d45ad80293",
+    "stored_bytes": 1666,
+    "stored_sha256": "1aaefdc5957b234c2d44c801283fbc3c1bf8aa8a31890adeaa1951d45ad80293",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source04/test-inventory.json",
+    "path": "native-main-integration/native-ledger-source04/test-inventory.json.gz",
+    "source_bytes": 23902,
+    "source_sha256": "01174b04e158b4bd16fd97e099cd673290dc8edb2e799b7af7229706fe8111ca",
+    "stored_bytes": 6128,
+    "stored_sha256": "8427cc564740ed90d7dace388f4296e67f24885f94ea0b1685c0c13cfbf7ad92",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-ledger-source02.py",
+    "path": "native-main-integration/verify-ledger-source02.py",
+    "source_bytes": 5400,
+    "source_sha256": "08b9db914524dedfbed7a099a5751a328c2f768813a9d1fbbe5d4aff1a7b6f07",
+    "stored_bytes": 5400,
+    "stored_sha256": "08b9db914524dedfbed7a099a5751a328c2f768813a9d1fbbe5d4aff1a7b6f07",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-ledger-source03-focused.py",
+    "path": "native-main-integration/verify-ledger-source03-focused.py",
+    "source_bytes": 3839,
+    "source_sha256": "d56ff7f88e7c2ff6181b14f61fecadf2f9ae7264552dd461448b547d87fa2eef",
+    "stored_bytes": 3839,
+    "stored_sha256": "d56ff7f88e7c2ff6181b14f61fecadf2f9ae7264552dd461448b547d87fa2eef",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-ledger-source04-focused.py",
+    "path": "native-main-integration/verify-ledger-source04-focused.py",
+    "source_bytes": 3839,
+    "source_sha256": "63b772bac2d22e8f27780dc7b8fb4a0ca7e2f46d9bcc66a1cd575dbe17e4f42d",
+    "stored_bytes": 3839,
+    "stored_sha256": "63b772bac2d22e8f27780dc7b8fb4a0ca7e2f46d9bcc66a1cd575dbe17e4f42d",
+    "encoding": "identity"
+  }
+]

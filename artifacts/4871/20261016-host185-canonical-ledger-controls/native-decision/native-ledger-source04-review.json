@@ -1,0 +1,71 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Source04 one-file fixture repair and five focused-command readiness only; not runtime or product acceptance",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model; internal independent route used.",
+  "source_files_independently_archive_verified": 10444,
+  "source03_comparison": {
+    "modified": [
+      "TreeDB/db/primary_construction_ledger_v6_test.go"
+    ],
+    "added": [],
+    "deleted": [],
+    "unchanged": 10443,
+    "all_modes_equal": true
+  },
+  "bindings": {
+    "source-frozen.json": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+    "source-frozen.tar.gz": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+    "source-modes.json": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "source03-to-source04.delta.patch": "1aaefdc5957b234c2d44c801283fbc3c1bf8aa8a31890adeaa1951d45ad80293",
+    "proposed-commands.json": "1fe1de496b0fa66afbfa9c28fa6fcfa8cac035373136801e593de48691d5733b",
+    "handoff.json": "dce2577db0b186f17b1c967bf583a7d5b0e6c44dd9ae77f617f451dcac64ea0d",
+    "README.md": "f33f779b0c580f85f83686960ab5396966891c3a437c10d446bd2478707a1aa8"
+  },
+  "changed_test_sha256": "bc8454b00bf5de02691b16bd5e41de55bd3e9caa4243c2b7673050865a4c7975",
+  "unchanged_helper_sha256": "26512332a0b1a5061c44eb28d219023e611c9e83f55630d067bc3537103d8672",
+  "findings": [],
+  "resolved_finding": "LC3-PTR: real existing value-log producer replaces invalid inline SetSync setup; all post-capture custody assertions unchanged.",
+  "semantic_checks": [
+    "Full archived modified file and complete incremental diff inspected.",
+    "Existing helper writes two real512B records, registers/refreshed source value-log Set, publishes two original SetPointer/WriteSync batches, closes DB and checks current refcount cache count2.",
+    "Plain reopened options match established helper; both selected roots retain actual persistent-value dependencies.",
+    "Non-nil rebuilt Sets remain mandatory; all constructor selection, late-drain, runtime/current/owner custody, sticky failure and repeated Close assertions remain byte-identical after capture.",
+    "Original producer/captured/root/runtime last-alias cleanup preserved; no fabricated Set or manual file deletion.",
+    "All production, pricing, protected public fixtures and benchmark inputs identical to source03."
+  ],
+  "proposal_checks": {
+    "focused_commands": 5,
+    "normal_tops_children": [
+      18,
+      10
+    ],
+    "race_tops_children": [
+      101,
+      178
+    ],
+    "historical_normal_reuse_tops_children": [
+      83,
+      168
+    ],
+    "actual_separate_commands": 2,
+    "actual_required_children_per_command": 6,
+    "argv_run_names_counts_child_oracles_and_all_non_TMP_env_equal_source03": true,
+    "fresh_TMPDIR_prefix": "native-ledger-source04",
+    "test_file_bindings_match_manifest": true,
+    "all_handoff_artifact_hashes_verified": true,
+    "runtime_requires_root_selection": true
+  },
+  "reused_coverage": "Previous production/pricing/source readiness carries only by exact file identity; prior source03 raw failure and historical review remain immutable. Historical normal83/168 are not source04 reruns.",
+  "limitations": [
+    "Source-only readiness; source04 tests not executed by reviewer.",
+    "Prior source03 four-arm setup failure reached no capture/constructor stage; prior incorrect reviewer advice explicitly corrected in separate diagnosis.",
+    "Fresh focused normal/race and separately selected actual controls pending.",
+    "No numeric allowance, Q32 fit, native publication qualification, whole graph, performance or merge acceptance."
+  ],
+  "lease": "RELEASED after report"
+}

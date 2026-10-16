@@ -1,0 +1,11 @@
+--- run-ledger-controls-source02.py
++++ run-ledger-controls-source03.py
+@@ -8,7 +8,7 @@
+ def utc():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+ assert B.is_relative_to(D/'native-main-integration') and grantpath.is_relative_to(D/'native-decision')
+ assert sha(grantpath)==args.selection_sha256
+-selection=json.loads(grantpath.read_text());assert selection['scope']=='focused-canonical-ledger-source02' and selection['actual_native_driver_authorized'] is False
++selection=json.loads(grantpath.read_text());assert selection['scope']=='focused-canonical-ledger-source03' and selection['actual_native_driver_authorized'] is False
+ assert selection['runner_sha256']==sha(Path(__file__))
+ assert sha(Path(selection['independent_review']))==selection['independent_review_sha256']
+ assert sha(Path(selection['source_verify']))==selection['source_verify_sha256']

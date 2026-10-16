@@ -1,0 +1,128 @@
+{
+  "Go_compiler_test_runtime_executed": false,
+  "anchors": {
+    "TreeDB/freelist/allocator_preparation_work_v6.go": {
+      "anchors": {
+        "if s.ledger != nil": [
+          652
+        ],
+        "s.allocator, s.base, s.root, s.ledger, s.highWater =": [
+          215,
+          269
+        ]
+      },
+      "source01_sha256": "6c077d3fb4a7f5051064d1a8504c6414e7bde42d8fa32595fa65840c8a237377",
+      "source02_sha256": "6c077d3fb4a7f5051064d1a8504c6414e7bde42d8fa32595fa65840c8a237377"
+    },
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go": {
+      "anchors": {
+        "func prepareAtomicPrivateCandidateV6": [
+          153
+        ],
+        "id, sink := candidateIDFromString(name)": [
+          164
+        ],
+        "private candidate did not complete through": [
+          181
+        ]
+      },
+      "source01_sha256": "c5790699963936a534aa9f11bfbce0a57ca99b94db5e6c80ad172666038b2906",
+      "source02_sha256": "f948139f3c649ba8c046e68c72cbc1c9d37ac3315adb919bca4e591413ae114e"
+    },
+    "TreeDB/freelist/generation_v1_materialize_work.go": {
+      "anchors": {
+        "sink.pageIDs != nil": [
+          53
+        ]
+      },
+      "source01_sha256": "81eeb0407551b194ed29e6f7be60ea3156709109bf74d9a8e191782715a106f3",
+      "source02_sha256": "81eeb0407551b194ed29e6f7be60ea3156709109bf74d9a8e191782715a106f3"
+    },
+    "TreeDB/freelist/generation_v1_reservation.go": {
+      "anchors": {
+        "count = statePageCount + recordPageCount + 1": [
+          429
+        ]
+      },
+      "source01_sha256": "a5c28c641653bd06145b64a4d9a28555414fba1d7ca92757f54e76430a1dd3fd",
+      "source02_sha256": "a5c28c641653bd06145b64a4d9a28555414fba1d7ca92757f54e76430a1dd3fd"
+    },
+    "TreeDB/freelist/private_control_capacity_v6_test.go": {
+      "anchors": {
+        "func privateCancelBoundTestV6": [
+          340
+        ],
+        "originalLedger, originalTxn :=": [
+          448
+        ],
+        "partial capture cancellation replaced": [
+          494
+        ],
+        "uncaptured :=": [
+          348
+        ]
+      },
+      "source01_sha256": "520e5ef0fc06f32f8431da6f2323f9fb86998405b6931e1c39d38a6b3728d2e2",
+      "source02_sha256": "46b8bbcff7db6595374679fbd3c6d708b61b10dd2de6337fefde160a5fbfd456"
+    },
+    "TreeDB/freelist/reservation_canonical_storage_v6_test.go": {
+      "anchors": {
+        "Count: uint32(burnedPages)": [
+          207
+        ],
+        "alternating peer lost original pinned tombstone": [
+          262
+        ],
+        "burnedPages <= 2": [
+          201
+        ],
+        "start, burnedPages, e :=": [
+          185
+        ]
+      },
+      "source01_sha256": "3403cdb0d679d6e14d6d7ad7c6eb4c36c5d99bf89899d891a2e970bb458f9f60",
+      "source02_sha256": "f906d820cc46c1de481c7c467798f1e686f1e70e9031d5f1dad65ef86cee8458"
+    },
+    "TreeDB/freelist/reservation_retirement_work_v6.go": {
+      "anchors": {
+        "burned.tailCount <= coverage.count-": [
+          322
+        ],
+        "next.scanPins++": [
+          239
+        ],
+        "old.scanPins--": [
+          243
+        ]
+      },
+      "source01_sha256": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c",
+      "source02_sha256": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c"
+    }
+  },
+  "caps_changed": false,
+  "causes": [
+    {
+      "group": "atomic adoption fixtures",
+      "invariants": "Original exact/current/below/Q32 work vectors and transaction/ledger no-effect/rollback oracles unchanged.",
+      "repair": "Use SAME empty CandidatePageSinkV1 with original admitted s.sinkPrivate; assert completed phase9/prepared and exact sink-set owner/identity before preparing activation. Ordinary constructor siblings keep their original map-backed sink.",
+      "source01_mechanism": "Shared helper bound native retained Owner but passed NewCandidatePageSinkV1(), whose ordinary pageIDs map violates the explicit private materializer nil-map/typed-set contract. ErrGenerationFormat is correct constructor rejection before activation."
+    },
+    {
+      "group": "partial-clone cuts available0,1,2",
+      "invariants": "All33 literal32 capture cuts retained; no prebinding a fake capture or dropping charge/custody assertions.",
+      "repair": "Caller captures exact original allocator ledger/transaction before Step and passes original ledger to cancellation helper. For uncaptured state prove no private header/vectors/maps/clone/materializer/claim/refund obligation before and after real Cancel, and exact Owner.Bytes==originalLedger.storageCharge. After Cancel verify unchanged original allocator ledger/transaction; final canonical Close still must refund zero.",
+      "source01_mechanism": "Step has an outer binding row, capture allocation row, and AddPending row. These three cuts refuse before successful header allocation and therefore before s.ledger/s.allocator/s.private are set. Original allocator ledger remains owned and charged. Helper incorrectly demanded s.ledger != nil."
+    },
+    {
+      "group": "alternating pinned burn",
+      "invariants": "Never shrink production burn coverage or alter pin traversal/reclamation/physical claims.",
+      "repair": "Capture exact original returned count, validate format uint32 conversion and full retained tail identity/count/last page. Use that exact full range in both original committed receipts. Keep3-record alternating progress, pin/charge/monotonic stop/late-burn/refund/replay assertions and additionally verify final last-page release.",
+      "source01_mechanism": "reserveTail(burn,100,2) returns4 pages:2 state+1 chain+1 header. Original test discarded returned count and supplied Count2 abandoned coverage. Full-tail containment correctly refused clearing the4-page burn; both scan pins correctly remained."
+    }
+  ],
+  "production_change": false,
+  "source01_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+  "source02_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "source_only_uncertainty": "No source02 test body executed. Corrected fixture may expose later genuine failures; first-failure stop remains required.",
+  "status": "SOURCE02_FIXTURE_ONLY_REPAIR_FROZEN_UNEXECUTED"
+}

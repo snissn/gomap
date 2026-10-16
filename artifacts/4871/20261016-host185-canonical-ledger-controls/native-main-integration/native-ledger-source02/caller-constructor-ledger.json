@@ -1,0 +1,327 @@
+{
+  "exhaustive_connected_api_source_occurrences": [
+    {
+      "line": 3950,
+      "path": "TreeDB/db/db.go",
+      "source": "if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {",
+      "source_sha256": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354"
+    },
+    {
+      "line": 194,
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "source": "cleanupErr := allocator.DrainConstructionLedgerV6()",
+      "source_sha256": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd"
+    },
+    {
+      "line": 205,
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "source": "if e = allocator.EnableOwnedCOWV6(base, a.MetadataOwner()); e != nil {",
+      "source_sha256": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd"
+    },
+    {
+      "line": 227,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "source": "if e = idx.allocator.EnableOwnedCOWV6(selected.Freelist, a.MetadataOwner()); e != nil {",
+      "source_sha256": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f"
+    },
+    {
+      "line": 341,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "source": "if e = idx.allocator.EnableOwnedCOWV6(base, a.MetadataOwner()); e != nil {",
+      "source_sha256": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f"
+    },
+    {
+      "line": 358,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "source": "err = errors.Join(err, idx.allocator.CloseReservationLedgerV6())",
+      "source_sha256": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f"
+    },
+    {
+      "line": 516,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "source": "if e = idx.allocator.PublishCOWCandidateV1(cow, cap); e != nil {",
+      "source_sha256": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f"
+    },
+    {
+      "line": 907,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "source": "e = seal.idx.allocator.PublishActivatedCOWPrefixDeferredV6(seal.prefix, reuseCapability, &seal.ledgerRetirement)",
+      "source_sha256": "60b767eff6c22aac8c6d61d794fdb2ac3de84e87f9e8d755001dd86bb14bad7f"
+    },
+    {
+      "line": 2328,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "source": "if err := candidate.idx.allocator.PublishCOWCandidateV1(candidate.prepared, candidate.capability); err != nil {",
+      "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30"
+    },
+    {
+      "line": 2511,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "source": "if err := idx.allocator.EnableCOWV1(base, ledger); err != nil {",
+      "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30"
+    },
+    {
+      "line": 2583,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "source": "if err := idx.allocator.PublishCOWCandidateV1(prepared, capability); err != nil {",
+      "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30"
+    },
+    {
+      "line": 2645,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "source": "if err := allocator.EnableCOWV1(base, ledger); err != nil {",
+      "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30"
+    },
+    {
+      "line": 2743,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "source": "if err := allocator.EnableCOWV1(current.Freelist, freelist.NewReservationLedger()); err != nil {",
+      "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30"
+    },
+    {
+      "line": 153,
+      "path": "TreeDB/db/index_gen.go",
+      "source": "if g.closeErr = g.primaryConstructionAllocator.DrainConstructionLedgerV6(); g.closeErr != nil {",
+      "source_sha256": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15"
+    },
+    {
+      "line": 189,
+      "path": "TreeDB/db/index_gen.go",
+      "source": "if g.closeErr = g.allocator.CloseReservationLedgerV6(); g.closeErr != nil {",
+      "source_sha256": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15"
+    },
+    {
+      "line": 85,
+      "path": "TreeDB/db/primary_authority_scope_v6.go",
+      "source": "ok, err := seal.idx.allocator.BeginCOWPublicationScopeV6(&s.allocator, seal.prefix, &seal.ledgerRetirement, w)",
+      "source_sha256": "03fc589b020f08f375d7fb18137d4dcf50235ad8cf783b542d92ba871c799526"
+    },
+    {
+      "line": 273,
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go",
+      "source": "if e = idx.allocator.EnableOwnedCOWV6(selected.Freelist, a.MetadataOwner()); e != nil {",
+      "source_sha256": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5"
+    },
+    {
+      "line": 92,
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "source": "if e = idx.allocator.PublishCOWCandidateV1(cow, cap); e != nil {",
+      "source_sha256": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106"
+    },
+    {
+      "line": 275,
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "source": "ledgerErr = s.ledgerRetirement.ContinueOriginalV6()",
+      "source_sha256": "8920df6e6dffa38f96248a9a45c3b9f09f0ebf848579922739acca54bfeb1295"
+    },
+    {
+      "line": 278,
+      "path": "TreeDB/db/primary_seal_release_work_v6.go",
+      "source": "ledgerReady, ledgerErr = s.ledgerRetirement.ContinueWithWorkV6(w)",
+      "source_sha256": "8920df6e6dffa38f96248a9a45c3b9f09f0ebf848579922739acca54bfeb1295"
+    },
+    {
+      "line": 1889,
+      "path": "TreeDB/db/root_publication_activation.go",
+      "source": "if err := seal.idx.allocator.PublishActivatedCOWPrefixDeferredV6(seal.prefix, nextCapability, &seal.ledgerRetirement); err != nil {",
+      "source_sha256": "525bcaa5f10dc7ba54032f22d27077cb3c6a0092480b1546867b4b41f7b1fe37"
+    },
+    {
+      "line": 1534,
+      "path": "TreeDB/db/vacuum_online.go",
+      "source": "enableErr = newAlloc.EnableOwnedCOWV6(selected.Freelist, replacementGen.primary.MetadataOwner())",
+      "source_sha256": "b9f685fe9740b048e904a00eabea0160a351391ad82ca917d8f00176cbe2219f"
+    },
+    {
+      "line": 1536,
+      "path": "TreeDB/db/vacuum_online.go",
+      "source": "enableErr = newAlloc.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger())",
+      "source_sha256": "b9f685fe9740b048e904a00eabea0160a351391ad82ca917d8f00176cbe2219f"
+    },
+    {
+      "line": 209,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *ReservationLedger) error {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 502,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "func (a *Allocator) PublishActivatedCOWPrefixV1(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 517,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "func (a *Allocator) PublishActivatedCOWPrefixDeferredV6(prefix []*PreparedCOWCandidateV1, next ReuseCapability, child *COWLedgerRetirementWorkV6) error {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 533,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "if err := child.ContinueOriginalV6(); err != nil {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 693,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 723,
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "source": "if err := retirement.ContinueOriginalV6(); err != nil {",
+      "source_sha256": "91e21e484ad798341f60779d5ded3f31522e45de2dc5acfe46adcea06eeffb35"
+    },
+    {
+      "line": 20,
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "source": "func (a *Allocator) PublishActivatedCOWPrefixWithWorkV6(prefix []*PreparedCOWCandidateV1, next ReuseCapability, child *COWLedgerRetirementWorkV6, w *iterator.OrdinalScanWork) (bool, error) {",
+      "source_sha256": "1a6855f477564ba08bc996613abbbd8a47c895e86abcd2ad6c74d449284b69d0"
+    },
+    {
+      "line": 22,
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "source": "ready, err := a.BeginCOWPublicationScopeV6(&scope, prefix, child, w)",
+      "source_sha256": "1a6855f477564ba08bc996613abbbd8a47c895e86abcd2ad6c74d449284b69d0"
+    },
+    {
+      "line": 30,
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "source": "func (a *Allocator) BeginCOWPublicationScopeV6(scope *COWPublicationScopeV6, prefix []*PreparedCOWCandidateV1, child *COWLedgerRetirementWorkV6, w *iterator.OrdinalScanWork) (ready bool, err error) {",
+      "source_sha256": "1a6855f477564ba08bc996613abbbd8a47c895e86abcd2ad6c74d449284b69d0"
+    },
+    {
+      "line": 8,
+      "path": "TreeDB/freelist/reservation_close_v6.go",
+      "source": "func (a *Allocator) EnableOwnedCOWV6(generation *FreelistGenerationV1, owner *retainedalloc.Owner) error {",
+      "source_sha256": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33"
+    },
+    {
+      "line": 13,
+      "path": "TreeDB/freelist/reservation_close_v6.go",
+      "source": "if err = a.EnableCOWV1(generation, l); err != nil {",
+      "source_sha256": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33"
+    },
+    {
+      "line": 28,
+      "path": "TreeDB/freelist/reservation_close_v6.go",
+      "source": "func (a *Allocator) CloseReservationLedgerV6() error {",
+      "source_sha256": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33"
+    },
+    {
+      "line": 98,
+      "path": "TreeDB/freelist/reservation_close_v6.go",
+      "source": "func (a *Allocator) DrainConstructionLedgerV6() error {",
+      "source_sha256": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33"
+    },
+    {
+      "line": 121,
+      "path": "TreeDB/freelist/reservation_close_v6.go",
+      "source": "return a.CloseReservationLedgerV6()",
+      "source_sha256": "f7180524ad94620692a78408450095c4bc3f78998da10aaf2beecb7f3158ba33"
+    },
+    {
+      "line": 69,
+      "path": "TreeDB/freelist/reservation_retirement_work_v6.go",
+      "source": "func (s *COWLedgerRetirementWorkV6) ContinueWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {",
+      "source_sha256": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c"
+    },
+    {
+      "line": 78,
+      "path": "TreeDB/freelist/reservation_retirement_work_v6.go",
+      "source": "func (s *COWLedgerRetirementWorkV6) ContinueOriginalV6() error {",
+      "source_sha256": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c"
+    },
+    {
+      "line": 397,
+      "path": "TreeDB/freelist/reservation_retirement_work_v6.go",
+      "source": "func (s *COWLedgerRetirementWorkV6) continueSingleOriginalV6() error { return s.ContinueOriginalV6() }",
+      "source_sha256": "f0dcb17c095fbb0a0132f8727ee36872c15cf92c6b7c7f05ea2357e349e2865c"
+    },
+    {
+      "line": 54,
+      "path": "TreeDB/freelist/reservation_rollback_work_v6.go",
+      "source": "err := s.ContinueOriginalV6()",
+      "source_sha256": "b0bd0fcdce884771e07ac286352a963e2d9f043f23175699b92b0fb00af311f7"
+    },
+    {
+      "line": 57,
+      "path": "TreeDB/freelist/reservation_rollback_work_v6.go",
+      "source": "return s.ContinueWithWorkV6(w)",
+      "source_sha256": "b0bd0fcdce884771e07ac286352a963e2d9f043f23175699b92b0fb00af311f7"
+    }
+  ],
+  "lock_order": "original publication/allocator -> ledger -> same metadata Owner; refund typed RemovalWork outside ledger lock",
+  "native_ordinary_distinction": "Explicit original authority/receipt origin; generic work-bearing ordinary materialization remains ordinary-compatible.",
+  "production_byte_equivalence_to_source01": true,
+  "routes": [
+    {
+      "disposition": "Owned before Enable/claim; init error captures exact original ordinary prepared producer before effects; drain before original physical owner release.",
+      "paths": [
+        "TreeDB/db/durable_primary_runtime_v5.go",
+        "TreeDB/db/primary_capsule_recovery_v6.go"
+      ],
+      "role": "PRIMARY startup/recovery"
+    },
+    {
+      "disposition": "Retained in original generation construction field before Enable/Prepare; final drain before successful runtime/selection handoff; error runtime=nil and original unpublishedPrimary retains exact runtime/Sets; failed Close keeps physical owner edge.",
+      "paths": [
+        "TreeDB/db/durable_primary_rebuild_v5.go",
+        "TreeDB/db/index_gen.go"
+      ],
+      "role": "Rebuild temporary allocator"
+    },
+    {
+      "disposition": "PRIMARY uses same actual arena Owner; non-PRIMARY stays legacy. Replacement generation owns distinct allocator ledger even when PRIMARY Owner is shared.",
+      "paths": [
+        "TreeDB/db/vacuum_online.go"
+      ],
+      "role": "Vacuum replacement"
+    },
+    {
+      "disposition": "Three legacy allocator enables and reset preserve original unowned ordinary behavior; explicit native authority rejects unowned before effects.",
+      "paths": [
+        "TreeDB/db/durable_root_runtime.go",
+        "TreeDB/db/db.go"
+      ],
+      "role": "Legacy non-PRIMARY/reset"
+    },
+    {
+      "disposition": "Existing seal inline child and exact independently admitted prefix validated under original allocator/ledger locks; child survives actual cut.",
+      "paths": [
+        "TreeDB/db/primary_authority_scope_v6.go",
+        "TreeDB/freelist/allocator_publication_work_v6.go"
+      ],
+      "role": "Native cut"
+    },
+    {
+      "disposition": "Deferred original seal child on real DB routes; generic ordinary adapter keeps allocator prefix backing until same synchronous child completes.",
+      "paths": [
+        "TreeDB/db/root_publication_activation.go",
+        "TreeDB/db/durable_primary_runtime_v5.go",
+        "TreeDB/freelist/allocator_cow.go"
+      ],
+      "role": "Ordinary shared cut"
+    },
+    {
+      "disposition": "Native explicit work child first; ordinary synchronous same child only for original ordinary receipt. Finish precedes prefix/resources/frame/ACK and private published terminal.",
+      "paths": [
+        "TreeDB/db/primary_seal_release_work_v6.go"
+      ],
+      "role": "Receipt Finish"
+    },
+    {
+      "disposition": "Same commit and retirement; ordinary synchronous policy, no new native fallback.",
+      "paths": [
+        "TreeDB/db/primary_capsule_runtime_v6.go",
+        "TreeDB/db/durable_primary_runtime_v5.go",
+        "TreeDB/db/durable_root_runtime.go",
+        "TreeDB/freelist/generation_v1_reservation.go"
+      ],
+      "role": "Direct canonical ordinary consumers"
+    }
+  ],
+  "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d"
+}

@@ -1,0 +1,194 @@
+=== RUN   TestAllocatorCOWPrepareProfileCountsLiveTransaction
+--- PASS: TestAllocatorCOWPrepareProfileCountsLiveTransaction (0.00s)
+=== RUN   TestAllocatorCOWPrepareLimitsRejectBeforeClone
+--- PASS: TestAllocatorCOWPrepareLimitsRejectBeforeClone (0.00s)
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_owners
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_candidates
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_burned_tail_ranges
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_highest_reserved_end
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/retired_pages
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/allocated_pages
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/abandoned_append_extents
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/changed_chunks
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/replaced_metadata_pages
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/base_reservation_extents
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/high_water
+=== RUN   TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/base_metadata_pages
+--- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_owners (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_candidates (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_burned_tail_ranges (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/ledger_highest_reserved_end (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/retired_pages (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/allocated_pages (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/abandoned_append_extents (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/changed_chunks (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/replaced_metadata_pages (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/base_reservation_extents (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/high_water (0.00s)
+    --- PASS: TestCOWPrepareProfileLimitsCoverEveryCopiedCollection/base_metadata_pages (0.00s)
+=== RUN   TestAllocatorFailedCOWCandidateWakesBlockedAllocation
+--- PASS: TestAllocatorFailedCOWCandidateWakesBlockedAllocation (0.00s)
+=== RUN   TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages
+--- PASS: TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages (0.00s)
+=== RUN   TestAllocatorCOWCandidateMustBeMaterializedBeforePublish
+--- PASS: TestAllocatorCOWCandidateMustBeMaterializedBeforePublish (0.00s)
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/extra
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/missing_first
+=== RUN   TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/reordered
+--- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/extra (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/missing_first (0.00s)
+    --- PASS: TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication/reordered (0.00s)
+=== RUN   TestAllocatorActivatedCOWPrefixRejectsUntrackedPhysicalTail
+--- PASS: TestAllocatorActivatedCOWPrefixRejectsUntrackedPhysicalTail (0.00s)
+=== RUN   TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation
+--- PASS: TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation (0.00s)
+=== RUN   TestReservationLedgerPublishBatchValidatesBeforeMutation
+--- PASS: TestReservationLedgerPublishBatchValidatesBeforeMutation (0.00s)
+=== RUN   TestAllocatorCOWCandidateRetirementsRollbackBeforePublish
+=== RUN   TestAllocatorCOWCandidateRetirementsRollbackBeforePublish/prepare_failure
+=== RUN   TestAllocatorCOWCandidateRetirementsRollbackBeforePublish/caller_abort
+--- PASS: TestAllocatorCOWCandidateRetirementsRollbackBeforePublish (0.00s)
+    --- PASS: TestAllocatorCOWCandidateRetirementsRollbackBeforePublish/prepare_failure (0.00s)
+    --- PASS: TestAllocatorCOWCandidateRetirementsRollbackBeforePublish/caller_abort (0.00s)
+=== RUN   TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles
+--- PASS: TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles (0.00s)
+=== RUN   TestAllocatorCOWPreferAppendBypassesReusablePages
+--- PASS: TestAllocatorCOWPreferAppendBypassesReusablePages (0.00s)
+=== RUN   TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater
+--- PASS: TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater (0.00s)
+=== RUN   TestAllocatorCOWAllocAppendSkipsActivatedVirtualTail
+--- PASS: TestAllocatorCOWAllocAppendSkipsActivatedVirtualTail (0.00s)
+=== RUN   TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances
+--- PASS: TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances (0.00s)
+=== RUN   TestAllocatorCOWCandidateEncodesSealedReuseCapability
+--- PASS: TestAllocatorCOWCandidateEncodesSealedReuseCapability (0.00s)
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/tail
+    generation_v1_materialize_work_test.go:83: whole constructor reuse=false calls=55 pages=6
+=== RUN   TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/reuse
+    generation_v1_materialize_work_test.go:83: whole constructor reuse=true calls=30 pages=3
+--- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1 (0.00s)
+    --- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/tail (0.00s)
+    --- PASS: TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1/reuse (0.00s)
+=== RUN   TestCanonicalMaterializationRefusalPreservesOriginalClaimV1
+--- PASS: TestCanonicalMaterializationRefusalPreservesOriginalClaimV1 (0.00s)
+=== RUN   TestMetadataReservationMaskBoundaries4627
+--- PASS: TestMetadataReservationMaskBoundaries4627 (0.00s)
+=== RUN   TestMetadataChunkRunMatchesReservationOracle4627
+--- PASS: TestMetadataChunkRunMatchesReservationOracle4627 (0.00s)
+=== RUN   TestMetadataFreshPathDoesNotDetachTwice4627
+--- PASS: TestMetadataFreshPathDoesNotDetachTwice4627 (0.00s)
+=== RUN   TestMetadataLosingClaimPreservesTransaction4627
+--- PASS: TestMetadataLosingClaimPreservesTransaction4627 (0.00s)
+=== RUN   TestMetadataImpossibleRunDoesNotAllocate4627
+--- PASS: TestMetadataImpossibleRunDoesNotAllocate4627 (0.00s)
+=== RUN   TestMetadataCursorConcurrentClaims4627
+--- PASS: TestMetadataCursorConcurrentClaims4627 (0.00s)
+=== RUN   TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627
+--- PASS: TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627 (0.00s)
+=== RUN   TestMetadataCursorCompletionPolicy4627
+--- PASS: TestMetadataCursorCompletionPolicy4627 (0.00s)
+=== RUN   TestMetadataChunkSearchWrapAndBound4627
+=== RUN   TestMetadataChunkSearchWrapAndBound4627/gap
+=== RUN   TestMetadataChunkSearchWrapAndBound4627/one
+=== RUN   TestMetadataChunkSearchWrapAndBound4627/after
+=== RUN   TestMetadataChunkSearchWrapAndBound4627/limit
+=== RUN   TestMetadataChunkSearchWrapAndBound4627/sentinel
+--- PASS: TestMetadataChunkSearchWrapAndBound4627 (0.00s)
+    --- PASS: TestMetadataChunkSearchWrapAndBound4627/gap (0.00s)
+    --- PASS: TestMetadataChunkSearchWrapAndBound4627/one (0.00s)
+    --- PASS: TestMetadataChunkSearchWrapAndBound4627/after (0.00s)
+    --- PASS: TestMetadataChunkSearchWrapAndBound4627/limit (0.00s)
+    --- PASS: TestMetadataChunkSearchWrapAndBound4627/sentinel (0.00s)
+=== RUN   TestMetadataAuxiliarySharesCursor4627
+--- PASS: TestMetadataAuxiliarySharesCursor4627 (0.00s)
+=== RUN   TestMetadataSearchMakesBoundedProgress4627
+--- PASS: TestMetadataSearchMakesBoundedProgress4627 (0.00s)
+=== RUN   TestMetadataEmissionPreservesSharedDirtyBranches4627
+=== RUN   TestMetadataEmissionPreservesSharedDirtyBranches4627/success
+=== RUN   TestMetadataEmissionPreservesSharedDirtyBranches4627/partial-write-failure
+--- PASS: TestMetadataEmissionPreservesSharedDirtyBranches4627 (0.00s)
+    --- PASS: TestMetadataEmissionPreservesSharedDirtyBranches4627/success (0.00s)
+    --- PASS: TestMetadataEmissionPreservesSharedDirtyBranches4627/partial-write-failure (0.00s)
+=== RUN   TestFreelistMetadataReuseAfterPhysicalTailFailure4627
+=== RUN   TestFreelistMetadataReuseAfterPhysicalTailFailure4627/contiguous
+    generation_v1_metadata_reuse_test.go:149: physical pages=513 logical high-water=518 header=517 burned intervals=1
+=== RUN   TestFreelistMetadataReuseAfterPhysicalTailFailure4627/abandoned-earlier-reservation
+    generation_v1_metadata_reuse_test.go:149: physical pages=615 logical high-water=620 header=619 burned intervals=1
+--- PASS: TestFreelistMetadataReuseAfterPhysicalTailFailure4627 (0.01s)
+    --- PASS: TestFreelistMetadataReuseAfterPhysicalTailFailure4627/contiguous (0.01s)
+    --- PASS: TestFreelistMetadataReuseAfterPhysicalTailFailure4627/abandoned-earlier-reservation (0.01s)
+=== RUN   TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627
+    generation_v1_metadata_reuse_test.go:282: cycle=0 high_water=520 safe_free=506 metadata_pages=6
+    generation_v1_metadata_reuse_test.go:282: cycle=1 high_water=520 safe_free=507 metadata_pages=5
+    generation_v1_metadata_reuse_test.go:282: cycle=2 high_water=520 safe_free=508 metadata_pages=4
+    generation_v1_metadata_reuse_test.go:282: cycle=3 high_water=520 safe_free=508 metadata_pages=4
+    generation_v1_metadata_reuse_test.go:282: cycle=4 high_water=520 safe_free=508 metadata_pages=4
+    generation_v1_metadata_reuse_test.go:282: cycle=5 high_water=520 safe_free=508 metadata_pages=4
+    generation_v1_metadata_reuse_test.go:282: cycle=6 high_water=520 safe_free=508 metadata_pages=4
+    generation_v1_metadata_reuse_test.go:282: cycle=7 high_water=520 safe_free=508 metadata_pages=4
+--- PASS: TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627 (0.00s)
+=== RUN   TestFreelistMetadataReusePlacement4627
+=== RUN   TestFreelistMetadataReusePlacement4627/full_chunk
+=== RUN   TestFreelistMetadataReusePlacement4627/aux_prefix
+=== RUN   TestFreelistMetadataReusePlacement4627/aux_consumes_first_chunk
+=== RUN   TestFreelistMetadataReusePlacement4627/skip_fragmented_chunks
+=== RUN   TestFreelistMetadataReusePlacement4627/bounded_starvation
+--- PASS: TestFreelistMetadataReusePlacement4627 (0.00s)
+    --- PASS: TestFreelistMetadataReusePlacement4627/full_chunk (0.00s)
+    --- PASS: TestFreelistMetadataReusePlacement4627/aux_prefix (0.00s)
+    --- PASS: TestFreelistMetadataReusePlacement4627/aux_consumes_first_chunk (0.00s)
+    --- PASS: TestFreelistMetadataReusePlacement4627/skip_fragmented_chunks (0.00s)
+    --- PASS: TestFreelistMetadataReusePlacement4627/bounded_starvation (0.00s)
+=== RUN   TestFreelistMetadataReuseArbitrarySinkRollback4627
+--- PASS: TestFreelistMetadataReuseArbitrarySinkRollback4627 (0.00s)
+=== RUN   TestFreelistMetadataReuseMaximumHighWater4627
+--- PASS: TestFreelistMetadataReuseMaximumHighWater4627 (0.00s)
+=== RUN   TestFreelistMetadataReuseAtomicClaim4627
+--- PASS: TestFreelistMetadataReuseAtomicClaim4627 (0.00s)
+=== RUN   TestFreelistMetadataReuseStagedAllocatorRollback4627
+--- PASS: TestFreelistMetadataReuseStagedAllocatorRollback4627 (0.00s)
+=== RUN   TestFreelistMetadataReuseAuxiliaryClaimConflict4627
+--- PASS: TestFreelistMetadataReuseAuxiliaryClaimConflict4627 (0.00s)
+=== RUN   TestFreelistMetadataTailPlacementAfterBurn4627
+=== RUN   TestFreelistMetadataTailPlacementAfterBurn4627/no-burn-unchanged
+=== RUN   TestFreelistMetadataTailPlacementAfterBurn4627/live-tail-remains-owned
+=== RUN   TestFreelistMetadataTailPlacementAfterBurn4627/overflow-rejected-without-claim
+--- PASS: TestFreelistMetadataTailPlacementAfterBurn4627 (0.00s)
+    --- PASS: TestFreelistMetadataTailPlacementAfterBurn4627/no-burn-unchanged (0.00s)
+    --- PASS: TestFreelistMetadataTailPlacementAfterBurn4627/live-tail-remains-owned (0.00s)
+    --- PASS: TestFreelistMetadataTailPlacementAfterBurn4627/overflow-rejected-without-claim (0.00s)
+=== RUN   TestFreelistMetadataReuseMixedDirtySiblingSizing4627
+--- PASS: TestFreelistMetadataReuseMixedDirtySiblingSizing4627 (0.00s)
+=== RUN   TestFreelistMetadataReusePublishesBurnedCoverage4627
+--- PASS: TestFreelistMetadataReusePublishesBurnedCoverage4627 (0.00s)
+=== RUN   TestFreelistMetadataReuseReservationChain4627
+--- PASS: TestFreelistMetadataReuseReservationChain4627 (0.00s)
+=== RUN   TestCanonicalReservationOutputRetainsCanonicalBytesV1
+    generation_v1_reservation_work_test.go:67: canonical reservation pages=2 Q32 calls=7 pending=400
+--- PASS: TestCanonicalReservationOutputRetainsCanonicalBytesV1 (0.00s)
+=== RUN   TestCanonicalCandidateOutputRetainsClaimAndFirstErrorV1
+    generation_v1_reservation_work_test.go:153: post-claim Q32 constructor calls=28 pages=6 claim retained
+--- PASS: TestCanonicalCandidateOutputRetainsClaimAndFirstErrorV1 (0.00s)
+=== RUN   TestCanonicalTailConflictRangeMatchesOwnedPagesV1
+--- PASS: TestCanonicalTailConflictRangeMatchesOwnedPagesV1 (0.00s)
+=== RUN   TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure
+--- PASS: TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure (0.00s)
+=== RUN   TestFreelistTxn_AllocateSkipsAnotherCandidateReservation
+--- PASS: TestFreelistTxn_AllocateSkipsAnotherCandidateReservation (0.00s)
+=== RUN   TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail
+--- PASS: TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail (0.00s)
+=== RUN   TestFreelistTxn_ReservationRejectsAppendChosenBeforeCompetingMetadataTail
+--- PASS: TestFreelistTxn_ReservationRejectsAppendChosenBeforeCompetingMetadataTail (0.00s)
+=== RUN   TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment
+--- PASS: TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment (0.00s)
+=== RUN   TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership
+--- PASS: TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership (0.00s)
+=== RUN   TestFreelistGenerationV1_ReopenReconstructsReservationOwnership
+--- PASS: TestFreelistGenerationV1_ReopenReconstructsReservationOwnership (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/freelist	0.035s

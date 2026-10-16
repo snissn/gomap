@@ -1,0 +1,56 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; independent read-only bounded failure diagnosis",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "FIXTURE_SETUP_FAILURE; recommend existing real pointer producer; no product handoff defect established",
+  "source_manifest_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+  "source_archive_sha256": "2e95363d01a4b38314b08f550e38b6d9d1d08016e5329ec1c2e30379dae8f6b2",
+  "source_file_count": 10444,
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/run.log",
+  "raw_log_sha256": "aa22d591155ccbe57d439f388350950064469fdbbf31eb1106354e4d4d93b9fd",
+  "inspected_source_bindings": {
+    "TreeDB/db/primary_construction_ledger_v6_test.go": "2d05bb5d23f0d9adbad44ecb1f089c2e87228280fca6635a4fac8db0547dbcfd",
+    "TreeDB/db/primary_offline_pair_v6_test.go": "26512332a0b1a5061c44eb28d219023e611c9e83f55630d067bc3537103d8672",
+    "TreeDB/db/vlog_gc_test.go": "05dfb91ec38040cc3918ae80a36e5b29091b2efa6c0e6e89b0a7f87de8221e26",
+    "TreeDB/db/api.go": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e",
+    "TreeDB/db/commit_combiner.go": "53251026d6e2904704ba678051e8b6c55aece1253de48236a1091aaae9a62f0f",
+    "TreeDB/batch/batch.go": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a",
+    "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/original_primary_runtime_cleanup.go": "d0df9b5f4c79cda28ec9b20ec687ba9c1263c7baf8e3fdd8489e37772b3f870a",
+    "TreeDB/db/primary_offline_pair_v6.go": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "TreeDB/db/durable_primary_rebuild_v5.go": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd",
+    "TreeDB/db/index_gen.go": "f8e86c8a781916ebbd7ea38f0126189fe77ac631ba224e743c885da744eeef15",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe"
+  },
+  "finding": {
+    "id": "LC3-PTR",
+    "location": "TreeDB/db/primary_construction_ledger_v6_test.go:22-36",
+    "cause": "PointerThreshold=1 constrains backend inline Set; SetSync forwards to batch.SetWithMVCCInput which returns ErrValueTooLarge before staging or publication. All four arms fail before recoverable-root capture.",
+    "classification": "test producer contract error, including prior reviewer advice error",
+    "correction": "Use prepareOfflinePointerPairV6(t, dir) instead of preparePrimaryJointCrashV6; restore plain Open without ValueLog override; remove failed SetSync loop and bytes import; preserve all nonnil dependency, selection, late-drain, sticky cleanup and final custody assertions."
+  },
+  "existing_helper": "TreeDB/db/primary_offline_pair_v6_test.go:23-60",
+  "helper_basis": [
+    "two real value-log records from original appendPointersInNewSegment",
+    "RefreshValueLogSet on open original DB",
+    "two actual Batch.SetPointer + WriteSync + Close publications",
+    "first pointer remains reachable in second published root",
+    "explicit successful original DB Close and persisted current-sequence/file-count-two check before return"
+  ],
+  "lifetime_obligations": [
+    "Keep source DB and captured recoverable-root handles live for original rebuilding.",
+    "Keep latest/older producer resources released through original deferred releaseCapturedRootResources, before pair/scope cleanup, then recoverable-root release, then DB.Close.",
+    "Preserve selected runtime wrappers/pins and failed-generation original custody; do not fabricate Sets, unlink segments, or treat handle closure as successful cleanup."
+  ],
+  "prior_review_disposition": "Historical source03 readiness report and previous diagnosis remain immutable; incorrect SetSync producer recommendation and four-arm runtime applicability are superseded by this diagnosis.",
+  "validation_performed": "Read-only source/hash/log inspection; no Go, compiler, tests or runtime executed.",
+  "nonclaims": [
+    "No repaired fixture runtime PASS",
+    "No constructor late-error/Close evidence from these four failed source03 arms",
+    "No genuine native publication/Q32/allowance/full-graph/performance qualification"
+  ]
+}

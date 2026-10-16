@@ -1,0 +1,23 @@
+[
+  {
+    "after_sha256": "f948139f3c649ba8c046e68c72cbc1c9d37ac3315adb919bca4e591413ae114e",
+    "before_sha256": "c5790699963936a534aa9f11bfbce0a57ca99b94db5e6c80ad172666038b2906",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/freelist/allocator_preparation_work_v6_test.go"
+  },
+  {
+    "after_sha256": "46b8bbcff7db6595374679fbd3c6d708b61b10dd2de6337fefde160a5fbfd456",
+    "before_sha256": "520e5ef0fc06f32f8431da6f2323f9fb86998405b6931e1c39d38a6b3728d2e2",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/freelist/private_control_capacity_v6_test.go"
+  },
+  {
+    "after_sha256": "f906d820cc46c1de481c7c467798f1e686f1e70e9031d5f1dad65ef86cee8458",
+    "before_sha256": "3403cdb0d679d6e14d6d7ad7c6eb4c36c5d99bf89899d891a2e970bb458f9f60",
+    "change": "modify",
+    "mode": "0o664",
+    "path": "TreeDB/freelist/reservation_canonical_storage_v6_test.go"
+  }
+]

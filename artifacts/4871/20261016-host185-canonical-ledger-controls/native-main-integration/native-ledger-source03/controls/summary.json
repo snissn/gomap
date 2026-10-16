@@ -1,0 +1,30 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction"
+  ],
+  "completed_utc": "2026-10-16T12:43:05.167588+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "exit_code": 1,
+      "name": "normal-db-construction",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source03/controls/normal-db-construction/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10444,
+  "source_manifest_sha256": "d4cabb2925743c61efda9489177382688450eb629dfc1bd49d9df2a5bf369d3a",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true,
+  "top_pass_normal": 17,
+  "top_pass_race": 0
+}

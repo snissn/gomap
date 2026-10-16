@@ -1,0 +1,62 @@
+{
+  "Go_commands_executed": 0,
+  "Q32": "RED/ACK0; no allowance/performance/product acceptance",
+  "actual_route_commands_separate": 2,
+  "artifacts": {
+    "README.md": "6db216334a906c067cb16a5dcd4febc6429ba26c267e13de70a0e337daa148ce",
+    "caller-constructor-ledger.json": "b5ccd53b54466e1736f9abcc8a4b68d4b0ee55c637adde9ff99e7f6f3ab9d2ac",
+    "changed-files.json": "9939be22a73f956da7ac1fff9b392d6251d1208a85a1cb0158ee007238819f2e",
+    "changed-source.tar.gz": "ed8bcb1f816d2b2fafbd4a6d7fbf05b23cc2ed324a0287d5b9d9332c4d87751d",
+    "failure-diagnosis.json": "a0928f3806bf52be1a82f59b3cc45de6a8c44c3fc2305e125164a87bb6949beb",
+    "failure-diagnosis.md": "792943b36ab613f51d8e1f6057a2d7877baf6e0b25e12a535716820a5eb151e2",
+    "freeze.json": "7df38b43576f51b77e420513a60ecc87a82b0f2bec8b391a88408a091b9378c8",
+    "invariance.json": "f4a9a4ca77e92ce4049c1aa2e37711d16c5bc6eda3721b0f8a8978b1b4808a66",
+    "pricing-retention.md": "98f9b37eb5327d5a89558295cf946f2c10b3216b1d7c7e8a26c0bcd909360a37",
+    "proposed-commands.json": "c9f62a70672263e1a58c360adfffd016965542fc18267a6b3745a8bae95e4ee4",
+    "source-frozen.json": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+    "source-frozen.tar.gz": "89756760b2d8edb2d9485051da54cce976fd6dd8c0cb19970d828b5fed7f04e7",
+    "source-modes.json": "48c064c282d15f3f3ab718dec3de4830e406f3e14098843d20215ee42655fa47",
+    "source.delta.patch": "96a2917ee42ec623cf19f7437563756b21d9cecd30bc8d838d1f0203fc44d05d",
+    "source01-evidence.json": "e6c18cc0e0e330f0a5d174005849668492e9c09eec42397462994de20af46da3",
+    "source01-to-source02.changed-files.json": "bd09347aebb49fc76365186dde454367dddb87295481da7ee02fc5387d62c0be",
+    "source01-to-source02.changed-source.tar.gz": "fa5dc02e04ba528f2af3cac205bc4287723166cf0dde4c7557bf0d8d9bacda10",
+    "source01-to-source02.delta.patch": "b4e0ade4bd458c8443583d34898bfce89657b55f49934b07dd96f8e4cb559691",
+    "test-inventory.json": "3248b7748b0b303f850f3c7a4774daf320425ceafc5a108b1672552cb58d2e75"
+  },
+  "changed_paths_vs_minimum01": 41,
+  "changed_paths_vs_source01": 3,
+  "focused_counts_by_mode": {
+    "normal": {
+      "children": 138,
+      "commands": 3,
+      "top_level": 97
+    },
+    "race": {
+      "children": 178,
+      "commands": 4,
+      "top_level": 101
+    }
+  },
+  "focused_proposed_commands": 7,
+  "index_unchanged": true,
+  "production_pricing_layout_G_P_unchanged": true,
+  "reuse_normal_mvcc": {
+    "applicability": "Every production/build source and mvcc test source is byte-identical; changed freelist _test.go files are not inputs to mvcc test package. Source02 introduces no production/pricing/type/formula changes. Root decides final reuse.",
+    "children": 40,
+    "name": "normal-mvcc-prices",
+    "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/run.log",
+    "raw_log_sha256": "f9cf77a3c7bf2d8f729c6b5381cb3f7256d88fb3db6752f0ef21cbaab6795e80",
+    "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source01/controls/normal-mvcc-prices/result.json",
+    "result_sha256": "b9ae835438feb23050e8d91540cf6cafe2deb570670cebfb408f48ee400ede72",
+    "source_manifest_sha256": "3510cbc6fb8bf326960856dfbea675d1f47f3686f8ca5944a4d5968db399eecf",
+    "top_level": 4
+  },
+  "runtime_lease_released": true,
+  "source_after_matches": true,
+  "source_archive_sha256": "89756760b2d8edb2d9485051da54cce976fd6dd8c0cb19970d828b5fed7f04e7",
+  "source_files": 10444,
+  "source_lease_released": true,
+  "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "status": "COMPLETE_SOURCE02_FIXTURE_REPAIR_FROZEN_UNEXECUTED",
+  "unchanged_vs_source01": 10441
+}

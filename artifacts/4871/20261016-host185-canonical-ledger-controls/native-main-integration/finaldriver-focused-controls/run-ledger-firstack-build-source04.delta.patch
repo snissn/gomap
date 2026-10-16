@@ -1,0 +1,20 @@
+--- run-ledger-firstack-build-source03.py
++++ run-ledger-firstack-build-source04.py
+@@ -12,7 +12,7 @@
+ 
+ D = Path('/mnt/fast4tb/gomap-mvcc-4871-20261015')
+ N = D / 'native-integrated'
+-B = D / 'native-main-integration/native-ledger-source03'
++B = D / 'native-main-integration/native-ledger-source04'
+ p = argparse.ArgumentParser()
+ p.add_argument('--selection', type=Path, required=True)
+ p.add_argument('--selection-sha256', required=True)
+@@ -33,7 +33,7 @@
+ assert a.selection.resolve().is_relative_to(D / 'native-decision')
+ assert sha(a.selection) == a.selection_sha256
+ grant = read(a.selection)
+-assert grant['scope'] == 'build-canonical-ledger-source03' and grant['build_only_authorized'] and grant['actual_native_driver_authorized'] is False
++assert grant['scope'] == 'build-canonical-ledger-source04' and grant['build_only_authorized'] and grant['actual_native_driver_authorized'] is False
+ assert grant['runner_sha256'] == sha(Path(__file__))
+ assert grant['proposal_sha256'] == sha(B / 'proposed-build-root01.json')
+ assert grant['manifest_sha256'] == sha(B / 'source-frozen.json')

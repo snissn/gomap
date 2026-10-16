@@ -1,0 +1,136 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9750696287473588,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9750696287473588,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9750696287473588,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9750696287473588,
+        "pid": 128239
+      },
+      {
+        "comm": "ksoftirqd/5",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 48
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 19242
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 120874
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 624687
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 681192
+      },
+      {
+        "comm": "cloudflared",
+        "one_core_cpu_percent": 0.9875348143736794,
+        "pid": 1729533
+      }
+    ],
+    "aggregate_busy_percent": 0.8264462809917356,
+    "mem_available_kib": 18782768,
+    "seconds": 1.0126225277781487
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "EmbyServer",
+        "one_core_cpu_percent": 13.823550855910554,
+        "pid": 538321
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9747929794157935,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9747929794157935,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9747929794157935,
+        "pid": 6357
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9747929794157935,
+        "pid": 681192
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9747929794157935,
+        "pid": 3140140
+      },
+      {
+        "comm": "ksoftirqd/9",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 72
+      },
+      {
+        "comm": "gnome-shell",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 3861
+      },
+      {
+        "comm": "xdg-desktop-por",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 4966
+      },
+      {
+        "comm": "Plex Media Serv",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 5917
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 128239
+      },
+      {
+        "comm": "polystore_gatew",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 684322
+      },
+      {
+        "comm": "polystore_gatew",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 684331
+      },
+      {
+        "comm": "ssh",
+        "one_core_cpu_percent": 0.9873964897078967,
+        "pid": 3034017
+      }
+    ],
+    "aggregate_busy_percent": 9.256198347107437,
+    "mem_available_kib": 18793224,
+    "seconds": 1.0127643863670528
+  }
+]

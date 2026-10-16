@@ -1,0 +1,39 @@
+{
+  "utc": "2026-10-16T12:58:09.359530+00:00",
+  "disposition": "INTERRUPTED_AFTER_ONE_BASELINE_SAMPLE_NO_B_MEASUREMENT_NO_COMPARISON",
+  "summary_sha256": "0ad91110d320fd8d4f44e9a61ace9ce1212b49767ed3f4767fa400fb55bb4a97",
+  "selection_sha256": "47c645db76beaf5deb0741db207ce9fbf1cfbb02f8a004e5bb1e2c98340ca3d8",
+  "source04_build_result_sha256": "a4922a8639fabd975990e7e37a6bb3ef6811031566267e35c4991a1315c2d8b3",
+  "baseline_result_sha256": "b0cbf084270dc33c8d1295c262932755f3d4e43841352534ffa711dbda9baede",
+  "baseline_raw_sha256": "fca0be0b29cfcc6d6e1882fe59130c1037b14956f4667c2553eaa5a1b6c39039",
+  "baseline_metrics": {
+    "public_call_sum_ns": 13390312,
+    "whole_birth_to_ack_ns": 23499026,
+    "max_call_ns": 7618585,
+    "public_calls": 8,
+    "work_records": 6973,
+    "work_bytes": 7022925,
+    "exact_ack_returns": 1
+  },
+  "baseline_whole_process_quietness_accepted": true,
+  "baseline_host_window_sha256": "64fa9560f433af6ec681dea77c9233bcb72654b753ddd0c994defa27ec67bf87",
+  "second_preflight_sha256": "23f5a332df02cee0136994d09f172b7a41dc16b6e79f2744aa6ffdb1d029c4d9",
+  "second_preflight_aggregate_busy_percent": [
+    0.9925558312655087,
+    8.340214698596201
+  ],
+  "B_process_not_spawned": true,
+  "five_unexecuted_commands": [
+    "firstack-B-02",
+    "firstack-B-03",
+    "firstack-A-04",
+    "firstack-A-05",
+    "firstack-B-06"
+  ],
+  "both_sources_and_ELFs_unchanged": true,
+  "all_planned_samples_retained": true,
+  "prior_contaminated_sample_separate": true,
+  "sample_retries": 0,
+  "performance_comparison_accepted": false,
+  "limits": "One baseline observation only; per-call window host attribution unproven; entire ABBAAB campaign incomplete. No B cost or performance direction available."
+}

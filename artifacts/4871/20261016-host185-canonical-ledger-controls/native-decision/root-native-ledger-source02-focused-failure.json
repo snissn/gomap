@@ -1,0 +1,63 @@
+{
+  "utc": "2026-10-16T12:34:42.674816+00:00",
+  "scope": "Source02 stopped focused DB failure independently recomputed from raw output",
+  "source_manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "summary_sha256": "e029b4faf55a80122a908377f7d8f9a224577e4774e9f8cea04f536d583d685c",
+  "checks": [
+    {
+      "name": "normal-freelist-canonical",
+      "result_sha256": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+      "raw_sha256": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+      "RUN": 118,
+      "PASS": 118,
+      "FAIL": [],
+      "status": "PASS",
+      "all_expected_ran": true,
+      "source_unchanged": true,
+      "groups_empty": true
+    },
+    {
+      "name": "normal-freelist-consumers",
+      "result_sha256": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+      "raw_sha256": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+      "RUN": 89,
+      "PASS": 89,
+      "FAIL": [],
+      "status": "PASS",
+      "all_expected_ran": true,
+      "source_unchanged": true,
+      "groups_empty": true
+    },
+    {
+      "name": "normal-db-construction",
+      "result_sha256": "81daddad1b11c8da3dbf6f70ab13895768c75817f4b023eb436d9fb3bfd444fc",
+      "raw_sha256": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+      "RUN": 28,
+      "PASS": 21,
+      "FAIL": [
+        "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+        "TestPrimaryConstructionLedgerLateHandoffCustodyV6/success",
+        "TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain",
+        "TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close",
+        "TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release",
+        "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+        "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6"
+      ],
+      "status": "STOP",
+      "all_expected_ran": true,
+      "source_unchanged": true,
+      "groups_empty": true
+    }
+  ],
+  "all_commands_pass": false,
+  "all_processes_joined": true,
+  "source_and_index_unchanged": true,
+  "unexecuted": [
+    "race-mvcc-prices",
+    "race-freelist-canonical",
+    "race-freelist-consumers",
+    "race-db-construction"
+  ],
+  "actual_publication_executed": false,
+  "note": "All expected RUN names present; explicit failed tops and children are failures, not missing tests."
+}

@@ -1,0 +1,15 @@
+{
+  "archive_sha256": "89756760b2d8edb2d9485051da54cce976fd6dd8c0cb19970d828b5fed7f04e7",
+  "disposition": "Historical source02 canonical26/92 and consumers53/36 passed. DB package15/18 tops passed; all10children ran; constructor4children and2disposaltops failed. Runner stopped before any race/actual.",
+  "files": {
+    "controls/normal-db-construction/result.json": "81daddad1b11c8da3dbf6f70ab13895768c75817f4b023eb436d9fb3bfd444fc",
+    "controls/normal-db-construction/run.log": "8c8d421bb97d1c218e7a7f7bcd7037d774202b8aa9859d63ef4732f864d72356",
+    "controls/normal-freelist-canonical/result.json": "a6076e4c983d751f717e0450df430b141d4654f00016d7baa6da548f0641d780",
+    "controls/normal-freelist-canonical/run.log": "5b4ace6448b0a7b79ce15198a019524cf638fdf76fa40b40cc8a9d5a8f0d90f8",
+    "controls/normal-freelist-consumers/result.json": "33ea742db89b0576566ff0575378feedc7e702159a67bc117195ee1ca45dca71",
+    "controls/normal-freelist-consumers/run.log": "218d04fe5447c61f97a84cc121d40da27d98bf14c9771b1aef80b7aafd80adbe",
+    "controls/summary.json": "e029b4faf55a80122a908377f7d8f9a224577e4774e9f8cea04f536d583d685c"
+  },
+  "manifest_sha256": "94647ddfa343301319211c228cdcd38a24b78771208139bd9119d2168ebe080d",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-ledger-source02"
+}

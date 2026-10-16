@@ -1,0 +1,90 @@
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape
+--- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6 (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape (0.00s)
+=== RUN   TestNativeSelectedConstructorLedgerCheckedArithmeticV6
+--- PASS: TestNativeSelectedConstructorLedgerCheckedArithmeticV6 (0.00s)
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/missing-proof
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unexpected-prep
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/opaque
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/no-owner
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/no-live
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/missing-backing
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unavailable-row
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unavailable-pair
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/metadata-contradiction
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unequal-shared-charge
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/transfer-incomplete
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/kind-backing/overflow
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/missing-proof
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unexpected-prep
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/opaque
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/no-owner
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/no-live
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/missing-backing
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unavailable-row
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unavailable-pair
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/metadata-contradiction
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unequal-shared-charge
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/transfer-incomplete
+=== RUN   TestNativeSelectedSetLedgerCombinationsV6/empty-backing/overflow
+--- PASS: TestNativeSelectedSetLedgerCombinationsV6 (0.00s)
+    --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/missing-proof (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unexpected-prep (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/opaque (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/no-owner (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/no-live (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/missing-backing (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unavailable-row (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unavailable-pair (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/metadata-contradiction (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/unequal-shared-charge (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/transfer-incomplete (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/kind-backing/overflow (0.00s)
+    --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/missing-proof (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unexpected-prep (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/opaque (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/no-owner (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/no-live (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/missing-backing (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unavailable-row (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unavailable-pair (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/metadata-contradiction (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/unequal-shared-charge (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/transfer-incomplete (0.00s)
+        --- PASS: TestNativeSelectedSetLedgerCombinationsV6/empty-backing/overflow (0.00s)
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/zero
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/record-short
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/byte-short
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/exact
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/nil-work
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/nil_cursor
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/cursor_operands
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/fixed_comparisons
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/initial_basis
+=== RUN   TestNativeSelectedLedgerObservationAdmissionV6/incomplete_row
+--- PASS: TestNativeSelectedLedgerObservationAdmissionV6 (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/zero (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/record-short (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/byte-short (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/exact (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/nil-work (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/nil_cursor (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/cursor_operands (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/fixed_comparisons (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/initial_basis (0.00s)
+    --- PASS: TestNativeSelectedLedgerObservationAdmissionV6/incomplete_row (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	1.011s
