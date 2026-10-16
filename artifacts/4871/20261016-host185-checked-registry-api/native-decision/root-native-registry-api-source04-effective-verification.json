@@ -1,0 +1,40 @@
+{
+  "accepted": true,
+  "all_process_groups_joined": true,
+  "compile_scope": "Source02 root-module compile/default-vet evidence is retained only for unchanged inputs. Changed DB production and fixture are compiled and vetted by fresh selected DB/caching/public tests. No separate whole-source04 compile claim.",
+  "effective_counts": {
+    "normal": {
+      "child": 43,
+      "top": 65
+    },
+    "race": {
+      "child": 43,
+      "top": 65
+    }
+  },
+  "fresh_counts": {
+    "normal": {
+      "child": 31,
+      "top": 40
+    },
+    "race": {
+      "child": 43,
+      "top": 65
+    }
+  },
+  "fresh_verification_sha256": "f1175ba42b82afd9741ebc5af5ff392f55dff558c2a0518c86f5723b76d372df",
+  "goleak_and_race_pass": true,
+  "historical_normal_counts": {
+    "child": 12,
+    "top": 25
+  },
+  "historical_reuse_sha256": "53564e4ef7fa2f89b8d7c4dfaf356926138157f46168d5459bea8789962e1f28",
+  "manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "native_publication_Q32_performance_or_graph_acceptance": false,
+  "nineteenth_worker_attribution": "not uniquely attributed; aggregate original goleak control now passes after DATA quiescence repair",
+  "scope": "checked registry API focused normal/race component controls only",
+  "source02_failure_retained": true,
+  "source03_goleak_failure_retained": true,
+  "source_and_index_frozen_through_runtime": true,
+  "utc": "2026-10-16T14:57:24.778000+00:00"
+}

@@ -1,0 +1,64 @@
+{
+  "status": "READ_ONLY_DIAGNOSIS_NO_SOURCE_OR_RUNTIME_LEASE",
+  "basis": {
+    "manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-frozen.tar.gz",
+    "archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/run.log",
+    "raw_sha256": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+    "root_receipt_sha256": "7872c65358277da59e287e93c4e772a0d2c1ab6cc620d1464f3e7207549a33fa"
+  },
+  "source_hashes": {
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "10b9aec29c783437ba494ca175d42cffae0d645876ddc83889aa20925b8e8e34",
+    "TreeDB/db/db.go": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+    "TreeDB/db/index_gen.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "TreeDB/db/root_publication_activation.go": "525bcaa5f10dc7ba54032f22d27077cb3c6a0092480b1546867b4b41f7b1fe37",
+    "TreeDB/db/durable_root_runtime.go": "cedbff883743df5d128b90a2d2badb15e87f560bdb8b6a80dcf38312f9f9ae5c",
+    "TreeDB/db/native_mvcc_data_dependency_release_v6.go": "9f3e09f314baf088ed891a37b5c385c7b1b94e52e3c4d413e4593895474e2787",
+    "TreeDB/db/original_startup_generation.go": "88ff3460df396a12918a72ab3cb364fbc077b4e5630c69c09905bec82350eced",
+    "TreeDB/db/vlog_ref_incarnation.go": "ddc684c077303db51d1b216462a7441642e49a6d5418ec15ff8574bead802743",
+    "TreeDB/lifecycle/registry.go": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "f080f03965a98f970598c2c1c82d7d08ca0d5ed3c813800ad914eb82c4e5b200",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_work.go": "8420cb0d319c8f7fa1a7bf99baea94722157385c3a884dfa5b8868d429e334f4"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "classification": "fixture_absolute_wrapper_zero_assumption",
+      "proof": "Register error returns before new snapshot retain; header directly carries ErrCapacity. Existing runtime/directory wrapper custody is not zero by contract. Raw combined assertion does not identify individual failed predicate.",
+      "repair": "Capture wrapper count immediately before failed AcquireSnapshot; assert exact unchanged count and separately assert nil snapshot, exact original registry error identity, ErrCapacity, header debt and terminal refusal."
+    },
+    {
+      "id": "F2",
+      "classification": "fixture_broad_fault_reaches_distinct_real_ordinary_panic_boundary",
+      "proof": "failShrink remains armed on the shared identity metadata owner; startup DB.Close calls tracker.close -> RemovePending(512), whose shrink fails and panics before startup receipt completion.",
+      "repair": "Fail exactly the intended real registry Resize once; keep enrollment and sticky header receipt, permit unrelated later shrink. Do not clear/refund registry receipt, close governor to erase failure, or modify tracker production under this finding."
+    },
+    {
+      "id": "F3",
+      "classification": "unexecuted_same_helper_concurrent_risk",
+      "proof": "Concurrent Close may reach tracker shrink before positive Unregister; first-shrink-only injection does not identify the registry event.",
+      "repair": "Measure positive registration owner delta, assert exactly one live slow leaf, then target actual matching shrink only after original snapshot closed/finalized and same registry has zero slow leaves while snapshot retains original registryID. One-shot exact callback barrier overlaps real DB.Close and Snapshot.Close; separate completed-physical-first schedule retains LateWrapper oracle."
+    }
+  ],
+  "recommended_source_scope": [
+    "TreeDB/db/reader_registry_header_failure_v6_test.go"
+  ],
+  "production_change_justified": false,
+  "nonclaims": [
+    "No runtime rerun performed",
+    "Raw combined first assertion lacks individual predicate instrumentation",
+    "Generic Owner.RemovePending refusal remains a real ordinary panic boundary and is not qualified by a narrowly targeted registry test",
+    "Concurrent target and startup terminal assertions require new selected execution",
+    "No acquisition scan, guard protocol, Q32 allowance, API or lifetime policy change"
+  ],
+  "focused_top_level_tests": [
+    "TestReaderRegistryFailedBirthRetainsGenerationV6",
+    "TestReaderRegistryLateWrapperFailureRetainsHeaderV6",
+    "TestOfflineReaderRegistryFailureRetainsOriginalScopeV6",
+    "TestReaderRegistryStartupFailureRetainsOriginalHeaderV6",
+    "TestReaderRegistryCloseRacesFailedUnregisterV6",
+    "TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6"
+  ]
+}

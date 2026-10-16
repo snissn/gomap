@@ -1,0 +1,298 @@
+{
+  "TreeDB/caching/conditional_txn.go": {
+    "before": "860ee0cbf73824308a4c4d7f56e6168c928cc493eee4c7ce7833f083aba35032",
+    "after": "f4fdb52b9e07764da24f5f1176f6338085d17706f095eee3bc1ea9ceef16c891"
+  },
+  "TreeDB/caching/cow_cut.go": {
+    "before": "ae6782d80dccb0ce82b3a8e7cab3aae8226e9eb71a83b1837ae67636a46a0286",
+    "after": "c47627613c68bcd9218bff44a88559356da14c5f8b61cf76339e2a6d08f19030"
+  },
+  "TreeDB/caching/cow_read_workspace.go": {
+    "before": "394eb29ef7df5f8b2316d95aa7d1573b0db29a18b89ad336c648e12d14a30202",
+    "after": "30eaa800d1d0061379a971dd2c15c1df450268d436e04b43a8c75c5cd90f688e"
+  },
+  "TreeDB/caching/db.go": {
+    "before": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "after": "0e57829d9561ef89cc1d6b2a7946c41d96fface502793eb7d56a201646b40f18"
+  },
+  "TreeDB/caching/point_successor.go": {
+    "before": "5fb5dca73e66b909ffa70cab074041bb319f0b0ea6655f763ade645db469421f",
+    "after": "cd8925812d8f242d3c57515f5293af93a9ad62effab791fbe2c21084068bb00e"
+  },
+  "TreeDB/caching/range_spans.go": {
+    "before": "a04e7239d9fe1b943ffd68cd323caa6fa0faf4efe8283db18d0b864a9c98c6fc",
+    "after": "1b5de3b0f24cd6a2ad317399a8dccd0b0997f4dac435640811b70454ec44d73f"
+  },
+  "TreeDB/caching/root_domain.go": {
+    "before": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+    "after": "7035df3068a105ac83e82cb552e240794840a9f3857294daa050734ffbf8be52"
+  },
+  "TreeDB/caching/snapshot.go": {
+    "before": "8b187ea31770b42d7e6030a27c83d4e41d485532c2e3cc9a7f0600949c039cb3",
+    "after": "29acc0269b64a9dc273ea71224bee60f858511dd83d2f2172f1b3d5945a425a5"
+  },
+  "TreeDB/cmd/template_corpus_extract/main.go": {
+    "before": "50dd98ca16003f529fcac64de8e92138daaf139ae4aa74c5242e680da2f7d72c",
+    "after": "6d78d1b21d897bfe0db9088de4c96b24fba8443c5a207cb229a3b63b0be26467"
+  },
+  "TreeDB/cmd/template_seed_train/main.go": {
+    "before": "49669eea162e860deebb41f8302b9ae8e916f344206ccf9cc73f09887f062415",
+    "after": "96a1c62f8a8beff02cc3ce86184f6538f99a5154bd6ca83c72d6721ea2194587"
+  },
+  "TreeDB/collections/api.go": {
+    "before": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f",
+    "after": "000b1556decf5410ad837a3c95382a7a20856cf4e561b5c1461448df170bfe90"
+  },
+  "TreeDB/collections/collection_vector_index_prepared_search_cache.go": {
+    "before": "180111892c9e51df3ef7d9b6f261850f64117c56aab13cae9bec4424cbc4a569",
+    "after": "adb45958532cac78151cfd32ea40abbb805a23e0f21563537c4530cfd6879b3b"
+  },
+  "TreeDB/collections/column_asset_gc.go": {
+    "before": "9b8021bbcb3aae2e2027603f72815a6f44e242c876e8ec4aae48f353df2d99ab",
+    "after": "131a8d675b29069d570189d2e123b38926542bd56c8192df3eb950fa9fd36942"
+  },
+  "TreeDB/collections/column_asset_rewrite.go": {
+    "before": "114986f150da44eb24b1dde0886bfa8552b67a1d3ed63bdb2b816380e5e0889e",
+    "after": "ef7d67f2a931a78df399ba17e998a7d54f1e7760cca2c496637d4d8b9cc68abd"
+  },
+  "TreeDB/collections/column_physical_scan.go": {
+    "before": "bf0f2c20eea61a9607f5eaff0bf3e97006a16a184c0f3d95f4b2be3857d7a71a",
+    "after": "19f803c0ce76289bef5f8b384097b46bb50b3dea82c3765885453a187b374dff"
+  },
+  "TreeDB/collections/column_physical_visibility.go": {
+    "before": "4b2dd1a512780d7c373f777096894c10e5d9f54ac520e5d707c1b6dd7de081af",
+    "after": "cbaafd4c4108cdebdf0e3f1d81bb0ad4005115cc315d5921881f30755d037cf6"
+  },
+  "TreeDB/collections/column_publish_plan.go": {
+    "before": "4a52f614e5ae21e11f8e9f12048bd2236683d0cee3d1d31cd40ad10284f4a362",
+    "after": "7590d43f9b19657caf1f07036a41a8573dc302561f31ef3387d42e29efc23354"
+  },
+  "TreeDB/collections/column_publish_write.go": {
+    "before": "d7d5f7093c9d6bd8c992fb6fe1e03976ce7c94532a214d41265c1fc100ecb807",
+    "after": "b3c476ccec9aa17d9573063945312d498bcd4675371c912b3f09ee1266091daa"
+  },
+  "TreeDB/collections/column_query_plan.go": {
+    "before": "44c72cbda5a2db4ae4ed87c3666b5290987c1ab5a408f4077d57497994e04274",
+    "after": "ef86cada86440e18b3d94cc62a4e6e34b61c985259783ead006532297b669f3c"
+  },
+  "TreeDB/collections/column_retained_payload_audit.go": {
+    "before": "7c8112b30ae6bdc6ce6ef0b4078f9282268e6db8ffd948874687f34b43648167",
+    "after": "bf0e51b880d8a1fb302f5c8b65482527afa5d09f9fb43b018256627d7de199d4"
+  },
+  "TreeDB/collections/column_source_directory_gc_v2.go": {
+    "before": "862bab6a0d6d650afbdcc574a034882d459d2ee2c5cd7b19e6f745cb1a0c0280",
+    "after": "00ef7f58e650c64f405e3051d57bff44db236622867e95421169897966561580"
+  },
+  "TreeDB/collections/column_source_directory_v2.go": {
+    "before": "f32da4c8d35e800746336292e3d98c333005d415a3668990f9df7f422de9849a",
+    "after": "affa1b47cd5a47829b078d399986357f99bc98911489f2dc1fc6499633fc8b1b"
+  },
+  "TreeDB/collections/column_store_compaction.go": {
+    "before": "b456a8c1a5af87d2383bbadcd72769b692f7e1450e1b37ae6b1d003224f75b87",
+    "after": "5db58d257c144a7499e9dd9426f4b3787eec5f8c94ea7707f0243eaea29272ad"
+  },
+  "TreeDB/collections/column_vector_graph_manifest.go": {
+    "before": "33dba6c1e23b979900eb18d88262aa955ed4aae6608605abac1833939fbdfcbe",
+    "after": "e5ef92f7bd461629158e494204398b99f634507ed929e27fdf0632ce0dcc6a03"
+  },
+  "TreeDB/collections/column_vector_graph_row_reader.go": {
+    "before": "691b0f9fa67d6f904ff233e22311e01e2cd0cc76669d5afaccde65bf576a7add",
+    "after": "f990aa7bb37315153148a8f58a09e5f1d1c887172ef82eb924f4ab6cc5df5c37"
+  },
+  "TreeDB/collections/column_vector_graph_stable_prepare.go": {
+    "before": "2a7362bf983d2e17adfaba4c61694d0503ebd7b54743e35d8c07910028f4e6b2",
+    "after": "7f785a293e5280c3891ab35e7c065749bdfd4752fca3feec0c2d6b298942be00"
+  },
+  "TreeDB/collections/document_chunking.go": {
+    "before": "fbf839ce20ea9c8ee9592369f31a5bba3edcff31e179866ad6d7d96421a6ca1f",
+    "after": "930646e318455768d6fe131be74cc4e0015d0b3358068559fd09666d2771bc75"
+  },
+  "TreeDB/collections/document_materializer.go": {
+    "before": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388",
+    "after": "3bc705dd568ecb685ceb57eb186d723d7262b8e7f8afaf3e9a33795dee9edb22"
+  },
+  "TreeDB/collections/hybrid_executor.go": {
+    "before": "419e2c5e04a355b4487f11ca38d952ecb6baffe941b2e3ca3af0d537026ddb94",
+    "after": "77c016ce28b6c86104d1d1d5d0d4526ad605369a6b707a0994e8d077fd107d90"
+  },
+  "TreeDB/collections/hybrid_text_candidates.go": {
+    "before": "ab14d94f7b7ac8edf2dbed944a090ddfd060331d8b038d36aef60d818be273b7",
+    "after": "e5935f84694b3bf38bf39096165e443674068ed3eb3e9fb8212dbfe09c0727c8"
+  },
+  "TreeDB/collections/source_atomic.go": {
+    "before": "dcffb06a4f05feb41a711f3c957921063072db4e98e0efab4d4640a426a02af6",
+    "after": "2847928cc82e9b0029cdd7c22c32713193d9dbcb3fa986596373bf0ea0ef7190"
+  },
+  "TreeDB/collections/text_catalog.go": {
+    "before": "1e2e24348a0dec802ab4b4f0a9741f92be7aa0e1ab601d6cf667183e4cb4cb10",
+    "after": "d2a0ef98accc32c4029ba78d3e14f1a9492e64aeeafceb298b0f5e41fec621f8"
+  },
+  "TreeDB/collections/text_index.go": {
+    "before": "7eff1c15fa98b38a8c65f11ed4d679a6f39ac666f65a8624dd84f4ccf66df6b3",
+    "after": "3306caa90bcccef8df054b174973e84377e18754a74e63ba919e7342209129b0"
+  },
+  "TreeDB/collections/text_search.go": {
+    "before": "92d15893f6963efe8915afe8e264d226f5718a90d978099b62d6866db53feb49",
+    "after": "ec283bd28ee7c3464513a94b09c7b90723de798e2ee3b7b551888684b92dc5ad"
+  },
+  "TreeDB/collections/text_v2_rewrite.go": {
+    "before": "576988dd473e331792cace02bc4a419a1b1327e5b5d1ba679200c8a198e1cda6",
+    "after": "09bb46b11cc4b0eac892a2ddb27217801329b99f7551a82327aee4458c76c1bf"
+  },
+  "TreeDB/collections/typed_graph_base_closure.go": {
+    "before": "e0ad5c3e06213e36fde212891bfbc95bf487d54f73bcbac9af9a0d822051b612",
+    "after": "d3b06ddfdc55a1d35f44b69c5a43006059537b861a965c6a4c3c58e93f2a81bb"
+  },
+  "TreeDB/collections/typed_graph_read_owner.go": {
+    "before": "88cb215aa4033e3c1f92e89634e92077cd8890c2279a88b55b4f8d1f622771d9",
+    "after": "f8189cb906fedff4ae42b7817c060cc1dfe0eef5f9ff5874da8209e1b76a1d0c"
+  },
+  "TreeDB/collections/typed_graph_reconcile.go": {
+    "before": "f9c1ef6e7f21468bd4358161c958b3372ebd329f642709fb81c61053f00d1497",
+    "after": "61960d8d1466cfa643308840e1697b0ec65e4dfbb274752ca4e28360581ce222"
+  },
+  "TreeDB/collections/typed_graph_serving_holder.go": {
+    "before": "74ffc18d8299cce9ce322d23968f923532bdb49f387e6faf7231bca152f7f4ba",
+    "after": "774345b33e684a99990a390ba12915794112e2929cbd0c2e2cd07c665e400b8e"
+  },
+  "TreeDB/collections/typed_graph_serving_metadata.go": {
+    "before": "e35e838e6690779d7b0951632abc1f6e94d477b73c0742817460c811c8d43090",
+    "after": "ae8032acd6cf8b83838a797970c5dac84cb85206710654db1961df0d1fccdb68"
+  },
+  "TreeDB/collections/typed_metadata.go": {
+    "before": "e6dd157d4bd8347a0c5070850dae79f7b90eb01ccb207b8125294c4127ca1bdd",
+    "after": "017e9d8f82b716719bbebaad4e0cc36bec7423b3aa3af207feca33dee38c0b38"
+  },
+  "TreeDB/collections/vector_index.go": {
+    "before": "002249400bbf2454233170803e4436abcf747a59067a26a03e804b72a550ec74",
+    "after": "0f90919100683c96dcc01828bce79cbf8ae72e0ced3e0c6d6a0bbe8dc5bd840d"
+  },
+  "TreeDB/collections/vector_index_buffered_coverage.go": {
+    "before": "60e931f3862bccc48cceb300aaf3453dcb27ad2f62a816cf79009b353c792195",
+    "after": "066488888ae8934114c33ebe669bcc36e3c396ff64f775153162cd810bdc0df1"
+  },
+  "TreeDB/collections/vector_index_ops.go": {
+    "before": "aea8e6e80c44ebacd982b3cffa7b44d16d46f9388fd47f2e1e383929371cdff7",
+    "after": "1c97d893ddbecd5983c76801b82ae1fb2bee8dbc58ff541009ba2e82905e06a3"
+  },
+  "TreeDB/collections/vector_index_partition_live_replay_v1.go": {
+    "before": "b75ee008eab43b7040d9cc6bbb699682ef9eaae8414b73544883e1d2fbedb28c",
+    "after": "59dd2b338403bfc2d3fc907584dd6187258eb63335337eab528a1be6147e250a"
+  },
+  "TreeDB/collections/vector_index_partition_live_v1.go": {
+    "before": "125eedf1bb60c252bd1340fe90a2f90c3b8ddc50175fe1f07e5009f92a31680d",
+    "after": "39808e248096dc1e9ba3f7e6600bb8c652a72edc48f7703e652959fefb051c45"
+  },
+  "TreeDB/collections/vector_index_persist.go": {
+    "before": "019105d13a826769d5c3a02137d61f124cb73d3c9c5f9d35e9576fd405aca273",
+    "after": "96ae1b281090152dd68bc985e036c4ff91266d598fd26c67fa787164b3f7781b"
+  },
+  "TreeDB/collections/vector_index_rebuild.go": {
+    "before": "8173195a96fa665b746bc177dc9f85a7da03326aa439cc0c17a3043b109e808f",
+    "after": "bfccd6e481622351276e67aacb6448d1c71870aa873fe8c8ac933717d60c9611"
+  },
+  "TreeDB/collections/vector_index_search.go": {
+    "before": "fdbeb918f909198dafdad248efffa6748818fbc48258068680217d91d578df44",
+    "after": "9a1f65a9ed2acbea5c1a65060c2e77bfd8f664e86f33a2f4aebab0e781042fe4"
+  },
+  "TreeDB/collections/vector_partition_barrier.go": {
+    "before": "c0fa0081177e4711d65cade74097d7b18703e14b41948444edbb3ea78f68599b",
+    "after": "df114c78b18a9ea16fa65b7c92bba41f1ba201368a09cc8c17eaf12e6e3c321d"
+  },
+  "TreeDB/collections/vector_partition_colocated_outcome_v1.go": {
+    "before": "952f05cf267696f8554f5d37634d50c46f500d571b6303e2ca5b55258ded8a8c",
+    "after": "03ef4792c8f052ef95c07195380e42e356c090fc812cb6b51d2601187b3b2e80"
+  },
+  "TreeDB/collections/vector_partition_colocated_proof_v1.go": {
+    "before": "4e78e6e6822658fbfcdf3e8067519c8877846357abf07f104866f4f8ff3a1434",
+    "after": "bfa035b7da974215228b9a1317be9be86685e823ad731f132b1d036a0b7e46c0"
+  },
+  "TreeDB/collections/vector_partition_lifecycle_public_v1.go": {
+    "before": "0c8aac0dcd0257f87d44e26eaaff886654bec4493be8576dc25a5fbf24e31b7c",
+    "after": "8aa4cf86affb9e11851d1f1c8d87b0644de32893eab636cc6063f3e5d907ff36"
+  },
+  "TreeDB/collections/vector_partition_live_document_v1.go": {
+    "before": "d8df4cf428d7685166b39462feb77372f807119d611352ece1be4e64ab31cbd0",
+    "after": "286f1b30a5b152003bb3ee44e9e264f282d4129d242f0c73dfc8986a27fe5498"
+  },
+  "TreeDB/collections/vector_partition_paged_build_v2.go": {
+    "before": "186e75bffb79013cd13ac895dfc2fd90720a4a40c28e51dd8542b49235ec5db2",
+    "after": "093368a0f76c75c6b46b82448f29b1aba8c18240d2ae48777e8917c1f87b89f4"
+  },
+  "TreeDB/collections/vector_partition_paged_source_session_v2.go": {
+    "before": "eae96027518a12e88e77eeee0371a6d6e3fa19e32dd968b9f35bde26bc169a50",
+    "after": "92da4404fab85988134837a2c25abe1fa8a097a4319aab7f7a82b46e0808e839"
+  },
+  "TreeDB/collections/vector_partition_prepare_v1.go": {
+    "before": "78fa0de4035028d4b759204172215c3decc75d969ebd75b4f19fdff8a3fa00de",
+    "after": "9cd9fb390055bdfe593a676243557888e8aeab4e3d67786a44bf0c955cddc1ae"
+  },
+  "TreeDB/collections/vector_partition_source_import_v2.go": {
+    "before": "52d94159455d10f6cfe23b229b8b8e056238e822251546376a244ae268ea3bcb",
+    "after": "41b6aa7a0e0bc8feaf0942d10846eaf93cc2d2d2cb2e2f8bddf6dce46decccfb"
+  },
+  "TreeDB/collections/vector_partition_source_reader_v2.go": {
+    "before": "744f6b0771a7c8fc660126de8634d143c9a08f26cbf35fa22db29ff89e2694cf",
+    "after": "7ae324de9346a6d266baf3b56118052470515a1affa69f23f078f1fc1b3452da"
+  },
+  "TreeDB/collections/vector_partition_split_insert_v1.go": {
+    "before": "152952cc196aeb4f3b827c5758c7be6376c1a48402860e54b5ab939ea1b379a5",
+    "after": "c53944a3f50194f260c987fcf613a4c0efa1d557785fd37ee19efd527cb8dd14"
+  },
+  "TreeDB/collections/vector_source_population_proof_v1.go": {
+    "before": "65e09d6523eda02331a4c743db9a1c62a52f1cca8cd9d26b438f56d23e071a64",
+    "after": "81805d547f51fbb2889fb86362d8ca76360bc73b22ea2f544d26f3b54818842f"
+  },
+  "TreeDB/docs/spec/contracts.md": {
+    "before": "29751c9c1f6b0f636772af3ff014eb00c19331b2d43bba339b05e77f255d7862",
+    "after": "561353e3a572fac8af5e1fe8e70805be29d4578521d2a9c0bbe130092d0eab95"
+  },
+  "TreeDB/internal/dictdb/resource_capture.go": {
+    "before": "c2c0eb49825e0895e3f2280fda99c4bbafb199b851855cb1f5e2b9fea451ef03",
+    "after": "c3d5f43607616f9e2f510c868b163a7015dd8d313795109556aa9329c4172ecd"
+  },
+  "TreeDB/mvcc/versions.go": {
+    "before": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "after": "dd0b0c060b867197f673cf29ccfb7c6e62b85265cfc803f0e1e86572cca78874"
+  },
+  "TreeDB/public.go": {
+    "before": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "after": "5d62c158fb0ece1f74fde97f52f84e28fc632c39a8c547309847eec39ea37f05"
+  },
+  "TreeDB/side_store_lookups.go": {
+    "before": "91c606b8f28e43a886b228d9181470fb0683940906e048e962cd8ca29ee178ef",
+    "after": "7d278bd9db68ad784669dd2a462ff35d04101618f6023454b0ff0d44b81cd5ea"
+  },
+  "TreeDB/template_adapter.go": {
+    "before": "4e39c79555c30f861c902558439b4b92c85acd0dd19f9cb2883b629dbffa482a",
+    "after": "4a9c42650e788d31ec6277c4c07a743742f70a752c8c5186e750d4f3a8ea2c14"
+  },
+  "TreeDB/template_stable_resource.go": {
+    "before": "d9bcfd47903a6a93a25bc4cd1f76b0297b33f04b5d7673d0ee85abecf2712c1b",
+    "after": "3a41a029bb85c82edd1d112ce2f4bd92caf74f49b2127a6041d29deb05ebdad4"
+  },
+  "cmd/unified_bench/adapter_treedb_backend.go": {
+    "before": "e9495f449c7f633d43ecc70f9aa5ed077dba28f4aa94005abfb204641e3f2e98",
+    "after": "2fe558e07d8c66bc1298e9a37c52298730fe2586e1a58f44b832e12252b6b254"
+  },
+  "docs/API_STABILITY.md": {
+    "before": "6a1e4363af231bd02b9784956d35250a1d92e4e3c0035f33a50453a5990d674f",
+    "after": "e9867c3027bea95bd8d02930352c4088e7cbedfa9326c147747c66c89e6a2dc3"
+  },
+  "docs/contracts/CONCURRENCY.md": {
+    "before": "e7d0632e2ff70797bec068e48cf34d78cfa81275b1ef8a6394e8c27cd7d7b280",
+    "after": "cfa8957854c89ec9ab265b36e62fa068b04c85ddb38c2f8653eac063e16ce471"
+  },
+  "kvstore/adapters/treedb/treedb.go": {
+    "before": "3439b1057dae8d2f5c5d8830011656e48b59c41f7b0f588b060725515ae3ff7e",
+    "after": "0935c91090c2f68e6676ca1e435b408f97255b2788cfc8c9f7487dee5922cefd"
+  },
+  "TreeDB/caching/snapshot_acquisition_error_test.go": {
+    "before": null,
+    "after": "dea41fa16d0b42f8d5172e56e5c5791881aa22e658f079ef0ceff03e8e33811d"
+  },
+  "TreeDB/snapshot_acquisition_error_test.go": {
+    "before": null,
+    "after": "37bf0259573c9f90f1d521134a124de9211077c22084e165fa03a65bcd42f008"
+  }
+}

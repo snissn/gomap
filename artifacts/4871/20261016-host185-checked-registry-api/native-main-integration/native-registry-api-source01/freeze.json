@@ -1,0 +1,42 @@
+{
+  "added_paths": 4,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "5bfe8ee7baccd18de4b9dd376023ec86a617541a5e6c36748b4ba8a283acf429",
+  "changed_paths": 410,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T13:37:54.069827+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "72200edd3945fade15e5db943037449b440ca33852746bce76031ea5bbe4f811",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-registry-api-core-before.json": "8bb7a3e1f0ca2f977ad7e00a56a83d73f1ba6f99287755b169c10889141de230",
+    "native-main-integration/native-registry-api-preparation/handoff.json": "6bf01e024e0d225d155f9547e1b2c48019e512b93e0a5456b5ad83c9947eb4c3",
+    "native-main-integration/native-registry-api-preparation/owned-modes.json": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "native-main-integration/native-registry-api-preparation/owned-source.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "native-main-integration/native-registry-api-root-migration/root-after.json": "7a30c8efabec53825f814ffc31f9da08ae2da5db97e4d93d49abe166a3511f7d",
+    "native-main-integration/native-registry-api-root-migration/root-before.json": "f2cc50cf80df6a7f01fb23d0ef58832d90c6bcef5612d6301310aea74208d2fd",
+    "native-main-integration/native-registry-api-root-migration/root-freeze.json": "0a376568d8db7d3a62be041970f3fd64df860b2d969a5d18eac3907a66535ead",
+    "native-main-integration/native-registry-api-test-migration/HANDOFF.md": "83df9f7521d7bad85844d7b5b43e03b359d275d10960ff21eea5d2d06d998ccf",
+    "native-main-integration/native-registry-api-test-migration/owned-after.json": "b6edae8c001072177dab9ef939f1e9bd97368db8ce759817168f9618b6cf78f7",
+    "native-main-integration/native-registry-api-test-migration/owned-before.json": "29fd1a8b07b6e7ebd5ee9716c3c6ccd305a542936a4c5c2bc410c842c07b3ac0",
+    "native-main-integration/native-registry-api-test-migration/owned-freeze.json": "8d363544a102188b5d2d4129a73e7ca9d091e168e689f20478d47522a5f74cc3"
+  },
+  "modes_sha256": "51099870e2055b287bb29d11cc54f22dba6d7f64b64edaf017ea1f43fda67667",
+  "parent_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "partition_changed_counts": {
+    "core": 120,
+    "outside-existing-tests": 216,
+    "outside-root": 74
+  },
+  "runtime_executed": false,
+  "scope": "coherent checked registry and Snapshot API source01",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "098b0a53dfcec008cbad3fdf3744f6ec9ee591e3a67171ccec897736d695409d",
+  "source_files": 10448,
+  "source_manifest_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

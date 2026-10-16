@@ -1,0 +1,64 @@
+=== RUN   TestReaderRegistryFastOnlyRefusalAndDrainProgress
+--- PASS: TestReaderRegistryFastOnlyRefusalAndDrainProgress (0.00s)
+=== RUN   TestLifecycle
+--- PASS: TestLifecycle (0.00s)
+=== RUN   TestReaderRegistry_FastPathSingleSeq
+--- PASS: TestReaderRegistry_FastPathSingleSeq (0.00s)
+=== RUN   TestReaderRegistry_FastAndSlowReadersMin
+--- PASS: TestReaderRegistry_FastAndSlowReadersMin (0.00s)
+=== RUN   TestReaderRegistry_FastPathConcurrentRegisterUnregister
+--- PASS: TestReaderRegistry_FastPathConcurrentRegisterUnregister (0.05s)
+=== RUN   TestReaderRegistry_ConcurrentFastAndSlowReaders
+--- PASS: TestReaderRegistry_ConcurrentFastAndSlowReaders (0.03s)
+=== RUN   TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle
+--- PASS: TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle (0.00s)
+=== RUN   TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow
+--- PASS: TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow (0.00s)
+=== RUN   TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing
+--- PASS: TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing (0.00s)
+=== RUN   TestReaderRegistry_EmptyShardClaimSerializesWithMinScan
+--- PASS: TestReaderRegistry_EmptyShardClaimSerializesWithMinScan (0.03s)
+=== RUN   TestNativeMVCCRegistryOriginalCohorts
+--- PASS: TestNativeMVCCRegistryOriginalCohorts (0.00s)
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/unregister
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/partial-branch
+--- PASS: TestReaderRegistryHeaderCompletionTimingV6 (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/unregister (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/partial-branch (0.00s)
+=== RUN   TestReaderRegistryHeaderFailureDebtV6
+--- PASS: TestReaderRegistryHeaderFailureDebtV6 (0.00s)
+=== RUN   TestReaderRegistryHeaderCompletionJoinsInFlightV6
+--- PASS: TestReaderRegistryHeaderCompletionJoinsInFlightV6 (0.00s)
+=== RUN   TestReaderRegistryPatriciaModelV6
+--- PASS: TestReaderRegistryPatriciaModelV6 (0.03s)
+=== RUN   TestReaderRegistryPositiveHandleWidthV6
+--- PASS: TestReaderRegistryPositiveHandleWidthV6 (0.00s)
+=== RUN   TestReaderRegistryOwnedAdmissionV6
+=== RUN   TestReaderRegistryOwnedAdmissionV6/header-refusal
+=== RUN   TestReaderRegistryOwnedAdmissionV6/peak-and-drain
+=== RUN   TestReaderRegistryOwnedAdmissionV6/closed-binding
+=== RUN   TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck
+=== RUN   TestReaderRegistryOwnedAdmissionV6/failed-unused-refund
+--- PASS: TestReaderRegistryOwnedAdmissionV6 (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/header-refusal (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/peak-and-drain (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/closed-binding (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/failed-unused-refund (0.00s)
+=== RUN   TestReaderRegistryPositiveCompletionV6
+=== RUN   TestReaderRegistryPositiveCompletionV6/nil-work
+=== RUN   TestReaderRegistryPositiveCompletionV6/short-work
+=== RUN   TestReaderRegistryPositiveCompletionV6/different-owner
+--- PASS: TestReaderRegistryPositiveCompletionV6 (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/nil-work (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/short-work (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/different-owner (0.00s)
+=== RUN   TestReaderRegistryOwnedConcurrentSlowV6
+--- PASS: TestReaderRegistryOwnedConcurrentSlowV6 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/lifecycle	1.146s

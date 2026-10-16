@@ -1,0 +1,9 @@
+[
+  {
+    "after_sha256": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "before_sha256": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "mode": "0o664",
+    "owner": "terminal-quiescence",
+    "path": "TreeDB/db/index_gen.go"
+  }
+]

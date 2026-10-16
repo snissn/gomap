@@ -1,0 +1,10 @@
+=== RUN   TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback
+=== RUN   TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/backend_fast_path
+=== RUN   TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/mutable_cached_path
+--- PASS: TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback (0.14s)
+    --- PASS: TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/backend_fast_path (0.07s)
+    --- PASS: TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/mutable_cached_path (0.07s)
+=== RUN   TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence
+--- PASS: TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.155s

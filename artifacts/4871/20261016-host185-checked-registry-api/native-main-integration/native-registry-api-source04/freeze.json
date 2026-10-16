@@ -1,0 +1,31 @@
+{
+  "added_paths": 0,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "bfd22714314761dcf15f3ffb1009faea1dac6d37e6405fe7c1cfed492fbbd411",
+  "changed_paths": 1,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T14:49:06.682269+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "8617cf335b3d5fb8f3a0398474428c02767847483fa8214daad1281141fd174f",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-registry-api-source04-repair-selection.json": "588d5578362b0dc7be1005bcadba0031e68f461c07b886a402a204c3ef1d30d2",
+    "native-main-integration/native-registry-api-source03/freeze.json": "f9bcc90c1732a583c781fdfacb88317c919665d06c0c0dda9aa12276b7420023"
+  },
+  "modes_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+  "parent_manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "partition_changed_counts": {
+    "terminal-quiescence": 1
+  },
+  "runtime_executed": false,
+  "scope": "checked registry API source04 original DATA terminal grower quiescence",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "6fe19cb928916c791730a56f177e7cb21677d40fed5afed4a4374e828fecdc56",
+  "source_files": 10451,
+  "source_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

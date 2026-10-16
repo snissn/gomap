@@ -1,0 +1,21 @@
+{
+  "before": {
+    "TreeDB/db/index_gen.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c"
+  },
+  "failure_raw_sha256": "15b880a720688f5aded9cc59675c690365150410e239ccacb578aec8bd16e3a6",
+  "no_workload_price_or_cap_change": true,
+  "owner": "/root/native_prerequisite exact gpt-6.1-sol/high",
+  "parent_manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "root_failure_verification_sha256": "b1b841e1f04a83680c56d7c0402b3cd8d10bf76fc705b758b4dcddcb0dc219d4",
+  "runtime_granted": false,
+  "scope": "source04 terminal DATA grower quiescence on retained registry/ledger failure",
+  "selected_change": "Reuse SAME DATA Pager.QuiesceBackgroundGrowth at original close boundary after write/growth admission withdrawal and before early registry/ledger failure returns. Retain mappings/files/original physical/header/accounting debt; never quiesce a shared live PRIMARY from terminal DATA boundary. No fixture bypass, no goleak ignore.",
+  "source_basis": "All36 top/27child assertions pass; TestMain reports19 growLoop leaks. Eighteen directly follow failed-birth/startup and16 concurrent closes; nineteenth not uniquely attributable from raw creator IDs and remains unresolved.",
+  "source_guard_engine_lease": false,
+  "source_lease": [
+    "TreeDB/db/index_gen.go",
+    "TreeDB/db/index_gen_db.go"
+  ],
+  "utc": "2026-10-16T14:47:31.547188+00:00"
+}

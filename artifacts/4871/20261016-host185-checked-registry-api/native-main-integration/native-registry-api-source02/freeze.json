@@ -1,0 +1,38 @@
+{
+  "added_paths": 3,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "b079c0318d4490ebb09d7fad7cc535db8246f925293a3c76100529b81b981635",
+  "changed_paths": 12,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T14:14:50.097424+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "8f91f8353004ed30dd5c00e8b3f890b18ff3ce8c6d8a5a264c28f1dac9cfde79",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-main-integration/native-registry-api-c1-core/handoff.json": "27c7d5cb4033d624b1a40d25808424d64311e75fcd7a718af5d571cbc39fecbc",
+    "native-main-integration/native-registry-api-c1-core/owned-after.json": "1e57f446fb0997b311d86ed608c7f7170f6a2d7434b313b9b839b19c3662b1ed",
+    "native-main-integration/native-registry-api-c1-core/owned-before.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "native-main-integration/native-registry-api-c1-core/owned-modes.json": "7c21bc52c31be932d253531ffd7c3bfd1d8ee43c41cfefb697938225cdc274c3",
+    "native-main-integration/native-registry-api-c1-root/after.json": "e917c201ee54e8f3a64dd04e7dfa4f9162dbe06307b798d9923ba50d94655af0",
+    "native-main-integration/native-registry-api-c1-root/before.json": "d99836dde800c40cf32ea69a73e84460af07bb7bb7b913a38a6aaa7fcaf569d0",
+    "native-main-integration/native-registry-api-c1-root/freeze.json": "ca5ceb03e0b8d7b662568e7edb23838f20c125ecce8ee7d4b38a7a09f476291a",
+    "native-main-integration/native-registry-api-source01/freeze.json": "f3929b7634704afe21f82cbfca66e98457592ed4533fcce98b6c47e7f1674670"
+  },
+  "modes_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+  "parent_manifest_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+  "partition_changed_counts": {
+    "core": 10,
+    "root-reset": 2
+  },
+  "runtime_executed": false,
+  "scope": "coherent checked registry API source02 C1 correction",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47",
+  "source_files": 10451,
+  "source_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "after_sha256": "3c3793bb15a8492ae3b2c96963c8a77bed1d73b97541db4e23e389a8a4e7fab5",
+    "before_sha256": "10b9aec29c783437ba494ca175d42cffae0d645876ddc83889aa20925b8e8e34",
+    "mode": "0o664",
+    "owner": "fixture-repair",
+    "path": "TreeDB/db/reader_registry_header_failure_v6_test.go"
+  }
+]

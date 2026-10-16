@@ -1,0 +1,23 @@
+{
+  "source_writes_released": true,
+  "runtime_lease_released": true,
+  "runtime_executed": false,
+  "changed_paths": [
+    "TreeDB/db/index_gen.go"
+  ],
+  "artifact_sha256": {
+    "index_gen.before.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "index_gen.after.go": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "before.json": "23e92249185fec1037ec3b698cf8f5451f1f054bfdb551b5420fcc104113d4c9",
+    "after.json": "d741bf36bd3c6a88705aed5eeff508b0e2b3795b3727b9043f2bcfba545d0bc8",
+    "delta.patch": "230409df493aebab0e9e67837f3b1f86c99a6c595bac19ea8eb2eea37bbe3cbd",
+    "README.md": "1853f8acd9b447482a78fe87d41d1318b95e5080dde76b3b6d87182f8e51203c"
+  },
+  "nineteenth_worker_attribution": "unresolved from retained terminal stack; not claimed uniquely attributed",
+  "source_before": {
+    "TreeDB/db/index_gen.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0"
+  },
+  "source_after": {
+    "TreeDB/db/index_gen.go": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51"
+  }
+}

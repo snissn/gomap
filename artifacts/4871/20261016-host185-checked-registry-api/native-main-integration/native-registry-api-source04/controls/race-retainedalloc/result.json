@@ -1,0 +1,106 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 3.570672526024282,
+  "ended_utc": "2026-10-16T14:54:08.566138+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-retainedalloc",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1735006,
+      "pid": 1735006,
+      "ppid": 1733000,
+      "session": 1735006,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1735006,
+      "pid": 1735025,
+      "ppid": 1735006,
+      "session": 1735006,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1735006,
+      "pid": 1735029,
+      "ppid": 1735006,
+      "session": 1735006,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1735006,
+      "pid": 1735045,
+      "ppid": 1735006,
+      "session": 1735006,
+      "state": "S"
+    },
+    {
+      "comm": "retainedalloc.t",
+      "pgid": 1735006,
+      "pid": 1735070,
+      "ppid": 1735006,
+      "session": 1735006,
+      "state": "S"
+    }
+  ],
+  "pgid": 1735006,
+  "pid": 1735006,
+  "raw_log_sha256": "a36562a2a12d83b3f3826f5a4f60849115f24574b0684ec84ecbb5bfbe8856a6",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T14:54:04.995465+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "test_RUN_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "top_level_pass_count": 6,
+  "unexpected_top_RUN": []
+}

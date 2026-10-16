@@ -1,0 +1,12 @@
+{
+  "accepted": true,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "elapsed_seconds": 378.58782750507817,
+  "raw_log_sha256": "96f7cd6a634b81d2d7e89a6893b2d3d47408d588e255080b3914faeed57c90b8",
+  "result_sha256": "56328a6d58d8598c34c5818a645cbbd95020a7329dd56e6f280e8715efb8e92f",
+  "scope": "root-module compile and default vet only; no test bodies; nested modules excluded",
+  "selection_sha256": "59ca4c2396cb7786f218cb26e5de2045d695ccc4a951fe79dd4838e2e90f1138",
+  "source_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "utc": "2026-10-16T14:24:11.727328+00:00"
+}

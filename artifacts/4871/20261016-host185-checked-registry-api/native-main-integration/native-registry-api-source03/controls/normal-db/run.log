@@ -1,0 +1,226 @@
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/current
+=== RUN   TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/retired-after-eligibility
+--- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6 (0.07s)
+    --- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/current (0.04s)
+    --- PASS: TestNativeDataDependencyReleaseRechecksCurrentGenerationV6/retired-after-eligibility (0.03s)
+=== RUN   TestNativeGenerationContainingCompletionAfterOriginalClose
+--- PASS: TestNativeGenerationContainingCompletionAfterOriginalClose (0.00s)
+=== RUN   TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach
+--- PASS: TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach (0.00s)
+=== RUN   TestNativeSnapshotMinimumAcquisitionAdmissionV6
+=== RUN   TestNativeSnapshotMinimumAcquisitionAdmissionV6/record-remainder-short
+=== RUN   TestNativeSnapshotMinimumAcquisitionAdmissionV6/byte-remainder-short
+=== RUN   TestNativeSnapshotMinimumAcquisitionAdmissionV6/first-shard
+=== RUN   TestNativeSnapshotMinimumAcquisitionAdmissionV6/last-shard
+--- PASS: TestNativeSnapshotMinimumAcquisitionAdmissionV6 (0.00s)
+    --- PASS: TestNativeSnapshotMinimumAcquisitionAdmissionV6/record-remainder-short (0.00s)
+    --- PASS: TestNativeSnapshotMinimumAcquisitionAdmissionV6/byte-remainder-short (0.00s)
+    --- PASS: TestNativeSnapshotMinimumAcquisitionAdmissionV6/first-shard (0.00s)
+    --- PASS: TestNativeSnapshotMinimumAcquisitionAdmissionV6/last-shard (0.00s)
+=== RUN   TestNativeSnapshotMinimumTerminalScanAdmissionV6
+--- PASS: TestNativeSnapshotMinimumTerminalScanAdmissionV6 (0.00s)
+=== RUN   TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6
+--- PASS: TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6 (0.00s)
+=== RUN   TestNativeSnapshotMinimumUnsupportedGeometryV6
+=== RUN   TestNativeSnapshotMinimumUnsupportedGeometryV6/whole-map
+=== RUN   TestNativeSnapshotMinimumUnsupportedGeometryV6/removed-fallback-summary
+--- PASS: TestNativeSnapshotMinimumUnsupportedGeometryV6 (0.00s)
+    --- PASS: TestNativeSnapshotMinimumUnsupportedGeometryV6/whole-map (0.00s)
+    --- PASS: TestNativeSnapshotMinimumUnsupportedGeometryV6/removed-fallback-summary (0.00s)
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6/initial
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6/registry
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6/terminal
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6/completed-reuse
+=== RUN   TestNativeSnapshotMinimumEpochInvalidationV6/counter-before-begin-epoch
+--- PASS: TestNativeSnapshotMinimumEpochInvalidationV6 (0.00s)
+    --- PASS: TestNativeSnapshotMinimumEpochInvalidationV6/initial (0.00s)
+    --- PASS: TestNativeSnapshotMinimumEpochInvalidationV6/registry (0.00s)
+    --- PASS: TestNativeSnapshotMinimumEpochInvalidationV6/terminal (0.00s)
+    --- PASS: TestNativeSnapshotMinimumEpochInvalidationV6/completed-reuse (0.00s)
+    --- PASS: TestNativeSnapshotMinimumEpochInvalidationV6/counter-before-begin-epoch (0.00s)
+=== RUN   TestNativeSnapshotMinimumChurnThenQuietProgressV6
+--- PASS: TestNativeSnapshotMinimumChurnThenQuietProgressV6 (0.00s)
+=== RUN   TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6
+--- PASS: TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6 (0.05s)
+=== RUN   TestNativeSnapshotMinimumConcurrentReadersV6
+--- PASS: TestNativeSnapshotMinimumConcurrentReadersV6 (0.00s)
+=== RUN   TestOriginalStartupCleanupPhysicalRefusalRetainsLock
+--- PASS: TestOriginalStartupCleanupPhysicalRefusalRetainsLock (0.05s)
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock
+--- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock (0.13s)
+    --- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock (0.06s)
+    --- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock (0.06s)
+=== RUN   TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload
+--- PASS: TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload (0.05s)
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/success
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release
+--- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6 (0.46s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/success (0.11s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain (0.11s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close (0.12s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release (0.12s)
+=== RUN   TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair
+--- PASS: TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair (0.08s)
+=== RUN   TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls
+--- PASS: TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls (0.08s)
+=== RUN   TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody
+--- PASS: TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody (0.10s)
+=== RUN   TestReaderRegistryFailedBirthRetainsGenerationV6
+--- PASS: TestReaderRegistryFailedBirthRetainsGenerationV6 (0.03s)
+=== RUN   TestReaderRegistryLateWrapperFailureRetainsHeaderV6
+--- PASS: TestReaderRegistryLateWrapperFailureRetainsHeaderV6 (0.03s)
+=== RUN   TestOfflineReaderRegistryFailureRetainsOriginalScopeV6
+--- PASS: TestOfflineReaderRegistryFailureRetainsOriginalScopeV6 (0.07s)
+=== RUN   TestReaderRegistryStartupFailureRetainsOriginalHeaderV6
+--- PASS: TestReaderRegistryStartupFailureRetainsOriginalHeaderV6 (0.03s)
+=== RUN   TestReaderRegistryCloseRacesFailedUnregisterV6
+--- PASS: TestReaderRegistryCloseRacesFailedUnregisterV6 (0.55s)
+=== RUN   TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6
+--- PASS: TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6 (0.07s)
+=== RUN   TestOriginalReaderRegistryHeaderLifetimeV6
+--- PASS: TestOriginalReaderRegistryHeaderLifetimeV6 (0.03s)
+=== RUN   TestNativeDataPositiveRegistrationCompletionV6
+--- PASS: TestNativeDataPositiveRegistrationCompletionV6 (0.03s)
+=== RUN   TestOfflineReaderRegistryOriginalOwnerV6
+--- PASS: TestOfflineReaderRegistryOriginalOwnerV6 (0.07s)
+=== RUN   TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB
+=== RUN   TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot
+=== RUN   TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read
+--- PASS: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB (0.13s)
+    --- PASS: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot (0.06s)
+    --- PASS: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read (0.07s)
+=== RUN   TestOriginalGenerationWrapperCloseRacesLastSnapshot
+--- PASS: TestOriginalGenerationWrapperCloseRacesLastSnapshot (0.69s)
+=== RUN   TestOriginalGenerationPublishedFailureConcurrentInspection
+--- PASS: TestOriginalGenerationPublishedFailureConcurrentInspection (0.06s)
+=== RUN   TestPrimaryMetadataCaptureFinalizesAfterLastRead
+--- PASS: TestPrimaryMetadataCaptureFinalizesAfterLastRead (0.09s)
+=== RUN   TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer
+--- PASS: TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer (0.11s)
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded
+--- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead (0.17s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary (0.09s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded (0.08s)
+=== RUN   TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot
+--- PASS: TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot (0.09s)
+=== RUN   TestOfflineReplacementOriginalPagerCompletion
+=== RUN   TestOfflineReplacementOriginalPagerCompletion/consumed
+=== RUN   TestOfflineReplacementOriginalPagerCompletion/physical-refusal
+--- PASS: TestOfflineReplacementOriginalPagerCompletion (0.17s)
+    --- PASS: TestOfflineReplacementOriginalPagerCompletion/consumed (0.09s)
+    --- PASS: TestOfflineReplacementOriginalPagerCompletion/physical-refusal (0.08s)
+=== RUN   TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock
+=== RUN   TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/semantic-refusal
+=== RUN   TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/late-parent-refusal
+--- PASS: TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock (0.17s)
+    --- PASS: TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/semantic-refusal (0.08s)
+    --- PASS: TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/late-parent-refusal (0.08s)
+PASS
+goleak: Errors on successful test run: found unexpected goroutines:
+[Goroutine 277 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574601208)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 564 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574c9c008)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 563
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 313 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d66c8)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 353 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d7208)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 329 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d6008)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 345 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d6d88)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 377 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d78c8)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 369 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d7448)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 321 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574601688)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 361 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d6b48)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 213 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574601d48)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 212
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 337 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d6908)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 231 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574600908)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 251 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d7b08)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 250
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 257 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5745d6248)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 269 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574600248)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 239 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574600fc8)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 263 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee574601448)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+ Goroutine 285 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2ee5746018c8)
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:61 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 230
+	/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/pager/grow.go:13 +0x116
+]
+FAIL	github.com/snissn/gomap/TreeDB/db	4.124s
+FAIL

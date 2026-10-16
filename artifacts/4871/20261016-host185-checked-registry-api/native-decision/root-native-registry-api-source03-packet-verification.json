@@ -1,0 +1,13 @@
+{
+  "all_eight_proposed_argv_and_named_test_inventories_match_source02": true,
+  "artifact_hashes_verified": 8,
+  "before_after_archives_and_modes_verified": true,
+  "changed_paths": [
+    "TreeDB/db/reader_registry_header_failure_v6_test.go"
+  ],
+  "exact_delta_verified": true,
+  "handoff_sha256": "9b762578a540616e25a5c4184fcfc7fbc5294bedd8ce12ef81964745ffe8da89",
+  "production_change": false,
+  "source_writes_released": true,
+  "utc": "2026-10-16T14:37:16.333554+00:00"
+}

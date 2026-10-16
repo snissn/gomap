@@ -1,0 +1,34 @@
+{
+  "artifacts": {
+    "README.md": "d0e118f05cb80c831a52c3e5e396e3fa400b2ae4c407401b89d072e60e321436",
+    "before.tar.gz": "f85494db5d0d164a1d105ce8708cb48863a7dc3206fae196426a8426f66ccaf1",
+    "changed-files.json": "a124e23cdd6a1c9387950b3d1b2720493c0dbe57307e6b3683f257a1944f3d3d",
+    "changed-source.tar.gz": "f7320bc0388d51b782381f13bbcb473fee4804c3a0d32806f87430b89cbd6d84",
+    "owned-after.json": "1e57f446fb0997b311d86ed608c7f7170f6a2d7434b313b9b839b19c3662b1ed",
+    "owned-after.tar.gz": "ab1220b5ceb637d49f33adf7266c50fd4b793f020e01c96f38cb94c6b80ffc05",
+    "owned-before-modes.json": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "owned-before.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "owned-modes.json": "7c21bc52c31be932d253531ffd7c3bfd1d8ee43c41cfefb697938225cdc274c3",
+    "parent-binding.json": "5aefcd397733dee531dff36ed0fe4d09faa6d91bd1a453711d5326f905ba40e9",
+    "proposed-commands.json": "2e94b3094004a57bfa4d54cd7cd4e5c32d860de4aada61afc220d66e7801cb7a",
+    "source.delta.patch": "9078785da5851dbef4beca28adca22454262026404fa1cdfbe9bcc53ba5696d1",
+    "test-bindings.json": "2785558a7e1e685f5acc2847c573675974c83c791ae978cafd79b50b652a57d7"
+  },
+  "changed_count": 10,
+  "commands_executed": false,
+  "concurrency_scope": "16 actual joined Close/Unregister schedules plus original concurrency controls; no universal schedule claim",
+  "first_hole_coverage": "shared original cleanup exercised with real admitted speculative nodes; full 63-bit exhaustion source-only",
+  "focused_proposal": {
+    "calls": 4,
+    "children_per_mode": 39,
+    "executed": false,
+    "tops_per_mode": 55
+  },
+  "owned_after_count": 503,
+  "parent_manifest_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+  "q32_progress": "unresolved; acquisition scans and protected product limits unchanged",
+  "runtime_lease": "released",
+  "selection_sha256": "b76c05e80de7a5d8a6cb88046236ba7fe63626e1e84a7c2b2fc40842ba7680b6",
+  "source_lease": "released",
+  "status": "source-only successor frozen; source/runtime leases released"
+}

@@ -1,0 +1,105 @@
+{
+  "verdict": "ACCEPT",
+  "disposition": "ACCEPT_SOURCE_READINESS_ONLY_RUNTIME_REQUIRED",
+  "scope": "source04 SAME DATA grower join before retained registry/ledger close refusal",
+  "utc": "2026-10-16T14:51:34.785515+00:00",
+  "reviewer": "/root/ordinary_completion exact gpt-6.1-sol/high",
+  "findings": [],
+  "inputs": {
+    "native-main-integration/native-registry-api-data-grower-repair/handoff.json": "df0b925a6a81a30ff548a07e76846c4931b2c6fb28434c3fe7b8f1c154170866",
+    "native-main-integration/native-registry-api-data-grower-repair/index_gen.before.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "native-main-integration/native-registry-api-data-grower-repair/index_gen.after.go": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "native-main-integration/native-registry-api-data-grower-repair/before.json": "23e92249185fec1037ec3b698cf8f5451f1f054bfdb551b5420fcc104113d4c9",
+    "native-main-integration/native-registry-api-data-grower-repair/after.json": "d741bf36bd3c6a88705aed5eeff508b0e2b3795b3727b9043f2bcfba545d0bc8",
+    "native-main-integration/native-registry-api-data-grower-repair/delta.patch": "230409df493aebab0e9e67837f3b1f86c99a6c595bac19ea8eb2eea37bbe3cbd",
+    "native-main-integration/native-registry-api-data-grower-repair/README.md": "1853f8acd9b447482a78fe87d41d1318b95e5080dde76b3b6d87182f8e51203c",
+    "native-decision/root-native-registry-api-source04-repair-selection.json": "588d5578362b0dc7be1005bcadba0031e68f461c07b886a402a204c3ef1d30d2",
+    "native-decision/root-native-registry-api-source03-focused-verification.json": "b1b841e1f04a83680c56d7c0402b3cd8d10bf76fc705b758b4dcddcb0dc219d4",
+    "native-main-integration/native-registry-api-source03/controls/normal-db/run.log": "15b880a720688f5aded9cc59675c690365150410e239ccacb578aec8bd16e3a6",
+    "native-main-integration/native-registry-api-source04/source-frozen.json": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "native-main-integration/native-registry-api-source04/source-frozen.tar.gz": "6fe19cb928916c791730a56f177e7cb21677d40fed5afed4a4374e828fecdc56",
+    "native-main-integration/native-registry-api-source04/proposed-commands.json": "cbbc80b4b16f250f598b520280232ddc4d3a3a6f3dc31916ed88d1e82ac5a70b"
+  },
+  "inspected_source_hashes": {
+    "TreeDB/db/index_gen.go": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "TreeDB/db/pools.go": "ed1851b6fd1c3c430406676af2507ea4d4ac977c9323569e98189bd2e7a256ac",
+    "TreeDB/db/db.go": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+    "TreeDB/db/original_startup_generation.go": "88ff3460df396a12918a72ab3cb364fbc077b4e5630c69c09905bec82350eced",
+    "TreeDB/db/primary_offline_pair_v6.go": "6c0b82bb061ac4aed6c088946293ba1af70f6e132a4bcc78e924a0f193288c80",
+    "TreeDB/db/vacuum_online.go": "3f2969a4b6e7182b3e0eb10567cae3484d777c1d9049b82843c23b071755fe86",
+    "TreeDB/db/vacuum_offline.go": "a6561ae2a8330ecbb0bf96693887f97178cd2ee99e15b059b10de91f85166f1a",
+    "TreeDB/db/open_readonly.go": "a3be4240eba7060a7b50932cbdd8adf814cdd36cc53cd519215c3922a9f4ba17",
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "3c3793bb15a8492ae3b2c96963c8a77bed1d73b97541db4e23e389a8a4e7fab5",
+    "TreeDB/pager/grow.go": "e3ae43cab70b6592f56bc5cb2074765c74d620b4e07cf6ab90c4c6df7d980c6f",
+    "TreeDB/pager/grow_work.go": "12194397502779ef2ed55c8243ec998f2b712000f576f461e50eb8709449c3e6"
+  },
+  "independent_identity_checks": {
+    "packet_hashes_match": true,
+    "preimage": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "postimage": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "exact_delta_regenerated": true,
+    "full_source04_archive_manifest_live_files_equal": 10451,
+    "only_changed_from_source03": [
+      "TreeDB/db/index_gen.go"
+    ],
+    "all_other_source03_files_equal": 10450,
+    "tests_and_original_capacities_unchanged": true
+  },
+  "caller_disposition": [
+    {
+      "family": "terminal DB teardown",
+      "sites": [
+        "db.go closeAfterHooks -> index_gen_db.go closeAllIndexes"
+      ],
+      "proof": "closing and mvcc admission withdrawn; writer and native publication work drained; producers stopped; idx discovery nil before loop; idxMu released before g.close."
+    },
+    {
+      "family": "retired generation and ghost disposal",
+      "sites": [
+        "index_gen_db.go releaseIndex",
+        "index_gen_db.go maybeReleaseRetiredIndex",
+        "pools.go indexGhostManager.add/closeOriginalGeneration/scavenge/closeAllWithCompletionV6"
+      ],
+      "proof": "Noncurrent generation, physical refs/readers retired; fresh DATA belongs to retired generation. idxMu released; ghost queue/retirement locks are not pager locks and growLoop never acquires them."
+    },
+    {
+      "family": "startup and read-only constructor refusal",
+      "sites": [
+        "original_startup_generation.go newStartupIndexGeneration/finishStartupFailure",
+        "db.go openWithLock",
+        "open_readonly.go openReadOnly/openReadOnlyWithLock"
+      ],
+      "proof": "Unpublished constructor is synchronous and no external writer exists; constructed startup uses actual DB.Close. Pager constructor calls have returned before deferred cleanup. Nil/read-only grower is safe."
+    },
+    {
+      "family": "private offline pair and replacement",
+      "sites": [
+        "primary_offline_pair_v6.go releaseOfflineNamespaceScopeV6/newOfflinePrimaryPairV6/finishOfflinePrimaryPairV6",
+        "original_startup_generation.go finishOfflineReplacementV1",
+        "vacuum_offline.go replacement.close"
+      ],
+      "proof": "Private output DATA; synchronous producer/build and file callbacks returned before close; namespace mutex acquired after g.close. Source DB and PRIMARY custody remain independent."
+    },
+    {
+      "family": "online vacuum replacement",
+      "sites": [
+        "vacuum_online.go replacementGen.close/closeNewPager/cleanupNewPager"
+      ],
+      "proof": "Fresh private replacement DATA, unpublished on cleanup branches; build calls returned. Successful publication transfers this same generation and leaves its worker live. Old DATA retires separately; shared PRIMARY is not the target."
+    }
+  ],
+  "lock_review": "g.closeOnce enters QuiesceBackgroundGrowth before acquiring wrapperMu, registry refundMu or construction-ledger release gates. stopGrower only closes its once-only stop channel and joins growDone. growLoop uses pager allocMu/growMu/mu and governed metadata during private Growth; reviewed close boundaries hold none of these. Registry fault callback may briefly hold Owner.mu/refundMu, but its test entry-hook barrier releases it before waiting for actual DB.Close; worker does not need DB close/ghost/idx locks to finish. No self-join from growLoop into g.close exists in the production call path.",
+  "physical_and_shared_owner_disposition": "Only g.pager is joined, not g.primary.Pager. Generation DATA pagers are opened/assigned as new private pagers; shared PRIMARY admission-aware quiescence remains unchanged in index_gen_db.go. No mapping/file/metadata/header detach, lease refund, registry receipt reset or successful physical close is fabricated. Existing closeOnce deferred sticky-error merge and all physical/header/accounting gates remain.",
+  "failure_basis": "source03 normal-db all36 top/27 child assertions PASS, then TestMain goleak reports19 Pager.growLoop workers. Structural source explains retained DATA workers on failed-birth/startup and16 close-race iterations; remaining nineteenth is not uniquely attributed from creator IDs and remains open pending exact runtime.",
+  "executed_runtime_commands": [],
+  "source_writes": [],
+  "git_or_github_actions": [],
+  "limits": [
+    "Source readiness only; no compile/tests/race/runtime executed by this reviewer.",
+    "Source03 package remains RED despite passing all named assertions because TestMain leaked.",
+    "Nineteenth worker has no unique source attribution; no guarantee this patch removes all19.",
+    "Root must run selected source04 normal/race controls, including goleak, before semantic acceptance.",
+    "No acquisition guard/scan, actual native publication, cost, CI, merge, Q32 or graph acceptance."
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 2,
+  "elapsed_seconds": 34.09848156385124,
+  "ended_utc": "2026-10-16T14:56:02.463934+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/backend_fast_path",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/mutable_cached_path"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-caching",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1736751,
+      "pid": 1736751,
+      "ppid": 1733000,
+      "session": 1736751,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1736770,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1736917,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1736922,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1737188,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1737196,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1737200,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1736751,
+      "pid": 1737206,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1736751,
+      "pid": 1737214,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1736751,
+      "pid": 1737224,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1736751,
+      "pid": 1737232,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1736751,
+      "pid": 1737305,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "R"
+    },
+    {
+      "comm": "caching.test",
+      "pgid": 1736751,
+      "pid": 1737321,
+      "ppid": 1736751,
+      "session": 1736751,
+      "state": "S"
+    }
+  ],
+  "pgid": 1736751,
+  "pid": 1736751,
+  "raw_log_sha256": "b471f42429221e25950139d3dc1fb9d1872cc7104878628d3237c08e6568dbc0",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T14:55:28.365453+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/backend_fast_path",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/mutable_cached_path",
+    "TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence"
+  ],
+  "test_RUN_names": [
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/backend_fast_path",
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback/mutable_cached_path",
+    "TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestSnapshotAcquisitionErrorDoesNotRetryCachedFallback",
+    "TestPublishedRootSnapshotAcquisitionErrorIsNotAbsence"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_RUN": []
+}

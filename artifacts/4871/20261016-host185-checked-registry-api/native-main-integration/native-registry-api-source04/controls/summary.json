@@ -1,0 +1,72 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 8,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T14:56:48.010373+00:00",
+  "git_identity_still_frozen": true,
+  "historical_normal_counts": {
+    "child": 12,
+    "top": 25
+  },
+  "historical_reuse_sha256": "53564e4ef7fa2f89b8d7c4dfaf356926138157f46168d5459bea8789962e1f28",
+  "native_publication_runtime": false,
+  "public_status": "Original Q32 gate remains; checked registry controls do not select a numeric allowance",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-caching",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-public",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-caching",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-public",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10451,
+  "source_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "top_pass_normal": 40,
+  "top_pass_race": 65
+}

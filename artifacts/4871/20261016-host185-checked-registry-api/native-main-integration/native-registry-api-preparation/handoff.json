@@ -1,0 +1,25 @@
+{
+  "changed_files": 120,
+  "changed_production_files": 31,
+  "changed_test_files": 89,
+  "files": {
+    "README.md": "14ef35bf5ad1b6471c18037006ac652a96a901f4bbc0084746f80001909aead8",
+    "changed-core.json": "6670bdeba05161f36945f7bd405ed2767d680e860979c72a8ffd6c8e0fefb9be",
+    "changed-core.tar.gz": "f1641fd59557cd08a70dcd686597b6747c23f830b2fce1b718f501dfb9012c41",
+    "changed-test-bindings.json": "5f20417e48d52ed145cb89f60b27f24a2436d90e2d1f9f914253aa192544989c",
+    "owned-core.patch": "222b897ecb46b2312f1566e384a092805dced7f797fb802bc6e0ec8d2176a34c",
+    "owned-modes.json": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "owned-source.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "owned-source.tar.gz": "884fdfb148166a67ea765f044db67abfbaf530f353efd6a3cfc6b45f7d23a104",
+    "proposed-commands.json": "9a9c37351388c0316282aacd1bd89a30161d8bf1aae9d924090e0cbbb7cc4d04",
+    "seal-core.py": "bb6f941cbf87ec0977ad0b69d80ef6e7f5ab70a1c6a1ef56c9198bcc1ef6dfa9",
+    "seal-receipt.json": "083c662e96668d9e51d1b629c3467a188d3d3b81651820d5dd1cb436c7e44a5f"
+  },
+  "owned_files": 501,
+  "provisional_production_snapshot_disposition": "Final root_publication_build_group.go adds original failed Unregister custody after releasing build locks; final owned seal supersedes that earlier file only.",
+  "runtime_lease": "RELEASED / none exercised",
+  "source_lease": "RELEASED",
+  "status": "core source complete; no compiler/runtime executed",
+  "unresolved_source_design_blockers": [],
+  "verification_required": "Root combined full-source freeze, compile/type checks and selected tests; no runtime acceptance claimed"
+}

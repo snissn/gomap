@@ -1,0 +1,130 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestNativeDataDependencyReleaseRechecksCurrentGenerationV6|TestNativeDataPositiveRegistrationCompletionV6|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestNativeSnapshotMinimumAcquisitionAdmissionV6|TestNativeSnapshotMinimumChurnThenQuietProgressV6|TestNativeSnapshotMinimumConcurrentReadersV6|TestNativeSnapshotMinimumEpochInvalidationV6|TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6|TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6|TestNativeSnapshotMinimumTerminalScanAdmissionV6|TestNativeSnapshotMinimumUnsupportedGeometryV6|TestOfflineReaderRegistryFailureRetainsOriginalScopeV6|TestOfflineReaderRegistryOriginalOwnerV6|TestOfflineReplacementOriginalPagerCompletion|TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationPublishedFailureConcurrentInspection|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock|TestOriginalReaderRegistryHeaderLifetimeV6|TestOriginalStartupCleanupPhysicalRefusalRetainsLock|TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload|TestPrimaryConstructionLedgerLateHandoffCustodyV6|TestPrimaryMetadataCaptureFinalizesAfterLastRead|TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer|TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody|TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair|TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls|TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot|TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead|TestReaderRegistryCloseRacesFailedUnregisterV6|TestReaderRegistryFailedBirthRetainsGenerationV6|TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6|TestReaderRegistryLateWrapperFailureRetainsHeaderV6|TestReaderRegistryStartupFailureRetainsOriginalHeaderV6)$",
+    "./TreeDB/db"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 27,
+  "expected_top_level_count": 36,
+  "grant_sha256": "9f0190be7990445238b2a84a348af336726a3bc264d0cb14c991369a10d59eb2",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/identity.json",
+  "name": "normal-db",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestNativeDataDependencyReleaseRechecksCurrentGenerationV6": [
+      "current",
+      "retired-after-eligibility"
+    ],
+    "TestNativeSnapshotMinimumAcquisitionAdmissionV6": [
+      "record-remainder-short",
+      "byte-remainder-short",
+      "first-shard",
+      "last-shard"
+    ],
+    "TestNativeSnapshotMinimumEpochInvalidationV6": [
+      "initial",
+      "registry",
+      "terminal",
+      "completed-reuse",
+      "counter-before-begin-epoch"
+    ],
+    "TestNativeSnapshotMinimumUnsupportedGeometryV6": [
+      "whole-map",
+      "removed-fallback-summary"
+    ],
+    "TestOfflineReplacementOriginalPagerCompletion": [
+      "consumed",
+      "physical-refusal"
+    ],
+    "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock": [
+      "semantic-refusal",
+      "late-parent-refusal"
+    ],
+    "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB": [
+      "held-snapshot",
+      "held-active-read"
+    ],
+    "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock": [
+      "shared-lock",
+      "caller-lock"
+    ],
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6": [
+      "success",
+      "late-drain",
+      "failed-close",
+      "runtime-release"
+    ],
+    "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead": [
+      "ordinary",
+      "bounded"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestNativeDataDependencyReleaseRechecksCurrentGenerationV6",
+    "TestNativeDataPositiveRegistrationCompletionV6",
+    "TestNativeGenerationContainingCompletionAfterOriginalClose",
+    "TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach",
+    "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+    "TestNativeSnapshotMinimumChurnThenQuietProgressV6",
+    "TestNativeSnapshotMinimumConcurrentReadersV6",
+    "TestNativeSnapshotMinimumEpochInvalidationV6",
+    "TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6",
+    "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+    "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+    "TestNativeSnapshotMinimumUnsupportedGeometryV6",
+    "TestOfflineReaderRegistryFailureRetainsOriginalScopeV6",
+    "TestOfflineReaderRegistryOriginalOwnerV6",
+    "TestOfflineReplacementOriginalPagerCompletion",
+    "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+    "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+    "TestOriginalGenerationPublishedFailureConcurrentInspection",
+    "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+    "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+    "TestOriginalReaderRegistryHeaderLifetimeV6",
+    "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+    "TestOriginalStartupSuccessAndCleanRefusalConsumeOnlyOriginalPayload",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryMetadataCaptureFinalizesAfterLastRead",
+    "TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer",
+    "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody",
+    "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+    "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+    "TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot",
+    "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead",
+    "TestReaderRegistryCloseRacesFailedUnregisterV6",
+    "TestReaderRegistryFailedBirthRetainsGenerationV6",
+    "TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6",
+    "TestReaderRegistryLateWrapperFailureRetainsHeaderV6",
+    "TestReaderRegistryStartupFailureRetainsOriginalHeaderV6"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-frozen.tar.gz",
+  "source_archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47"
+}

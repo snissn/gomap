@@ -1,0 +1,45 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 3,
+  "commands_not_executed": [
+    "normal-caching",
+    "normal-public",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-db",
+    "race-caching",
+    "race-public"
+  ],
+  "completed_utc": "2026-10-16T14:24:33.314733+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Original Q32 gate remains; checked registry controls do not select a numeric allowance",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 1,
+      "name": "normal-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10451,
+  "source_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true,
+  "top_pass_normal": 45,
+  "top_pass_race": 0
+}

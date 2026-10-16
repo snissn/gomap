@@ -1,0 +1,48 @@
+{
+  "Q32": "original gate remains open",
+  "accepted": false,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "checks": [
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": false,
+      "child_pass": 27,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-db",
+      "raw_sha256": "15b880a720688f5aded9cc59675c690365150410e239ccacb578aec8bd16e3a6",
+      "result_sha256": "a2eebfbe65326aaa927ae1e8a6604bb65e4815c3ebb95dfcc4f108d1f62d8b77",
+      "source_equal": true,
+      "top_pass": 36,
+      "unexpected_RUN": []
+    }
+  ],
+  "commands_not_executed": [
+    "normal-caching",
+    "normal-public",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-db",
+    "race-caching",
+    "race-public"
+  ],
+  "counts": {
+    "normal": {
+      "child": 27,
+      "top": 36
+    },
+    "race": {
+      "child": 0,
+      "top": 0
+    }
+  },
+  "manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "plan_sha256": "6eac81b8f5f504e138553bebab2d5984d6760f439e0d92731bc6b33be84a3b79",
+  "scope": "frozen checked registry API focused normal/race raw recomputation",
+  "summary_sha256": "b75029b82d4f27c88250647008652208835189e56a9e2d03b26d6fac943bcbca",
+  "utc": "2026-10-16T14:44:01.144235+00:00"
+}

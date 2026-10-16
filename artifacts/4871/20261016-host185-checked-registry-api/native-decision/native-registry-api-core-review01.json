@@ -1,0 +1,121 @@
+{
+  "disposition": "REJECT",
+  "scope": "Frozen db/lifecycle checked registry and API core source readiness; not whole integrated qualification",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin the required exact gpt-6.1-sol model; this independent explicitly routed internal review is used.",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation",
+  "handoff_sha256": "6bf01e024e0d225d155f9547e1b2c48019e512b93e0a5456b5ad83c9947eb4c3",
+  "owned_source_manifest_sha256": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+  "owned_source_archive_sha256": "884fdfb148166a67ea765f044db67abfbaf530f353efd6a3cfc6b45f7d23a104",
+  "owned_core_patch_sha256": "222b897ecb46b2312f1566e384a092805dced7f797fb802bc6e0ec8d2176a34c",
+  "owned_files": 501,
+  "changed_files": 120,
+  "changed_production_files": 31,
+  "changed_test_files": 89,
+  "artifact_bindings": {
+    "README.md": "14ef35bf5ad1b6471c18037006ac652a96a901f4bbc0084746f80001909aead8",
+    "changed-core.json": "6670bdeba05161f36945f7bd405ed2767d680e860979c72a8ffd6c8e0fefb9be",
+    "changed-core.tar.gz": "f1641fd59557cd08a70dcd686597b6747c23f830b2fce1b718f501dfb9012c41",
+    "changed-test-bindings.json": "5f20417e48d52ed145cb89f60b27f24a2436d90e2d1f9f914253aa192544989c",
+    "owned-core.patch": "222b897ecb46b2312f1566e384a092805dced7f797fb802bc6e0ec8d2176a34c",
+    "owned-modes.json": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "owned-source.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "owned-source.tar.gz": "884fdfb148166a67ea765f044db67abfbaf530f353efd6a3cfc6b45f7d23a104",
+    "proposed-commands.json": "9a9c37351388c0316282aacd1bd89a30161d8bf1aae9d924090e0cbbb7cc4d04",
+    "seal-core.py": "bb6f941cbf87ec0977ad0b69d80ef6e7f5ab70a1c6a1ef56c9198bcc1ef6dfa9",
+    "seal-receipt.json": "083c662e96668d9e51d1b629c3467a188d3d3b81651820d5dd1cb436c7e44a5f"
+  },
+  "reviewed_production_delta_bindings": {
+    "TreeDB/db/api.go": "69a690c69893d7d91538bb0a35164c5168c6857fd8d6cace47a85e88d222081b",
+    "TreeDB/db/batch.go": "10f2ae73d1dffd38dc1763eff6d0ba294cfdd259faf27dfae306aec4756233ee",
+    "TreeDB/db/compact_storage.go": "fa19290375391a896d57a4c8a1a7978abe4a229d9563a576dc26793129632870",
+    "TreeDB/db/compact_storage_audit.go": "bf7447a862ce71f7039db2f78db9c3c5ed73c21cef0c8fa44fd1e501efb7e58f",
+    "TreeDB/db/conditional_txn.go": "79d08dd96f3840f34923345650a8b31124d4977a65efb3548e366898879d2f58",
+    "TreeDB/db/db.go": "ac761ed11cf9e5cf68e0361b1dbb23d449e2eff7f5a2e04ec3d804ce00ed4621",
+    "TreeDB/db/durable_root_runtime.go": "cedbff883743df5d128b90a2d2badb15e87f560bdb8b6a80dcf38312f9f9ae5c",
+    "TreeDB/db/flush_span_run_plan.go": "e6beaeee4a8243264365163f66fa6e4e5c0ab3487c8d0823b7e69aaed8b5d62f",
+    "TreeDB/db/fragmentation.go": "e0d8ec33f89a86d26288f654fb7bb40ef2b22837cd5567ea56a16bc7fb9beda3",
+    "TreeDB/db/index_gen.go": "15057e53cbbbd0292b3a82146c2e32e04e7e102a0ee0d7bfc1f735feb6d2a2ae",
+    "TreeDB/db/leaf_generation_gc.go": "714049706db18ad99a063d83b0ce9f6e81209bc40e35d0d5bb4d4192f36fb3b3",
+    "TreeDB/db/leaf_generation_maintenance_limits.go": "7c40a5cd0d4b0363eb3d3e08d310ee67d1e74a52d8200cc3538b8876331a3eca",
+    "TreeDB/db/leaf_generation_pack_rewrite.go": "0511f595c9f68efc29a243b19bfc033a84391abbe9da2584eeb70fb095704fc8",
+    "TreeDB/db/leaf_generation_plan.go": "a28d4da775fa3f50c7e08edf75ca2b1677181b8d9d839dfe8c3ebc5266b036ca",
+    "TreeDB/db/native_minimum_price_for_test_v6.go": "eac36566476a24c778d28eed65c1810638e8cd97ed8eff0fbe734e199d78f96d",
+    "TreeDB/db/native_mvcc_data_dependency_release_v6.go": "9f3e09f314baf088ed891a37b5c385c7b1b94e52e3c4d413e4593895474e2787",
+    "TreeDB/db/negative_filter.go": "51c64202c2d9892628abe243e778fb58b0556bdf64b23c188402449ff9fb3aea",
+    "TreeDB/db/ordered_root_publish.go": "f5aa3798ee22c3772707604e446ee35d240f200eb15199e821be8aea38e99799",
+    "TreeDB/db/pools.go": "ed1851b6fd1c3c430406676af2507ea4d4ac977c9323569e98189bd2e7a256ac",
+    "TreeDB/db/primary_offline_pair_v6.go": "c6dddaf82d1e5885a70a635e82eb6e04005e14244bce7e8f58a8c0f87023961a",
+    "TreeDB/db/read_only_prepare.go": "bb132bf96890467fdf0641fd3cbc15711344e9756287b5d8434d7828ed17975f",
+    "TreeDB/db/recoverable_root_set.go": "5630e20bea65ef84c607820c17521ae389ce50b6568071530e39f4f5b3391d46",
+    "TreeDB/db/root_publication_build_group.go": "255d1706c60c212be9a56e9706f4632b4a9766db685d85d97578ffadfd3ae166",
+    "TreeDB/db/vacuum_online.go": "3f2969a4b6e7182b3e0eb10567cae3484d777c1d9049b82843c23b071755fe86",
+    "TreeDB/db/value_log_appender.go": "69e825f8363bd72b7d80aafdcb997eb217f4a185a53c2c79cdd9eb1dba2fe6bb",
+    "TreeDB/db/vlog_gc_incremental.go": "a29bc6ada3780a10a527d4553b228ba2b491eb3ef61170eea3b71625c4b12213",
+    "TreeDB/db/vlog_rewrite.go": "7fad8f920d12bd57cffad6a1557141bb4fbb14c978c614a991b1fd9723f42c7b",
+    "TreeDB/db/vlog_rewrite_chunk_plan.go": "df4291de223b598e58504d70a36c42725cb089c4189a510beefb4cee47b3a9b2",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "f080f03965a98f970598c2c1c82d7d08ca0d5ed3c813800ad914eb82c4e5b200",
+    "TreeDB/lifecycle/registry.go": "d83ac5058a07d67bf3860ed878a82734534bc9392eb71891a162ea0da149fca3",
+    "TreeDB/lifecycle/registry_unregister_work_v6.go": "2ef31d32d0bebee8bb72f4cee6f57122e381f5768e1534098ba246ccfeb70a73"
+  },
+  "selected_full_test_bindings": {
+    "TreeDB/db/reader_registry_lifetime_v6_test.go": "8c67edec859cbeef47bf760dca8b07468a2ee42554a658a0b32a166a3075ca7c",
+    "TreeDB/lifecycle/registry_patricia_v6_test.go": "5479bff5b9c787d0c0260933aad4191bee61a9f9aeb9a6df3f031f90ce607073"
+  },
+  "immutable_original_dependency_bindings": {
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go": "8ecbcd1dc3029f3dc5d21db08ab320461fad3da75485b1ac5e18df0218fc005b"
+  },
+  "dependency_archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "checks_actually_performed": [
+    "Verified all handoff artifact hashes",
+    "Verified full 501 owned archived file hashes and modes against sealed manifests",
+    "Compared immutable parent and successor: exact 120-path delta, including 31 production and 89 test paths",
+    "Read all production deltas and full registry, unregister, generation and DATA dependency release implementation; traced checked capture/recovery/Close/build-group callers",
+    "Read both new core control files and selected existing control deltas; checked existing benchmark timer directives unchanged",
+    "Checked proposed anchored top-name inventories: 16 lifecycle and 24 DB per normal/race proposal",
+    "Traced original RemovalWork BindPendingOriginal/ContinueOriginal to actual owner debit and governing shrink completion"
+  ],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "blocking",
+      "title": "Full leaf refund consumes the charge containing the active cleanup receipt before its final access",
+      "location": "TreeDB/lifecycle/registry.go:259",
+      "additional_locations": [
+        "TreeDB/lifecycle/registry.go:269",
+        "TreeDB/lifecycle/registry.go:377",
+        "TreeDB/lifecycle/registry.go:212",
+        "TreeDB/lifecycle/registry.go:229",
+        "TreeDB/internal/retainedalloc/owner_work.go:277",
+        "TreeDB/internal/retainedalloc/owner_work.go:284",
+        "TreeDB/internal/retainedalloc/owner_work.go:286"
+      ],
+      "trigger": "Successful owned positive-handle Unregister, or full speculative refund after the locked fast-path recheck (used==0); first-hole error cleanup has the same full-refund structure.",
+      "causal_reasoning": "The independently admitted readerLeaf contains removal/speculationRemoval. refund binds its full containing charge to that embedded RemovalWork, then ContinueOriginal calls removeStep. removeUnserialized debits owner bytes/pending at lines 277-279, completes governing shrink, and writes the embedded receipt owner/done at lines 286-287; removeStep still unlocks that embedded mutex on return. refund subsequently writes l.debt=0 at registry.go:269. Thus successful full refund ends the new leaf admission before the true last receipt/leaf consumer. Go liveness prevents a memory use-after-free but does not satisfy the explicit last-consumer retained-allocation contract.",
+      "distinctions": "An unused-branch-only refund while the registered leaf charge survives is a different, covered case. Failed governing shrink retains the SAME original leaf/error and unsettled governing lease debt; this finding does not assert missing failed-cleanup custody. DATA detach-to-original surviving parent is also distinct from ordinary self-refund.",
+      "required_correction": "Move full-leaf completion to an original surviving caller/last-access teardown seam so the leaf and embedded mutex/receipt remain admitted through their last use; preserve same-owner accounting and retained failure receipt. Do not fix by dropping the debt write alone, since the embedded receipt itself is still used after shrink. Add a control discriminating the final-admission/last-access interval, retaining partial-refund and failed-cleanup assertions."
+    }
+  ],
+  "otherwise_reviewed": [
+    "Patricia fixed-width handle insertion/deletion, gap reuse, minimum/count summaries and fast-shard transition locking",
+    "Maximum leaf+branch preadmission outside registry lock, exact same metadata owner, concurrent recheck and speculative charge separation",
+    "Registry header plus index generation birth charge and physical-completion/last-wrapper retirement conditions",
+    "DATA positive-handle accounting-only detach into original same-owner completion and alias withdrawal before return",
+    "Checked AcquireSnapshot/registration error propagation through core ordinary/native snapshot, publication, recovery, offline and maintenance callers",
+    "Final build-group unregister error custody after releasing build locks; Snapshot/Index/RecoverableRootSet failure retention",
+    "New controls exercise arbitrary sequences, duplicate cohorts, handle reuse, concurrency, capacity and closed binding errors, callback lock order, failed speculation, same-owner completion and header last wrapper"
+  ],
+  "test_adequacy_limit": "Current end-total/peak tests do not detect C1 successful full-leaf self-refund before final embedded receipt/leaf access. No runtime result is inferred from source review.",
+  "limits": [
+    "No compiler, Go test, benchmark, runtime, Git/GitHub mutation or source edits by reviewer",
+    "Outside-owned partition acceptance is composed only at checked interfaces; this is not a new full outside review",
+    "No current integrated compile, runtime, race, hosted CI, performance, actual native publication, Q32 fit, numeric allowance or complete graph acceptance",
+    "CAS/lock contention and ordinary owner-binding fanout are not claimed bounded by Patricia key width"
+  ],
+  "review_lease": "RELEASED after report"
+}

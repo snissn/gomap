@@ -1,0 +1,39 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "mod",
+    "download",
+    "-json"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/module",
+  "env": {
+    "PATH": "/home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/mikers/.codex/tmp/arg0/codex-arg0kI25aT:/home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/node_modules/.bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/node_modules/.bin:/mnt/fast4tb/node_modules/.bin:/mnt/node_modules/.bin:/node_modules/.bin:/home/mikers/.nvm/versions/node/v24.14.1/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin:/home/mikers/.nvm/versions/node/v24.14.1/bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin:/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "HOME": "/home/mikers",
+    "USER": "mikers",
+    "LOGNAME": "mikers",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "GOTOOLCHAIN": "local",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GOPROXY": "https://proxy.golang.org,direct",
+    "GOSUMDB": "sum.golang.org",
+    "GOWORK": "off",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "2GiB",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/tmp"
+  },
+  "source_module_sha256": {
+    "go.mod": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+    "go.sum": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+    "third_party/hashicorp_raft_v1.7.3/go.mod": "49841b28731c44a8947809437a793931489a24756cefbf248558424ee74dd025",
+    "third_party/hashicorp_raft_v1.7.3/go.sum": "0ed9fc69ca244b8becc72aff710ca383f3e7af516af361cf26e930f1ee8aa4fc"
+  },
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "package_code_executed": false,
+  "outer_timeout_seconds": 600,
+  "started_utc": "2026-10-16T13:59:11.148751+00:00"
+}

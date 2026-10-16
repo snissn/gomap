@@ -1,0 +1,8 @@
+{
+  "disposition": "ACCEPT scoped source review only",
+  "review_md_sha256": "692b589732cdbb91ea41f3ec78cbab5cbddb3075aa3a84ee70f56ba3c3cb9132",
+  "review_json_sha256": "37f8f20863c13f3fad22b96b718e0e66f4cdf32aa8ae68d5cd5f02fdfa2bb398",
+  "input_hashes_verified": 7,
+  "changed_source_hashes_verified": 74,
+  "limits": "Core db/lifecycle and integrated compilation/runtime not covered; no test execution."
+}

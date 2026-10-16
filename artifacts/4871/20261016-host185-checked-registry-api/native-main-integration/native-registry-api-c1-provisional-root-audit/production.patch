@@ -1,0 +1,494 @@
+--- source01/TreeDB/db/db.go
++++ provisional-c1/TreeDB/db/db.go
+@@ -5626,8 +5626,9 @@
+ 	return a.p.Alloc(1)
+ }
+ 
+-// Failed registry shrink retains its SAME original speculative/disposal leaf
+-// through the DB's existing cleanup graph. Ordinary capacity refusal has no debt.
++// Failed registry shrink retains its SAME original header receipt through the
++// DB cleanup graph. Its generation gate retains the containing header charge.
++// Ordinary capacity refusal without cleanup debt has no retained payload.
+ func (db *DB) retainReaderRegistryCleanup(err error) {
+ 	if lifecycle.ReaderRegistryCleanupFailed(err) {
+ 		db.retainOriginalCleanupError(err)
+--- source01/TreeDB/db/index_gen.go
++++ provisional-c1/TreeDB/db/index_gen.go
+@@ -152,6 +152,14 @@
+ 			g.wrapperBorrows.Or(indexWrapperTerminalV6)
+ 			g.wrapperMu.Unlock()
+ 		}()
++		// Failed registration need not have produced any Snapshot borrow.
++		// Join the original header before dropping even the physical edge.
++		g.wrapperMu.Lock()
++		registryErr := g.registryCleanupFailureLockedV6()
++		g.wrapperMu.Unlock()
++		if registryErr != nil {
++			return
++		}
+ 		if g.primaryConstructionAllocator != nil {
+ 			if g.closeErr = g.primaryConstructionAllocator.DrainConstructionLedgerV6(); g.closeErr != nil {
+ 				if g.primaryOwner != nil {
+@@ -303,6 +311,9 @@
+ 	}
+ 	g.wrapperMu.Lock()
+ 	err = cleanupErr
++	if registryErr := g.registryCleanupFailureLockedV6(); err == nil {
++		err = registryErr
++	}
+ 	if err == nil && g.closeCompleted {
+ 		err = g.closeErr
+ 	}
+@@ -328,9 +339,9 @@
+ 	if !consumed {
+ 		g.dropWrapperBorrowV6()
+ 	}
+-	metadata, charge = g.detachGenerationMetadataLockedV6()
++	metadata, charge, err = g.detachGenerationMetadataLockedV6()
+ 	g.wrapperMu.Unlock()
+-	return metadata, charge, nil
++	return metadata, charge, err
+ }
+ 
+ func (g *indexGen) releaseWrapperBorrow(snapshot *Snapshot, cleanupErr error) {
+@@ -353,7 +364,7 @@
+ 	// Snapshot retains its separate original wrapper borrow.
+ 	g.dropWrapperBorrowV6()
+ 	if err == nil {
+-		metadata, charge = g.detachGenerationMetadataLockedV6()
++		metadata, charge, err = g.detachGenerationMetadataLockedV6()
+ 	}
+ 	g.wrapperMu.Unlock()
+ 	return metadata, charge, err
+@@ -365,20 +376,54 @@
+ 		err = g.closeErr
+ 	}
+ 	if err == nil {
+-		metadata, charge = g.detachGenerationMetadataLockedV6()
++		metadata, charge, err = g.detachGenerationMetadataLockedV6()
+ 	}
+ 	g.wrapperMu.Unlock()
+ 	return metadata, charge, err
+ }
+ 
+-func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uint64) {
++// Caller holds wrapperMu. The same closeFailure retains the original payload;
++// a registry error alone is never permission to refund its containing header.
++func (g *indexGen) registryCleanupFailureLockedV6() error {
++	if g.registry == nil {
++		return nil
++	}
++	cause := g.registry.OriginalCleanupError()
++	if cause == nil {
++		return nil
++	}
++	if g.closeErr == nil {
++		g.closeErr = g.originalCloseFailure(cause)
++		if !g.physicalCompleted && g.primaryOwner != nil {
++			g.primaryOwner.retainFailedDataGeneration(g)
++		} else if g.offlineScopePhysicalOwner != nil && !g.offlineScopeRetained {
++			g.offlineScopePhysicalOwner.retainFailedDataGeneration(g)
++			g.offlineScopeRetained = true
++		}
++	} else {
++		g.closeFailure.retainCause(1, cause)
++		g.closeErr = &g.closeFailure
++	}
++	if g.metadata != nil {
++		g.metadata.CleanupFailed()
++	}
++	if g.stableNamespaceMetadata != nil {
++		g.stableNamespaceMetadata.CleanupFailed()
++	}
++	return g.closeErr
++}
++
++func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uint64, error) {
++	if err := g.registryCleanupFailureLockedV6(); err != nil {
++		return nil, 0, err
++	}
+ 	if !g.physicalCompleted || g.wrapperBorrowCountV6() != 0 || g.startupDB != nil || g.closeErr != nil || g.metadata == nil {
+-		return nil, 0
++		return nil, 0, nil
+ 	}
+ 	metadata, charge := g.metadata, g.metadataCharge
+ 	g.pager, g.allocator, g.zipper = nil, nil, nil
+ 	g.registry, g.graveyard = nil, nil
+ 	g.primary, g.primaryOwner = nil, nil
+ 	g.metadata, g.metadataCharge = nil, 0
+-	return metadata, charge
+-}
++	return metadata, charge, nil
++}
+--- source01/TreeDB/db/original_startup_generation.go
++++ provisional-c1/TreeDB/db/original_startup_generation.go
+@@ -90,14 +90,8 @@
+ 		g.metadata.CleanupFailed()
+ 		return nil, 0, &g.startupReceipt
+ 	}
+-	custody := g.startupCustody
+-	g.startupDB, g.startupManager, g.startupLock, g.startupCustody = nil, nil, nil, nil
+-	g.startupConstructed = false
+-	metadata, charge, err := g.detachGenerationMetadataCompletionV6()
+-	g = nil
+-	custody.Complete(nil, nil)
+-	custody = nil
+-	return metadata, charge, errors.Join(operation, err)
++	metadata, charge, err := g.completeStartupGenerationMetadataV6(operation)
++	return metadata, charge, err
+ }
+ 
+ // Offline maintenance borrows the already-admitted read-only source wrapper
+@@ -166,10 +160,7 @@
+ 		g.metadata.CleanupFailed()
+ 		return nil, 0, &g.startupReceipt
+ 	}
+-	g.finishStartupSuccess()
+-	metadata, charge, err := g.detachGenerationMetadataCompletionV6()
+-	g = nil
+-	return metadata, charge, errors.Join(operation, err)
++	return g.completeStartupGenerationMetadataV6(operation)
+ }
+ 
+ // Admit the physical parent/child before opening them. The original generation
+@@ -207,3 +198,29 @@
+ 	g.pager, err = pager.OpenOwnedFileWithMetadata(file, file.Name(), chunkSize, pager.OpenOptions{}, metadata, fileCharge)
+ 	return err
+ }
++
++func (g *indexGen) completeStartupGenerationMetadataV6(operation error) (*retainedalloc.Owner, uint64, error) {
++	source, manager, lock, custody := g.startupDB, g.startupManager, g.startupLock, g.startupCustody
++	constructed := g.startupConstructed
++	g.startupDB, g.startupManager, g.startupLock, g.startupCustody = nil, nil, nil, nil
++	g.startupConstructed = false
++	metadata, charge, err := g.detachGenerationMetadataCompletionV6()
++	if err != nil {
++		g.startupDB, g.startupManager, g.startupLock, g.startupCustody = source, manager, lock, custody
++		g.startupConstructed = constructed
++		g.startupReceipt.cause = errors.Join(operation, err, ErrRecoveryRequired)
++		g.startupReceipt.generation = g
++		if custody != nil {
++			custody.Complete(g, &g.startupReceipt)
++		}
++		if g.metadata != nil {
++			g.metadata.CleanupFailed()
++		}
++		return nil, 0, &g.startupReceipt
++	}
++	g = nil
++	if custody != nil {
++		custody.Complete(nil, nil)
++	}
++	return metadata, charge, operation
++}
+--- source01/TreeDB/db/primary_offline_pair_v6.go
++++ provisional-c1/TreeDB/db/primary_offline_pair_v6.go
+@@ -88,6 +88,14 @@
+ 	// Physical disposal is once-only on the SAME generation. Namespace
+ 	// completion is separate because this original parent spans COMMIT.
+ 	physicalErr := idx.close()
++	// A late header failure must not become a successful aggregate scope
++	// completion merely because the earlier physical call already returned.
++	idx.wrapperMu.Lock()
++	registryErr := idx.registryCleanupFailureLockedV6()
++	idx.wrapperMu.Unlock()
++	if registryErr != nil {
++		physicalErr = registryErr
++	}
+ 	idx.stableNamespaceMu.Lock()
+ 	if !idx.offlineNamespaceScope {
+ 		idx.stableNamespaceMu.Unlock()
+--- source01/TreeDB/lifecycle/registry.go
++++ provisional-c1/TreeDB/lifecycle/registry.go
+@@ -38,27 +38,21 @@
+ 	bit     uint8
+ }
+ 
+-// The actual speculative leaf contains its original fixed failure receipt.
+-// Failure does not allocate another error, registry, owner, or cleanup keeper.
++// Leaves contain only canonical membership; their disposal runs in the
++// surviving original registry header, never in the allocation being refunded.
+ type readerLeaf struct {
+-	parent             *readerBranch
+-	handle, sequence   uint64
+-	owner              *retainedalloc.Owner
+-	debt               uint64
+-	removal            retainedalloc.RemovalWork
+-	speculationRemoval retainedalloc.RemovalWork
+-	causes             [3]error
+-	failureMu          sync.Mutex
+-}
+-
+-func (l *readerLeaf) Error() string { return "reader registration accounting cleanup incomplete" }
+-
+-// Causes are copied before walking arbitrary user lease errors. The third
+-// original slot links an older DB cleanup receipt without a failure allocation.
+-func (l *readerLeaf) Is(target error) bool {
+-	l.failureMu.Lock()
+-	causes := l.causes
+-	l.failureMu.Unlock()
++	parent           *readerBranch
++	handle, sequence uint64
++	owner            *retainedalloc.Owner
++}
++
++// The header is already admitted by its original generation/scope. Its fixed
++// receipt owns accounting only after all disposed node aliases have ended.
++func (r *ReaderRegistry) Error() string { return "reader registration accounting cleanup incomplete" }
++func (r *ReaderRegistry) Is(target error) bool {
++	r.failureMu.Lock()
++	causes := r.refundCauses
++	r.failureMu.Unlock()
+ 	for _, cause := range causes {
+ 		if cause != nil && errors.Is(cause, target) {
+ 			return true
+@@ -66,10 +60,10 @@
+ 	}
+ 	return false
+ }
+-func (l *readerLeaf) As(target any) bool {
+-	l.failureMu.Lock()
+-	causes := l.causes
+-	l.failureMu.Unlock()
++func (r *ReaderRegistry) As(target any) bool {
++	r.failureMu.Lock()
++	causes := r.refundCauses
++	r.failureMu.Unlock()
+ 	for _, cause := range causes {
+ 		if cause != nil && errors.As(cause, target) {
+ 			return true
+@@ -77,23 +71,37 @@
+ 	}
+ 	return false
+ }
+-func (l *readerLeaf) OriginalCleanupPriorAvailable() bool {
+-	l.failureMu.Lock()
+-	defer l.failureMu.Unlock()
+-	return l.causes[2] == nil
+-}
+-func (l *readerLeaf) TryLinkPriorCleanupError(prior error) bool {
+-	l.failureMu.Lock()
+-	defer l.failureMu.Unlock()
+-	if prior == nil || prior == l || l.causes[2] != nil {
++func (r *ReaderRegistry) OriginalCleanupPriorAvailable() bool {
++	r.failureMu.Lock()
++	defer r.failureMu.Unlock()
++	return r.refundCauses[2] == nil
++}
++func (r *ReaderRegistry) TryLinkPriorCleanupError(prior error) bool {
++	r.failureMu.Lock()
++	defer r.failureMu.Unlock()
++	if prior == nil || prior == r || r.refundCauses[2] != nil {
+ 		return false
+ 	}
+-	l.causes[2] = prior
++	r.refundCauses[2] = prior
+ 	return true
+ }
+-func (l *readerLeaf) LinkPriorCleanupError(prior error) { l.TryLinkPriorCleanupError(prior) }
+-func ReaderRegistryCleanupFailed(err error) bool        { var leaf *readerLeaf; return errors.As(err, &leaf) }
+-func (n readerNode) empty() bool                        { return n.leaf == nil && n.branch == nil }
++func (r *ReaderRegistry) LinkPriorCleanupError(prior error) { r.TryLinkPriorCleanupError(prior) }
++func ReaderRegistryCleanupFailed(err error) bool            { var r *ReaderRegistry; return errors.As(err, &r) }
++
++// OriginalCleanupError joins an in-flight ordinary refund. No containing
++// header completion may pass an unfinished receipt or a later detached debt.
++func (r *ReaderRegistry) OriginalCleanupError() error {
++	if r == nil {
++		return nil
++	}
++	r.refundMu.Lock()
++	defer r.refundMu.Unlock()
++	if r.refundAmount != 0 || r.refundDeferred != 0 || r.refundFailed {
++		return r
++	}
++	return nil
++}
++func (n readerNode) empty() bool { return n.leaf == nil && n.branch == nil }
+ func (n readerNode) summary() readerSummary {
+ 	if n.leaf != nil {
+ 		return readerSummary{n.leaf.sequence, n.leaf.handle, n.leaf.handle, 1}
+@@ -132,11 +140,19 @@
+ }
+ 
+ type ReaderRegistry struct {
+-	mu            sync.Mutex
+-	root          readerNode
+-	metadata      *retainedalloc.Owner
+-	fastShards    [fastReaderShardCount]readerRegistryShard
+-	nextFastShard atomic.Uint64
++	// Never hold mu while entering Owner. This independent serialization leaves
++	// minimum queries and fast unregister available to governing callbacks.
++	refundMu                     sync.Mutex
++	refundWork                   retainedalloc.RemovalWork
++	refundAmount, refundDeferred uint64
++	refundFailed                 bool
++	failureMu                    sync.Mutex
++	refundCauses                 [3]error
++	mu                           sync.Mutex
++	root                         readerNode
++	metadata                     *retainedalloc.Owner
++	fastShards                   [fastReaderShardCount]readerRegistryShard
++	nextFastShard                atomic.Uint64
+ }
+ 
+ // NewReaderRegistry is explicitly standalone, GC-owned construction.
+@@ -208,8 +224,7 @@
+ 		key, err := r.firstHoleLocked()
+ 		if err != nil {
+ 			r.mu.Unlock()
+-			branch = nil
+-			return 0, hint, leaf.refund(charge, err, true)
++			return 0, hint, r.refundUnusedNodes(&leaf, &branch, charge, err)
+ 		}
+ 		leaf.handle, leaf.sequence = key, seq
+ 		if r.root.empty() {
+@@ -222,17 +237,31 @@
+ 		id, h = int64(key), registerHintUnset
+ 	}
+ 	r.mu.Unlock()
+-	branch = nil
+-	if owner == nil || used == charge {
++	if used == charge {
++		branch = nil
+ 		return id, h, nil
+ 	}
+-	if err := leaf.refund(charge-used, nil, true); err != nil {
++	// An unused leaf is disposed together with its speculative branch. A root
++	// leaf remains charged and reachable during a branch-only completion.
++	var refundErr error
++	if used == 0 {
++		refundErr = r.refundUnusedNodes(&leaf, &branch, charge, nil)
++	} else {
++		*branch = readerBranch{}
++		branch = nil
++		refundErr = r.refund(charge-used, nil)
++	}
++	if err := refundErr; err != nil {
+ 		// A failed attempt cannot expose a registration with unsettled speculation.
+ 		if used != 0 {
+ 			r.mu.Lock()
+ 			extra := r.detachLeafLocked(leaf)
+ 			r.mu.Unlock()
+-			leaf.debt += extra
++			leaf.owner = nil
++			leaf = nil
++			// The first failed header receipt is not overwritten. This exact
++			// subsequent detached charge stays in its fixed deferred scalar.
++			r.refund(extra, nil)
+ 		} else {
+ 			r.unregisterFast(id)
+ 		}
+@@ -240,33 +269,64 @@
+ 	}
+ 	return id, h, nil
+ }
+-func (l *readerLeaf) refund(amount uint64, first error, speculative bool) error {
+-	if l.owner == nil || amount == 0 {
++
++// refundUnusedNodes is shared by a failed first-hole search and a locked
++// fast-path recheck. The caller's actual speculative aliases are cleared before
++// entering the surviving header receipt; no leaf-owned completion survives.
++func (r *ReaderRegistry) refundUnusedNodes(leaf **readerLeaf, branch **readerBranch, charge uint64, first error) error {
++	if *leaf != nil {
++		**leaf = readerLeaf{}
++		*leaf = nil
++	}
++	if *branch != nil {
++		**branch = readerBranch{}
++		*branch = nil
++	}
++	return r.refund(charge, first)
++}
++
++// refund consumes accounting only; no disposed leaf/branch reaches this
++// method. The original header survives every Owner callback and receipt access.
++func (r *ReaderRegistry) refund(amount uint64, first error) error {
++	if r.metadata == nil || amount == 0 {
+ 		return first
+ 	}
+-	l.debt = amount
+-	l.causes[0] = first
+-	work := &l.removal
+-	if speculative {
+-		work = &l.speculationRemoval
+-	}
+-	if _, err := work.BindPendingOriginal(l.owner, amount); err != nil {
+-		l.causes[1] = err
+-		l.owner.CleanupFailed()
+-		return l
++	r.refundMu.Lock()
++	defer r.refundMu.Unlock()
++	if r.refundFailed {
++		// All deltas were separately admitted to the same owner before allocation;
++		// their sum cannot exceed its original uint64 pending domain. Never wrap.
++		if amount > math.MaxUint64-r.refundDeferred {
++			return r
++		}
++		r.refundDeferred += amount
++		return r
++	}
++	r.refundAmount = amount
++	fail := func(cause error) error {
++		r.refundFailed = true
++		r.failureMu.Lock()
++		r.refundCauses[0], r.refundCauses[1] = first, cause
++		r.failureMu.Unlock()
++		r.metadata.CleanupFailed()
++		return r
++	}
++	if _, err := r.refundWork.BindPendingOriginal(r.metadata, amount); err != nil {
++		return fail(err)
+ 	}
+ 	for {
+-		done, err := work.ContinueOriginal()
++		done, err := r.refundWork.ContinueOriginal()
+ 		if err != nil {
+-			l.causes[1] = err
+-			l.owner.CleanupFailed()
+-			return l
++			return fail(err)
+ 		}
+ 		if done {
+ 			break
+ 		}
+ 	}
+-	l.debt = 0
++	if _, err := r.refundWork.ResetCompletedOriginal(); err != nil {
++		return fail(err)
++	}
++	r.refundAmount = 0
+ 	return first
+ }
+ func (r *ReaderRegistry) firstHoleLocked() (uint64, error) {
+@@ -373,8 +433,11 @@
+ 	}
+ 	l := n.leaf
+ 	charge := r.detachLeafLocked(l)
++	l.owner = nil
++	l = nil
++	n = readerNode{}
+ 	r.mu.Unlock()
+-	return l.refund(charge, nil, false)
++	return r.refund(charge, nil)
+ }
+ func (r *ReaderRegistry) unregisterFast(id int64) {
+ 	shard := int(-id - 1)
+--- source01/TreeDB/lifecycle/registry_unregister_work_v6.go
++++ provisional-c1/TreeDB/lifecycle/registry_unregister_work_v6.go
+@@ -57,8 +57,6 @@
+ 	c.Metadata = l.owner
+ 	c.Charge = r.detachLeafLocked(l)
+ 	l.owner = nil
+-	l.debt = 0
+-	l.causes = [3]error{}
+ 	l = nil
+ 	n = readerNode{}
+ 	return c, true, nil
+@@ -90,6 +88,5 @@
+ 	c.Metadata = l.owner
+ 	c.Charge = r.detachLeafLocked(l)
+ 	l.owner = nil
+-	l.causes = [3]error{}
+ 	return c, nil
+ }

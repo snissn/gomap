@@ -1,0 +1,189 @@
+--- source01/TreeDB/internal/retainedalloc/owner_work.go
++++ c1/TreeDB/internal/retainedalloc/owner_work.go
+@@ -355,6 +355,26 @@
+ 	return s.continueRemoval(false, nil)
+ }
+ 
++// ResetCompletedOriginal reuses a surviving parent's ordinary receipt after
++// its exact delta and governing shrink have completed. Failed or unfinished
++// receipts retain their original custody, and bounded work remains with its
++// original caller. The parent must have ended every alias to the disposed child.
++func (s *RemovalWork) ResetCompletedOriginal() (bool, error) {
++	if s == nil {
++		return false, ErrWorkRequired
++	}
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.native {
++		return false, ErrWorkRequired
++	}
++	if !s.done {
++		return false, ErrCapacity
++	}
++	s.resetFieldsLocked()
++	return true, nil
++}
++
+ // ResetCompletedWork reuses a surviving parent's receipt only after its exact
+ // previous delta completed. It never copies or resets the initialized mutex.
+ // The parent must already have ended every alias to the disposed child.
+@@ -379,10 +399,15 @@
+ 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))) {
+ 		return false, nil
+ 	}
++	s.resetFieldsLocked()
++	return true, nil
++}
++
++// Keep the initialized mutex in place while clearing only completed work.
++func (s *RemovalWork) resetFieldsLocked() {
+ 	s.owner, s.amount = nil, 0
+ 	s.pending, s.native, s.bound, s.started, s.done = false, false, false, false, false
+ 	s.shrink = shrinkWork{}
+-	return true, nil
+ }
+ 
+ // CompletePendingWork consumes an accounting-only callback result held in a
+--- /dev/null
++++ c1/TreeDB/internal/retainedalloc/owner_original_reset_test.go
+@@ -0,0 +1,140 @@
++package retainedalloc
++
++import (
++	"errors"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
++)
++
++func TestOriginalRemovalReceiptReuseKeepsExactAccounting(t *testing.T) {
++	var owner Owner
++	owner.Initialize(128) // The original surviving parent stays admitted.
++	budget := &testBudget{cap: 1 << 20}
++	enrollment, err := owner.Enroll(budget)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer enrollment.Close()
++	baseline := owner.Bytes()
++	var receipt RemovalWork
++	if done, err := receipt.ResetCompletedOriginal(); done || !errors.Is(err, ErrCapacity) {
++		t.Fatal("unused receipt was reset", done, err)
++	}
++	for _, amount := range []uint64{256, 64, 512} {
++		if err := owner.AddPending(amount); err != nil {
++			t.Fatal(err)
++		}
++		if ready, err := receipt.BindPendingOriginal(&owner, amount); !ready || err != nil {
++			t.Fatal("bind", ready, err)
++		}
++		if done, err := receipt.ResetCompletedOriginal(); done || !errors.Is(err, ErrCapacity) {
++			t.Fatal("live receipt lost its delta", done, err)
++		}
++		if owner.Bytes() != baseline+amount || budget.bytes != baseline+amount {
++			t.Fatal("refused reset changed retained admission")
++		}
++		for i := 0; i < 2; i++ {
++			if done, err := receipt.ContinueOriginal(); !done || err != nil {
++				t.Fatal("complete", done, err)
++			}
++			if owner.Bytes() != baseline || budget.bytes != baseline {
++				t.Fatal("completion did not refund exactly once")
++			}
++		}
++		if done, err := receipt.ResetCompletedOriginal(); !done || err != nil {
++			t.Fatal("completed original receipt cannot be reused", done, err)
++		}
++	}
++}
++
++type originalResetBudget struct {
++	base       testBudget
++	failShrink error
++	shrinks    int
++}
++
++type originalResetLease struct {
++	*testLease
++	budget *originalResetBudget
++}
++
++func (b *originalResetBudget) AcquireRetention(n uint64) (Lease, error) {
++	l, err := b.base.AcquireRetention(n)
++	if err != nil {
++		return nil, err
++	}
++	return &originalResetLease{testLease: l.(*testLease), budget: b}, nil
++}
++
++func (l *originalResetLease) Resize(n uint64) error {
++	if n < l.bytes {
++		l.budget.shrinks++
++		if l.budget.failShrink != nil {
++			return l.budget.failShrink
++		}
++	}
++	return l.testLease.Resize(n)
++}
++
++func TestOriginalRemovalResetPreservesFailedGoverningShrink(t *testing.T) {
++	var owner Owner
++	owner.Initialize(128)
++	budget := &originalResetBudget{base: testBudget{cap: 1 << 20}}
++	enrollment, err := owner.Enroll(budget)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := owner.AddPending(256); err != nil {
++		t.Fatal(err)
++	}
++	before := owner.Bytes()
++	cause := errors.New("injected original governing shrink failure")
++	budget.failShrink = cause
++	var receipt RemovalWork
++	if ready, err := receipt.BindPendingOriginal(&owner, 256); !ready || err != nil {
++		t.Fatal(ready, err)
++	}
++	for i := 0; i < 2; i++ {
++		if done, err := receipt.ContinueOriginal(); done || !errors.Is(err, cause) {
++			t.Fatal("original failure changed", done, err)
++		}
++		if done, err := receipt.ResetCompletedOriginal(); done || !errors.Is(err, ErrCapacity) {
++			t.Fatal("failed receipt lost its custody", done, err)
++		}
++		if receipt.owner != &owner || receipt.amount != 256 || receipt.shrink.failure != cause {
++			t.Fatal("original failure receipt changed")
++		}
++		if owner.Bytes() != before-256 || budget.base.bytes != before || budget.shrinks != 1 {
++			t.Fatal("failure replayed debit or governing shrink")
++		}
++	}
++	if !enrollment.BelongsTo(&owner) || budget.base.bytes != before {
++		t.Fatal("failed original governing lease lost its capture")
++	}
++}
++
++func TestOriginalRemovalResetCannotConsumeBoundedReceipt(t *testing.T) {
++	var owner Owner
++	owner.Initialize(128)
++	if err := owner.AddPending(256); err != nil {
++		t.Fatal(err)
++	}
++	var receipt RemovalWork
++	work := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
++	if ready, err := receipt.BindPendingWork(&owner, 256, &work); !ready || err != nil {
++		t.Fatal(ready, err)
++	}
++	if done, err := receipt.ResetCompletedOriginal(); done || !errors.Is(err, ErrWorkRequired) || owner.Bytes() != 384 {
++		t.Fatal("ordinary reset consumed bounded receipt", done, err)
++	}
++	if done, err := receipt.ContinueWork(&work); !done || err != nil {
++		t.Fatal(done, err)
++	}
++	if done, err := receipt.ResetCompletedOriginal(); done || !errors.Is(err, ErrWorkRequired) || owner.Bytes() != 128 {
++		t.Fatal("ordinary reset consumed completed bounded receipt", done, err)
++	}
++	if done, err := receipt.ResetCompletedWork(&work); !done || err != nil {
++		t.Fatal("bounded owner could not reset its receipt", done, err)
++	}
++}

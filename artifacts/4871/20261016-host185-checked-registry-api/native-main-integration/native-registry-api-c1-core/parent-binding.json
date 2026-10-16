@@ -1,0 +1,23 @@
+{
+  "changed_count": 10,
+  "changed_paths": [
+    "TreeDB/db/db.go",
+    "TreeDB/db/index_gen.go",
+    "TreeDB/db/original_startup_generation.go",
+    "TreeDB/db/primary_arena_owner_v5.go",
+    "TreeDB/db/primary_offline_pair_v6.go",
+    "TreeDB/db/reader_registry_header_failure_v6_test.go",
+    "TreeDB/lifecycle/registry.go",
+    "TreeDB/lifecycle/registry_header_completion_v6_test.go",
+    "TreeDB/lifecycle/registry_patricia_v6_test.go",
+    "TreeDB/lifecycle/registry_unregister_work_v6.go"
+  ],
+  "commands_executed": false,
+  "outside_scope": "not written/frozen by this worker; root composes outside partition and retainedalloc ResetCompletedOriginal",
+  "owned_after_count": 503,
+  "parent_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/source-frozen.json",
+  "parent_manifest_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+  "parent_owned_count": 501,
+  "selection": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-core-source-selection.md",
+  "selection_sha256": "b76c05e80de7a5d8a6cb88046236ba7fe63626e1e84a7c2b2fc40842ba7680b6"
+}

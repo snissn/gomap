@@ -1,0 +1,26 @@
+{
+  "inherits_only_listed_variables": true,
+  "variables": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "LANG": "en_US.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "LOGNAME": "mikers",
+    "PATH": "/home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/mnt/fast4tb/github-actions-runners/rh-state/elan/bin:/home/mikers/.elan/bin:/home/mikers/node_modules/tura-ai/target/release:/home/mikers/.rbenv/shims:/home/mikers/.rbenv/bin:/home/mikers/.codex/tmp/arg0/codex-arg0kI25aT:/home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/mikers/.npm/_npx/5010de4b76d2184a/node_modules/.bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/node_modules/.bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/node_modules/.bin:/mnt/fast4tb/node_modules/.bin:/mnt/node_modules/.bin:/node_modules/.bin:/home/mikers/.nvm/versions/node/v24.14.1/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin:/home/mikers/.nvm/versions/node/v24.14.1/bin:/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin:/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/mikers/go/bin",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/tmp",
+    "USER": "mikers"
+  }
+}

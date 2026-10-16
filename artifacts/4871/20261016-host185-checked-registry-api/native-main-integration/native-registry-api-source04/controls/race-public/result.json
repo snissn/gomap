@@ -1,0 +1,161 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 2,
+  "elapsed_seconds": 43.51614569919184,
+  "ended_utc": "2026-10-16T14:56:47.076843+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-public",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1737334,
+      "pid": 1737334,
+      "ppid": 1733000,
+      "session": 1737334,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737353,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737360,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737364,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737904,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737909,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1737334,
+      "pid": 1737913,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1737334,
+      "pid": 1737925,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1737334,
+      "pid": 1737967,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1737334,
+      "pid": 1738005,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1737334,
+      "pid": 1738017,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1737334,
+      "pid": 1738025,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "S"
+    },
+    {
+      "comm": "TreeDB.test",
+      "pgid": 1737334,
+      "pid": 1738031,
+      "ppid": 1737334,
+      "session": 1737334,
+      "state": "S"
+    }
+  ],
+  "pgid": 1737334,
+  "pid": 1737334,
+  "raw_log_sha256": "c0af4d6f839216872ac1c95c71f18ac29cbd300d0925d63313fd7e274f1125ed",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPublicSnapshotClosedErrorHasNilInterface",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T14:56:03.560697+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "test_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_RUN": []
+}

@@ -1,0 +1,34 @@
+{
+  "added_paths": 0,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "f7659c8a47a7d2d70b5017cf0f2371b1a531229819a2de9521aaf5dbda5ca805",
+  "changed_paths": 1,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T14:38:05.937508+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "050a3f86dd448023ed943ce12fc16cf9ee6339bc29c651468bf7be7439901b35",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-main-integration/native-registry-api-source02/freeze.json": "0f48e79ceb029682b96b02f896655cf6141501cbdda84b27c9dd301672d4c76e",
+    "native-main-integration/native-registry-api-source03-repair/after.json": "e73c878f07fdbfe3dbb856cf57252f599cf962d935999a9ed1728b1760e32081",
+    "native-main-integration/native-registry-api-source03-repair/before.json": "a04e6ed02abe18fa6d487b9fe70f4795a32463028049ba2663c726b48b502ddf",
+    "native-main-integration/native-registry-api-source03-repair/handoff.json": "9b762578a540616e25a5c4184fcfc7fbc5294bedd8ce12ef81964745ffe8da89",
+    "native-main-integration/native-registry-api-source03-repair/modes.json": "f9f0bf01a82d5f9d2a4d5f5940c7b2670f57f0f40ba68f4a491f72b60d323433"
+  },
+  "modes_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+  "parent_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "partition_changed_counts": {
+    "fixture-repair": 1
+  },
+  "runtime_executed": false,
+  "scope": "coherent checked registry API source03 targeted fault-fixture correction",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "f04dfd67bf7afe3f5f27877c5321241f19bd73787e960889a5bdc3316f54d416",
+  "source_files": 10451,
+  "source_manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

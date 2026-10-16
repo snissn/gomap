@@ -1,0 +1,62 @@
+{
+  "TreeDB/db/db.go": {
+    "after": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+    "after_mode": "0o664",
+    "before": "ac761ed11cf9e5cf68e0361b1dbb23d449e2eff7f5a2e04ec3d804ce00ed4621",
+    "before_mode": "0o664"
+  },
+  "TreeDB/db/index_gen.go": {
+    "after": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "after_mode": "0o664",
+    "before": "15057e53cbbbd0292b3a82146c2e32e04e7e102a0ee0d7bfc1f735feb6d2a2ae",
+    "before_mode": "0o664"
+  },
+  "TreeDB/db/original_startup_generation.go": {
+    "after": "88ff3460df396a12918a72ab3cb364fbc077b4e5630c69c09905bec82350eced",
+    "after_mode": "0o664",
+    "before": "d18c812235b4718b61738b7dee560c5bcaf5ea0a339c34e01af9a7c693c7e6cc",
+    "before_mode": "0o664"
+  },
+  "TreeDB/db/primary_arena_owner_v5.go": {
+    "after": "205af9b59465f334461a19b9613d53ef7daead8f4346819a6ca32b075e155ed0",
+    "after_mode": "0o664",
+    "before": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "before_mode": "0o664"
+  },
+  "TreeDB/db/primary_offline_pair_v6.go": {
+    "after": "6c0b82bb061ac4aed6c088946293ba1af70f6e132a4bcc78e924a0f193288c80",
+    "after_mode": "0o664",
+    "before": "c6dddaf82d1e5885a70a635e82eb6e04005e14244bce7e8f58a8c0f87023961a",
+    "before_mode": "0o664"
+  },
+  "TreeDB/db/reader_registry_header_failure_v6_test.go": {
+    "after": "10b9aec29c783437ba494ca175d42cffae0d645876ddc83889aa20925b8e8e34",
+    "after_mode": "0o664",
+    "before": null,
+    "before_mode": null
+  },
+  "TreeDB/lifecycle/registry.go": {
+    "after": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+    "after_mode": "0o664",
+    "before": "d83ac5058a07d67bf3860ed878a82734534bc9392eb71891a162ea0da149fca3",
+    "before_mode": "0o664"
+  },
+  "TreeDB/lifecycle/registry_header_completion_v6_test.go": {
+    "after": "e53b816198b9dc56a6947b9eeda2ee5128af2a683c4227cdfcbbd90a41363416",
+    "after_mode": "0o664",
+    "before": null,
+    "before_mode": null
+  },
+  "TreeDB/lifecycle/registry_patricia_v6_test.go": {
+    "after": "99f50e7dca6e8b924682a00aef6a42dfc5dbc1aed711dd3fbadae7a84cc52d9b",
+    "after_mode": "0o664",
+    "before": "5479bff5b9c787d0c0260933aad4191bee61a9f9aeb9a6df3f031f90ce607073",
+    "before_mode": "0o664"
+  },
+  "TreeDB/lifecycle/registry_unregister_work_v6.go": {
+    "after": "231ad0865af34a412691db9f48994651f9eefd5c47edcd1369788b8e132ed11f",
+    "after_mode": "0o664",
+    "before": "2ef31d32d0bebee8bb72f4cee6f57122e381f5768e1534098ba246ccfeb70a73",
+    "before_mode": "0o664"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "utc": "2026-10-16T13:03:48.527762+00:00",
+  "selection_sha256": "98ebb64fa4d7e6ff89d19e96b33137402aa89e8bcbcc20ea4461f0c2ff75b79b",
+  "basis_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "basis_archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "bindings": {
+    "root-native-minimum-registration-api-disposition.json": "74b6fc894757c715def5de0af5d805ffd651409ada464a570705fa602031e740",
+    "root-native-minimum-registry-representation-disposition.json": "415874361a263d347b2125de94a51ceaaeaec94f07091378c02a284c23da0ad0",
+    "root-native-minimum-guard-lifecycle-preparation.json": "808c812f1342688e3ae5b47dedf5a7431ff5165ee513dac27efe110bddf324b7",
+    "native-minimum-registration-api-preparation.md": "c68dcf15d0177760c0a51d52687f7dd51b71491397a89fdd50603fda6e5dcd29",
+    "native-minimum-registry-representation-design.md": "27f505f7fc927fe8587bc723d4ed995e8c37cdd29fea3e8f2ddeb3be6ffcafc0",
+    "minimum-registration-api-caller-inventory.json": "640962bf54ddddb4a76e2cc57ab914c7e64be465cbb425b7527d80102acdbd0b",
+    "root-native-ledger-source04-focused-verification.json": "06e7ca622240610cf1dafc226f6cfee52e258f9a496efa4ef3ea597da567761e",
+    "root-native-ledger-source04-actual-verification.json": "a4c8ea361992a4380fea50e13ea42ff75641ce080855aebb27d4fcacb65261a8",
+    "root-native-ledger-firstack-comparison01-final-analysis.json": "656eb6fa3f970fb1787e76f43d69094aae06354833e5b434f6fea8c6a216a50b"
+  },
+  "file_ownership": {
+    "native_prerequisite": [
+      "TreeDB/db/**",
+      "TreeDB/lifecycle/**"
+    ],
+    "root": [
+      "all other source paths and docs"
+    ]
+  },
+  "source_lease_granted": true,
+  "Go_runtime_authorized": false,
+  "gofmt_owned_paths_allowed": true,
+  "minimum_producer_guard_source_lease": false,
+  "protected_oracles_unchanged": true,
+  "performance_qualification": "OPEN; incomplete diagnostic observations retained"
+}

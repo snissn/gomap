@@ -1,0 +1,47 @@
+{
+  "not_executed": true,
+  "first_step": "Root coherent all-writers source checkpoint, then compile all affected test packages with -run ^$ to find indirect method-set/type errors",
+  "affected_packages": [
+    "./TreeDB",
+    "./TreeDB/caching",
+    "./TreeDB/cmd/treemap",
+    "./TreeDB/collections",
+    "./TreeDB/internal/dictdb",
+    "./TreeDB/internal/templatedb",
+    "./TreeDB/mongo_gateway",
+    "./TreeDB/mvcc",
+    "./TreeDB/mvcc/cowbench",
+    "./TreeDB/nativewire",
+    "./TreeDB/zipper"
+  ],
+  "focused_selectors": [
+    {
+      "packages": [
+        "./TreeDB",
+        "./TreeDB/caching"
+      ],
+      "normal_and_race_selector": "Test(AcquireSnapshot_|AcquireBackendSnapshotFastPath_|COWCut|COWPublicReadOwnerCaptureRacesClose|ReadSnapshotsSeeQueuedWrites|ProfileFast_ReadSnapshotsSeeQueuedWrites|RootDomainProbeStats_)"
+    },
+    {
+      "packages": [
+        "./TreeDB/mvcc"
+      ],
+      "normal_and_race_selector": "Test(Prune|NativePrune|COW|ExactKey)"
+    },
+    {
+      "packages": [
+        "./TreeDB/collections"
+      ],
+      "normal_and_race_selector": "Test(CollectionCatalogOverlayRootsAreVisibleAfterReopen|CollectionOverlayPrimaryProbeMissDoesNotFallThroughToBase|VectorIndexInsert|CollectionBSONOrderedV2MetadataAndEntryCorruptionFailClosed|TypedGraph)"
+    },
+    {
+      "packages": [
+        "./TreeDB/internal/templatedb",
+        "./TreeDB/cmd/treemap"
+      ],
+      "normal_and_race_selector": "Test(Stable|Compact)"
+    }
+  ],
+  "environment": "Pinned task Go; GOTOOLCHAIN=local GOWORK=off GOENV=off; task cache and TMPDIR; root owns runtime concurrency reservation",
+  "limits": "Proposals only. Protected workloads/caps/alloc oracles remain unchanged. No benchmark execution by this worker."
+}

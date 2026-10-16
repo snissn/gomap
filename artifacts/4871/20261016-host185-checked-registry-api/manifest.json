@@ -1,0 +1,2882 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/canonical-before-registry-api.json",
+    "path": "live-startup/canonical-before-registry-api.json.gz",
+    "source_bytes": 68453,
+    "source_sha256": "6c0e1ad21c3b34e2eebcd245595da4ad2902b0b95fb433a847aed95e34105000",
+    "stored_bytes": 24107,
+    "stored_sha256": "756976f467036b16db361ded37f7b8d156a0385de30efc3169944c80b426787e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/issue4878-before-registry-api.json",
+    "path": "live-startup/issue4878-before-registry-api.json.gz",
+    "source_bytes": 69084,
+    "source_sha256": "a1b28338d08f18e35ffca3b2c70e65c7ced9700e622c1b2124ac849b1075286c",
+    "stored_bytes": 24593,
+    "stored_sha256": "a573bc18f2996956d0924cc077f878b0b3a5cb8cfcd6113b7961dd307063389b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/main-before-registry-api.json",
+    "path": "live-startup/main-before-registry-api.json",
+    "source_bytes": 361,
+    "source_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "stored_bytes": 361,
+    "stored_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-c1-core-review02.json",
+    "path": "native-decision/native-registry-api-c1-core-review02.json",
+    "source_bytes": 9337,
+    "source_sha256": "48463b56d50ea69f49c7c49c7831ba077d5777b5c6694f906f9d98a77bef6c95",
+    "stored_bytes": 9337,
+    "stored_sha256": "48463b56d50ea69f49c7c49c7831ba077d5777b5c6694f906f9d98a77bef6c95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-c1-core-review02.md",
+    "path": "native-decision/native-registry-api-c1-core-review02.md",
+    "source_bytes": 4509,
+    "source_sha256": "183ad1ec1c08635f3b1558e600f0bc938c951e7cf9f82c768e80d7a656118bb8",
+    "stored_bytes": 4509,
+    "stored_sha256": "183ad1ec1c08635f3b1558e600f0bc938c951e7cf9f82c768e80d7a656118bb8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-c1-root-review01.json",
+    "path": "native-decision/native-registry-api-c1-root-review01.json",
+    "source_bytes": 3455,
+    "source_sha256": "7e047ed5d4512fabde44f29ddbd41833bb3ef357d5b0376564e1c391129a21ee",
+    "stored_bytes": 3455,
+    "stored_sha256": "7e047ed5d4512fabde44f29ddbd41833bb3ef357d5b0376564e1c391129a21ee",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-c1-root-review01.md",
+    "path": "native-decision/native-registry-api-c1-root-review01.md",
+    "source_bytes": 2267,
+    "source_sha256": "2f085fc24bbfee6c1142e77e8319790bb68e01753821327ce29f57d773fcec79",
+    "stored_bytes": 2267,
+    "stored_sha256": "2f085fc24bbfee6c1142e77e8319790bb68e01753821327ce29f57d773fcec79",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-core-review01.json",
+    "path": "native-decision/native-registry-api-core-review01.json",
+    "source_bytes": 11265,
+    "source_sha256": "ee78c74892ae904709676e15e0bef947fe63e5e94337432ac052a71564b2b72d",
+    "stored_bytes": 11265,
+    "stored_sha256": "ee78c74892ae904709676e15e0bef947fe63e5e94337432ac052a71564b2b72d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-core-review01.md",
+    "path": "native-decision/native-registry-api-core-review01.md",
+    "source_bytes": 4350,
+    "source_sha256": "c70ba217c9f433982878ea9c41a96be53cc0eb6ba60a7594dd4dacf40cf606d2",
+    "stored_bytes": 4350,
+    "stored_sha256": "c70ba217c9f433982878ea9c41a96be53cc0eb6ba60a7594dd4dacf40cf606d2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-outside-production-review01.json",
+    "path": "native-decision/native-registry-api-outside-production-review01.json",
+    "source_bytes": 13206,
+    "source_sha256": "37f8f20863c13f3fad22b96b718e0e66f4cdf32aa8ae68d5cd5f02fdfa2bb398",
+    "stored_bytes": 13206,
+    "stored_sha256": "37f8f20863c13f3fad22b96b718e0e66f4cdf32aa8ae68d5cd5f02fdfa2bb398",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-outside-production-review01.md",
+    "path": "native-decision/native-registry-api-outside-production-review01.md",
+    "source_bytes": 2870,
+    "source_sha256": "692b589732cdbb91ea41f3ec78cbab5cbddb3075aa3a84ee70f56ba3c3cb9132",
+    "stored_bytes": 2870,
+    "stored_sha256": "692b589732cdbb91ea41f3ec78cbab5cbddb3075aa3a84ee70f56ba3c3cb9132",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-outside-test-review01.json",
+    "path": "native-decision/native-registry-api-outside-test-review01.json.gz",
+    "source_bytes": 31597,
+    "source_sha256": "642d700c4d474d12e7941506ddcb570664940a7a06bf0c7ec6f509bde20fb9ba",
+    "stored_bytes": 13400,
+    "stored_sha256": "1288e22e39669d1cc3ed6044bb57a010485e5d1c5c14f8037270b4adb3b7e691",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-outside-test-review01.md",
+    "path": "native-decision/native-registry-api-outside-test-review01.md",
+    "source_bytes": 2580,
+    "source_sha256": "715e507a03df9eba219fd35d76a525fca178877d3983fe608a91ff98f0dec367",
+    "stored_bytes": 2580,
+    "stored_sha256": "715e507a03df9eba219fd35d76a525fca178877d3983fe608a91ff98f0dec367",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source02-focused-failure-diagnosis.json",
+    "path": "native-decision/native-registry-api-source02-focused-failure-diagnosis.json",
+    "source_bytes": 4924,
+    "source_sha256": "ef8c6d2ba1254e018adc42f50c82da4e9bb6a8e28dd5fd080a4f369fb1381a2e",
+    "stored_bytes": 4924,
+    "stored_sha256": "ef8c6d2ba1254e018adc42f50c82da4e9bb6a8e28dd5fd080a4f369fb1381a2e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source02-focused-failure-diagnosis.md",
+    "path": "native-decision/native-registry-api-source02-focused-failure-diagnosis.md",
+    "source_bytes": 6141,
+    "source_sha256": "e388e28877bee505e2bb0c37ab95eb11a2f020e302a061c7917f5014fc99b103",
+    "stored_bytes": 6141,
+    "stored_sha256": "e388e28877bee505e2bb0c37ab95eb11a2f020e302a061c7917f5014fc99b103",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source03-repair-review01.json",
+    "path": "native-decision/native-registry-api-source03-repair-review01.json",
+    "source_bytes": 9703,
+    "source_sha256": "5ada7c6531dc12b33c7c2f50022b187c72362433efaea6b9fdf50fd4d13e475d",
+    "stored_bytes": 9703,
+    "stored_sha256": "5ada7c6531dc12b33c7c2f50022b187c72362433efaea6b9fdf50fd4d13e475d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source03-repair-review01.md",
+    "path": "native-decision/native-registry-api-source03-repair-review01.md",
+    "source_bytes": 6532,
+    "source_sha256": "f940217a1026cd86b270c543adf94b0ccf6c631ef175bf99d906ffe044fdb5b4",
+    "stored_bytes": 6532,
+    "stored_sha256": "f940217a1026cd86b270c543adf94b0ccf6c631ef175bf99d906ffe044fdb5b4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source04-quiescence-review01.json",
+    "path": "native-decision/native-registry-api-source04-quiescence-review01.json",
+    "source_bytes": 8390,
+    "source_sha256": "276d8e268ca35efdf81072bd041a8816dde979b1ee1f9d6a166e7938ff999ad3",
+    "stored_bytes": 8390,
+    "stored_sha256": "276d8e268ca35efdf81072bd041a8816dde979b1ee1f9d6a166e7938ff999ad3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source04-quiescence-review01.md",
+    "path": "native-decision/native-registry-api-source04-quiescence-review01.md",
+    "source_bytes": 5092,
+    "source_sha256": "de90a0ae2deed0e5373a10ce63388e46421ce6da8bf48a006cbb0b455207deea",
+    "stored_bytes": 5092,
+    "stored_sha256": "de90a0ae2deed0e5373a10ce63388e46421ce6da8bf48a006cbb0b455207deea",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-implementation-preparation.json",
+    "path": "native-decision/native-source-guard-implementation-preparation.json",
+    "source_bytes": 5977,
+    "source_sha256": "dd10966f9fcd000a312903815bd4a840fc7b4f1cfd6c92fd50641c39a4477180",
+    "stored_bytes": 5977,
+    "stored_sha256": "dd10966f9fcd000a312903815bd4a840fc7b4f1cfd6c92fd50641c39a4477180",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-implementation-preparation.md",
+    "path": "native-decision/native-source-guard-implementation-preparation.md",
+    "source_bytes": 18626,
+    "source_sha256": "873ced24d8cd6cb4c2fbdc74a457afc4d90160b6be16ac49afd42c612ce4aa79",
+    "stored_bytes": 18626,
+    "stored_sha256": "873ced24d8cd6cb4c2fbdc74a457afc4d90160b6be16ac49afd42c612ce4aa79",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-mutation-advice01.json",
+    "path": "native-decision/native-source-guard-mutation-advice01.json",
+    "source_bytes": 4347,
+    "source_sha256": "643e6ce64d5d03da77ffa867b711950b23d28a27b78b02be17064ba3f55806f3",
+    "stored_bytes": 4347,
+    "stored_sha256": "643e6ce64d5d03da77ffa867b711950b23d28a27b78b02be17064ba3f55806f3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-mutation-advice01.md",
+    "path": "native-decision/native-source-guard-mutation-advice01.md",
+    "source_bytes": 17582,
+    "source_sha256": "ab00c86f80a5db59cf9b74f56ef79363f657f608be588c104637f7a876a92fb0",
+    "stored_bytes": 17582,
+    "stored_sha256": "ab00c86f80a5db59cf9b74f56ef79363f657f608be588c104637f7a876a92fb0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-core-packet-verification.json",
+    "path": "native-decision/root-native-registry-api-c1-core-packet-verification.json",
+    "source_bytes": 3413,
+    "source_sha256": "8ec370834d053b7b0d58b6c79cbbae9a21e9e4fcded2167be69363b58286b727",
+    "stored_bytes": 3413,
+    "stored_sha256": "8ec370834d053b7b0d58b6c79cbbae9a21e9e4fcded2167be69363b58286b727",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-core-review02-adoption.json",
+    "path": "native-decision/root-native-registry-api-c1-core-review02-adoption.json",
+    "source_bytes": 637,
+    "source_sha256": "338613b9d85f96efcf3867aa6e3e59e1f613f7569413f7f8abcccee66ba8fb9d",
+    "stored_bytes": 637,
+    "stored_sha256": "338613b9d85f96efcf3867aa6e3e59e1f613f7569413f7f8abcccee66ba8fb9d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-core-source-selection.md",
+    "path": "native-decision/root-native-registry-api-c1-core-source-selection.md",
+    "source_bytes": 3549,
+    "source_sha256": "b76c05e80de7a5d8a6cb88046236ba7fe63626e1e84a7c2b2fc40842ba7680b6",
+    "stored_bytes": 3549,
+    "stored_sha256": "b76c05e80de7a5d8a6cb88046236ba7fe63626e1e84a7c2b2fc40842ba7680b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-root-review01-adoption.json",
+    "path": "native-decision/root-native-registry-api-c1-root-review01-adoption.json",
+    "source_bytes": 276,
+    "source_sha256": "df59d70a51103abfc013bce69975030645b928829b19ecae280251fc7602f83b",
+    "stored_bytes": 276,
+    "stored_sha256": "df59d70a51103abfc013bce69975030645b928829b19ecae280251fc7602f83b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-c1-root-source-selection.md",
+    "path": "native-decision/root-native-registry-api-c1-root-source-selection.md",
+    "source_bytes": 1298,
+    "source_sha256": "b0af21420ece00801cc1a4f5f43d1b0553e117cde7d54d0787e5fc0c64153e24",
+    "stored_bytes": 1298,
+    "stored_sha256": "b0af21420ece00801cc1a4f5f43d1b0553e117cde7d54d0787e5fc0c64153e24",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-compile-source01-selection.json",
+    "path": "native-decision/root-native-registry-api-compile-source01-selection.json",
+    "source_bytes": 1689,
+    "source_sha256": "4f29462d93bf3bd5762fbd65c13906561f291e73b5fb0eb26732accd33155efb",
+    "stored_bytes": 1689,
+    "stored_sha256": "4f29462d93bf3bd5762fbd65c13906561f291e73b5fb0eb26732accd33155efb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-compile-source02-selection.json",
+    "path": "native-decision/root-native-registry-api-compile-source02-selection.json",
+    "source_bytes": 1618,
+    "source_sha256": "59ca4c2396cb7786f218cb26e5de2045d695ccc4a951fe79dd4838e2e90f1138",
+    "stored_bytes": 1618,
+    "stored_sha256": "59ca4c2396cb7786f218cb26e5de2045d695ccc4a951fe79dd4838e2e90f1138",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-compile-source02-verification.json",
+    "path": "native-decision/root-native-registry-api-compile-source02-verification.json",
+    "source_bytes": 641,
+    "source_sha256": "9ac4ff72ba3814238904eea8e4daeb26c91932952d7281cfdbd6288101675b5b",
+    "stored_bytes": 641,
+    "stored_sha256": "9ac4ff72ba3814238904eea8e4daeb26c91932952d7281cfdbd6288101675b5b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-core-before.json",
+    "path": "native-decision/root-native-registry-api-core-before.json.gz",
+    "source_bytes": 56705,
+    "source_sha256": "8bb7a3e1f0ca2f977ad7e00a56a83d73f1ba6f99287755b169c10889141de230",
+    "stored_bytes": 24229,
+    "stored_sha256": "841a491bf1c80375e5ab534db2a92a0dfc2bd2b6aca7fe6f621f510b41c135bb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-core-packet-verification.json",
+    "path": "native-decision/root-native-registry-api-core-packet-verification.json",
+    "source_bytes": 478,
+    "source_sha256": "17964dd870ef47c859c37b26fe1820906266a3ea656840e8b4acbe30aae362c2",
+    "stored_bytes": 478,
+    "stored_sha256": "17964dd870ef47c859c37b26fe1820906266a3ea656840e8b4acbe30aae362c2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-core-review01-adoption.json",
+    "path": "native-decision/root-native-registry-api-core-review01-adoption.json",
+    "source_bytes": 928,
+    "source_sha256": "8405f94405702d372c456b9475cf210e9cb2c64228f7f2834995611a3c4503fe",
+    "stored_bytes": 928,
+    "stored_sha256": "8405f94405702d372c456b9475cf210e9cb2c64228f7f2834995611a3c4503fe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-focused-source02-selection.json",
+    "path": "native-decision/root-native-registry-api-focused-source02-selection.json",
+    "source_bytes": 1972,
+    "source_sha256": "9f0190be7990445238b2a84a348af336726a3bc264d0cb14c991369a10d59eb2",
+    "stored_bytes": 1972,
+    "stored_sha256": "9f0190be7990445238b2a84a348af336726a3bc264d0cb14c991369a10d59eb2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-focused-source03-selection.json",
+    "path": "native-decision/root-native-registry-api-focused-source03-selection.json",
+    "source_bytes": 2169,
+    "source_sha256": "8499f43362399c4ad28394b40fec85ce14a8468be8e5c1bdf84f7a358ab57118",
+    "stored_bytes": 2169,
+    "stored_sha256": "8499f43362399c4ad28394b40fec85ce14a8468be8e5c1bdf84f7a358ab57118",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-focused-source04-selection.json",
+    "path": "native-decision/root-native-registry-api-focused-source04-selection.json",
+    "source_bytes": 2169,
+    "source_sha256": "01e4c8b9a84e187807ca8b8058a34d89bcc9c83845945b10c0082e37260ea29e",
+    "stored_bytes": 2169,
+    "stored_sha256": "01e4c8b9a84e187807ca8b8058a34d89bcc9c83845945b10c0082e37260ea29e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-outside-production-review-acceptance.json",
+    "path": "native-decision/root-native-registry-api-outside-production-review-acceptance.json",
+    "source_bytes": 408,
+    "source_sha256": "b9eb62d3c55c38826589d08861aa5e9854e7e628071a375806b7fe6b26e23621",
+    "stored_bytes": 408,
+    "stored_sha256": "b9eb62d3c55c38826589d08861aa5e9854e7e628071a375806b7fe6b26e23621",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-outside-test-packet-verification.json",
+    "path": "native-decision/root-native-registry-api-outside-test-packet-verification.json",
+    "source_bytes": 757,
+    "source_sha256": "a7a80bdd4542e02ce8b7b7cedb28e4bd9287bf952f54e0eb0a35dad49169c375",
+    "stored_bytes": 757,
+    "stored_sha256": "a7a80bdd4542e02ce8b7b7cedb28e4bd9287bf952f54e0eb0a35dad49169c375",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source-selection.json",
+    "path": "native-decision/root-native-registry-api-source-selection.json",
+    "source_bytes": 2116,
+    "source_sha256": "4dae369b56b0d09bd64f29ac0947ca3c9555af16ea6dd8c41815e83ed99bdf31",
+    "stored_bytes": 2116,
+    "stored_sha256": "4dae369b56b0d09bd64f29ac0947ca3c9555af16ea6dd8c41815e83ed99bdf31",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source-selection.md",
+    "path": "native-decision/root-native-registry-api-source-selection.md",
+    "source_bytes": 4470,
+    "source_sha256": "98ebb64fa4d7e6ff89d19e96b33137402aa89e8bcbcc20ea4461f0c2ff75b79b",
+    "stored_bytes": 4470,
+    "stored_sha256": "98ebb64fa4d7e6ff89d19e96b33137402aa89e8bcbcc20ea4461f0c2ff75b79b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source02-diagnosis-adoption.json",
+    "path": "native-decision/root-native-registry-api-source02-diagnosis-adoption.json",
+    "source_bytes": 1241,
+    "source_sha256": "8a2907de9046be8b1ee8cea25ba94a6614ec0e44c09d295322b9b40526119c49",
+    "stored_bytes": 1241,
+    "stored_sha256": "8a2907de9046be8b1ee8cea25ba94a6614ec0e44c09d295322b9b40526119c49",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source02-focused-verification.json",
+    "path": "native-decision/root-native-registry-api-source02-focused-verification.json",
+    "source_bytes": 3928,
+    "source_sha256": "7872c65358277da59e287e93c4e772a0d2c1ab6cc620d1464f3e7207549a33fa",
+    "stored_bytes": 3928,
+    "stored_sha256": "7872c65358277da59e287e93c4e772a0d2c1ab6cc620d1464f3e7207549a33fa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source03-focused-verification.json",
+    "path": "native-decision/root-native-registry-api-source03-focused-verification.json",
+    "source_bytes": 1375,
+    "source_sha256": "b1b841e1f04a83680c56d7c0402b3cd8d10bf76fc705b758b4dcddcb0dc219d4",
+    "stored_bytes": 1375,
+    "stored_sha256": "b1b841e1f04a83680c56d7c0402b3cd8d10bf76fc705b758b4dcddcb0dc219d4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source03-packet-verification.json",
+    "path": "native-decision/root-native-registry-api-source03-packet-verification.json",
+    "source_bytes": 478,
+    "source_sha256": "21f4c8d8c9ce22a086371a64cf62b07158b95de3f0194d133f57841356cd6ffe",
+    "stored_bytes": 478,
+    "stored_sha256": "21f4c8d8c9ce22a086371a64cf62b07158b95de3f0194d133f57841356cd6ffe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source03-repair-selection.md",
+    "path": "native-decision/root-native-registry-api-source03-repair-selection.md",
+    "source_bytes": 2928,
+    "source_sha256": "2931a57ac033ff792481d17213f63fe1a4fb6a2173f578bc64559226fb60d5fa",
+    "stored_bytes": 2928,
+    "stored_sha256": "2931a57ac033ff792481d17213f63fe1a4fb6a2173f578bc64559226fb60d5fa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source03-reuse.json",
+    "path": "native-decision/root-native-registry-api-source03-reuse.json",
+    "source_bytes": 1745,
+    "source_sha256": "52e975e02ccfd7440baeed81f17bd3c4de20c7abf8f24d168f047f75e20d655c",
+    "stored_bytes": 1745,
+    "stored_sha256": "52e975e02ccfd7440baeed81f17bd3c4de20c7abf8f24d168f047f75e20d655c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source03-review-adoption.json",
+    "path": "native-decision/root-native-registry-api-source03-review-adoption.json",
+    "source_bytes": 674,
+    "source_sha256": "163aec03eaff21b798ec44f7bd5e66e32126948370b5d744208181499c2e2b40",
+    "stored_bytes": 674,
+    "stored_sha256": "163aec03eaff21b798ec44f7bd5e66e32126948370b5d744208181499c2e2b40",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source04-effective-verification.json",
+    "path": "native-decision/root-native-registry-api-source04-effective-verification.json",
+    "source_bytes": 1439,
+    "source_sha256": "f192cae29e1fd8bf62600d0559e1ecb4297818067548e0dc4480e846229d25bd",
+    "stored_bytes": 1439,
+    "stored_sha256": "f192cae29e1fd8bf62600d0559e1ecb4297818067548e0dc4480e846229d25bd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source04-focused-verification.json",
+    "path": "native-decision/root-native-registry-api-source04-focused-verification.json",
+    "source_bytes": 4275,
+    "source_sha256": "f1175ba42b82afd9741ebc5af5ff392f55dff558c2a0518c86f5723b76d372df",
+    "stored_bytes": 4275,
+    "stored_sha256": "f1175ba42b82afd9741ebc5af5ff392f55dff558c2a0518c86f5723b76d372df",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source04-repair-selection.json",
+    "path": "native-decision/root-native-registry-api-source04-repair-selection.json",
+    "source_bytes": 1506,
+    "source_sha256": "588d5578362b0dc7be1005bcadba0031e68f461c07b886a402a204c3ef1d30d2",
+    "stored_bytes": 1506,
+    "stored_sha256": "588d5578362b0dc7be1005bcadba0031e68f461c07b886a402a204c3ef1d30d2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source04-reuse.json",
+    "path": "native-decision/root-native-registry-api-source04-reuse.json",
+    "source_bytes": 2393,
+    "source_sha256": "53564e4ef7fa2f89b8d7c4dfaf356926138157f46168d5459bea8789962e1f28",
+    "stored_bytes": 2393,
+    "stored_sha256": "53564e4ef7fa2f89b8d7c4dfaf356926138157f46168d5459bea8789962e1f28",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-source04-review-adoption.json",
+    "path": "native-decision/root-native-registry-api-source04-review-adoption.json",
+    "source_bytes": 696,
+    "source_sha256": "a2e0682dcf19db4d91593ba4da0e6e47c43d74d5e805192bec045d0224239a15",
+    "stored_bytes": 696,
+    "stored_sha256": "a2e0682dcf19db4d91593ba4da0e6e47c43d74d5e805192bec045d0224239a15",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-registry-api-test-partition.md",
+    "path": "native-decision/root-native-registry-api-test-partition.md",
+    "source_bytes": 1507,
+    "source_sha256": "bff1ed30c9ea54b593f1e4bd568a60080980b32806b831a173a3146fda7da6c6",
+    "stored_bytes": 1507,
+    "stored_sha256": "bff1ed30c9ea54b593f1e4bd568a60080980b32806b831a173a3146fda7da6c6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-advice-adoption.json",
+    "path": "native-decision/root-native-source-guard-advice-adoption.json",
+    "source_bytes": 962,
+    "source_sha256": "823410d29bb9013de9dd83d1c183fba61aea40e7f5a8a111c5798ab2e76ad115",
+    "stored_bytes": 962,
+    "stored_sha256": "823410d29bb9013de9dd83d1c183fba61aea40e7f5a8a111c5798ab2e76ad115",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-implementation-activation.json",
+    "path": "native-decision/root-native-source-guard-implementation-activation.json",
+    "source_bytes": 1850,
+    "source_sha256": "8571a2231bc4a8304371475f43c4377802da50525b81d2e1853edbb253632869",
+    "stored_bytes": 1850,
+    "stored_sha256": "8571a2231bc4a8304371475f43c4377802da50525b81d2e1853edbb253632869",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-implementation-selection.md",
+    "path": "native-decision/root-native-source-guard-implementation-selection.md",
+    "source_bytes": 9125,
+    "source_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "stored_bytes": 9125,
+    "stored_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-registry-api-c1-source.py",
+    "path": "native-main-integration/freeze-registry-api-c1-source.py",
+    "source_bytes": 6328,
+    "source_sha256": "084c190ca254b188ea718e4b7fb7dfb4567b32bd8a75804e410236a376d94db9",
+    "stored_bytes": 6328,
+    "stored_sha256": "084c190ca254b188ea718e4b7fb7dfb4567b32bd8a75804e410236a376d94db9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-registry-api-source.py",
+    "path": "native-main-integration/freeze-registry-api-source.py",
+    "source_bytes": 6551,
+    "source_sha256": "147691310e9ab9e757580c4f050cd1b3c28b8036da37025b6847649dbb86d1b4",
+    "stored_bytes": 6551,
+    "stored_sha256": "147691310e9ab9e757580c4f050cd1b3c28b8036da37025b6847649dbb86d1b4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-registry-api-source03.py",
+    "path": "native-main-integration/freeze-registry-api-source03.py",
+    "source_bytes": 6049,
+    "source_sha256": "79e275cfd4448647adc13ce438bfdf4168fd025428c3ce0d7cc5529ee0eb5e2d",
+    "stored_bytes": 6049,
+    "stored_sha256": "79e275cfd4448647adc13ce438bfdf4168fd025428c3ce0d7cc5529ee0eb5e2d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-registry-api-source04.py",
+    "path": "native-main-integration/freeze-registry-api-source04.py",
+    "source_bytes": 5530,
+    "source_sha256": "d2570778b827d87c02985233253573d102aabd3ed63db6a1a83e16d5a5dce266",
+    "stored_bytes": 5530,
+    "stored_sha256": "d2570778b827d87c02985233253573d102aabd3ed63db6a1a83e16d5a5dce266",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/README.md",
+    "path": "native-main-integration/native-registry-api-c1-core/README.md",
+    "source_bytes": 7107,
+    "source_sha256": "d0e118f05cb80c831a52c3e5e396e3fa400b2ae4c407401b89d072e60e321436",
+    "stored_bytes": 7107,
+    "stored_sha256": "d0e118f05cb80c831a52c3e5e396e3fa400b2ae4c407401b89d072e60e321436",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/before-modes.json",
+    "path": "native-main-integration/native-registry-api-c1-core/before-modes.json.gz",
+    "source_bytes": 27384,
+    "source_sha256": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "stored_bytes": 3560,
+    "stored_sha256": "c58ad645a7c17a1312081b7d1f0240bf84771288416cbb196f702c08c6f0766c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/before.json",
+    "path": "native-main-integration/native-registry-api-c1-core/before.json.gz",
+    "source_bytes": 56943,
+    "source_sha256": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "stored_bytes": 24339,
+    "stored_sha256": "a780cd62b2b35f7baa42ea8ba9795478509e93c32d0fba4b9c463c8d3e435ef7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/before.tar.gz",
+    "path": "native-main-integration/native-registry-api-c1-core/before.tar.gz.gz",
+    "source_bytes": 1434539,
+    "source_sha256": "f85494db5d0d164a1d105ce8708cb48863a7dc3206fae196426a8426f66ccaf1",
+    "stored_bytes": 1434997,
+    "stored_sha256": "3377c470e441f38f1ab73d628e0352631eaddae7114b4d8ec498e1e844e4ed53",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/changed-files.json",
+    "path": "native-main-integration/native-registry-api-c1-core/changed-files.json",
+    "source_bytes": 2546,
+    "source_sha256": "a124e23cdd6a1c9387950b3d1b2720493c0dbe57307e6b3683f257a1944f3d3d",
+    "stored_bytes": 2546,
+    "stored_sha256": "a124e23cdd6a1c9387950b3d1b2720493c0dbe57307e6b3683f257a1944f3d3d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/changed-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-c1-core/changed-source.tar.gz.gz",
+    "source_bytes": 76341,
+    "source_sha256": "f7320bc0388d51b782381f13bbcb473fee4804c3a0d32806f87430b89cbd6d84",
+    "stored_bytes": 76384,
+    "stored_sha256": "7e1b9b61b016736123aaf75fa55c644e36e618fc57584159f6a73e2b8b56d738",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/close-race-correction.py",
+    "path": "native-main-integration/native-registry-api-c1-core/close-race-correction.py",
+    "source_bytes": 5122,
+    "source_sha256": "62fc3c338c018fa49d38f16ef6830c226c3fe9863d1a4ea18ad727e282e137ce",
+    "stored_bytes": 5122,
+    "stored_sha256": "62fc3c338c018fa49d38f16ef6830c226c3fe9863d1a4ea18ad727e282e137ce",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/finish-c1.py",
+    "path": "native-main-integration/native-registry-api-c1-core/finish-c1.py",
+    "source_bytes": 3399,
+    "source_sha256": "b4f1cf31c025800941f34cdc4a068b46df45a0dd79e5e1de93d9de728ad812b4",
+    "stored_bytes": 3399,
+    "stored_sha256": "b4f1cf31c025800941f34cdc4a068b46df45a0dd79e5e1de93d9de728ad812b4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/handoff.json",
+    "path": "native-main-integration/native-registry-api-c1-core/handoff.json",
+    "source_bytes": 2124,
+    "source_sha256": "27c7d5cb4033d624b1a40d25808424d64311e75fcd7a718af5d571cbc39fecbc",
+    "stored_bytes": 2124,
+    "stored_sha256": "27c7d5cb4033d624b1a40d25808424d64311e75fcd7a718af5d571cbc39fecbc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/implement-c1.py",
+    "path": "native-main-integration/native-registry-api-c1-core/implement-c1.py",
+    "source_bytes": 5338,
+    "source_sha256": "f7009edca89451c9069aa20ba684a894abcf0ca1b33d8f3a764b322d3f81c37f",
+    "stored_bytes": 5338,
+    "stored_sha256": "f7009edca89451c9069aa20ba684a894abcf0ca1b33d8f3a764b322d3f81c37f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/implement-gates.py",
+    "path": "native-main-integration/native-registry-api-c1-core/implement-gates.py",
+    "source_bytes": 4653,
+    "source_sha256": "312ada80c4342adc57698c6fff1f31d647dcb79bbc24bf3355912b463f2888b6",
+    "stored_bytes": 4653,
+    "stored_sha256": "312ada80c4342adc57698c6fff1f31d647dcb79bbc24bf3355912b463f2888b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/owned-after.json",
+    "path": "native-main-integration/native-registry-api-c1-core/owned-after.json.gz",
+    "source_bytes": 57196,
+    "source_sha256": "1e57f446fb0997b311d86ed608c7f7170f6a2d7434b313b9b839b19c3662b1ed",
+    "stored_bytes": 24449,
+    "stored_sha256": "97670d5d5fffa369d224ed4abf7ee0c7291c7a9b6d8fa870508309384a1bdda3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/owned-after.tar.gz",
+    "path": "native-main-integration/native-registry-api-c1-core/owned-after.tar.gz.gz",
+    "source_bytes": 1440416,
+    "source_sha256": "ab1220b5ceb637d49f33adf7266c50fd4b793f020e01c96f38cb94c6b80ffc05",
+    "stored_bytes": 1440854,
+    "stored_sha256": "c2a57dfef7e6208429437c453342d66db96aff8c72309afcfa827114602139ed",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/owned-before-modes.json",
+    "path": "native-main-integration/native-registry-api-c1-core/owned-before-modes.json.gz",
+    "source_bytes": 27384,
+    "source_sha256": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "stored_bytes": 3560,
+    "stored_sha256": "c58ad645a7c17a1312081b7d1f0240bf84771288416cbb196f702c08c6f0766c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/owned-before.json",
+    "path": "native-main-integration/native-registry-api-c1-core/owned-before.json.gz",
+    "source_bytes": 56943,
+    "source_sha256": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "stored_bytes": 24339,
+    "stored_sha256": "a780cd62b2b35f7baa42ea8ba9795478509e93c32d0fba4b9c463c8d3e435ef7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/owned-modes.json",
+    "path": "native-main-integration/native-registry-api-c1-core/owned-modes.json.gz",
+    "source_bytes": 27519,
+    "source_sha256": "7c21bc52c31be932d253531ffd7c3bfd1d8ee43c41cfefb697938225cdc274c3",
+    "stored_bytes": 3573,
+    "stored_sha256": "c86f686b441de8d6308a05899cefcf736b9fe5adadd515ea8067a322768a509f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/parent-binding.json",
+    "path": "native-main-integration/native-registry-api-c1-core/parent-binding.json",
+    "source_bytes": 1166,
+    "source_sha256": "5aefcd397733dee531dff36ed0fe4d09faa6d91bd1a453711d5326f905ba40e9",
+    "stored_bytes": 1166,
+    "stored_sha256": "5aefcd397733dee531dff36ed0fe4d09faa6d91bd1a453711d5326f905ba40e9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-c1-core/proposed-commands.json.gz",
+    "source_bytes": 26146,
+    "source_sha256": "2e94b3094004a57bfa4d54cd7cd4e5c32d860de4aada61afc220d66e7801cb7a",
+    "stored_bytes": 2756,
+    "stored_sha256": "a9599e02f2277f5393b7ed1751f8565b6347208679e1def0d7e71c3bcf35028a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/seal-owned.py",
+    "path": "native-main-integration/native-registry-api-c1-core/seal-owned.py",
+    "source_bytes": 6545,
+    "source_sha256": "03f2e0b5e96331ff0463859da955c0575b67b94ce2d1e3bea544683d86b73518",
+    "stored_bytes": 6545,
+    "stored_sha256": "03f2e0b5e96331ff0463859da955c0575b67b94ce2d1e3bea544683d86b73518",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-c1-core/source.delta.patch.gz",
+    "source_bytes": 44572,
+    "source_sha256": "9078785da5851dbef4beca28adca22454262026404fa1cdfbe9bcc53ba5696d1",
+    "stored_bytes": 10840,
+    "stored_sha256": "4be080505aa8bf9ee04004beceedd42ef4d9bbecb3018545d7555033fd7996af",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core/test-bindings.json",
+    "path": "native-main-integration/native-registry-api-c1-core/test-bindings.json",
+    "source_bytes": 15736,
+    "source_sha256": "2785558a7e1e685f5acc2847c573675974c83c791ae978cafd79b50b652a57d7",
+    "stored_bytes": 15736,
+    "stored_sha256": "2785558a7e1e685f5acc2847c573675974c83c791ae978cafd79b50b652a57d7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-provisional-root-audit/production.patch",
+    "path": "native-main-integration/native-registry-api-c1-provisional-root-audit/production.patch",
+    "source_bytes": 16506,
+    "source_sha256": "176b1e6f8318f3133387bc824043dff52b138265d7692b0e2639a807d6575dcd",
+    "stored_bytes": 16506,
+    "stored_sha256": "176b1e6f8318f3133387bc824043dff52b138265d7692b0e2639a807d6575dcd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-provisional-root-audit/source.json",
+    "path": "native-main-integration/native-registry-api-c1-provisional-root-audit/source.json",
+    "source_bytes": 635,
+    "source_sha256": "6d0370e63431cc4c33b728f31452900a7d718c15ea549ace6c76018a3b1312d0",
+    "stored_bytes": 635,
+    "stored_sha256": "6d0370e63431cc4c33b728f31452900a7d718c15ea549ace6c76018a3b1312d0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-provisional-root-audit02/production.patch",
+    "path": "native-main-integration/native-registry-api-c1-provisional-root-audit02/production.patch.gz",
+    "source_bytes": 23790,
+    "source_sha256": "f75d2cac197e1d27e27034c9d7efadf38ba8b14ed0ec0ec7dfdb369211a3fde3",
+    "stored_bytes": 6333,
+    "stored_sha256": "4d34e3b699bb5621a0c43e52d910e16666672d4b68ab11c43c53ea86d4cda2e8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-provisional-root-audit02/source.json",
+    "path": "native-main-integration/native-registry-api-c1-provisional-root-audit02/source.json",
+    "source_bytes": 744,
+    "source_sha256": "ee34e8402fe4abbb7bd7220514a743f0a70723da2430fde8a1b3e71aade195dc",
+    "stored_bytes": 744,
+    "stored_sha256": "ee34e8402fe4abbb7bd7220514a743f0a70723da2430fde8a1b3e71aade195dc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/after.json",
+    "path": "native-main-integration/native-registry-api-c1-root/after.json",
+    "source_bytes": 252,
+    "source_sha256": "e917c201ee54e8f3a64dd04e7dfa4f9162dbe06307b798d9923ba50d94655af0",
+    "stored_bytes": 252,
+    "stored_sha256": "e917c201ee54e8f3a64dd04e7dfa4f9162dbe06307b798d9923ba50d94655af0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/before.json",
+    "path": "native-main-integration/native-registry-api-c1-root/before.json",
+    "source_bytes": 120,
+    "source_sha256": "d99836dde800c40cf32ea69a73e84460af07bb7bb7b913a38a6aaa7fcaf569d0",
+    "stored_bytes": 120,
+    "stored_sha256": "d99836dde800c40cf32ea69a73e84460af07bb7bb7b913a38a6aaa7fcaf569d0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/freeze.json",
+    "path": "native-main-integration/native-registry-api-c1-root/freeze.json",
+    "source_bytes": 1164,
+    "source_sha256": "ca5ceb03e0b8d7b662568e7edb23838f20c125ecce8ee7d4b38a7a09f476291a",
+    "stored_bytes": 1164,
+    "stored_sha256": "ca5ceb03e0b8d7b662568e7edb23838f20c125ecce8ee7d4b38a7a09f476291a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/owner_work.before.go",
+    "path": "native-main-integration/native-registry-api-c1-root/owner_work.before.go.gz",
+    "source_bytes": 21252,
+    "source_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "stored_bytes": 5040,
+    "stored_sha256": "796508c3ddc6ffc2b970c0ce313a43e41a2705ae2ab9384e9403526e84920589",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-c1-root/source.delta.patch",
+    "source_bytes": 6222,
+    "source_sha256": "80246cfa4a356445b67647f2ffeaba9cdc972c03293eab32c6e76c9598dc939c",
+    "stored_bytes": 6222,
+    "stored_sha256": "80246cfa4a356445b67647f2ffeaba9cdc972c03293eab32c6e76c9598dc939c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-root/source.tar.gz",
+    "path": "native-main-integration/native-registry-api-c1-root/source.tar.gz",
+    "source_bytes": 6454,
+    "source_sha256": "96a9813cd0225fa5978efbd40ae44a84c4f4216b5c19c4da58faab9bf4ad2f5a",
+    "stored_bytes": 6454,
+    "stored_sha256": "96a9813cd0225fa5978efbd40ae44a84c4f4216b5c19c4da58faab9bf4ad2f5a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/README.md",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/README.md",
+    "source_bytes": 2230,
+    "source_sha256": "1853f8acd9b447482a78fe87d41d1318b95e5080dde76b3b6d87182f8e51203c",
+    "stored_bytes": 2230,
+    "stored_sha256": "1853f8acd9b447482a78fe87d41d1318b95e5080dde76b3b6d87182f8e51203c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/after.json",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/after.json",
+    "source_bytes": 99,
+    "source_sha256": "d741bf36bd3c6a88705aed5eeff508b0e2b3795b3727b9043f2bcfba545d0bc8",
+    "stored_bytes": 99,
+    "stored_sha256": "d741bf36bd3c6a88705aed5eeff508b0e2b3795b3727b9043f2bcfba545d0bc8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/before.json",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/before.json",
+    "source_bytes": 99,
+    "source_sha256": "23e92249185fec1037ec3b698cf8f5451f1f054bfdb551b5420fcc104113d4c9",
+    "stored_bytes": 99,
+    "stored_sha256": "23e92249185fec1037ec3b698cf8f5451f1f054bfdb551b5420fcc104113d4c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/delta.patch",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/delta.patch",
+    "source_bytes": 782,
+    "source_sha256": "230409df493aebab0e9e67837f3b1f86c99a6c595bac19ea8eb2eea37bbe3cbd",
+    "stored_bytes": 782,
+    "stored_sha256": "230409df493aebab0e9e67837f3b1f86c99a6c595bac19ea8eb2eea37bbe3cbd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/handoff.json",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/handoff.json",
+    "source_bytes": 1072,
+    "source_sha256": "df0b925a6a81a30ff548a07e76846c4931b2c6fb28434c3fe7b8f1c154170866",
+    "stored_bytes": 1072,
+    "stored_sha256": "df0b925a6a81a30ff548a07e76846c4931b2c6fb28434c3fe7b8f1c154170866",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/index_gen.after.go",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/index_gen.after.go",
+    "source_bytes": 16411,
+    "source_sha256": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "stored_bytes": 16411,
+    "stored_sha256": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-data-grower-repair/index_gen.before.go",
+    "path": "native-main-integration/native-registry-api-data-grower-repair/index_gen.before.go",
+    "source_bytes": 15959,
+    "source_sha256": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "stored_bytes": 15959,
+    "stored_sha256": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/command.json",
+    "path": "native-main-integration/native-registry-api-module-preparation/command.json",
+    "source_bytes": 2498,
+    "source_sha256": "f4680fdb0fddcea1f786ae85ea9552df72bd677b3dde0329c61c8f0024c46aeb",
+    "stored_bytes": 2498,
+    "stored_sha256": "f4680fdb0fddcea1f786ae85ea9552df72bd677b3dde0329c61c8f0024c46aeb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/download.jsonl",
+    "path": "native-main-integration/native-registry-api-module-preparation/download.jsonl.gz",
+    "source_bytes": 73450,
+    "source_sha256": "bf9f963f2dedf60437243ce90ed3eae03a360924dce9b2ae7cfe2277f69c4aac",
+    "stored_bytes": 12246,
+    "stored_sha256": "aab48130e6088837ede668912371880e17d142f67aa9d755ea6c5d208258ee36",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/process.json",
+    "path": "native-main-integration/native-registry-api-module-preparation/process.json",
+    "source_bytes": 86,
+    "source_sha256": "c7152d1adb3c462b3487fb0eb01ce5203cb0b88f71bf2271fbff2ba3ab4874ba",
+    "stored_bytes": 86,
+    "stored_sha256": "c7152d1adb3c462b3487fb0eb01ce5203cb0b88f71bf2271fbff2ba3ab4874ba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/result.json",
+    "path": "native-main-integration/native-registry-api-module-preparation/result.json",
+    "source_bytes": 517,
+    "source_sha256": "10b8aca1270c743d7296a7aa09e1f68642f7a41faddc4d8ff272ffe85630033c",
+    "stored_bytes": 517,
+    "stored_sha256": "10b8aca1270c743d7296a7aa09e1f68642f7a41faddc4d8ff272ffe85630033c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/stderr.log",
+    "path": "native-main-integration/native-registry-api-module-preparation/stderr.log",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/README.md",
+    "path": "native-main-integration/native-registry-api-preparation/README.md",
+    "source_bytes": 6430,
+    "source_sha256": "14ef35bf5ad1b6471c18037006ac652a96a901f4bbc0084746f80001909aead8",
+    "stored_bytes": 6430,
+    "stored_sha256": "14ef35bf5ad1b6471c18037006ac652a96a901f4bbc0084746f80001909aead8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/changed-core.json",
+    "path": "native-main-integration/native-registry-api-preparation/changed-core.json.gz",
+    "source_bytes": 33818,
+    "source_sha256": "6670bdeba05161f36945f7bd405ed2767d680e860979c72a8ffd6c8e0fefb9be",
+    "stored_bytes": 11181,
+    "stored_sha256": "32eb0e8273f842500044a2a6c0a470fb4fa12237a50739f488c7305188571c3f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/changed-core.tar.gz",
+    "path": "native-main-integration/native-registry-api-preparation/changed-core.tar.gz.gz",
+    "source_bytes": 639898,
+    "source_sha256": "f1641fd59557cd08a70dcd686597b6747c23f830b2fce1b718f501dfb9012c41",
+    "stored_bytes": 640103,
+    "stored_sha256": "4bc49c3f4615857ee5cd048d9c84d7d7e35337e04b19548db8ab92c76ddec61d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/changed-test-bindings.json",
+    "path": "native-main-integration/native-registry-api-preparation/changed-test-bindings.json.gz",
+    "source_bytes": 76300,
+    "source_sha256": "5f20417e48d52ed145cb89f60b27f24a2436d90e2d1f9f914253aa192544989c",
+    "stored_bytes": 19078,
+    "stored_sha256": "1cf68689d7dac8ddffce610bc671707a95bd7d57275fc155c7b6a22c8b93be0f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/core-acquisition-callers.txt",
+    "path": "native-main-integration/native-registry-api-preparation/core-acquisition-callers.txt",
+    "source_bytes": 3112,
+    "source_sha256": "dfdc0f40d9b72158e6fe2d1eabb60dd5422f4c750f176777f98a913ea0be6c66",
+    "stored_bytes": 3112,
+    "stored_sha256": "dfdc0f40d9b72158e6fe2d1eabb60dd5422f4c750f176777f98a913ea0be6c66",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/core-registration-callers.txt",
+    "path": "native-main-integration/native-registry-api-preparation/core-registration-callers.txt",
+    "source_bytes": 2199,
+    "source_sha256": "c8c783985d9a38d91025e8dd44b2c3597fcabe0c868888996845c5f25af80576",
+    "stored_bytes": 2199,
+    "stored_sha256": "c8c783985d9a38d91025e8dd44b2c3597fcabe0c868888996845c5f25af80576",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/current-calls.txt",
+    "path": "native-main-integration/native-registry-api-preparation/current-calls.txt.gz",
+    "source_bytes": 34487,
+    "source_sha256": "1a8ab2a9d6c0614af0737aad7da22396d61bfc89a18fb78200b21ad8b19da023",
+    "stored_bytes": 4462,
+    "stored_sha256": "0767650a0d58b8e67d5ebc255a344ffb7bce94feb630279d5f45059fc29e42f9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/handoff.json",
+    "path": "native-main-integration/native-registry-api-preparation/handoff.json",
+    "source_bytes": 1686,
+    "source_sha256": "6bf01e024e0d225d155f9547e1b2c48019e512b93e0a5456b5ad83c9947eb4c3",
+    "stored_bytes": 1686,
+    "stored_sha256": "6bf01e024e0d225d155f9547e1b2c48019e512b93e0a5456b5ad83c9947eb4c3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/implement_registry.py",
+    "path": "native-main-integration/native-registry-api-preparation/implement_registry.py",
+    "source_bytes": 8443,
+    "source_sha256": "e36fa63fb29a9a33f3c680dafdb5d96995978b9688aa692e396bd51715bd5a14",
+    "stored_bytes": 8443,
+    "stored_sha256": "e36fa63fb29a9a33f3c680dafdb5d96995978b9688aa692e396bd51715bd5a14",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/migrate_core.py",
+    "path": "native-main-integration/native-registry-api-preparation/migrate_core.py",
+    "source_bytes": 4885,
+    "source_sha256": "9b6679cb857521691e957d9aef41cc5c91532160b4dc5f5a6d87f16a50bb4c79",
+    "stored_bytes": 4885,
+    "stored_sha256": "9b6679cb857521691e957d9aef41cc5c91532160b4dc5f5a6d87f16a50bb4c79",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/migrate_producers.py",
+    "path": "native-main-integration/native-registry-api-preparation/migrate_producers.py",
+    "source_bytes": 5748,
+    "source_sha256": "401ddfebd2678c2195a8cd9326a99505e3115472f50d03b11bf68edf9cdfc1aa",
+    "stored_bytes": 5748,
+    "stored_sha256": "401ddfebd2678c2195a8cd9326a99505e3115472f50d03b11bf68edf9cdfc1aa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/migrate_production.py",
+    "path": "native-main-integration/native-registry-api-preparation/migrate_production.py",
+    "source_bytes": 3785,
+    "source_sha256": "874fc8195e1c4cc2bd421916fc50361938f709046e41ab2bc3b5eb8b752af476",
+    "stored_bytes": 3785,
+    "stored_sha256": "874fc8195e1c4cc2bd421916fc50361938f709046e41ab2bc3b5eb8b752af476",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/migrate_remaining_tests.py",
+    "path": "native-main-integration/native-registry-api-preparation/migrate_remaining_tests.py",
+    "source_bytes": 2390,
+    "source_sha256": "09aa88f726800f4cd10d4b1631dc72851ec815c72ac0edd3157f37ce226e2867",
+    "stored_bytes": 2390,
+    "stored_sha256": "09aa88f726800f4cd10d4b1631dc72851ec815c72ac0edd3157f37ce226e2867",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/migrate_tests.py",
+    "path": "native-main-integration/native-registry-api-preparation/migrate_tests.py",
+    "source_bytes": 1298,
+    "source_sha256": "9ad5357fa0d36831781517e7f7a7f77f51bd6311ea6cdc88d51218a968299480",
+    "stored_bytes": 1298,
+    "stored_sha256": "9ad5357fa0d36831781517e7f7a7f77f51bd6311ea6cdc88d51218a968299480",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/outside-production-calls.txt",
+    "path": "native-main-integration/native-registry-api-preparation/outside-production-calls.txt",
+    "source_bytes": 14359,
+    "source_sha256": "11ebb4e5ad819aa5431d27b59c0fefe1f80ed023b1cf3e1ce8eac686c0a89750",
+    "stored_bytes": 14359,
+    "stored_sha256": "11ebb4e5ad819aa5431d27b59c0fefe1f80ed023b1cf3e1ce8eac686c0a89750",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/outside-production-context.txt",
+    "path": "native-main-integration/native-registry-api-preparation/outside-production-context.txt.gz",
+    "source_bytes": 59052,
+    "source_sha256": "b76dc3380a724863d4f0e9c624f1ca776e888b9708aec4d34350765998bc3ebb",
+    "stored_bytes": 10134,
+    "stored_sha256": "bce2cc772c263e4ce3da3910b751cd2014abe58b596588eac0d2cd8a7f15a533",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/owned-core.patch",
+    "path": "native-main-integration/native-registry-api-preparation/owned-core.patch.gz",
+    "source_bytes": 208680,
+    "source_sha256": "222b897ecb46b2312f1566e384a092805dced7f797fb802bc6e0ec8d2176a34c",
+    "stored_bytes": 40080,
+    "stored_sha256": "d7ee66d08b369c9676db6670f0855004f740c715311944ee1e4e44d5e25dcb5a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/owned-modes.json",
+    "path": "native-main-integration/native-registry-api-preparation/owned-modes.json.gz",
+    "source_bytes": 27384,
+    "source_sha256": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "stored_bytes": 3560,
+    "stored_sha256": "c58ad645a7c17a1312081b7d1f0240bf84771288416cbb196f702c08c6f0766c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/owned-source.json",
+    "path": "native-main-integration/native-registry-api-preparation/owned-source.json.gz",
+    "source_bytes": 56943,
+    "source_sha256": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "stored_bytes": 24339,
+    "stored_sha256": "a780cd62b2b35f7baa42ea8ba9795478509e93c32d0fba4b9c463c8d3e435ef7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/owned-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-preparation/owned-source.tar.gz.gz",
+    "source_bytes": 1434545,
+    "source_sha256": "884fdfb148166a67ea765f044db67abfbaf530f353efd6a3cfc6b45f7d23a104",
+    "stored_bytes": 1435003,
+    "stored_sha256": "275f7aa3ecdcdeceb16293ec6300708cec3e98461d659c29a25bff9787f9b5fe",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/production-core.json",
+    "path": "native-main-integration/native-registry-api-preparation/production-core.json",
+    "source_bytes": 7323,
+    "source_sha256": "40ff98f6d2765964f70656e1a1232b1f6a2550a995108ee73fda059b7612ed1b",
+    "stored_bytes": 7323,
+    "stored_sha256": "40ff98f6d2765964f70656e1a1232b1f6a2550a995108ee73fda059b7612ed1b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/production-core.tar.gz",
+    "path": "native-main-integration/native-registry-api-preparation/production-core.tar.gz.gz",
+    "source_bytes": 304425,
+    "source_sha256": "d03c1f71c61d9ff712ffb87ee64944e663663bee0bb11928e8895afa38b8a0da",
+    "stored_bytes": 304526,
+    "stored_sha256": "56c86dea1a4e521200d87b66c2d579174da1a373bee8d4322a4d28d87c10e61c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-preparation/proposed-commands.json",
+    "source_bytes": 12710,
+    "source_sha256": "9a9c37351388c0316282aacd1bd89a30161d8bf1aae9d924090e0cbbb7cc4d04",
+    "stored_bytes": 12710,
+    "stored_sha256": "9a9c37351388c0316282aacd1bd89a30161d8bf1aae9d924090e0cbbb7cc4d04",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/root-production-core.delta.patch",
+    "path": "native-main-integration/native-registry-api-preparation/root-production-core.delta.patch.gz",
+    "source_bytes": 69503,
+    "source_sha256": "44e0ea7da8d1e8ecd92f2aab7a2ffb9bc7f84728885fbf1f6859dffaa77a5890",
+    "stored_bytes": 16148,
+    "stored_sha256": "857aecedb19de14ac80d82af7c37e461bf46fdc0445e98ce90526c6f414f3556",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/seal-core.py",
+    "path": "native-main-integration/native-registry-api-preparation/seal-core.py",
+    "source_bytes": 5093,
+    "source_sha256": "bb6f941cbf87ec0977ad0b69d80ef6e7f5ab70a1c6a1ef56c9198bcc1ef6dfa9",
+    "stored_bytes": 5093,
+    "stored_sha256": "bb6f941cbf87ec0977ad0b69d80ef6e7f5ab70a1c6a1ef56c9198bcc1ef6dfa9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/seal-receipt.json",
+    "path": "native-main-integration/native-registry-api-preparation/seal-receipt.json",
+    "source_bytes": 580,
+    "source_sha256": "083c662e96668d9e51d1b629c3467a188d3d3b81651820d5dd1cb436c7e44a5f",
+    "stored_bytes": 580,
+    "stored_sha256": "083c662e96668d9e51d1b629c3467a188d3d3b81651820d5dd1cb436c7e44a5f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/before-manifest.json",
+    "path": "native-main-integration/native-registry-api-root-migration/before-manifest.json",
+    "source_bytes": 9961,
+    "source_sha256": "c21a6c55692051721000ece8088ace011076270fa2d9e0be8cf71b40d842eadf",
+    "stored_bytes": 9961,
+    "stored_sha256": "c21a6c55692051721000ece8088ace011076270fa2d9e0be8cf71b40d842eadf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/changed-production.json",
+    "path": "native-main-integration/native-registry-api-root-migration/changed-production.json",
+    "source_bytes": 15909,
+    "source_sha256": "fe1edaee80dc408aa2559c0614b7ce84da8c3e72de57a787f5fda2d7cea8445b",
+    "stored_bytes": 15909,
+    "stored_sha256": "fe1edaee80dc408aa2559c0614b7ce84da8c3e72de57a787f5fda2d7cea8445b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/gofmt01.stderr.txt",
+    "path": "native-main-integration/native-registry-api-root-migration/gofmt01.stderr.txt",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/gofmt01.stdout.txt",
+    "path": "native-main-integration/native-registry-api-root-migration/gofmt01.stdout.txt",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/gofmt02.stderr.txt",
+    "path": "native-main-integration/native-registry-api-root-migration/gofmt02.stderr.txt",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/gofmt02.stdout.txt",
+    "path": "native-main-integration/native-registry-api-root-migration/gofmt02.stdout.txt",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/migrate-complex01.py",
+    "path": "native-main-integration/native-registry-api-root-migration/migrate-complex01.py",
+    "source_bytes": 7451,
+    "source_sha256": "742ddc6262d23df154db667edaa89916d52e648e8b0d0cd29321d066e16501bd",
+    "stored_bytes": 7451,
+    "stored_sha256": "742ddc6262d23df154db667edaa89916d52e648e8b0d0cd29321d066e16501bd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/migrate-complex02.py",
+    "path": "native-main-integration/native-registry-api-root-migration/migrate-complex02.py",
+    "source_bytes": 2452,
+    "source_sha256": "f1639c27c1bb7c4b702e6695103484abf5bac6172693a47741aae15e36d25788",
+    "stored_bytes": 2452,
+    "stored_sha256": "f1639c27c1bb7c4b702e6695103484abf5bac6172693a47741aae15e36d25788",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/migrate-lookups.py",
+    "path": "native-main-integration/native-registry-api-root-migration/migrate-lookups.py",
+    "source_bytes": 4875,
+    "source_sha256": "0c15009ef68d9ade037cb732b5abf50ef0588e660373ea025327b190db33ee95",
+    "stored_bytes": 4875,
+    "stored_sha256": "0c15009ef68d9ade037cb732b5abf50ef0588e660373ea025327b190db33ee95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/migrate-simple.py",
+    "path": "native-main-integration/native-registry-api-root-migration/migrate-simple.py",
+    "source_bytes": 1846,
+    "source_sha256": "4e7d3a7850c487a05ef8c72d9e61b9ef3627e9e7504ae5e7f2e0b9ed2faa7a25",
+    "stored_bytes": 1846,
+    "stored_sha256": "4e7d3a7850c487a05ef8c72d9e61b9ef3627e9e7504ae5e7f2e0b9ed2faa7a25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/outside-production.delta.patch",
+    "path": "native-main-integration/native-registry-api-root-migration/outside-production.delta.patch.gz",
+    "source_bytes": 119844,
+    "source_sha256": "c57aa72e037f8ad2629bb86e42c471b69602416e765062d6df2d99920e749a73",
+    "stored_bytes": 20752,
+    "stored_sha256": "a37ac6117ee6ecbc5ecaa25a0ef26738a0204c68d9cb2299b0650efcc2d81842",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/root-after-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-root-migration/root-after-source.tar.gz.gz",
+    "source_bytes": 931306,
+    "source_sha256": "ee07d4bcc933b0657be3b635af096a297d6fc875401b5a764eef81211932769c",
+    "stored_bytes": 931593,
+    "stored_sha256": "7410b667256fe1ed45d421ef9e8f288876a754758c401704371e722f9edcd9d3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/root-after.json",
+    "path": "native-main-integration/native-registry-api-root-migration/root-after.json",
+    "source_bytes": 8668,
+    "source_sha256": "7a30c8efabec53825f814ffc31f9da08ae2da5db97e4d93d49abe166a3511f7d",
+    "stored_bytes": 8668,
+    "stored_sha256": "7a30c8efabec53825f814ffc31f9da08ae2da5db97e4d93d49abe166a3511f7d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/root-before-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-root-migration/root-before-source.tar.gz.gz",
+    "source_bytes": 927446,
+    "source_sha256": "625b19a75977e118c6922e91971cb7a2d4c97a544650365ccde551773b1b8ee8",
+    "stored_bytes": 927749,
+    "stored_sha256": "bbc728f9c5e73de78f91965ef506419147754c66f444c9053fd86266257980bd",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/root-before.json",
+    "path": "native-main-integration/native-registry-api-root-migration/root-before.json",
+    "source_bytes": 8430,
+    "source_sha256": "f2cc50cf80df6a7f01fb23d0ef58832d90c6bcef5612d6301310aea74208d2fd",
+    "stored_bytes": 8430,
+    "stored_sha256": "f2cc50cf80df6a7f01fb23d0ef58832d90c6bcef5612d6301310aea74208d2fd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/root-freeze.json",
+    "path": "native-main-integration/native-registry-api-root-migration/root-freeze.json.gz",
+    "source_bytes": 34889,
+    "source_sha256": "0a376568d8db7d3a62be041970f3fd64df860b2d969a5d18eac3907a66535ead",
+    "stored_bytes": 8915,
+    "stored_sha256": "706eac1ec40a45abd2c8eb9318170dab22dbbb716b962afe941960ca8f339f0f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-root-migration/simple-migrations.json",
+    "path": "native-main-integration/native-registry-api-root-migration/simple-migrations.json.gz",
+    "source_bytes": 46881,
+    "source_sha256": "bdb7e423bfa29fba54fa74413cefd1c9403b77eca82b95ac597a06255d1c47a4",
+    "stored_bytes": 3148,
+    "stored_sha256": "510ccf5a65f60195eef4fc493d3a106e5ea94b0afc35ff862c8a5c4c58a7698a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/changed-files.json",
+    "path": "native-main-integration/native-registry-api-source01/changed-files.json.gz",
+    "source_bytes": 121982,
+    "source_sha256": "0b2e71c85ef8d7bcccbe8cf6c5e3df8bb6baa91c623d4b9fa11d6e7c21e15ee5",
+    "stored_bytes": 37734,
+    "stored_sha256": "2dd3956bdd9b9955e3d5fa1e30b06bdaf45325e07ff5d73c3e3a2b16803937d0",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/changed-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source01/changed-source.tar.gz.gz",
+    "source_bytes": 2562221,
+    "source_sha256": "5bfe8ee7baccd18de4b9dd376023ec86a617541a5e6c36748b4ba8a283acf429",
+    "stored_bytes": 2562957,
+    "stored_sha256": "670217b9631a0123a16f20a4f4a2752280a85b4d3112b58104c9118df4649670",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/command.json",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/command.json",
+    "source_bytes": 2549,
+    "source_sha256": "2812a6b320158a47a41d21da807343043eb7436fa374cf9f65a1661bb59de56e",
+    "stored_bytes": 2549,
+    "stored_sha256": "2812a6b320158a47a41d21da807343043eb7436fa374cf9f65a1661bb59de56e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/process.json",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/process.json",
+    "source_bytes": 131,
+    "source_sha256": "784810e844985d0c5281b8286ba6a78ed6a38f37440e5c9d4804e94e5abe59eb",
+    "stored_bytes": 131,
+    "stored_sha256": "784810e844985d0c5281b8286ba6a78ed6a38f37440e5c9d4804e94e5abe59eb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/result.json",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/result.json.gz",
+    "source_bytes": 42701,
+    "source_sha256": "1d3aea7278d32b04c0498546b09e37199b297aa17463f9b2652eda3750a04783",
+    "stored_bytes": 1987,
+    "stored_sha256": "eda2f944cba0ae17f1dee36e7db6b2e4fbe4893449d8e5537a91017cc1d972b8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/run.log",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/run.log",
+    "source_bytes": 12386,
+    "source_sha256": "c95fbdbcdb7182b2cd0b431d8b8e425b8e448a39522cc7a541b4b405f8cabeeb",
+    "stored_bytes": 12386,
+    "stored_sha256": "c95fbdbcdb7182b2cd0b431d8b8e425b8e448a39522cc7a541b4b405f8cabeeb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/source-after.json",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/source-after.json.gz",
+    "source_bytes": 1598204,
+    "source_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+    "stored_bytes": 467144,
+    "stored_sha256": "8ee77d0091d6028a1d6ac01c1fd6561499773dc5c2285e24767d01ee8b281a43",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/source-before.json",
+    "path": "native-main-integration/native-registry-api-source01/compile-only/source-before.json.gz",
+    "source_bytes": 1598204,
+    "source_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+    "stored_bytes": 467144,
+    "stored_sha256": "8ee77d0091d6028a1d6ac01c1fd6561499773dc5c2285e24767d01ee8b281a43",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/freeze.json",
+    "path": "native-main-integration/native-registry-api-source01/freeze.json",
+    "source_bytes": 2945,
+    "source_sha256": "f3929b7634704afe21f82cbfca66e98457592ed4533fcce98b6c47e7f1674670",
+    "stored_bytes": 2945,
+    "stored_sha256": "f3929b7634704afe21f82cbfca66e98457592ed4533fcce98b6c47e7f1674670",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/source-frozen.json",
+    "path": "native-main-integration/native-registry-api-source01/source-frozen.json.gz",
+    "source_bytes": 1598204,
+    "source_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+    "stored_bytes": 467144,
+    "stored_sha256": "8ee77d0091d6028a1d6ac01c1fd6561499773dc5c2285e24767d01ee8b281a43",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/source-modes.json",
+    "path": "native-main-integration/native-registry-api-source01/source-modes.json.gz",
+    "source_bytes": 981772,
+    "source_sha256": "51099870e2055b287bb29d11cc54f22dba6d7f64b64edaf017ea1f43fda67667",
+    "stored_bytes": 71960,
+    "stored_sha256": "6323d5e25761d2e67c3f39c7d356dc8aa3e37acac22df7e3b550294fe9d43900",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-source01/source.delta.patch.gz",
+    "source_bytes": 530945,
+    "source_sha256": "72200edd3945fade15e5db943037449b440ca33852746bce76031ea5bbe4f811",
+    "stored_bytes": 86781,
+    "stored_sha256": "ec42a20b9eb8146f49a38071af2e92294ca8171e11df7c54f5bf8fa0b0735bc7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/changed-files.json",
+    "path": "native-main-integration/native-registry-api-source02/changed-files.json",
+    "source_bytes": 3219,
+    "source_sha256": "c80b7053ca8ac6fbd6fe09dd24ebb49737a8f38d58379e1ba5f760ead2b81f27",
+    "stored_bytes": 3219,
+    "stored_sha256": "c80b7053ca8ac6fbd6fe09dd24ebb49737a8f38d58379e1ba5f760ead2b81f27",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/changed-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source02/changed-source.tar.gz.gz",
+    "source_bytes": 82538,
+    "source_sha256": "b079c0318d4490ebb09d7fad7cc535db8246f925293a3c76100529b81b981635",
+    "stored_bytes": 82581,
+    "stored_sha256": "6151544df1d4102239345af41a97788724b2edc14c44ae8fcc00833416e1f82a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/command.json",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/command.json",
+    "source_bytes": 2934,
+    "source_sha256": "00e32db39a52619303f13132c9dc6d97ca945662783a6049372fc284896b580a",
+    "stored_bytes": 2934,
+    "stored_sha256": "00e32db39a52619303f13132c9dc6d97ca945662783a6049372fc284896b580a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/process.json",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/process.json",
+    "source_bytes": 131,
+    "source_sha256": "e75ee2f0504e95e89431307e35b2c25f5be90efd3c4d35c7ece6cd78adf31dfc",
+    "stored_bytes": 131,
+    "stored_sha256": "e75ee2f0504e95e89431307e35b2c25f5be90efd3c4d35c7ece6cd78adf31dfc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/result.json",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/result.json.gz",
+    "source_bytes": 59324,
+    "source_sha256": "56328a6d58d8598c34c5818a645cbbd95020a7329dd56e6f280e8715efb8e92f",
+    "stored_bytes": 2662,
+    "stored_sha256": "e114cff274f2086b597a1d9ffe6b24453152ee4286f7e4d6e5be9c8a0ab85355",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/run.log",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/run.log",
+    "source_bytes": 2881,
+    "source_sha256": "96f7cd6a634b81d2d7e89a6893b2d3d47408d588e255080b3914faeed57c90b8",
+    "stored_bytes": 2881,
+    "stored_sha256": "96f7cd6a634b81d2d7e89a6893b2d3d47408d588e255080b3914faeed57c90b8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/source-after.json",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/source-before.json",
+    "path": "native-main-integration/native-registry-api-source02/compile-online02/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/identity.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/identity.json",
+    "source_bytes": 3728,
+    "source_sha256": "3520fcf44169cd8a15b2d234bddd6183daa8709b63a010636ca5b319055e5d92",
+    "stored_bytes": 3728,
+    "stored_sha256": "3520fcf44169cd8a15b2d234bddd6183daa8709b63a010636ca5b319055e5d92",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/command.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/command.json",
+    "source_bytes": 7049,
+    "source_sha256": "d449f08a2708338030c93c4af2b3bab15a76238bee61690dfa4dbe607c5f75c7",
+    "stored_bytes": 7049,
+    "stored_sha256": "d449f08a2708338030c93c4af2b3bab15a76238bee61690dfa4dbe607c5f75c7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/environment.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/environment.json",
+    "source_bytes": 2021,
+    "source_sha256": "3925211e30b31f2e3348b660923b772d8cf9fd60cee220960cc557346a89034f",
+    "stored_bytes": 2021,
+    "stored_sha256": "3925211e30b31f2e3348b660923b772d8cf9fd60cee220960cc557346a89034f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/process.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/process.json",
+    "source_bytes": 144,
+    "source_sha256": "438cbb61f02229ad69d5838188a8049418b432dc313e90b7ffabe5fb5076118b",
+    "stored_bytes": 144,
+    "stored_sha256": "438cbb61f02229ad69d5838188a8049418b432dc313e90b7ffabe5fb5076118b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/result.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/result.json",
+    "source_bytes": 13564,
+    "source_sha256": "baeec50b6b681448698c4340cf41a1cf7989e5e6181f704bd9b7dc16b03a4b70",
+    "stored_bytes": 13564,
+    "stored_sha256": "baeec50b6b681448698c4340cf41a1cf7989e5e6181f704bd9b7dc16b03a4b70",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/run.log",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/run.log",
+    "source_bytes": 9222,
+    "source_sha256": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+    "stored_bytes": 9222,
+    "stored_sha256": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/source-after.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/source-before.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-db/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/command.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/command.json",
+    "source_bytes": 3971,
+    "source_sha256": "a1c1142014df39c21d9a049ba2acace9816d92ff2e33335da528f8249717c234",
+    "stored_bytes": 3971,
+    "stored_sha256": "a1c1142014df39c21d9a049ba2acace9816d92ff2e33335da528f8249717c234",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/environment.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/environment.json",
+    "source_bytes": 2028,
+    "source_sha256": "cae9d3d1eab218bbb6fdf2a1fbadff2c3985ab6b8700f8c99f593d50e629bdd0",
+    "stored_bytes": 2028,
+    "stored_sha256": "cae9d3d1eab218bbb6fdf2a1fbadff2c3985ab6b8700f8c99f593d50e629bdd0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/process.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/process.json",
+    "source_bytes": 144,
+    "source_sha256": "d7782634f10817a5450b53e6f0770eae0de9c6109396c5b34617c673f3c30c4b",
+    "stored_bytes": 144,
+    "stored_sha256": "d7782634f10817a5450b53e6f0770eae0de9c6109396c5b34617c673f3c30c4b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/result.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/result.json",
+    "source_bytes": 7626,
+    "source_sha256": "163d561da2b2925c9ed87a749718791cca0af584a4823e6c65693d7dcb6b0fc0",
+    "stored_bytes": 7626,
+    "stored_sha256": "163d561da2b2925c9ed87a749718791cca0af584a4823e6c65693d7dcb6b0fc0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/run.log",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/run.log",
+    "source_bytes": 3992,
+    "source_sha256": "9f1f323319be3b651572e80712befd7a7bf45d1af01f2120f80345ea5c4a15c9",
+    "stored_bytes": 3992,
+    "stored_sha256": "9f1f323319be3b651572e80712befd7a7bf45d1af01f2120f80345ea5c4a15c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/source-after.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/source-before.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-lifecycle/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/command.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/command.json",
+    "source_bytes": 2359,
+    "source_sha256": "7be268ef7ab2879f13eb398a39e998866b1327f4278da11aea95b160ba2239e6",
+    "stored_bytes": 2359,
+    "stored_sha256": "7be268ef7ab2879f13eb398a39e998866b1327f4278da11aea95b160ba2239e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/environment.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/environment.json",
+    "source_bytes": 2032,
+    "source_sha256": "72e993b3d441e83b6cc3bf3226dce060d1a1e4998893739a9b291af26a29af62",
+    "stored_bytes": 2032,
+    "stored_sha256": "72e993b3d441e83b6cc3bf3226dce060d1a1e4998893739a9b291af26a29af62",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/process.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/process.json",
+    "source_bytes": 144,
+    "source_sha256": "7ce21a20b2f4aaf41ac19b3a47fc6d973f18e94cf06dfe971e964f4abf62af9d",
+    "stored_bytes": 144,
+    "stored_sha256": "7ce21a20b2f4aaf41ac19b3a47fc6d973f18e94cf06dfe971e964f4abf62af9d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/result.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/result.json",
+    "source_bytes": 2895,
+    "source_sha256": "1b83daaf7c19d8814a055d5466588b532d3914813bc99e0d20875f9427bf7206",
+    "stored_bytes": 2895,
+    "stored_sha256": "1b83daaf7c19d8814a055d5466588b532d3914813bc99e0d20875f9427bf7206",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/run.log",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/run.log",
+    "source_bytes": 873,
+    "source_sha256": "87b444bd91a8c0ccc77d42d4a7c3e1d5c553508fed9786185103712d689ab446",
+    "stored_bytes": 873,
+    "stored_sha256": "87b444bd91a8c0ccc77d42d4a7c3e1d5c553508fed9786185103712d689ab446",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/source-after.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/source-before.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/normal-retainedalloc/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/summary.json",
+    "path": "native-main-integration/native-registry-api-source02/controls/summary.json",
+    "source_bytes": 1519,
+    "source_sha256": "c866433adebca7caa3e8f057cf6a310e941208aae5d2fafaa94705a2e2a04ddc",
+    "stored_bytes": 1519,
+    "stored_sha256": "c866433adebca7caa3e8f057cf6a310e941208aae5d2fafaa94705a2e2a04ddc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/freeze.json",
+    "path": "native-main-integration/native-registry-api-source02/freeze.json",
+    "source_bytes": 2409,
+    "source_sha256": "0f48e79ceb029682b96b02f896655cf6141501cbdda84b27c9dd301672d4c76e",
+    "stored_bytes": 2409,
+    "stored_sha256": "0f48e79ceb029682b96b02f896655cf6141501cbdda84b27c9dd301672d4c76e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-source02/proposed-commands.json.gz",
+    "source_bytes": 43505,
+    "source_sha256": "aa889c8e8faa61a0335dc07405c7e0148c9632e42b26e191f89a6741cdec5325",
+    "stored_bytes": 4841,
+    "stored_sha256": "86ece2da5ef1cc24e7d5b3357e78a76482c2cfe594e5a64d4b6d3d1d7a1d3bf0",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-frozen.json",
+    "path": "native-main-integration/native-registry-api-source02/source-frozen.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "stored_bytes": 467311,
+    "stored_sha256": "f56f40a061b0c21fe972f0706213336224542612a9d79aafc973001df0902037",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-modes.json",
+    "path": "native-main-integration/native-registry-api-source02/source-modes.json.gz",
+    "source_bytes": 981980,
+    "source_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+    "stored_bytes": 71985,
+    "stored_sha256": "3203c387fb3b6ede2bf5d4a1d30ae740ed2b2be409c4cd0271dae9fdeb8549db",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-source02/source.delta.patch.gz",
+    "source_bytes": 50932,
+    "source_sha256": "8f91f8353004ed30dd5c00e8b3f890b18ff3ce8c6d8a5a264c28f1dac9cfde79",
+    "stored_bytes": 12221,
+    "stored_sha256": "99dec3f1a3ae9f69b08d00f9d71c2be0f1380b29931ae8dc05ae73c256775c03",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/README.md",
+    "path": "native-main-integration/native-registry-api-source03-repair/README.md",
+    "source_bytes": 3195,
+    "source_sha256": "286bbaf945f2b8c5283d75cce335206ba8e886232906fa6d733a988f5ead349f",
+    "stored_bytes": 3195,
+    "stored_sha256": "286bbaf945f2b8c5283d75cce335206ba8e886232906fa6d733a988f5ead349f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/after-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source03-repair/after-source.tar.gz",
+    "source_bytes": 4771,
+    "source_sha256": "817366c5ffa0d816a915f87aa8ccee8d3658c1622e4e1a280dbe0cc5acc3d9a5",
+    "stored_bytes": 4771,
+    "stored_sha256": "817366c5ffa0d816a915f87aa8ccee8d3658c1622e4e1a280dbe0cc5acc3d9a5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/after.json",
+    "path": "native-main-integration/native-registry-api-source03-repair/after.json",
+    "source_bytes": 128,
+    "source_sha256": "e73c878f07fdbfe3dbb856cf57252f599cf962d935999a9ed1728b1760e32081",
+    "stored_bytes": 128,
+    "stored_sha256": "e73c878f07fdbfe3dbb856cf57252f599cf962d935999a9ed1728b1760e32081",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/before-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source03-repair/before-source.tar.gz",
+    "source_bytes": 3520,
+    "source_sha256": "cd1112d2b67bbd847584f49266123e92888d618ea042c351e065a14f72d9df32",
+    "stored_bytes": 3520,
+    "stored_sha256": "cd1112d2b67bbd847584f49266123e92888d618ea042c351e065a14f72d9df32",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/before.json",
+    "path": "native-main-integration/native-registry-api-source03-repair/before.json",
+    "source_bytes": 128,
+    "source_sha256": "a04e6ed02abe18fa6d487b9fe70f4795a32463028049ba2663c726b48b502ddf",
+    "stored_bytes": 128,
+    "stored_sha256": "a04e6ed02abe18fa6d487b9fe70f4795a32463028049ba2663c726b48b502ddf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/delta.patch",
+    "path": "native-main-integration/native-registry-api-source03-repair/delta.patch",
+    "source_bytes": 9786,
+    "source_sha256": "077f2cb662b802abcf6666bdbb8a5a3979da53cf1c423c5791c409aab0b1616e",
+    "stored_bytes": 9786,
+    "stored_sha256": "077f2cb662b802abcf6666bdbb8a5a3979da53cf1c423c5791c409aab0b1616e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/handoff.json",
+    "path": "native-main-integration/native-registry-api-source03-repair/handoff.json",
+    "source_bytes": 2177,
+    "source_sha256": "9b762578a540616e25a5c4184fcfc7fbc5294bedd8ce12ef81964745ffe8da89",
+    "stored_bytes": 2177,
+    "stored_sha256": "9b762578a540616e25a5c4184fcfc7fbc5294bedd8ce12ef81964745ffe8da89",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/modes.json",
+    "path": "native-main-integration/native-registry-api-source03-repair/modes.json",
+    "source_bytes": 69,
+    "source_sha256": "f9f0bf01a82d5f9d2a4d5f5940c7b2670f57f0f40ba68f4a491f72b60d323433",
+    "stored_bytes": 69,
+    "stored_sha256": "f9f0bf01a82d5f9d2a4d5f5940c7b2670f57f0f40ba68f4a491f72b60d323433",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03-repair/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-source03-repair/proposed-commands.json.gz",
+    "source_bytes": 37967,
+    "source_sha256": "76d4695f815e4a2fb3d9b5a10c9e3ae4cb2f90f57c8e1e9d5a66c063a3d9704c",
+    "stored_bytes": 4859,
+    "stored_sha256": "19c41d3e6ccc5522acb27a139fb4a31b84657da5576436e4feb8fec94a696c5e",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/changed-files.json",
+    "path": "native-main-integration/native-registry-api-source03/changed-files.json",
+    "source_bytes": 307,
+    "source_sha256": "94f0f37e7d7ad62bfd64d683b635c282779fa887a1af2c4210afc388a895f65d",
+    "stored_bytes": 307,
+    "stored_sha256": "94f0f37e7d7ad62bfd64d683b635c282779fa887a1af2c4210afc388a895f65d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/changed-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source03/changed-source.tar.gz",
+    "source_bytes": 4786,
+    "source_sha256": "f7659c8a47a7d2d70b5017cf0f2371b1a531229819a2de9521aaf5dbda5ca805",
+    "stored_bytes": 4786,
+    "stored_sha256": "f7659c8a47a7d2d70b5017cf0f2371b1a531229819a2de9521aaf5dbda5ca805",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/identity.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/identity.json",
+    "source_bytes": 3728,
+    "source_sha256": "d13eb8ea588cb2153b2288b857b87173e089c9c5cee680b800abc13386d5a5af",
+    "stored_bytes": 3728,
+    "stored_sha256": "d13eb8ea588cb2153b2288b857b87173e089c9c5cee680b800abc13386d5a5af",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/command.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/command.json",
+    "source_bytes": 7049,
+    "source_sha256": "f3c700079761a2baad0b21c239dcb323ead999a491a09bfffa2abd7829552c77",
+    "stored_bytes": 7049,
+    "stored_sha256": "f3c700079761a2baad0b21c239dcb323ead999a491a09bfffa2abd7829552c77",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/environment.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/environment.json",
+    "source_bytes": 2021,
+    "source_sha256": "b55f10d9b7d09a930c3439db0c837aa9db8a39e61fdc307a07083588659b6438",
+    "stored_bytes": 2021,
+    "stored_sha256": "b55f10d9b7d09a930c3439db0c837aa9db8a39e61fdc307a07083588659b6438",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/process.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/process.json",
+    "source_bytes": 144,
+    "source_sha256": "52476b1d4eb8daef588045791ca9383bd6e7857fae753b9c148177dd805a5e92",
+    "stored_bytes": 144,
+    "stored_sha256": "52476b1d4eb8daef588045791ca9383bd6e7857fae753b9c148177dd805a5e92",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/result.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/result.json",
+    "source_bytes": 18792,
+    "source_sha256": "a2eebfbe65326aaa927ae1e8a6604bb65e4815c3ebb95dfcc4f108d1f62d8b77",
+    "stored_bytes": 18792,
+    "stored_sha256": "a2eebfbe65326aaa927ae1e8a6604bb65e4815c3ebb95dfcc4f108d1f62d8b77",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/run.log",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/run.log",
+    "source_bytes": 17855,
+    "source_sha256": "15b880a720688f5aded9cc59675c690365150410e239ccacb578aec8bd16e3a6",
+    "stored_bytes": 17855,
+    "stored_sha256": "15b880a720688f5aded9cc59675c690365150410e239ccacb578aec8bd16e3a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/source-after.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+    "stored_bytes": 467312,
+    "stored_sha256": "5bac67a3cf0a2b87eaa212947d86a6f279a62463c70788927082e86f72601049",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/normal-db/source-before.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/normal-db/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+    "stored_bytes": 467312,
+    "stored_sha256": "5bac67a3cf0a2b87eaa212947d86a6f279a62463c70788927082e86f72601049",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/controls/summary.json",
+    "path": "native-main-integration/native-registry-api-source03/controls/summary.json",
+    "source_bytes": 1196,
+    "source_sha256": "b75029b82d4f27c88250647008652208835189e56a9e2d03b26d6fac943bcbca",
+    "stored_bytes": 1196,
+    "stored_sha256": "b75029b82d4f27c88250647008652208835189e56a9e2d03b26d6fac943bcbca",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/freeze.json",
+    "path": "native-main-integration/native-registry-api-source03/freeze.json",
+    "source_bytes": 2014,
+    "source_sha256": "f9bcc90c1732a583c781fdfacb88317c919665d06c0c0dda9aa12276b7420023",
+    "stored_bytes": 2014,
+    "stored_sha256": "f9bcc90c1732a583c781fdfacb88317c919665d06c0c0dda9aa12276b7420023",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-source03/proposed-commands.json.gz",
+    "source_bytes": 37807,
+    "source_sha256": "6eac81b8f5f504e138553bebab2d5984d6760f439e0d92731bc6b33be84a3b79",
+    "stored_bytes": 4856,
+    "stored_sha256": "07090f139c27a70d5d6141087cf3a302f2eb97ab6d89304674fe4026348c70e9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/source-frozen.json",
+    "path": "native-main-integration/native-registry-api-source03/source-frozen.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+    "stored_bytes": 467312,
+    "stored_sha256": "5bac67a3cf0a2b87eaa212947d86a6f279a62463c70788927082e86f72601049",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/source-modes.json",
+    "path": "native-main-integration/native-registry-api-source03/source-modes.json.gz",
+    "source_bytes": 981980,
+    "source_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+    "stored_bytes": 71985,
+    "stored_sha256": "3203c387fb3b6ede2bf5d4a1d30ae740ed2b2be409c4cd0271dae9fdeb8549db",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source03/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-source03/source.delta.patch",
+    "source_bytes": 9800,
+    "source_sha256": "050a3f86dd448023ed943ce12fc16cf9ee6339bc29c651468bf7be7439901b35",
+    "stored_bytes": 9800,
+    "stored_sha256": "050a3f86dd448023ed943ce12fc16cf9ee6339bc29c651468bf7be7439901b35",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/changed-files.json",
+    "path": "native-main-integration/native-registry-api-source04/changed-files.json",
+    "source_bytes": 283,
+    "source_sha256": "36327d2bb257b797a0de2b47bd6deced4d4d133db2244820be6c93112a99926e",
+    "stored_bytes": 283,
+    "stored_sha256": "36327d2bb257b797a0de2b47bd6deced4d4d133db2244820be6c93112a99926e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/changed-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-source04/changed-source.tar.gz",
+    "source_bytes": 4723,
+    "source_sha256": "bfd22714314761dcf15f3ffb1009faea1dac6d37e6405fe7c1cfed492fbbd411",
+    "stored_bytes": 4723,
+    "stored_sha256": "bfd22714314761dcf15f3ffb1009faea1dac6d37e6405fe7c1cfed492fbbd411",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/identity.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/identity.json",
+    "source_bytes": 3728,
+    "source_sha256": "21c66247433e7c66b1ba98300aaeefb9239a739b2f7b139d62888e2126922142",
+    "stored_bytes": 3728,
+    "stored_sha256": "21c66247433e7c66b1ba98300aaeefb9239a739b2f7b139d62888e2126922142",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/command.json",
+    "source_bytes": 2016,
+    "source_sha256": "be01ae870f8fd7385b19d641366c19b185ce4c324f38918e78c8744a3b2677fe",
+    "stored_bytes": 2016,
+    "stored_sha256": "be01ae870f8fd7385b19d641366c19b185ce4c324f38918e78c8744a3b2677fe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/environment.json",
+    "source_bytes": 2026,
+    "source_sha256": "06c832b6373c71bcb39a057a1f7b02924401d3479afb1c036e87c5d26ec5a5b8",
+    "stored_bytes": 2026,
+    "stored_sha256": "06c832b6373c71bcb39a057a1f7b02924401d3479afb1c036e87c5d26ec5a5b8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/process.json",
+    "source_bytes": 144,
+    "source_sha256": "07019f301878b279ac80d724be06b6cef0b7d5db35591f79f153e30172ee69dd",
+    "stored_bytes": 144,
+    "stored_sha256": "07019f301878b279ac80d724be06b6cef0b7d5db35591f79f153e30172ee69dd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/result.json",
+    "source_bytes": 4082,
+    "source_sha256": "083f33a29d2186fb20df89831a12b66be70e6549ca2bde00044236f249d6e62b",
+    "stored_bytes": 4082,
+    "stored_sha256": "083f33a29d2186fb20df89831a12b66be70e6549ca2bde00044236f249d6e62b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/run.log",
+    "source_bytes": 690,
+    "source_sha256": "daea9919e31e814fd03d43203f2779472c918aa639615ddd5c20302d029e1a1a",
+    "stored_bytes": 690,
+    "stored_sha256": "daea9919e31e814fd03d43203f2779472c918aa639615ddd5c20302d029e1a1a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-caching/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-caching/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/command.json",
+    "source_bytes": 7049,
+    "source_sha256": "2a5ae411978c6b1ef63f176d93c48e5d49a701581fc4880ba928a7a4aae7836c",
+    "stored_bytes": 7049,
+    "stored_sha256": "2a5ae411978c6b1ef63f176d93c48e5d49a701581fc4880ba928a7a4aae7836c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/environment.json",
+    "source_bytes": 2021,
+    "source_sha256": "51515252abb4390b1c2c1c81212c6ababe5323a8e9dc3c984c50a91448744ed9",
+    "stored_bytes": 2021,
+    "stored_sha256": "51515252abb4390b1c2c1c81212c6ababe5323a8e9dc3c984c50a91448744ed9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/process.json",
+    "source_bytes": 144,
+    "source_sha256": "f855f37f5b75eac5a6f6bc766ca58ec53f14a2608f50b2dbf92468fb1aa5b70f",
+    "stored_bytes": 144,
+    "stored_sha256": "f855f37f5b75eac5a6f6bc766ca58ec53f14a2608f50b2dbf92468fb1aa5b70f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/result.json",
+    "source_bytes": 18743,
+    "source_sha256": "a11b008512a27351658ab4e69c871a5cbf874e31aacb907ec6376a3d512a7ee7",
+    "stored_bytes": 18743,
+    "stored_sha256": "a11b008512a27351658ab4e69c871a5cbf874e31aacb907ec6376a3d512a7ee7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/run.log",
+    "source_bytes": 9325,
+    "source_sha256": "65665cf0b05b9997a53499262bcaa5de79354a5b4639f309a33162600ba56acf",
+    "stored_bytes": 9325,
+    "stored_sha256": "65665cf0b05b9997a53499262bcaa5de79354a5b4639f309a33162600ba56acf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-db/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-db/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/command.json",
+    "source_bytes": 2030,
+    "source_sha256": "4be61edf6a1a14741169bdde23b3e6b035b1941196e64413b2321e4464e5514f",
+    "stored_bytes": 2030,
+    "stored_sha256": "4be61edf6a1a14741169bdde23b3e6b035b1941196e64413b2321e4464e5514f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/environment.json",
+    "source_bytes": 2025,
+    "source_sha256": "1a3878dae3ef63381c67746dd945d10bb7c05187ee66ca37ca96b8b84929968c",
+    "stored_bytes": 2025,
+    "stored_sha256": "1a3878dae3ef63381c67746dd945d10bb7c05187ee66ca37ca96b8b84929968c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/process.json",
+    "source_bytes": 144,
+    "source_sha256": "79c67478b0bc9c39068b01e6bc5a0b817d83ad6ae148cb6c198e886b3f4c5fbb",
+    "stored_bytes": 144,
+    "stored_sha256": "79c67478b0bc9c39068b01e6bc5a0b817d83ad6ae148cb6c198e886b3f4c5fbb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/result.json",
+    "source_bytes": 4473,
+    "source_sha256": "0eda8aeb517a59b99e471bb6fdbccb63181d0494c41e74116d25cac2ed32e859",
+    "stored_bytes": 4473,
+    "stored_sha256": "0eda8aeb517a59b99e471bb6fdbccb63181d0494c41e74116d25cac2ed32e859",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/run.log",
+    "source_bytes": 748,
+    "source_sha256": "131312e71a9bd7afb96f5c417cbeb7dd5db7256537c0edeff634f950dd265b89",
+    "stored_bytes": 748,
+    "stored_sha256": "131312e71a9bd7afb96f5c417cbeb7dd5db7256537c0edeff634f950dd265b89",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/normal-public/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/normal-public/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/command.json",
+    "source_bytes": 2025,
+    "source_sha256": "eb5271056b99e10aec93491db96188565ec7edd8f892e435c6f9dcd811e73fa3",
+    "stored_bytes": 2025,
+    "stored_sha256": "eb5271056b99e10aec93491db96188565ec7edd8f892e435c6f9dcd811e73fa3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/environment.json",
+    "source_bytes": 2024,
+    "source_sha256": "29e005b4fec378deadbf9e29c9b32bdd581ddc3303bf5132d9066882a19f7800",
+    "stored_bytes": 2024,
+    "stored_sha256": "29e005b4fec378deadbf9e29c9b32bdd581ddc3303bf5132d9066882a19f7800",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/process.json",
+    "source_bytes": 144,
+    "source_sha256": "25288b9db3f6b9123fa3e43b6aeb2272c7207d1e6c48deaf469b76b6ca2115e5",
+    "stored_bytes": 144,
+    "stored_sha256": "25288b9db3f6b9123fa3e43b6aeb2272c7207d1e6c48deaf469b76b6ca2115e5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/result.json",
+    "source_bytes": 4084,
+    "source_sha256": "c3f12f0fe5fc224ef6554f893f9798d856d1857176cccae5de8faadf3a606561",
+    "stored_bytes": 4084,
+    "stored_sha256": "c3f12f0fe5fc224ef6554f893f9798d856d1857176cccae5de8faadf3a606561",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/run.log",
+    "source_bytes": 690,
+    "source_sha256": "b471f42429221e25950139d3dc1fb9d1872cc7104878628d3237c08e6568dbc0",
+    "stored_bytes": 690,
+    "stored_sha256": "b471f42429221e25950139d3dc1fb9d1872cc7104878628d3237c08e6568dbc0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-caching/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-caching/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/command.json",
+    "source_bytes": 7058,
+    "source_sha256": "c2d3b9e6189d695325a81a3547c0cbc2cab92f1d0b2bb7fd1a51c2b8df88253f",
+    "stored_bytes": 7058,
+    "stored_sha256": "c2d3b9e6189d695325a81a3547c0cbc2cab92f1d0b2bb7fd1a51c2b8df88253f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/environment.json",
+    "source_bytes": 2019,
+    "source_sha256": "5fde9a01eea8c8777ad9c8bf2337d322aae8096afb9d972d77ebea5b81e0e665",
+    "stored_bytes": 2019,
+    "stored_sha256": "5fde9a01eea8c8777ad9c8bf2337d322aae8096afb9d972d77ebea5b81e0e665",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/process.json",
+    "source_bytes": 144,
+    "source_sha256": "753c62ef9f35c9897823b4cdd5ccd6d26f1f8485004695cbb6f2c2adfdfdfa12",
+    "stored_bytes": 144,
+    "stored_sha256": "753c62ef9f35c9897823b4cdd5ccd6d26f1f8485004695cbb6f2c2adfdfdfa12",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/result.json.gz",
+    "source_bytes": 21431,
+    "source_sha256": "a46a403aa8935ee8da27ea205c75b8d5843fd353ddc3aa3cb517c76a08796c91",
+    "stored_bytes": 2039,
+    "stored_sha256": "5fea314ac2a001b9ed574bfca929a8384e4c3d5eb5a3c296a1d5ad8b4e6fd7fd",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/run.log",
+    "source_bytes": 9325,
+    "source_sha256": "bd0a049bf05873a6e62e13baef6151c098725098f4b8f7a83ede551ca1966239",
+    "stored_bytes": 9325,
+    "stored_sha256": "bd0a049bf05873a6e62e13baef6151c098725098f4b8f7a83ede551ca1966239",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-db/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-db/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/command.json",
+    "source_bytes": 3980,
+    "source_sha256": "a09329c88e45258b374764011724d2af4d9377212b99abd92f74512c5aa2f60a",
+    "stored_bytes": 3980,
+    "stored_sha256": "a09329c88e45258b374764011724d2af4d9377212b99abd92f74512c5aa2f60a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/environment.json",
+    "source_bytes": 2026,
+    "source_sha256": "dd530ec1a97f40ba18fe124aa9a09d353e3623158c6f62bf3ef385db45b58add",
+    "stored_bytes": 2026,
+    "stored_sha256": "dd530ec1a97f40ba18fe124aa9a09d353e3623158c6f62bf3ef385db45b58add",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/process.json",
+    "source_bytes": 144,
+    "source_sha256": "0d8f9d66045a4e92144299d154f5188f4a2a9653e5cbb9431feb2f1e70520f1d",
+    "stored_bytes": 144,
+    "stored_sha256": "0d8f9d66045a4e92144299d154f5188f4a2a9653e5cbb9431feb2f1e70520f1d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/result.json",
+    "source_bytes": 8085,
+    "source_sha256": "01b7b5f90656137a1297595073f3ef2fadf01f514eef728ccb527f934240a9b8",
+    "stored_bytes": 8085,
+    "stored_sha256": "01b7b5f90656137a1297595073f3ef2fadf01f514eef728ccb527f934240a9b8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/run.log",
+    "source_bytes": 3992,
+    "source_sha256": "f502f859682eff51860fc8e943f75ae9490147ea53f8106e01d599c1ebbed330",
+    "stored_bytes": 3992,
+    "stored_sha256": "f502f859682eff51860fc8e943f75ae9490147ea53f8106e01d599c1ebbed330",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-lifecycle/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-lifecycle/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/command.json",
+    "source_bytes": 2039,
+    "source_sha256": "8920653ac8d46ed688e0c39f2fbe9fac968318269ee32ada6ebe4833f13ec436",
+    "stored_bytes": 2039,
+    "stored_sha256": "8920653ac8d46ed688e0c39f2fbe9fac968318269ee32ada6ebe4833f13ec436",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/environment.json",
+    "source_bytes": 2023,
+    "source_sha256": "08837a249f4ba1087aac7b092c895c185ba4715464d467dd2c477c1d5af63e5a",
+    "stored_bytes": 2023,
+    "stored_sha256": "08837a249f4ba1087aac7b092c895c185ba4715464d467dd2c477c1d5af63e5a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/process.json",
+    "source_bytes": 144,
+    "source_sha256": "c5ad4ae4a783127ee33f857725ec0fa66126e146add973cc3b48d2181dbda283",
+    "stored_bytes": 144,
+    "stored_sha256": "c5ad4ae4a783127ee33f857725ec0fa66126e146add973cc3b48d2181dbda283",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/result.json",
+    "source_bytes": 4172,
+    "source_sha256": "fa49de1e376f460341819e34cf6080b48dab9698cd95823ab53e6bae9c74afcd",
+    "stored_bytes": 4172,
+    "stored_sha256": "fa49de1e376f460341819e34cf6080b48dab9698cd95823ab53e6bae9c74afcd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/run.log",
+    "source_bytes": 748,
+    "source_sha256": "c0af4d6f839216872ac1c95c71f18ac29cbd300d0925d63313fd7e274f1125ed",
+    "stored_bytes": 748,
+    "stored_sha256": "c0af4d6f839216872ac1c95c71f18ac29cbd300d0925d63313fd7e274f1125ed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-public/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-public/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/command.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/command.json",
+    "source_bytes": 2368,
+    "source_sha256": "97649da86e92f26696f13ac28ca5a28f34b866d445b5d0163d949a370235aa11",
+    "stored_bytes": 2368,
+    "stored_sha256": "97649da86e92f26696f13ac28ca5a28f34b866d445b5d0163d949a370235aa11",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/environment.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/environment.json",
+    "source_bytes": 2030,
+    "source_sha256": "48e08b0a43f50897663596885512b20022c3981c9d962ee09bd5252048724b64",
+    "stored_bytes": 2030,
+    "stored_sha256": "48e08b0a43f50897663596885512b20022c3981c9d962ee09bd5252048724b64",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/process.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/process.json",
+    "source_bytes": 144,
+    "source_sha256": "cd7b8f9db6c9ae48ad95dd82736d22e89a751f908119c9f4ac41d8af2ed69641",
+    "stored_bytes": 144,
+    "stored_sha256": "cd7b8f9db6c9ae48ad95dd82736d22e89a751f908119c9f4ac41d8af2ed69641",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/result.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/result.json",
+    "source_bytes": 3353,
+    "source_sha256": "ea054c384acfc46e5d721add0d0bd94cad0d498508c1640881cf5d0135006b5b",
+    "stored_bytes": 3353,
+    "stored_sha256": "ea054c384acfc46e5d721add0d0bd94cad0d498508c1640881cf5d0135006b5b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/run.log",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/run.log",
+    "source_bytes": 873,
+    "source_sha256": "a36562a2a12d83b3f3826f5a4f60849115f24574b0684ec84ecbb5bfbe8856a6",
+    "stored_bytes": 873,
+    "stored_sha256": "a36562a2a12d83b3f3826f5a4f60849115f24574b0684ec84ecbb5bfbe8856a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/source-after.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/source-after.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/source-before.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/race-retainedalloc/source-before.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/summary.json",
+    "path": "native-main-integration/native-registry-api-source04/controls/summary.json",
+    "source_bytes": 2684,
+    "source_sha256": "79f3d721dc6653df9cfb2427c6c5a17e9a24c171debec0c3461acf334e48e7de",
+    "stored_bytes": 2684,
+    "stored_sha256": "79f3d721dc6653df9cfb2427c6c5a17e9a24c171debec0c3461acf334e48e7de",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/freeze.json",
+    "path": "native-main-integration/native-registry-api-source04/freeze.json",
+    "source_bytes": 1577,
+    "source_sha256": "c79b63955f2fbd7efe8a168beb75057c076d9f115d20c7c8f333652e8e68269c",
+    "stored_bytes": 1577,
+    "stored_sha256": "c79b63955f2fbd7efe8a168beb75057c076d9f115d20c7c8f333652e8e68269c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/proposed-commands.json",
+    "path": "native-main-integration/native-registry-api-source04/proposed-commands.json.gz",
+    "source_bytes": 37807,
+    "source_sha256": "cbbc80b4b16f250f598b520280232ddc4d3a3a6f3dc31916ed88d1e82ac5a70b",
+    "stored_bytes": 4857,
+    "stored_sha256": "5fe941bee6573f9d64c318de7f073b308b29aa7e1e43dbb083e8bf2fa8fcfda8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/source-frozen.json",
+    "path": "native-main-integration/native-registry-api-source04/source-frozen.json.gz",
+    "source_bytes": 1598589,
+    "source_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+    "stored_bytes": 467314,
+    "stored_sha256": "6f48b2f617068318468208784fae22625501bc2139ae84857f16e2d667100586",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/source-modes.json",
+    "path": "native-main-integration/native-registry-api-source04/source-modes.json.gz",
+    "source_bytes": 981980,
+    "source_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+    "stored_bytes": 71985,
+    "stored_sha256": "3203c387fb3b6ede2bf5d4a1d30ae740ed2b2be409c4cd0271dae9fdeb8549db",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/source.delta.patch",
+    "path": "native-main-integration/native-registry-api-source04/source.delta.patch",
+    "source_bytes": 796,
+    "source_sha256": "8617cf335b3d5fb8f3a0398474428c02767847483fa8214daad1281141fd174f",
+    "stored_bytes": 796,
+    "stored_sha256": "8617cf335b3d5fb8f3a0398474428c02767847483fa8214daad1281141fd174f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/HANDOFF.md",
+    "path": "native-main-integration/native-registry-api-test-migration/HANDOFF.md",
+    "source_bytes": 4113,
+    "source_sha256": "83df9f7521d7bad85844d7b5b43e03b359d275d10960ff21eea5d2d06d998ccf",
+    "stored_bytes": 4113,
+    "stored_sha256": "83df9f7521d7bad85844d7b5b43e03b359d275d10960ff21eea5d2d06d998ccf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/artifact-hashes.json",
+    "path": "native-main-integration/native-registry-api-test-migration/artifact-hashes.json",
+    "source_bytes": 2338,
+    "source_sha256": "a9e0af70da22952f10e9a0d952ee8a6e4ff84ecb6d16e5ddb108cf930588e491",
+    "stored_bytes": 2338,
+    "stored_sha256": "a9e0af70da22952f10e9a0d952ee8a6e4ff84ecb6d16e5ddb108cf930588e491",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/automatic-migration.json",
+    "path": "native-main-integration/native-registry-api-test-migration/automatic-migration.json.gz",
+    "source_bytes": 152138,
+    "source_sha256": "6551354ac01ac684ed858ca3fe3235b75d20ec402ca96f67a2697fd67af5b877",
+    "stored_bytes": 15487,
+    "stored_sha256": "98222be366bf8419ff87cf3791b762c1abc0b63108a1fb7bc8440d338187b281",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/call-context-before.json",
+    "path": "native-main-integration/native-registry-api-test-migration/call-context-before.json.gz",
+    "source_bytes": 132296,
+    "source_sha256": "3f6b1f2f39c9ef6a472ee304d667790310604dbb06d3a97e3e205ebeb5efcab1",
+    "stored_bytes": 15815,
+    "stored_sha256": "7d65280f9f86a99c5d67d97f81a9df6e8d78f7f970c6da8f4a24c3c22425536c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/caller-inventory-after.json",
+    "path": "native-main-integration/native-registry-api-test-migration/caller-inventory-after.json.gz",
+    "source_bytes": 87357,
+    "source_sha256": "6c51a4347d7eaa0584070b43a5d825d8989408f56f5766e6f4bff4638e8acb6f",
+    "stored_bytes": 5355,
+    "stored_sha256": "b20b322fde48dc928ccc567d8ab40e8100c6c7ef2f56ea137126c1f3ab36dfb7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/changed-files.json",
+    "path": "native-main-integration/native-registry-api-test-migration/changed-files.json.gz",
+    "source_bytes": 48175,
+    "source_sha256": "5f6e1e5956b0627a94adf986b8bc273926a32462ec1275da3ef763966a783e12",
+    "stored_bytes": 19805,
+    "stored_sha256": "12706597c3bdee65334b21fa692aefa38a6a36e382eb218e008a060311fbe513",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/changed-paths-checkpoint.json",
+    "path": "native-main-integration/native-registry-api-test-migration/changed-paths-checkpoint.json",
+    "source_bytes": 11671,
+    "source_sha256": "7644c37bed8275a26e2a2bc48ed6cf2014850074b9203dfeafb3a842d704ca74",
+    "stored_bytes": 11671,
+    "stored_sha256": "7644c37bed8275a26e2a2bc48ed6cf2014850074b9203dfeafb3a842d704ca74",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/finalize_source.py",
+    "path": "native-main-integration/native-registry-api-test-migration/finalize_source.py",
+    "source_bytes": 3989,
+    "source_sha256": "48a97529a2b8c87f84f7751723405a9cf4bbbcad261e018022d5daea5eb5f2c5",
+    "stored_bytes": 3989,
+    "stored_sha256": "48a97529a2b8c87f84f7751723405a9cf4bbbcad261e018022d5daea5eb5f2c5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/gofmt-final.stderr",
+    "path": "native-main-integration/native-registry-api-test-migration/gofmt-final.stderr",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/gofmt-final.stdout",
+    "path": "native-main-integration/native-registry-api-test-migration/gofmt-final.stdout",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/gofmt.stderr",
+    "path": "native-main-integration/native-registry-api-test-migration/gofmt.stderr",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/gofmt.stdout",
+    "path": "native-main-integration/native-registry-api-test-migration/gofmt.stdout",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/inspect_calls.py",
+    "path": "native-main-integration/native-registry-api-test-migration/inspect_calls.py",
+    "source_bytes": 1571,
+    "source_sha256": "8793d35c5f568e108780dfb7b469621919de5774a4d45f951caf1f64780cd9ce",
+    "stored_bytes": 1571,
+    "stored_sha256": "8793d35c5f568e108780dfb7b469621919de5774a4d45f951caf1f64780cd9ce",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/manual-migration-input.json",
+    "path": "native-main-integration/native-registry-api-test-migration/manual-migration-input.json",
+    "source_bytes": 8856,
+    "source_sha256": "f63bc8e9d182f516e8fd9bd9f69319e6d10b599b3b4da92f32edcaea8f19d886",
+    "stored_bytes": 8856,
+    "stored_sha256": "f63bc8e9d182f516e8fd9bd9f69319e6d10b599b3b4da92f32edcaea8f19d886",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/migrate_manual.py",
+    "path": "native-main-integration/native-registry-api-test-migration/migrate_manual.py",
+    "source_bytes": 7547,
+    "source_sha256": "ce7ba76353e3585103b084ff2ccb8ca5a6af11827a1e0c1d035e7e1eaab8e6fc",
+    "stored_bytes": 7547,
+    "stored_sha256": "ce7ba76353e3585103b084ff2ccb8ca5a6af11827a1e0c1d035e7e1eaab8e6fc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/migrate_simple.py",
+    "path": "native-main-integration/native-registry-api-test-migration/migrate_simple.py",
+    "source_bytes": 2340,
+    "source_sha256": "f8f931a140e4ede94de1335548e2d5e3f962527b9feea60041144f53b10c4ba3",
+    "stored_bytes": 2340,
+    "stored_sha256": "f8f931a140e4ede94de1335548e2d5e3f962527b9feea60041144f53b10c4ba3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-after-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-after-source.tar.gz.gz",
+    "source_bytes": 954313,
+    "source_sha256": "e4cc22009a5816f2e49aef8c8f8c9810e63e1e32b08159a46cf3b850c7823298",
+    "stored_bytes": 954623,
+    "stored_sha256": "4ee78b29fa178acefea6769a97755d180f091d73d9574e23b568d2f5d72bcb03",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-after.json",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-after.json.gz",
+    "source_bytes": 238900,
+    "source_sha256": "b6edae8c001072177dab9ef939f1e9bd97368db8ce759817168f9618b6cf78f7",
+    "stored_bytes": 95198,
+    "stored_sha256": "29328a0c9994352f7153b72ffde1569cf7bfc3f14c69a16cf8c34ad830fe135a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-before-source.tar.gz",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-before-source.tar.gz.gz",
+    "source_bytes": 951610,
+    "source_sha256": "73ca73ddab8f8a2ef5f17da7a59dbeb41acb5bc4b7cb6d5274e36b65d31eebd1",
+    "stored_bytes": 951920,
+    "stored_sha256": "3efba25bcfa09df2529513093633de812a38e7c1d6d8f6f5464c3cefcf4d2d82",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-before.json",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-before.json.gz",
+    "source_bytes": 238900,
+    "source_sha256": "29fd1a8b07b6e7ebd5ee9716c3c6ccd305a542936a4c5c2bc410c842c07b3ac0",
+    "stored_bytes": 95169,
+    "stored_sha256": "bbec4e769911068b1ec5559bb48eb6dfb7954ac6595d66c648df7a53bd34dfce",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-delta.patch",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-delta.patch.gz",
+    "source_bytes": 195811,
+    "source_sha256": "1aa77e654fb92445581dc38bcaf4607487fbaafd14fd0723cbc3189d2dd4f0c4",
+    "stored_bytes": 25914,
+    "stored_sha256": "bb2b571283d10aaaa0f70c54c5da17c2174f86e8a6fe1a76239cc6a7ddcbf7da",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/owned-freeze.json",
+    "path": "native-main-integration/native-registry-api-test-migration/owned-freeze.json.gz",
+    "source_bytes": 269942,
+    "source_sha256": "8d363544a102188b5d2d4129a73e7ca9d091e168e689f20478d47522a5f74cc3",
+    "stored_bytes": 106151,
+    "stored_sha256": "6edc00b10a14e1d38b960d060dff6cadcc23b45c050c567b50e26e34d36a8197",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/proposed-validation.json",
+    "path": "native-main-integration/native-registry-api-test-migration/proposed-validation.json",
+    "source_bytes": 1742,
+    "source_sha256": "f5d98bca39032569802f1c6add5596fca9ebba253b1eafd58d54070919ef852f",
+    "stored_bytes": 1742,
+    "stored_sha256": "f5d98bca39032569802f1c6add5596fca9ebba253b1eafd58d54070919ef852f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/validation.json",
+    "path": "native-main-integration/native-registry-api-test-migration/validation.json",
+    "source_bytes": 12718,
+    "source_sha256": "bf7ada66c03662c60f5b0d190336c6b3b52db1557769c6316bc8a853afd5dde7",
+    "stored_bytes": 12718,
+    "stored_sha256": "bf7ada66c03662c60f5b0d190336c6b3b52db1557769c6316bc8a853afd5dde7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/workload-timer-audit.json",
+    "path": "native-main-integration/native-registry-api-test-migration/workload-timer-audit.json.gz",
+    "source_bytes": 38239,
+    "source_sha256": "9af6068c1bde19dfad958299a7dcaa80d93a6d936a91b6162277152cf4919ccc",
+    "stored_bytes": 2171,
+    "stored_sha256": "e46ec60852302a015b9979e76b7aa645b98bd7c4b4a07ff06f1517d97a6e127c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration/write_handoff.py",
+    "path": "native-main-integration/native-registry-api-test-migration/write_handoff.py",
+    "source_bytes": 6879,
+    "source_sha256": "2b0ae3ad50aa878738d933f96464b390689a8c3b63ea13a292935cdca38aa939",
+    "stored_bytes": 6879,
+    "stored_sha256": "2b0ae3ad50aa878738d933f96464b390689a8c3b63ea13a292935cdca38aa939",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/prepare-registry-api-controls.py",
+    "path": "native-main-integration/prepare-registry-api-controls.py",
+    "source_bytes": 6471,
+    "source_sha256": "e65c4dee57a3619f263ecd099eaa131a1b57202c17637b18cd388c8ec4e4729b",
+    "stored_bytes": 6471,
+    "stored_sha256": "e65c4dee57a3619f263ecd099eaa131a1b57202c17637b18cd388c8ec4e4729b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/prepare-registry-api-source03-controls.py",
+    "path": "native-main-integration/prepare-registry-api-source03-controls.py",
+    "source_bytes": 5061,
+    "source_sha256": "edb9220ab24836d225a00e8bad2a5535695fa64faf8c0912fca3606bd5d9a798",
+    "stored_bytes": 5061,
+    "stored_sha256": "edb9220ab24836d225a00e8bad2a5535695fa64faf8c0912fca3606bd5d9a798",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/prepare-registry-api-source04-controls.py",
+    "path": "native-main-integration/prepare-registry-api-source04-controls.py",
+    "source_bytes": 5928,
+    "source_sha256": "4eeb51042fa44acb5a2dd62c97f79da98e5029a42ced1a49dd2f2b76cbd8c45d",
+    "stored_bytes": 5928,
+    "stored_sha256": "4eeb51042fa44acb5a2dd62c97f79da98e5029a42ced1a49dd2f2b76cbd8c45d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-registry-api-compile-online02.py",
+    "path": "native-main-integration/run-registry-api-compile-online02.py",
+    "source_bytes": 8072,
+    "source_sha256": "ac40bb831c3521381dfbd21e0e840a756fca4de691e87669402d30f32188ed21",
+    "stored_bytes": 8072,
+    "stored_sha256": "ac40bb831c3521381dfbd21e0e840a756fca4de691e87669402d30f32188ed21",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-registry-api-compile.py",
+    "path": "native-main-integration/run-registry-api-compile.py",
+    "source_bytes": 7808,
+    "source_sha256": "910a470c8a0e9d78af9c80cf53fa90251f9a8edec137e39a15ca4bc1ae7c4a34",
+    "stored_bytes": 7808,
+    "stored_sha256": "910a470c8a0e9d78af9c80cf53fa90251f9a8edec137e39a15ca4bc1ae7c4a34",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-registry-api-focused.py",
+    "path": "native-main-integration/run-registry-api-focused.py",
+    "source_bytes": 13483,
+    "source_sha256": "7a3cb34ed8ee32ce287c29983d1bf4d258b5f537437faf2c2d2075d7cfa8d0db",
+    "stored_bytes": 13483,
+    "stored_sha256": "7a3cb34ed8ee32ce287c29983d1bf4d258b5f537437faf2c2d2075d7cfa8d0db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-registry-api-focused03.py",
+    "path": "native-main-integration/run-registry-api-focused03.py",
+    "source_bytes": 14292,
+    "source_sha256": "d71081e51993a73d786f4525270e06f00b1cc6528e0c35f17d11ff304629d5f3",
+    "stored_bytes": 14292,
+    "stored_sha256": "d71081e51993a73d786f4525270e06f00b1cc6528e0c35f17d11ff304629d5f3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-registry-api-focused04.py",
+    "path": "native-main-integration/run-registry-api-focused04.py",
+    "source_bytes": 14292,
+    "source_sha256": "25fb33eee1559d535c7cac5b7a404889ac6973e30b3272e10c64e18b13c3cc0b",
+    "stored_bytes": 14292,
+    "stored_sha256": "25fb33eee1559d535c7cac5b7a404889ac6973e30b3272e10c64e18b13c3cc0b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-registry-api-controls.py",
+    "path": "native-main-integration/verify-registry-api-controls.py",
+    "source_bytes": 4365,
+    "source_sha256": "a0120777f2a100abe1ce3b77c2e1a30ab22ce19ee28cc691f28bfc06b6e8c3c3",
+    "stored_bytes": 4365,
+    "stored_sha256": "a0120777f2a100abe1ce3b77c2e1a30ab22ce19ee28cc691f28bfc06b6e8c3c3",
+    "encoding": "identity"
+  }
+]

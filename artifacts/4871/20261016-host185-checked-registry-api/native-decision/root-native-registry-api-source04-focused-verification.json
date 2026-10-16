@@ -1,0 +1,138 @@
+{
+  "Q32": "original gate remains open",
+  "accepted": true,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "checks": [
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 27,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-db",
+      "raw_sha256": "65665cf0b05b9997a53499262bcaa5de79354a5b4639f309a33162600ba56acf",
+      "result_sha256": "a11b008512a27351658ab4e69c871a5cbf874e31aacb907ec6376a3d512a7ee7",
+      "source_equal": true,
+      "top_pass": 36,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 2,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-caching",
+      "raw_sha256": "daea9919e31e814fd03d43203f2779472c918aa639615ddd5c20302d029e1a1a",
+      "result_sha256": "083f33a29d2186fb20df89831a12b66be70e6549ca2bde00044236f249d6e62b",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 2,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-public",
+      "raw_sha256": "131312e71a9bd7afb96f5c417cbeb7dd5db7256537c0edeff634f950dd265b89",
+      "result_sha256": "0eda8aeb517a59b99e471bb6fdbccb63181d0494c41e74116d25cac2ed32e859",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 0,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-retainedalloc",
+      "raw_sha256": "a36562a2a12d83b3f3826f5a4f60849115f24574b0684ec84ecbb5bfbe8856a6",
+      "result_sha256": "ea054c384acfc46e5d721add0d0bd94cad0d498508c1640881cf5d0135006b5b",
+      "source_equal": true,
+      "top_pass": 6,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 12,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-lifecycle",
+      "raw_sha256": "f502f859682eff51860fc8e943f75ae9490147ea53f8106e01d599c1ebbed330",
+      "result_sha256": "01b7b5f90656137a1297595073f3ef2fadf01f514eef728ccb527f934240a9b8",
+      "source_equal": true,
+      "top_pass": 19,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 27,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-db",
+      "raw_sha256": "bd0a049bf05873a6e62e13baef6151c098725098f4b8f7a83ede551ca1966239",
+      "result_sha256": "a46a403aa8935ee8da27ea205c75b8d5843fd353ddc3aa3cb517c76a08796c91",
+      "source_equal": true,
+      "top_pass": 36,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 2,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-caching",
+      "raw_sha256": "b471f42429221e25950139d3dc1fb9d1872cc7104878628d3237c08e6568dbc0",
+      "result_sha256": "c3f12f0fe5fc224ef6554f893f9798d856d1857176cccae5de8faadf3a606561",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 2,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-public",
+      "raw_sha256": "c0af4d6f839216872ac1c95c71f18ac29cbd300d0925d63313fd7e274f1125ed",
+      "result_sha256": "fa49de1e376f460341819e34cf6080b48dab9698cd95823ab53e6bae9c74afcd",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    }
+  ],
+  "commands_not_executed": [],
+  "counts": {
+    "normal": {
+      "child": 31,
+      "top": 40
+    },
+    "race": {
+      "child": 43,
+      "top": 65
+    }
+  },
+  "manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "plan_sha256": "cbbc80b4b16f250f598b520280232ddc4d3a3a6f3dc31916ed88d1e82ac5a70b",
+  "scope": "frozen checked registry API focused normal/race raw recomputation",
+  "summary_sha256": "79f3d721dc6653df9cfb2427c6c5a17e9a24c171debec0c3461acf334e48e7de",
+  "utc": "2026-10-16T14:57:24.749579+00:00"
+}

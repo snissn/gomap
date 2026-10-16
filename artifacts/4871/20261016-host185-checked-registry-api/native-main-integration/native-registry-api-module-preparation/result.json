@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "exit_code": 0,
+  "elapsed_seconds": 19.047263492364436,
+  "download_records": 104,
+  "errors": [],
+  "signals": [],
+  "groups_and_adopted_children_empty": true,
+  "remaining": [],
+  "source_module_inputs_unchanged": true,
+  "copy_changes": {},
+  "package_code_executed": false,
+  "test_bodies_executed": false,
+  "raw_download_sha256": "bf9f963f2dedf60437243ce90ed3eae03a360924dce9b2ae7cfe2277f69c4aac",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

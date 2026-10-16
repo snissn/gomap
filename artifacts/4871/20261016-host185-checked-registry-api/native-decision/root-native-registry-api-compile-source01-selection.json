@@ -1,0 +1,28 @@
+{
+  "all_source_writers_released": true,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-c",
+    "-o",
+    "/dev/null",
+    "./..."
+  ],
+  "created_utc": "2026-10-16T13:38:11.929787+00:00",
+  "freeze_sha256": "f3929b7634704afe21f82cbfca66e98457592ed4533fcce98b6c47e7f1674670",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "manifest_sha256": "98b09c2ca598a66558462384ed966930e2161fc2da49e76ee7ff844bb2427bb5",
+  "modes_sha256": "51099870e2055b287bb29d11cc54f22dba6d7f64b64edaf017ea1f43fda67667",
+  "nested_modules": "Inventoried all nested go.mod paths; no direct changed API caller names in maintained nested integration/benchmark modules. Root module compilation does not qualify nested modules or runtime.",
+  "outer_timeout_seconds": 900,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01",
+  "prior_source_review": "outside existing-test and outside production partitions accepted; final core independent review active; root independently verified all core artifacts and exact combined delta partitions.",
+  "purpose": "Compile all root-module callers and method sets of checked Snapshot/ReaderRegistry API including all test code; default vet retained. Pinned Go -c selects build actions and cannot execute test bodies. No benchmark/profile/database workload authorization.",
+  "runner_sha256": "910a470c8a0e9d78af9c80cf53fa90251f9a8edec137e39a15ca4bc1ae7c4a34",
+  "scope": "registry-api-compile-only",
+  "test_bodies_authorized": false
+}

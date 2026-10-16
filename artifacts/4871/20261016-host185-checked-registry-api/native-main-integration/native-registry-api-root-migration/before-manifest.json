@@ -1,0 +1,270 @@
+[
+  {
+    "path": "TreeDB/caching/conditional_txn.go",
+    "sha256": "860ee0cbf73824308a4c4d7f56e6168c928cc493eee4c7ce7833f083aba35032"
+  },
+  {
+    "path": "TreeDB/caching/cow_cut.go",
+    "sha256": "ae6782d80dccb0ce82b3a8e7cab3aae8226e9eb71a83b1837ae67636a46a0286"
+  },
+  {
+    "path": "TreeDB/caching/db.go",
+    "sha256": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d"
+  },
+  {
+    "path": "TreeDB/caching/point_successor.go",
+    "sha256": "5fb5dca73e66b909ffa70cab074041bb319f0b0ea6655f763ade645db469421f"
+  },
+  {
+    "path": "TreeDB/caching/range_spans.go",
+    "sha256": "a04e7239d9fe1b943ffd68cd323caa6fa0faf4efe8283db18d0b864a9c98c6fc"
+  },
+  {
+    "path": "TreeDB/caching/root_domain.go",
+    "sha256": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150"
+  },
+  {
+    "path": "TreeDB/caching/snapshot.go",
+    "sha256": "8b187ea31770b42d7e6030a27c83d4e41d485532c2e3cc9a7f0600949c039cb3"
+  },
+  {
+    "path": "TreeDB/cmd/template_corpus_extract/main.go",
+    "sha256": "50dd98ca16003f529fcac64de8e92138daaf139ae4aa74c5242e680da2f7d72c"
+  },
+  {
+    "path": "TreeDB/cmd/template_seed_train/main.go",
+    "sha256": "49669eea162e860deebb41f8302b9ae8e916f344206ccf9cc73f09887f062415"
+  },
+  {
+    "path": "TreeDB/collections/api.go",
+    "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f"
+  },
+  {
+    "path": "TreeDB/collections/collection_vector_index_prepared_search_cache.go",
+    "sha256": "180111892c9e51df3ef7d9b6f261850f64117c56aab13cae9bec4424cbc4a569"
+  },
+  {
+    "path": "TreeDB/collections/column_asset_gc.go",
+    "sha256": "9b8021bbcb3aae2e2027603f72815a6f44e242c876e8ec4aae48f353df2d99ab"
+  },
+  {
+    "path": "TreeDB/collections/column_asset_rewrite.go",
+    "sha256": "114986f150da44eb24b1dde0886bfa8552b67a1d3ed63bdb2b816380e5e0889e"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_scan.go",
+    "sha256": "bf0f2c20eea61a9607f5eaff0bf3e97006a16a184c0f3d95f4b2be3857d7a71a"
+  },
+  {
+    "path": "TreeDB/collections/column_physical_visibility.go",
+    "sha256": "4b2dd1a512780d7c373f777096894c10e5d9f54ac520e5d707c1b6dd7de081af"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_plan.go",
+    "sha256": "4a52f614e5ae21e11f8e9f12048bd2236683d0cee3d1d31cd40ad10284f4a362"
+  },
+  {
+    "path": "TreeDB/collections/column_publish_write.go",
+    "sha256": "d7d5f7093c9d6bd8c992fb6fe1e03976ce7c94532a214d41265c1fc100ecb807"
+  },
+  {
+    "path": "TreeDB/collections/column_query_plan.go",
+    "sha256": "44c72cbda5a2db4ae4ed87c3666b5290987c1ab5a408f4077d57497994e04274"
+  },
+  {
+    "path": "TreeDB/collections/column_retained_payload_audit.go",
+    "sha256": "7c8112b30ae6bdc6ce6ef0b4078f9282268e6db8ffd948874687f34b43648167"
+  },
+  {
+    "path": "TreeDB/collections/column_source_directory_gc_v2.go",
+    "sha256": "862bab6a0d6d650afbdcc574a034882d459d2ee2c5cd7b19e6f745cb1a0c0280"
+  },
+  {
+    "path": "TreeDB/collections/column_source_directory_v2.go",
+    "sha256": "f32da4c8d35e800746336292e3d98c333005d415a3668990f9df7f422de9849a"
+  },
+  {
+    "path": "TreeDB/collections/column_store_compaction.go",
+    "sha256": "b456a8c1a5af87d2383bbadcd72769b692f7e1450e1b37ae6b1d003224f75b87"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_manifest.go",
+    "sha256": "33dba6c1e23b979900eb18d88262aa955ed4aae6608605abac1833939fbdfcbe"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_row_reader.go",
+    "sha256": "691b0f9fa67d6f904ff233e22311e01e2cd0cc76669d5afaccde65bf576a7add"
+  },
+  {
+    "path": "TreeDB/collections/column_vector_graph_stable_prepare.go",
+    "sha256": "2a7362bf983d2e17adfaba4c61694d0503ebd7b54743e35d8c07910028f4e6b2"
+  },
+  {
+    "path": "TreeDB/collections/document_chunking.go",
+    "sha256": "fbf839ce20ea9c8ee9592369f31a5bba3edcff31e179866ad6d7d96421a6ca1f"
+  },
+  {
+    "path": "TreeDB/collections/document_materializer.go",
+    "sha256": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388"
+  },
+  {
+    "path": "TreeDB/collections/hybrid_executor.go",
+    "sha256": "419e2c5e04a355b4487f11ca38d952ecb6baffe941b2e3ca3af0d537026ddb94"
+  },
+  {
+    "path": "TreeDB/collections/hybrid_text_candidates.go",
+    "sha256": "ab14d94f7b7ac8edf2dbed944a090ddfd060331d8b038d36aef60d818be273b7"
+  },
+  {
+    "path": "TreeDB/collections/source_atomic.go",
+    "sha256": "dcffb06a4f05feb41a711f3c957921063072db4e98e0efab4d4640a426a02af6"
+  },
+  {
+    "path": "TreeDB/collections/text_catalog.go",
+    "sha256": "1e2e24348a0dec802ab4b4f0a9741f92be7aa0e1ab601d6cf667183e4cb4cb10"
+  },
+  {
+    "path": "TreeDB/collections/text_index.go",
+    "sha256": "7eff1c15fa98b38a8c65f11ed4d679a6f39ac666f65a8624dd84f4ccf66df6b3"
+  },
+  {
+    "path": "TreeDB/collections/text_search.go",
+    "sha256": "92d15893f6963efe8915afe8e264d226f5718a90d978099b62d6866db53feb49"
+  },
+  {
+    "path": "TreeDB/collections/text_v2_rewrite.go",
+    "sha256": "576988dd473e331792cace02bc4a419a1b1327e5b5d1ba679200c8a198e1cda6"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_base_closure.go",
+    "sha256": "e0ad5c3e06213e36fde212891bfbc95bf487d54f73bcbac9af9a0d822051b612"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_read_owner.go",
+    "sha256": "88cb215aa4033e3c1f92e89634e92077cd8890c2279a88b55b4f8d1f622771d9"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_reconcile.go",
+    "sha256": "f9c1ef6e7f21468bd4358161c958b3372ebd329f642709fb81c61053f00d1497"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_serving_holder.go",
+    "sha256": "74ffc18d8299cce9ce322d23968f923532bdb49f387e6faf7231bca152f7f4ba"
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_serving_metadata.go",
+    "sha256": "e35e838e6690779d7b0951632abc1f6e94d477b73c0742817460c811c8d43090"
+  },
+  {
+    "path": "TreeDB/collections/typed_metadata.go",
+    "sha256": "e6dd157d4bd8347a0c5070850dae79f7b90eb01ccb207b8125294c4127ca1bdd"
+  },
+  {
+    "path": "TreeDB/collections/vector_index.go",
+    "sha256": "002249400bbf2454233170803e4436abcf747a59067a26a03e804b72a550ec74"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_buffered_coverage.go",
+    "sha256": "60e931f3862bccc48cceb300aaf3453dcb27ad2f62a816cf79009b353c792195"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_ops.go",
+    "sha256": "aea8e6e80c44ebacd982b3cffa7b44d16d46f9388fd47f2e1e383929371cdff7"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_partition_live_replay_v1.go",
+    "sha256": "b75ee008eab43b7040d9cc6bbb699682ef9eaae8414b73544883e1d2fbedb28c"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_partition_live_v1.go",
+    "sha256": "125eedf1bb60c252bd1340fe90a2f90c3b8ddc50175fe1f07e5009f92a31680d"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_persist.go",
+    "sha256": "019105d13a826769d5c3a02137d61f124cb73d3c9c5f9d35e9576fd405aca273"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_rebuild.go",
+    "sha256": "8173195a96fa665b746bc177dc9f85a7da03326aa439cc0c17a3043b109e808f"
+  },
+  {
+    "path": "TreeDB/collections/vector_index_search.go",
+    "sha256": "fdbeb918f909198dafdad248efffa6748818fbc48258068680217d91d578df44"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_barrier.go",
+    "sha256": "c0fa0081177e4711d65cade74097d7b18703e14b41948444edbb3ea78f68599b"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_colocated_outcome_v1.go",
+    "sha256": "952f05cf267696f8554f5d37634d50c46f500d571b6303e2ca5b55258ded8a8c"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_colocated_proof_v1.go",
+    "sha256": "4e78e6e6822658fbfcdf3e8067519c8877846357abf07f104866f4f8ff3a1434"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_lifecycle_public_v1.go",
+    "sha256": "0c8aac0dcd0257f87d44e26eaaff886654bec4493be8576dc25a5fbf24e31b7c"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_live_document_v1.go",
+    "sha256": "d8df4cf428d7685166b39462feb77372f807119d611352ece1be4e64ab31cbd0"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_paged_build_v2.go",
+    "sha256": "186e75bffb79013cd13ac895dfc2fd90720a4a40c28e51dd8542b49235ec5db2"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_paged_source_session_v2.go",
+    "sha256": "eae96027518a12e88e77eeee0371a6d6e3fa19e32dd968b9f35bde26bc169a50"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_prepare_v1.go",
+    "sha256": "78fa0de4035028d4b759204172215c3decc75d969ebd75b4f19fdff8a3fa00de"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_source_import_v2.go",
+    "sha256": "52d94159455d10f6cfe23b229b8b8e056238e822251546376a244ae268ea3bcb"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_source_reader_v2.go",
+    "sha256": "744f6b0771a7c8fc660126de8634d143c9a08f26cbf35fa22db29ff89e2694cf"
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_split_insert_v1.go",
+    "sha256": "152952cc196aeb4f3b827c5758c7be6376c1a48402860e54b5ab939ea1b379a5"
+  },
+  {
+    "path": "TreeDB/collections/vector_source_population_proof_v1.go",
+    "sha256": "65e09d6523eda02331a4c743db9a1c62a52f1cca8cd9d26b438f56d23e071a64"
+  },
+  {
+    "path": "TreeDB/internal/dictdb/resource_capture.go",
+    "sha256": "c2c0eb49825e0895e3f2280fda99c4bbafb199b851855cb1f5e2b9fea451ef03"
+  },
+  {
+    "path": "TreeDB/internal/templatedb/store.go",
+    "sha256": "a616bff816ac4b8fa5012ce862d07c1f76643319d90400f0b7a6fe327e7c6ded"
+  },
+  {
+    "path": "TreeDB/mvcc/versions.go",
+    "sha256": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53"
+  },
+  {
+    "path": "TreeDB/public.go",
+    "sha256": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc"
+  },
+  {
+    "path": "TreeDB/template_stable_resource.go",
+    "sha256": "d9bcfd47903a6a93a25bc4cd1f76b0297b33f04b5d7673d0ee85abecf2712c1b"
+  },
+  {
+    "path": "cmd/unified_bench/adapter_treedb_backend.go",
+    "sha256": "e9495f449c7f633d43ecc70f9aa5ed077dba28f4aa94005abfb204641e3f2e98"
+  },
+  {
+    "path": "kvstore/adapters/treedb/treedb.go",
+    "sha256": "3439b1057dae8d2f5c5d8830011656e48b59c41f7b0f588b060725515ae3ff7e"
+  }
+]

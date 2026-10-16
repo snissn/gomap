@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-16T13:36:58.790756+00:00",
+  "handoff_sha256": "6bf01e024e0d225d155f9547e1b2c48019e512b93e0a5456b5ad83c9947eb4c3",
+  "artifact_hashes_verified": 11,
+  "owned_source_and_modes_verified": 501,
+  "changed_paths_verified": 120,
+  "archives_members_verified": true,
+  "delta_independently_reconstructed": true,
+  "source_lease_released": true,
+  "runtime_executed": false,
+  "provisional_production_drift": [
+    "TreeDB/db/root_publication_build_group.go"
+  ]
+}

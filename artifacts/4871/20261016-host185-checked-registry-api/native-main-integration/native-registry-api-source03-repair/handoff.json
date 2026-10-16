@@ -1,0 +1,38 @@
+{
+  "artifact_sha256": {
+    "README.md": "286bbaf945f2b8c5283d75cce335206ba8e886232906fa6d733a988f5ead349f",
+    "after-source.tar.gz": "817366c5ffa0d816a915f87aa8ccee8d3658c1622e4e1a280dbe0cc5acc3d9a5",
+    "after.json": "e73c878f07fdbfe3dbb856cf57252f599cf962d935999a9ed1728b1760e32081",
+    "before-source.tar.gz": "cd1112d2b67bbd847584f49266123e92888d618ea042c351e065a14f72d9df32",
+    "before.json": "a04e6ed02abe18fa6d487b9fe70f4795a32463028049ba2663c726b48b502ddf",
+    "delta.patch": "077f2cb662b802abcf6666bdbb8a5a3979da53cf1c423c5791c409aab0b1616e",
+    "modes.json": "f9f0bf01a82d5f9d2a4d5f5940c7b2670f57f0f40ba68f4a491f72b60d323433",
+    "proposed-commands.json": "76d4695f815e4a2fb3d9b5a10c9e3ae4cb2f90f57c8e1e9d5a66c063a3d9704c"
+  },
+  "changed_paths": [
+    "TreeDB/db/reader_registry_header_failure_v6_test.go"
+  ],
+  "diagnosis_json_sha256": "ef8c6d2ba1254e018adc42f50c82da4e9bb6a8e28dd5fd080a4f369fb1381a2e",
+  "diagnosis_md_sha256": "e388e28877bee505e2bb0c37ab95eb11a2f020e302a061c7917f5014fc99b103",
+  "executed_go_commands": [],
+  "gofmt_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/gofmt",
+  "gofmt_sha256": "f5b77505ba58bdbf60725592b1499c55f50c89b28757a02227165532a73f8545",
+  "modes": {
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "0o664"
+  },
+  "owned_after": {
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "3c3793bb15a8492ae3b2c96963c8a77bed1d73b97541db4e23e389a8a4e7fab5"
+  },
+  "owned_before": {
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "10b9aec29c783437ba494ca175d42cffae0d645876ddc83889aa20925b8e8e34"
+  },
+  "parent_archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47",
+  "parent_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "production_and_price_change": false,
+  "proposed_command_count": 8,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "runtime_lease_released": true,
+  "scope": "source-only single DB test fixture repair",
+  "selection_sha256": "2931a57ac033ff792481d17213f63fe1a4fb6a2173f578bc64559226fb60d5fa",
+  "source_writes_released": true
+}

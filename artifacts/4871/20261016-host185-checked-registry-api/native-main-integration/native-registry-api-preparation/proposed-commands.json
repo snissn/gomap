@@ -1,0 +1,219 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/lifecycle",
+        "-run",
+        "^(TestLifecycle|TestNativeMVCCRegistryOriginalCohorts|TestReaderRegistryFastOnlyRefusalAndDrainProgress|TestReaderRegistryOwnedAdmissionV6|TestReaderRegistryOwnedConcurrentSlowV6|TestReaderRegistryPatriciaModelV6|TestReaderRegistryPositiveCompletionV6|TestReaderRegistryPositiveHandleWidthV6|TestReaderRegistry_ConcurrentFastAndSlowReaders|TestReaderRegistry_EmptyShardClaimSerializesWithMinScan|TestReaderRegistry_FastAndSlowReadersMin|TestReaderRegistry_FastPathConcurrentRegisterUnregister|TestReaderRegistry_FastPathSingleSeq|TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle|TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing|TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "GOMAXPROCS": "2",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/proposed-controls/normal-lifecycle/tmp"
+      },
+      "executed": false,
+      "name": "normal-lifecycle",
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestLifecycle",
+        "TestNativeMVCCRegistryOriginalCohorts",
+        "TestReaderRegistryFastOnlyRefusalAndDrainProgress",
+        "TestReaderRegistryOwnedAdmissionV6",
+        "TestReaderRegistryOwnedConcurrentSlowV6",
+        "TestReaderRegistryPatriciaModelV6",
+        "TestReaderRegistryPositiveCompletionV6",
+        "TestReaderRegistryPositiveHandleWidthV6",
+        "TestReaderRegistry_ConcurrentFastAndSlowReaders",
+        "TestReaderRegistry_EmptyShardClaimSerializesWithMinScan",
+        "TestReaderRegistry_FastAndSlowReadersMin",
+        "TestReaderRegistry_FastPathConcurrentRegisterUnregister",
+        "TestReaderRegistry_FastPathSingleSeq",
+        "TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle",
+        "TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing",
+        "TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/db",
+        "-run",
+        "^(TestOriginalReaderRegistryHeaderLifetimeV6|TestNativeDataPositiveRegistrationCompletionV6|TestOfflineReaderRegistryOriginalOwnerV6|TestNativeSnapshotMinimumAcquisitionAdmissionV6|TestNativeSnapshotMinimumTerminalScanAdmissionV6|TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6|TestNativeSnapshotMinimumUnsupportedGeometryV6|TestNativeSnapshotMinimumEpochInvalidationV6|TestNativeSnapshotMinimumChurnThenQuietProgressV6|TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6|TestNativeSnapshotMinimumConcurrentReadersV6|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestOriginalGenerationPublishedFailureConcurrentInspection|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestPrimaryMetadataCaptureFinalizesAfterLastRead|TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer|TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead|TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot|TestNativeDataDependencyReleaseRechecksCurrentGenerationV6|TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair|TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls|TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "GOMAXPROCS": "2",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/proposed-controls/normal-db/tmp"
+      },
+      "executed": false,
+      "name": "normal-db",
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestOriginalReaderRegistryHeaderLifetimeV6",
+        "TestNativeDataPositiveRegistrationCompletionV6",
+        "TestOfflineReaderRegistryOriginalOwnerV6",
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+        "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+        "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6",
+        "TestNativeSnapshotMinimumEpochInvalidationV6",
+        "TestNativeSnapshotMinimumChurnThenQuietProgressV6",
+        "TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6",
+        "TestNativeSnapshotMinimumConcurrentReadersV6",
+        "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+        "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+        "TestOriginalGenerationPublishedFailureConcurrentInspection",
+        "TestNativeGenerationContainingCompletionAfterOriginalClose",
+        "TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach",
+        "TestPrimaryMetadataCaptureFinalizesAfterLastRead",
+        "TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer",
+        "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead",
+        "TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot",
+        "TestNativeDataDependencyReleaseRechecksCurrentGenerationV6",
+        "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+        "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+        "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "./TreeDB/lifecycle",
+        "-run",
+        "^(TestLifecycle|TestNativeMVCCRegistryOriginalCohorts|TestReaderRegistryFastOnlyRefusalAndDrainProgress|TestReaderRegistryOwnedAdmissionV6|TestReaderRegistryOwnedConcurrentSlowV6|TestReaderRegistryPatriciaModelV6|TestReaderRegistryPositiveCompletionV6|TestReaderRegistryPositiveHandleWidthV6|TestReaderRegistry_ConcurrentFastAndSlowReaders|TestReaderRegistry_EmptyShardClaimSerializesWithMinScan|TestReaderRegistry_FastAndSlowReadersMin|TestReaderRegistry_FastPathConcurrentRegisterUnregister|TestReaderRegistry_FastPathSingleSeq|TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle|TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing|TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "GOMAXPROCS": "2",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/proposed-controls/race-lifecycle/tmp"
+      },
+      "executed": false,
+      "name": "race-lifecycle",
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestLifecycle",
+        "TestNativeMVCCRegistryOriginalCohorts",
+        "TestReaderRegistryFastOnlyRefusalAndDrainProgress",
+        "TestReaderRegistryOwnedAdmissionV6",
+        "TestReaderRegistryOwnedConcurrentSlowV6",
+        "TestReaderRegistryPatriciaModelV6",
+        "TestReaderRegistryPositiveCompletionV6",
+        "TestReaderRegistryPositiveHandleWidthV6",
+        "TestReaderRegistry_ConcurrentFastAndSlowReaders",
+        "TestReaderRegistry_EmptyShardClaimSerializesWithMinScan",
+        "TestReaderRegistry_FastAndSlowReadersMin",
+        "TestReaderRegistry_FastPathConcurrentRegisterUnregister",
+        "TestReaderRegistry_FastPathSingleSeq",
+        "TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle",
+        "TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing",
+        "TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "^(TestOriginalReaderRegistryHeaderLifetimeV6|TestNativeDataPositiveRegistrationCompletionV6|TestOfflineReaderRegistryOriginalOwnerV6|TestNativeSnapshotMinimumAcquisitionAdmissionV6|TestNativeSnapshotMinimumTerminalScanAdmissionV6|TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6|TestNativeSnapshotMinimumUnsupportedGeometryV6|TestNativeSnapshotMinimumEpochInvalidationV6|TestNativeSnapshotMinimumChurnThenQuietProgressV6|TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6|TestNativeSnapshotMinimumConcurrentReadersV6|TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB|TestOriginalGenerationWrapperCloseRacesLastSnapshot|TestOriginalGenerationPublishedFailureConcurrentInspection|TestNativeGenerationContainingCompletionAfterOriginalClose|TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach|TestPrimaryMetadataCaptureFinalizesAfterLastRead|TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer|TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead|TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot|TestNativeDataDependencyReleaseRechecksCurrentGenerationV6|TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair|TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls|TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "GOMAXPROCS": "2",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-preparation/proposed-controls/race-db/tmp"
+      },
+      "executed": false,
+      "name": "race-db",
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestOriginalReaderRegistryHeaderLifetimeV6",
+        "TestNativeDataPositiveRegistrationCompletionV6",
+        "TestOfflineReaderRegistryOriginalOwnerV6",
+        "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+        "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+        "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+        "TestNativeSnapshotMinimumUnsupportedGeometryV6",
+        "TestNativeSnapshotMinimumEpochInvalidationV6",
+        "TestNativeSnapshotMinimumChurnThenQuietProgressV6",
+        "TestNativeSnapshotMinimumHeldReaderAndPartialCaptureV6",
+        "TestNativeSnapshotMinimumConcurrentReadersV6",
+        "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+        "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+        "TestOriginalGenerationPublishedFailureConcurrentInspection",
+        "TestNativeGenerationContainingCompletionAfterOriginalClose",
+        "TestNativeGhostContainingCompletionAfterOriginalDBAliasDetach",
+        "TestPrimaryMetadataCaptureFinalizesAfterLastRead",
+        "TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer",
+        "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead",
+        "TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot",
+        "TestNativeDataDependencyReleaseRechecksCurrentGenerationV6",
+        "TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair",
+        "TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls",
+        "TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody"
+      ]
+    }
+  ],
+  "compile_proposal": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-run",
+      "^$",
+      "-p=1",
+      "./..."
+    ],
+    "executed": false,
+    "note": "Root prepared combined compile-only runner is authoritative; this is no execution authorization."
+  },
+  "executed": false,
+  "required_dynamic_children": {
+    "TestNativeDataDependencyReleaseRechecksCurrentGenerationV6": [
+      "current",
+      "retired-after-eligibility"
+    ],
+    "TestReaderRegistryPositiveCompletionV6": [
+      "nil-work",
+      "short-work",
+      "different-owner"
+    ]
+  },
+  "scope": "proposal only; root must bind combined source/tool/env/process grant before execution"
+}

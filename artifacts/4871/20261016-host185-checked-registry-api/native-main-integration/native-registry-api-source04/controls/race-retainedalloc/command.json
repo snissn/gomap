@@ -1,0 +1,53 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-race",
+    "-run",
+    "^(TestNativeRemovalCompletionRetainsExactDeltaOnRefusal|TestOriginalRemovalReceiptReuseKeepsExactAccounting|TestOriginalRemovalResetCannotConsumeBoundedReceipt|TestOriginalRemovalResetPreservesFailedGoverningShrink|TestRemovalWorkConcurrentOriginalGrowthAndEnrollment|TestRemovalWorkManyOriginalBindingsAndFutureGrowth)$",
+    "./TreeDB/internal/retainedalloc"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/race-retainedalloc/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 0,
+  "expected_top_level_count": 6,
+  "grant_sha256": "01e4c8b9a84e187807ca8b8058a34d89bcc9c83845945b10c0082e37260ea29e",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/identity.json",
+  "name": "race-retainedalloc",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {},
+  "required_top_level_tests": [
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/source-frozen.tar.gz",
+  "source_archive_sha256": "6fe19cb928916c791730a56f177e7cb21677d40fed5afed4a4374e828fecdc56"
+}

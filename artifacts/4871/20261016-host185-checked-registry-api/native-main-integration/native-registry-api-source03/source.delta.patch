@@ -1,0 +1,237 @@
+--- source02/TreeDB/db/reader_registry_header_failure_v6_test.go
++++ source03/TreeDB/db/reader_registry_header_failure_v6_test.go
+@@ -8,6 +8,7 @@
+ 	"sync"
+ 	"testing"
+ 
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/lifecycle"
+@@ -15,7 +16,38 @@
+ 
+ // Ordinary lease failures exercise the real registry refund path, rather than
+ // altering a registry receipt or declaring a synthetic generation complete.
+-type registryHeaderFailureBudgetV6 struct{ failShrink bool }
++type registryHeaderFailureBudgetV6 struct {
++	mu            sync.Mutex
++	failShrink    bool
++	target        func(old, next uint64) bool
++	beforeFailure func()
++	failures      uint64
++}
++
++func (b *registryHeaderFailureBudgetV6) arm(target func(old, next uint64) bool, beforeFailure func()) {
++	b.mu.Lock()
++	b.failShrink, b.target, b.beforeFailure = true, target, beforeFailure
++	b.mu.Unlock()
++}
++func (b *registryHeaderFailureBudgetV6) disarm() {
++	b.mu.Lock()
++	b.failShrink = false
++	b.mu.Unlock()
++}
++func (b *registryHeaderFailureBudgetV6) failureCount() uint64 {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.failures
++}
++
++// This original scalar query takes only registry.mu, never the governing Owner
++// or its refund receipt. Registry disposal releases registry.mu before Resize.
++func registryHeaderSlowCountV6(r *lifecycle.ReaderRegistry) (uint64, bool) {
++	w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
++	g, ready := r.MaintenanceNativeMinimumGeometryForTestV6(&w)
++	return g.FallbackSlots, ready && g.Complete && !g.Dirty
++}
++
+ type registryHeaderFailureLeaseV6 struct {
+ 	budget *registryHeaderFailureBudgetV6
+ 	bytes  uint64
+@@ -25,10 +57,22 @@
+ 	return &registryHeaderFailureLeaseV6{b, n}, nil
+ }
+ func (l *registryHeaderFailureLeaseV6) Resize(n uint64) error {
+-	if n < l.bytes && l.budget.failShrink {
++	b := l.budget
++	b.mu.Lock()
++	if n < l.bytes && b.failShrink && (b.target == nil || b.target(l.bytes, n)) {
++		// Consume only this selected real failure. The original header receipt
++		// remains failed; unrelated refunds on the same Owner may now succeed.
++		b.failShrink = false
++		b.failures++
++		beforeFailure := b.beforeFailure
++		b.mu.Unlock()
++		if beforeFailure != nil {
++			beforeFailure()
++		}
+ 		return retainedalloc.ErrCapacity
+ 	}
+ 	l.bytes = n
++	b.mu.Unlock()
+ 	return nil
+ }
+ func (l *registryHeaderFailureLeaseV6) Close() {}
+@@ -59,10 +103,28 @@
+ 	r, charge := g.registry, g.metadataCharge
+ 	fillGenerationRegistryFastV6(t, r)
+ 	budget := bindRegistryHeaderFailureV6(t, g.metadata)
+-	budget.failShrink = true
++	// Register installs its sole slow leaf before returning the unused branch
++	// through the original header. No Manager/root setup has happened yet.
++	budget.arm(func(old, next uint64) bool {
++		count, ready := registryHeaderSlowCountV6(r)
++		return ready && count == 1
++	}, nil)
++	beforeBorrow := g.wrapperBorrowCountV6()
+ 	snapshot, err := d.AcquireSnapshot()
+-	if snapshot != nil || !lifecycle.ReaderRegistryCleanupFailed(err) || !errors.Is(err, retainedalloc.ErrCapacity) || g.wrapperBorrowCountV6() != 0 {
+-		t.Fatal("failed birth lost original registry cause", snapshot, err)
++	if snapshot != nil {
++		t.Fatal("failed birth fabricated Snapshot", snapshot)
++	}
++	if !lifecycle.ReaderRegistryCleanupFailed(err) || err != r {
++		t.Fatal("failed birth lost SAME registry header", err)
++	}
++	if !errors.Is(err, retainedalloc.ErrCapacity) {
++		t.Fatal("failed birth lost original capacity cause", err)
++	}
++	if after := g.wrapperBorrowCountV6(); after != beforeBorrow {
++		t.Fatal("failed birth changed original wrapper baseline", beforeBorrow, after)
++	}
++	if budget.failureCount() != 1 {
++		t.Fatal("registry refund fault did not occur exactly once")
+ 	}
+ 	original := r.OriginalCleanupError()
+ 	if original == nil {
+@@ -103,9 +165,12 @@
+ 	if !g.physicalCompleted || g.registry != r || g.metadataCharge != charge {
+ 		t.Fatal("held Snapshot lost original header before late failure")
+ 	}
+-	budget.failShrink = true
++	budget.arm(nil, nil)
+ 	if err = s.Close(); !errors.Is(err, retainedalloc.ErrCapacity) {
+ 		t.Fatal("late unregister failure lost", err)
++	}
++	if budget.failureCount() != 1 {
++		t.Fatal("late registry fault did not occur exactly once")
+ 	}
+ 	if g.registry != r || g.metadataCharge != charge || g.metadata == nil || g.wrapperBorrowCountV6() != 1 || g.failedSnapshots != s || g.closeFailure.payload != g {
+ 		t.Fatal("late wrapper failure lost original payload/charge")
+@@ -145,15 +210,18 @@
+ 	if err != nil || id <= 0 {
+ 		t.Fatal(id, err)
+ 	}
+-	budget.failShrink = true
++	budget.arm(nil, nil)
+ 	if err = r.Unregister(id); !errors.Is(err, retainedalloc.ErrCapacity) {
+ 		t.Fatal(err)
++	}
++	if budget.failureCount() != 1 {
++		t.Fatal("offline registry fault did not occur exactly once")
+ 	}
+ 	original := r.OriginalCleanupError()
+ 	before := metadata.Bytes()
+ 	// Unrelated namespace-file accounting may complete successfully even though
+ 	// the SAME original registry receipt is permanently failed.
+-	budget.failShrink = false
++	budget.disarm()
+ 	actual, n, e := scope.releaseOfflineNamespaceScopeV6()
+ 	if actual != metadata || n != fileCharge || !errors.Is(e, retainedalloc.ErrCapacity) || scope.registry != r || scope.offlineScopeControlCharge != control || scope.physicalCompleted || !scope.offlineScopeRetained {
+ 		t.Fatal("failed scope passed physical/header gate", actual, n, e)
+@@ -194,10 +262,13 @@
+ 		g = d.idx.Load()
+ 		fillGenerationRegistryFastV6(t, g.registry)
+ 		b := bindRegistryHeaderFailureV6(t, g.metadata)
+-		b.failShrink = true
++		b.arm(func(old, next uint64) bool {
++			count, ready := registryHeaderSlowCountV6(g.registry)
++			return ready && count == 1
++		}, nil)
+ 		s, err := d.AcquireSnapshot()
+-		if s != nil || !lifecycle.ReaderRegistryCleanupFailed(err) {
+-			t.Error("startup did not hit actual registry cleanup", s, err)
++		if s != nil || !lifecycle.ReaderRegistryCleanupFailed(err) || err != g.registry || !errors.Is(err, retainedalloc.ErrCapacity) || b.failureCount() != 1 {
++			t.Error("startup did not hit one actual registry cleanup failure", s, err)
+ 		}
+ 		return errors.Join(operation, err)
+ 	}
+@@ -239,19 +310,60 @@
+ 		r, charge := g.registry, g.metadataCharge
+ 		fillGenerationRegistryFastV6(t, r)
+ 		b := bindRegistryHeaderFailureV6(t, g.metadata)
++		if count, ready := registryHeaderSlowCountV6(r); !ready || count != 0 {
++			t.Fatal("expected original empty slow tree", count, ready)
++		}
++		before := g.metadata.Bytes()
+ 		s, err := d.AcquireSnapshot()
+ 		if err != nil || s.registryID <= 0 {
+ 			t.Fatal(s, err)
+ 		}
+-		b.failShrink = true
+-		start := make(chan struct{})
++		originalID := s.registryID
++		after := g.metadata.Bytes()
++		if after <= before {
++			t.Fatal("missing admitted positive registration contribution", before, after)
++		}
++		contribution := after - before
++		if count, ready := registryHeaderSlowCountV6(r); !ready || count != 1 {
++			t.Fatal("expected one original slow leaf", count, ready)
++		}
++		targetEntered, releaseTarget := make(chan struct{}), make(chan struct{})
++		closeEntered, closeDone, snapshotDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
++		d.RegisterCloseHook(func() error { close(closeEntered); return nil })
++		b.arm(func(old, next uint64) bool {
++			// Only Snapshot.Close writes registryID here; this callback runs inline
++			// on that same goroutine. Atomic finalized/closed and registry.mu protect
++			// the other observations. No Owner/refundMu callback reentry occurs.
++			count, ready := registryHeaderSlowCountV6(r)
++			return old-next == contribution && s.closed.Load() && s.finalized.Load() && s.registryID == originalID && ready && count == 0
++		}, func() { close(targetEntered); <-releaseTarget })
+ 		var wg sync.WaitGroup
+ 		var closeErr, snapshotErr error
+-		wg.Add(2)
+-		go func() { defer wg.Done(); <-start; closeErr = d.Close() }()
+-		go func() { defer wg.Done(); <-start; snapshotErr = s.Close() }()
+-		close(start)
++		wg.Add(1)
++		go func() { defer wg.Done(); defer close(snapshotDone); snapshotErr = s.Close() }()
++		select {
++		case <-targetEntered:
++		case <-snapshotDone:
++			_ = d.Close()
++			t.Fatal("original unregister never reached the exact selected shrink", snapshotErr, contribution)
++		}
++		// Hold the SAME real governing Resize until the actual public DB.Close
++		// has entered. This covers a concurrent physical result without allowing
++		// tracker cleanup to steal an undifferentiated first-shrink fault.
++		wg.Add(1)
++		go func() { defer wg.Done(); defer close(closeDone); closeErr = d.Close() }()
++		select {
++		case <-closeEntered:
++		case <-closeDone:
++			close(releaseTarget)
++			wg.Wait()
++			t.Fatal("public Close skipped its original entry hook", closeErr)
++		}
++		close(releaseTarget)
+ 		wg.Wait()
++		if b.failureCount() != 1 {
++			t.Fatal("wrong or repeated original shrink failure", b.failureCount())
++		}
+ 		if !errors.Is(snapshotErr, retainedalloc.ErrCapacity) || (closeErr != nil && !errors.Is(closeErr, retainedalloc.ErrCapacity)) {
+ 			t.Fatal("original errors lost", closeErr, snapshotErr)
+ 		}
+@@ -263,9 +375,9 @@
+ 		if !errors.Is(g.close(), retainedalloc.ErrCapacity) || !errors.Is(&g.closeFailure, retainedalloc.ErrCapacity) {
+ 			t.Fatal("registry error overwritten")
+ 		}
+-		before := g.metadata.Bytes()
++		terminalBytes := g.metadata.Bytes()
+ 		metadata, n, e := g.detachGenerationMetadataCompletionV6()
+-		if metadata != nil || n != 0 || !errors.Is(e, retainedalloc.ErrCapacity) || g.metadata.Bytes() != before {
++		if metadata != nil || n != 0 || !errors.Is(e, retainedalloc.ErrCapacity) || g.metadata.Bytes() != terminalBytes {
+ 			t.Fatal("concurrent containing completion bypass", metadata, n, e)
+ 		}
+ 	}

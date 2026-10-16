@@ -1,0 +1,10 @@
+=== RUN   TestPublicSnapshotPropagatesOriginalRegistryAdmissionError
+=== RUN   TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted
+=== RUN   TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed
+--- PASS: TestPublicSnapshotPropagatesOriginalRegistryAdmissionError (2.62s)
+    --- PASS: TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted (1.46s)
+    --- PASS: TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed (1.16s)
+=== RUN   TestPublicSnapshotClosedErrorHasNilInterface
+--- PASS: TestPublicSnapshotClosedErrorHasNilInterface (0.11s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	3.751s

@@ -1,0 +1,7 @@
+{
+  "disposition": "ACCEPT two-file reset seam only",
+  "review_sha256": "7e047ed5d4512fabde44f29ddbd41833bb3ef357d5b0376564e1c391129a21ee",
+  "all_declared_artifacts_and_live_owned_source_verified": true,
+  "core_c1_lifetime_fix_pending": true,
+  "runtime_executed": false
+}

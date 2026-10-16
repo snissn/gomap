@@ -1,0 +1,36 @@
+{
+  "all_affected_test_bodies_pending": true,
+  "checks": [
+    {
+      "child": 0,
+      "groups_joined": true,
+      "name": "normal-retainedalloc",
+      "raw_sha256": "87b444bd91a8c0ccc77d42d4a7c3e1d5c553508fed9786185103712d689ab446",
+      "result_sha256": "1b83daaf7c19d8814a055d5466588b532d3914813bc99e0d20875f9427bf7206",
+      "same_package_inputs_and_all_non_db_fixture_files_unchanged": true,
+      "top": 6
+    },
+    {
+      "child": 12,
+      "groups_joined": true,
+      "name": "normal-lifecycle",
+      "raw_sha256": "9f1f323319be3b651572e80712befd7a7bf45d1af01f2120f80345ea5c4a15c9",
+      "result_sha256": "163d561da2b2925c9ed87a749718791cca0af584a4823e6c65693d7dcb6b0fc0",
+      "same_package_inputs_and_all_non_db_fixture_files_unchanged": true,
+      "top": 19
+    }
+  ],
+  "compile_scope": "All production and unchanged test/module inputs retain source02 root-module compile/default-vet evidence. Changed DB fixture compiles in fresh normal-db; no separate whole-source03 compile claim.",
+  "historical_normal_counts": {
+    "child": 12,
+    "top": 25
+  },
+  "native_or_performance_qualification": false,
+  "only_changed_path": "TreeDB/db/reader_registry_header_failure_v6_test.go",
+  "parent_compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/compile-online02/result.json",
+  "parent_compile_result_sha256": "56328a6d58d8598c34c5818a645cbbd95020a7329dd56e6f280e8715efb8e92f",
+  "parent_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "status": "ACCEPTED_UNCHANGED_INPUT_REUSE",
+  "successor_manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "utc": "2026-10-16T14:38:48.519847+00:00"
+}

@@ -1,0 +1,303 @@
+[
+  {
+    "path": "TreeDB/cow_public_close_race_test.go",
+    "line": 122,
+    "text": "\t\t\t\t\tif snap := database.AcquireSnapshot(); snap != nil {",
+    "scopes": [
+      "func TestCOWPublicReadOwnerCaptureRacesClose(t *testing.T)",
+      "func(t *testing.T)",
+      "func()",
+      "func()"
+    ],
+    "start": 3893
+  },
+  {
+    "path": "TreeDB/cow_public_close_race_test.go",
+    "line": 155,
+    "text": "\t\t\tif snap := database.AcquireSnapshot(); snap != nil {",
+    "scopes": [
+      "func TestCOWPublicReadOwnerCaptureRacesClose(t *testing.T)",
+      "func(t *testing.T)"
+    ],
+    "start": 4734
+  },
+  {
+    "path": "TreeDB/snapshot_fastpath_test.go",
+    "line": 150,
+    "text": "\t\t\t\tsnap := d.AcquireSnapshot()",
+    "scopes": [
+      "func TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints(t *testing.T)",
+      "func(worker int)"
+    ],
+    "start": 3695
+  },
+  {
+    "path": "TreeDB/algorithm_work_bench_test.go",
+    "line": 821,
+    "text": "\t\t\t\tif err := algorithmSnapshotCheckAndClose(d.AcquireSnapshot(), algorithmKey(id*2), id, 1); err != nil {",
+    "scopes": [
+      "func TestAlgorithmWorkAcknowledgedReplay(t *testing.T)"
+    ],
+    "start": 26475
+  },
+  {
+    "path": "TreeDB/mvcc/native_prune_foreground_test.go",
+    "line": 527,
+    "text": "\t\tif snap := db.AcquireSnapshot(); snap != nil {",
+    "scopes": [
+      "func TestNativePruneForegroundPilot(t *testing.T)"
+    ],
+    "start": 19251
+  },
+  {
+    "path": "TreeDB/mvcc/versions_test.go",
+    "line": 771,
+    "text": "\tsnapshot := db.DB.AcquireSnapshot()",
+    "scopes": [
+      "func (db *pruneSnapshotPauseDB) AcquireSnapshot() treedb.Snapshot"
+    ],
+    "start": 26413
+  },
+  {
+    "path": "TreeDB/mvcc/versions_test.go",
+    "line": 915,
+    "text": "\tsnapshot := db.DB.AcquireSnapshot()",
+    "scopes": [
+      "func (db *snapshotValueErrorDB) AcquireSnapshot() treedb.Snapshot"
+    ],
+    "start": 29550
+  },
+  {
+    "path": "TreeDB/caching/root_domain_probe_stats_test.go",
+    "line": 167,
+    "text": "\t\t\tbackend: backend.AcquireSnapshot(),",
+    "scopes": [
+      "func TestRootDomainProbeStats_SnapshotHasManyAndHasPrefixes(t *testing.T)",
+      "func(t *testing.T)"
+    ],
+    "start": 6237
+  },
+  {
+    "path": "TreeDB/caching/root_domain_probe_stats_test.go",
+    "line": 223,
+    "text": "\t\t\tbackend: backend.AcquireSnapshot(),",
+    "scopes": [
+      "func TestRootDomainProbeStats_SnapshotHasManyAndHasPrefixes(t *testing.T)",
+      "func(t *testing.T)"
+    ],
+    "start": 7859
+  },
+  {
+    "path": "TreeDB/caching/root_domain_probe_stats_test.go",
+    "line": 270,
+    "text": "\t\t\tbackend: backend.AcquireSnapshot(),",
+    "scopes": [
+      "func TestRootDomainProbeStats_SnapshotHasManyAndHasPrefixes(t *testing.T)",
+      "func(t *testing.T)"
+    ],
+    "start": 9128
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 165,
+    "text": "\tif snap := cached.AcquireSnapshot(); snap != nil {",
+    "scopes": [
+      "func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T)"
+    ],
+    "start": 4121
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 391,
+    "text": "\tif snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {",
+    "scopes": [
+      "func TestAcquireBackendSnapshotFastPath_RejectsMutableCachedWrites(t *testing.T)"
+    ],
+    "start": 9552
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 426,
+    "text": "\tif snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {",
+    "scopes": [
+      "func TestAcquireBackendSnapshotFastPath_RejectsDirtyBackendValueLogState(t *testing.T)"
+    ],
+    "start": 10549
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 449,
+    "text": "\treturn b.snapper.AcquireSnapshot()",
+    "scopes": [
+      "func()\n}\n\nfunc (b *dirtyDuringAcquireBackend) AcquireSnapshot() *db.Snapshot",
+      "func (b *dirtyDuringAcquireBackend) AcquireSnapshot() *db.Snapshot"
+    ],
+    "start": 11182
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 476,
+    "text": "\tif snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {",
+    "scopes": [
+      "func TestAcquireBackendSnapshotFastPath_RejectsValueLogDirtyRace(t *testing.T)"
+    ],
+    "start": 11906
+  },
+  {
+    "path": "TreeDB/caching/snapshot_test.go",
+    "line": 517,
+    "text": "\tif snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {",
+    "scopes": [
+      "func TestAcquireBackendSnapshotFastPath_RejectsPublishedRootState(t *testing.T)"
+    ],
+    "start": 13186
+  },
+  {
+    "path": "TreeDB/caching/cow_cut_test.go",
+    "line": 72,
+    "text": "\t\ts := db.AcquireSnapshot()",
+    "scopes": [
+      "func TestCOWCutPrivatePrepareDoesNotBlockOrMixReaders(t *testing.T)",
+      "func()"
+    ],
+    "start": 2285
+  },
+  {
+    "path": "TreeDB/caching/cow_cut_test.go",
+    "line": 163,
+    "text": "\t\t\ts := db.AcquireSnapshot()",
+    "scopes": [
+      "func TestCOWCutPublicationCaptureCloseRace(t *testing.T)",
+      "func()"
+    ],
+    "start": 4549
+  },
+  {
+    "path": "TreeDB/caching/cow_cut_test.go",
+    "line": 262,
+    "text": "\tif db.AcquireSnapshot() != nil {",
+    "scopes": [
+      "func TestCOWReadPressurePreservesCapacityError(t *testing.T)"
+    ],
+    "start": 7106
+  },
+  {
+    "path": "TreeDB/caching/point_successor_mvcc_test.go",
+    "line": 192,
+    "text": "\treturn b.snapper.AcquireSnapshot()",
+    "scopes": [
+      "func (b *successorAcquireBarrier) AcquireSnapshot() *backenddb.Snapshot"
+    ],
+    "start": 6450
+  },
+  {
+    "path": "TreeDB/caching/snapshot_pool_test.go",
+    "line": 148,
+    "text": "\t\t\t\tsnap := cached.AcquireSnapshot()",
+    "scopes": [
+      "func TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites(t *testing.T)",
+      "func(worker int)"
+    ],
+    "start": 3746
+  },
+  {
+    "path": "TreeDB/cmd/treemap/compact_endpoint_test.go",
+    "line": 161,
+    "text": "\t\t\tsnap = backend.AcquireSnapshot()",
+    "scopes": [
+      "func TestCompactCommandWALSettlePreservesDataAndReceipt(t *testing.T)",
+      "func(t *testing.T)"
+    ],
+    "start": 6620
+  },
+  {
+    "path": "TreeDB/collections/vector_index_insert_cache_test.go",
+    "line": 228,
+    "text": "\tsnap := d.AcquireSnapshot()",
+    "scopes": [
+      "func currentDBSystemRootForTest4243(d *backenddb.DB) uint64"
+    ],
+    "start": 9691
+  },
+  {
+    "path": "TreeDB/collections/api_test.go",
+    "line": 5364,
+    "text": "\tsnap = db.AcquireSnapshot()",
+    "scopes": [
+      "func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T)"
+    ],
+    "start": 186798
+  },
+  {
+    "path": "TreeDB/collections/api_test.go",
+    "line": 5695,
+    "text": "\tsnap = d.AcquireSnapshot()",
+    "scopes": [
+      "func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T)"
+    ],
+    "start": 197818
+  },
+  {
+    "path": "TreeDB/collections/api_test.go",
+    "line": 7353,
+    "text": "\tsnap = d.AcquireSnapshot()",
+    "scopes": [
+      "func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T)"
+    ],
+    "start": 254346
+  },
+  {
+    "path": "TreeDB/collections/api_test.go",
+    "line": 8498,
+    "text": "\tsnap = d.AcquireSnapshot()",
+    "scopes": [
+      "func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *testing.T)"
+    ],
+    "start": 290340
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_split_insert_recovery_v1_test.go",
+    "line": 343,
+    "text": "\tsnap = database.AcquireSnapshot()",
+    "scopes": [
+      "func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testing.T)"
+    ],
+    "start": 12684
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_split_insert_recovery_v1_test.go",
+    "line": 376,
+    "text": "\tsnap = reopened.AcquireSnapshot()",
+    "scopes": [
+      "func TestSplitInsertSystemPointersSurviveWholeSystemRebuildAndReopenV1(t *testing.T)"
+    ],
+    "start": 13770
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_publication_test.go",
+    "line": 478,
+    "text": "\tcurrent = db.AcquireSnapshot()",
+    "scopes": [
+      "func TestTypedGraphPublicationAcceptedGapAcrossManagers(t *testing.T)"
+    ],
+    "start": 19366
+  },
+  {
+    "path": "TreeDB/collections/vector_partition_paged_source_session_v2_test.go",
+    "line": 84,
+    "text": "\tsession := &VectorPartitionPagedSourceSessionV2{collection: c, manifest: m, ownership: ownership, snapshot: d.AcquireSnapshot()}",
+    "scopes": [
+      "func TestVectorPartitionPagedSourceSessionV2VerifiesCompletedOwner(t *testing.T)"
+    ],
+    "start": 4039
+  },
+  {
+    "path": "TreeDB/collections/typed_graph_base_alias_test.go",
+    "line": 455,
+    "text": "\tsnap = db.AcquireSnapshot()",
+    "scopes": [
+      "func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool)"
+    ],
+    "start": 17890
+  }
+]

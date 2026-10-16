@@ -1,0 +1,17 @@
+--- source03/TreeDB/db/index_gen.go
++++ source04/TreeDB/db/index_gen.go
+@@ -164,6 +164,14 @@
+ 			g.wrapperBorrows.Or(indexWrapperTerminalV6)
+ 			g.wrapperMu.Unlock()
+ 		}()
++		// Every close caller has withdrawn this generation's DATA write/growth
++		// admission: terminal DB teardown, retired-generation disposal, or private
++		// construction cleanup. Join its worker even when retained registry/ledger
++		// debt prevents physical Close. This consumes no mapping, file, or metadata
++		// edge; the potentially shared PRIMARY pager has separate admission custody.
++		if g.pager != nil {
++			g.pager.QuiesceBackgroundGrowth()
++		}
+ 		// Failed registration need not have produced any Snapshot borrow.
+ 		// Join the original header before dropping even the physical edge.
+ 		g.wrapperMu.Lock()

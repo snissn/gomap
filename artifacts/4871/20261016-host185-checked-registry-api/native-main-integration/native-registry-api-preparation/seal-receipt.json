@@ -1,0 +1,14 @@
+{
+  "changed_files": 120,
+  "changed_production_files": 31,
+  "changed_test_files": 89,
+  "compiler_or_tests_executed": false,
+  "deleted_files": [],
+  "owned_files": 501,
+  "parent_archive_sha256": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008",
+  "parent_manifest_sha256": "3b7e1bf114e613fe3f7cbf29f99b7dcdb6b54f8d12a3c06fef71075b8fc558f0",
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "runtime_lease": "none; released",
+  "source_lease": "released upon final handoff",
+  "source_stable_after_archives": true
+}

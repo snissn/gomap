@@ -1,0 +1,82 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 1.2954796720296144,
+  "ended_utc": "2026-10-16T14:24:25.237643+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-retainedalloc",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1709001,
+      "pid": 1709001,
+      "ppid": 1708920,
+      "session": 1709001,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1709001,
+      "pid": 1709023,
+      "ppid": 1709001,
+      "session": 1709001,
+      "state": "S"
+    }
+  ],
+  "pgid": 1709001,
+  "pid": 1709001,
+  "raw_log_sha256": "87b444bd91a8c0ccc77d42d4a7c3e1d5c553508fed9786185103712d689ab446",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T14:24:23.942155+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "test_RUN_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal"
+  ],
+  "top_level_pass_count": 6,
+  "unexpected_top_RUN": []
+}

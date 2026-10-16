@@ -1,0 +1,18 @@
+{
+  "accepted_scope": "source-backed one-fixture repair rationale; original individual first-assertion predicate not runtime proven",
+  "basis": {
+    "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-frozen.tar.gz",
+    "archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47",
+    "manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-db/run.log",
+    "raw_sha256": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+    "root_receipt_sha256": "7872c65358277da59e287e93c4e772a0d2c1ab6cc620d1464f3e7207549a33fa"
+  },
+  "diagnosis_json_sha256": "ef8c6d2ba1254e018adc42f50c82da4e9bb6a8e28dd5fd080a4f369fb1381a2e",
+  "diagnosis_md_sha256": "e388e28877bee505e2bb0c37ab95eb11a2f020e302a061c7917f5014fc99b103",
+  "generic_ordinary_remove_pending_faults_qualified": false,
+  "production_change_justified": false,
+  "source_selection_sha256": "2931a57ac033ff792481d17213f63fe1a4fb6a2173f578bc64559226fb60d5fa",
+  "utc": "2026-10-16T14:36:08.433024+00:00",
+  "verified_source_bindings": 12
+}

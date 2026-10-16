@@ -1,0 +1,11 @@
+{
+  "scope": "root adoption of independent registry core C1 rejection",
+  "review_md_sha256": "c70ba217c9f433982878ea9c41a96be53cc0eb6ba60a7594dd4dacf40cf606d2",
+  "review_json_sha256": "ee78c74892ae904709676e15e0bef947fe63e5e94337432ac052a71564b2b72d",
+  "all_reported_artifact_and_source_bindings_verified": true,
+  "finding": "C1 confirmed: full-leaf debit/shrink precedes last embedded receipt/mutex/leaf use",
+  "disposition": "REJECT source01; source-only successor correction selected; runtime remains held",
+  "additional_required_closure": "Original generation and offline PRIMARY header must remain admitted through failed header cleanup receipt/deferred debt; preserve original generation edge/error",
+  "outside_reviews": "Previously accepted outside changes remain byte preserved",
+  "compile01": "Offline compilation failed on unavailable dependency cache; source frozen and children joined; no test bodies ran"
+}

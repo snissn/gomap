@@ -1,0 +1,177 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 2,
+  "elapsed_seconds": 31.139988095965236,
+  "ended_utc": "2026-10-16T14:54:03.891201+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-public",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1734566,
+      "pid": 1734566,
+      "ppid": 1733000,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734584,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734619,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734623,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734840,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734855,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734861,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1734566,
+      "pid": 1734873,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1734566,
+      "pid": 1734881,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1734566,
+      "pid": 1734889,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1734566,
+      "pid": 1734893,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1734566,
+      "pid": 1734897,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1734566,
+      "pid": 1734901,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1734566,
+      "pid": 1734940,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "R"
+    },
+    {
+      "comm": "TreeDB.test",
+      "pgid": 1734566,
+      "pid": 1734946,
+      "ppid": 1734566,
+      "session": 1734566,
+      "state": "D"
+    }
+  ],
+  "pgid": 1734566,
+  "pid": 1734566,
+  "raw_log_sha256": "131312e71a9bd7afb96f5c417cbeb7dd5db7256537c0edeff634f950dd265b89",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPublicSnapshotClosedErrorHasNilInterface",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T14:53:32.751215+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "test_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_capacity_exhausted",
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError/retained_metadata_owner_closed",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestPublicSnapshotPropagatesOriginalRegistryAdmissionError",
+    "TestPublicSnapshotClosedErrorHasNilInterface"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_RUN": []
+}

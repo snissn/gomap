@@ -1,0 +1,32 @@
+{
+  "all_source_writers_released": true,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-c",
+    "-o",
+    "/dev/null",
+    "./..."
+  ],
+  "dependency_preparation": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-module-preparation/result.json",
+  "dependency_preparation_sha256": "10b8aca1270c743d7296a7aa09e1f68642f7a41faddc4d8ff272ffe85630033c",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "modes_sha256": "4c30c814d78914e1c65e6835f1c1c6b55ff7c192e77b37c2d4b715c1d7047c18",
+  "module_inputs_readonly": true,
+  "outer_timeout_seconds": 900,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02",
+  "prior_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source01/compile-only/result.json",
+  "prior_result_sha256": "1d3aea7278d32b04c0498546b09e37199b297aa17463f9b2652eda3750a04783",
+  "runner_sha256": "ac40bb831c3521381dfbd21e0e840a756fca4de691e87669402d30f32188ed21",
+  "scope": "registry-api-compile-only-online",
+  "source_freeze_sha256": "0f48e79ceb029682b96b02f896655cf6141501cbdda84b27c9dd301672d4c76e",
+  "status": "root selects one compile-only attempt on coherent C1 source02; no test bodies",
+  "test_bodies_authorized": false,
+  "utc": "2026-10-16T14:15:45.139878+00:00"
+}

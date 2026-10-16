@@ -1,0 +1,12 @@
+{
+  "disposition": "ACCEPT",
+  "independent_report_sha256": "de90a0ae2deed0e5373a10ce63388e46421ce6da8bf48a006cbb0b455207deea",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source04-quiescence-review01.json",
+  "independent_review_sha256": "276d8e268ca35efdf81072bd041a8816dde979b1ee1f9d6a166e7938ff999ad3",
+  "inputs_verified": 13,
+  "no_runtime_acceptance": true,
+  "scope": "independent source04 terminal DATA quiescence source review adoption; runtime pending",
+  "source_bindings_verified": 12,
+  "source_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "utc": "2026-10-16T14:52:07.161577+00:00"
+}

@@ -1,0 +1,14 @@
+=== RUN   TestOriginalRemovalReceiptReuseKeepsExactAccounting
+--- PASS: TestOriginalRemovalReceiptReuseKeepsExactAccounting (0.00s)
+=== RUN   TestOriginalRemovalResetPreservesFailedGoverningShrink
+--- PASS: TestOriginalRemovalResetPreservesFailedGoverningShrink (0.00s)
+=== RUN   TestOriginalRemovalResetCannotConsumeBoundedReceipt
+--- PASS: TestOriginalRemovalResetCannotConsumeBoundedReceipt (0.00s)
+=== RUN   TestRemovalWorkManyOriginalBindingsAndFutureGrowth
+--- PASS: TestRemovalWorkManyOriginalBindingsAndFutureGrowth (0.00s)
+=== RUN   TestRemovalWorkConcurrentOriginalGrowthAndEnrollment
+--- PASS: TestRemovalWorkConcurrentOriginalGrowthAndEnrollment (0.01s)
+=== RUN   TestNativeRemovalCompletionRetainsExactDeltaOnRefusal
+--- PASS: TestNativeRemovalCompletionRetainsExactDeltaOnRefusal (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/retainedalloc	1.019s

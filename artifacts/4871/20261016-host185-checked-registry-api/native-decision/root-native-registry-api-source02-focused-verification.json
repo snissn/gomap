@@ -1,0 +1,102 @@
+{
+  "Q32": "original gate remains open",
+  "accepted": false,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "checks": [
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 0,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-retainedalloc",
+      "raw_sha256": "87b444bd91a8c0ccc77d42d4a7c3e1d5c553508fed9786185103712d689ab446",
+      "result_sha256": "1b83daaf7c19d8814a055d5466588b532d3914813bc99e0d20875f9427bf7206",
+      "source_equal": true,
+      "top_pass": 6,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 12,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-lifecycle",
+      "raw_sha256": "9f1f323319be3b651572e80712befd7a7bf45d1af01f2120f80345ea5c4a15c9",
+      "result_sha256": "163d561da2b2925c9ed87a749718791cca0af584a4823e6c65693d7dcb6b0fc0",
+      "source_equal": true,
+      "top_pass": 19,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [
+        "TestReaderRegistryFailedBirthRetainsGenerationV6",
+        "TestReaderRegistryStartupFailureRetainsOriginalHeaderV6"
+      ],
+      "SKIP": [],
+      "accepted": false,
+      "child_pass": 19,
+      "groups_empty": true,
+      "missing_RUN": [
+        "TestNativeDataPositiveRegistrationCompletionV6",
+        "TestOfflineReaderRegistryOriginalOwnerV6",
+        "TestOfflineReplacementOriginalPagerCompletion",
+        "TestOfflineReplacementOriginalPagerCompletion/consumed",
+        "TestOfflineReplacementOriginalPagerCompletion/physical-refusal",
+        "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock",
+        "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/late-parent-refusal",
+        "TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock/semantic-refusal",
+        "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB",
+        "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read",
+        "TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot",
+        "TestOriginalGenerationPublishedFailureConcurrentInspection",
+        "TestOriginalGenerationWrapperCloseRacesLastSnapshot",
+        "TestOriginalReaderRegistryHeaderLifetimeV6",
+        "TestPrimaryMetadataCaptureFinalizesAfterLastRead",
+        "TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer",
+        "TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot",
+        "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead",
+        "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded",
+        "TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary",
+        "TestReaderRegistryCloseRacesFailedUnregisterV6",
+        "TestReaderRegistryGenerationPhysicalDebtRetainsOriginalEdgeV6"
+      ],
+      "name": "normal-db",
+      "raw_sha256": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+      "result_sha256": "baeec50b6b681448698c4340cf41a1cf7989e5e6181f704bd9b7dc16b03a4b70",
+      "source_equal": true,
+      "top_pass": 20,
+      "unexpected_RUN": []
+    }
+  ],
+  "commands_not_executed": [
+    "normal-caching",
+    "normal-public",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-db",
+    "race-caching",
+    "race-public"
+  ],
+  "counts": {
+    "normal": {
+      "child": 31,
+      "top": 45
+    },
+    "race": {
+      "child": 0,
+      "top": 0
+    }
+  },
+  "manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "plan_sha256": "aa889c8e8faa61a0335dc07405c7e0148c9632e42b26e191f89a6741cdec5325",
+  "scope": "frozen checked registry API focused normal/race raw recomputation",
+  "summary_sha256": "c866433adebca7caa3e8f057cf6a310e941208aae5d2fafaa94705a2e2a04ddc",
+  "utc": "2026-10-16T14:25:06.692050+00:00"
+}

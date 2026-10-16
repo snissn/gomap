@@ -1,0 +1,12 @@
+{
+  "time_utc": "2026-10-16T13:23:13.855159+00:00",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-test-migration",
+  "scope": "ONLY existing *_test.go outside TreeDB/db/** and TreeDB/lifecycle/**; not a whole-tree freeze",
+  "artifact_manifest_sha256": "a9e0af70da22952f10e9a0d952ee8a6e4ff84ecb6d16e5ddb108cf930588e491",
+  "owned_freeze_sha256": "8d363544a102188b5d2d4129a73e7ca9d091e168e689f20478d47522a5f74cc3",
+  "verified_packet_artifacts": 25,
+  "verified_owned_live_files": 1935,
+  "verified_changed_before_and_after_archive_files": 216,
+  "all_bindings_live_and_archive_match": true,
+  "semantic_review": "independent reviewer in progress; compiler/runtime not yet run; core source remains mutable"
+}

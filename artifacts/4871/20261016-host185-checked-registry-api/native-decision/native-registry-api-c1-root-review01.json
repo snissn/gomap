@@ -1,0 +1,50 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Two-file retainedalloc ordinary completed-receipt reset seam only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin required exact gpt-6.1-sol; explicitly routed internal review used.",
+  "freeze_sha256": "ca5ceb03e0b8d7b662568e7edb23838f20c125ecce8ee7d4b38a7a09f476291a",
+  "selection_sha256": "b0af21420ece00801cc1a4f5f43d1b0553e117cde7d54d0787e5fc0c64153e24",
+  "artifact_bindings": {
+    "after.json": "e917c201ee54e8f3a64dd04e7dfa4f9162dbe06307b798d9923ba50d94655af0",
+    "source.delta.patch": "80246cfa4a356445b67647f2ffeaba9cdc972c03293eab32c6e76c9598dc939c",
+    "owner_work.before.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "before.json": "d99836dde800c40cf32ea69a73e84460af07bb7bb7b913a38a6aaa7fcaf569d0",
+    "source.tar.gz": "96a9813cd0225fa5978efbd40ae44a84c4f4216b5c19c4da58faab9bf4ad2f5a"
+  },
+  "source_bindings": {
+    "TreeDB/internal/retainedalloc/owner_work.go": "8420cb0d319c8f7fa1a7bf99baea94722157385c3a884dfa5b8868d429e334f4",
+    "TreeDB/internal/retainedalloc/owner_original_reset_test.go": "35c60598e70c9f91661b4b15bf3217385d2c4eab608d388980f1533c37d96e9a"
+  },
+  "dependency_bindings": {
+    "original_owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "original_owner_test.go": "5599d89d7c9d17130f42a1c3b37b33eade2aae1d0a9083f8ac1ebeb3803eaf5e",
+    "original_source_archive": "c1c5e731521d81cf55744962f971bc623042816556412da6cc96a89b693da008"
+  },
+  "findings": [],
+  "checks_actually_performed": [
+    "Verified freeze identity and every declared artifact hash",
+    "Verified exactly two archived source members, their declared hashes, and live hashes for these two owned paths only",
+    "Matched production preimage to immutable original source archive and reproduced complete production diff",
+    "Read full added tests and affected Bind/Continue/remove/shrink/reset implementation, plus original testBudget/testLease semantics",
+    "Checked original bounded reset Reserve and refusal path are byte-semantically unchanged except factored identical field clearing"
+  ],
+  "conclusions": [
+    "ResetCompletedOriginal retains original mutex, rejects nil/native/unused/bound/failed receipts, and clears only successfully completed original work",
+    "Successful removal sets done only after governing shrink completion; reset preserves original failure/cursor custody until then",
+    "Bounded reset still admits one record and twice RemovalWork size before field clearing and preserves refusal behavior",
+    "Controls discriminate repeated exact debit, replay, failed shrink retaining original lease and first cause, and ordinary refusal to consume native receipts"
+  ],
+  "limitations": [
+    "Source-only: no Go/compiler/test/runtime executed",
+    "Tests intentionally retain injected failed-cleanup graph rather than fabricate cleanup success",
+    "No acceptance of pending db/lifecycle C1 implementation or whole combined source",
+    "Caller must preserve admitted surviving parent and end child aliases before reset; this helper alone does not resolve original C1",
+    "No CI/performance/native publication/Q32/allowance/whole graph claim"
+  ],
+  "review_lease": "RELEASED"
+}

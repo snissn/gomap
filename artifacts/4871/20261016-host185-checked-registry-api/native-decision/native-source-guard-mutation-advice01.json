@@ -1,0 +1,59 @@
+{
+  "archive_manifest_mismatches": 0,
+  "archive_verified_payloads": 10451,
+  "candidate_edits": false,
+  "capability_limit_defers_selected_engineering": false,
+  "children_spawned": false,
+  "current_blockers": [
+    "depth63 atomic summary mutation >32",
+    "atomic Owner growth over all bindings",
+    "existing shrink restarts not proven terminating under unrestricted binding churn"
+  ],
+  "input_sha256": {
+    "native-decision/native-source-guard-implementation-preparation.json": "dd10966f9fcd000a312903815bd4a840fc7b4f1cfd6c92fd50641c39a4477180",
+    "native-decision/native-source-guard-implementation-preparation.md": "873ced24d8cd6cb4c2fbdc74a457afc4d90160b6be16ac49afd42c612ce4aa79",
+    "native-main-integration/native-registry-api-source02/source-frozen.json": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "native-main-integration/native-registry-api-source02/source-frozen.tar.gz": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47"
+  },
+  "limits": [
+    "no worst-case mutex latency or fairness guarantee",
+    "no global G or Q32 fit",
+    "no publication/runtime allowance",
+    "no role-coverage source acceptance",
+    "ordinary helper cost/performance unmeasured",
+    "current source has no proposed cooperative engines",
+    "constructor preflight alone cannot close later Lease-only ordinary enrollment/last-drop capability"
+  ],
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "model": "gpt-6.1-sol",
+  "owner_proposed_concrete_binding_step_records": 6,
+  "prices_implemented_in_input": false,
+  "progress_conditions": [
+    "one scheduled native operation after slot acquisition",
+    "every native step has enough remaining actual work for its primitive and parent prefix",
+    "all competing structural mutators honor help-before-mutation",
+    "all Owner binding/topology mutators honor same accounting slot",
+    "concrete lease primitives have finite native capability verified before forward effects",
+    "original containing parent retained through all helper aliases and terminal acknowledgment",
+    "every reachable future ordinary governor on the selected Owner has bounded native Resize/Close adapter; opaque Lease-only future enrollment is an unresolved capability branch, not grounds to disable ordinary support"
+  ],
+  "reasoning_effort": "high",
+  "recommendation": "Same ReaderRegistry single cooperative structural operation, connected same metadata Owner cooperative pending growth/removal; explicit accounted ordinary helpers and persisted native steps",
+  "report_sha256": "ab00c86f80a5db59cf9b74f56ef79363f657f608be588c104637f7a876a92fb0",
+  "required_contract_decision": "Authorize ordinary mutators to help original accounting/tree operation with explicit work, preserving native parent custody and actual total work; no help from callbacks/read-only queries",
+  "runtime_executed": false,
+  "selected_positive_progress_domain": "arbitrary ordinary registration cardinality, supported native work-capable governing budgets; unsupported actual consumption preserves original custody and ordinary enrollment support",
+  "source_bindings": {
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_enroll_work.go": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "8420cb0d319c8f7fa1a7bf99baea94722157385c3a884dfa5b8868d429e334f4",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "f080f03965a98f970598c2c1c82d7d08ca0d5ed3c813800ad914eb82c4e5b200",
+    "TreeDB/lifecycle/native_mvcc_registry.go": "20b49a38337e9f4e40bca1157fbca00d0e8e5231c5ba8ea26de4c0eccdc88213",
+    "TreeDB/lifecycle/registry.go": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+    "TreeDB/lifecycle/registry_unregister_work_v6.go": "231ad0865af34a412691db9f48994651f9eefd5c47edcd1369788b8e132ed11f"
+  },
+  "status": "SELECTABLE_CONDITIONAL_DESIGN_NOT_SOURCE_ACCEPTANCE",
+  "tree_largest_proposed_indivisible_records_including_entry": 3
+}

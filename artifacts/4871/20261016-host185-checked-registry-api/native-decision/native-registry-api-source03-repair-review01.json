@@ -1,0 +1,113 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Source readiness of one-file source03 registry header failure fixture repair only",
+  "utc": "2026-10-16T14:42:03.156846+00:00",
+  "reviewer": "/root/ordinary_completion (gpt-6.1-sol/high)",
+  "findings": [],
+  "inputs": {
+    "native-main-integration/native-registry-api-source03-repair/handoff.json": "9b762578a540616e25a5c4184fcfc7fbc5294bedd8ce12ef81964745ffe8da89",
+    "native-decision/root-native-registry-api-source03-repair-selection.md": "2931a57ac033ff792481d17213f63fe1a4fb6a2173f578bc64559226fb60d5fa",
+    "native-decision/native-registry-api-source02-focused-failure-diagnosis.md": "e388e28877bee505e2bb0c37ab95eb11a2f020e302a061c7917f5014fc99b103",
+    "native-decision/native-registry-api-source02-focused-failure-diagnosis.json": "ef8c6d2ba1254e018adc42f50c82da4e9bb6a8e28dd5fd080a4f369fb1381a2e",
+    "native-decision/root-native-registry-api-source02-focused-verification.json": "7872c65358277da59e287e93c4e772a0d2c1ab6cc620d1464f3e7207549a33fa",
+    "native-main-integration/native-registry-api-source02/controls/normal-db/run.log": "b9d4a675189b44a303fad465b6400bc0cad11bfc57b312b52d0855489dcf5e1a",
+    "native-main-integration/native-registry-api-source02/source-frozen.json": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+    "native-main-integration/native-registry-api-source02/source-frozen.tar.gz": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47",
+    "native-main-integration/native-registry-api-source03/source-frozen.json": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+    "native-main-integration/native-registry-api-source03/source-frozen.tar.gz": "f04dfd67bf7afe3f5f27877c5321241f19bd73787e960889a5bdc3316f54d416",
+    "native-main-integration/native-registry-api-source03/proposed-commands.json": "6eac81b8f5f504e138553bebab2d5984d6760f439e0d92731bc6b33be84a3b79",
+    "native-main-integration/native-registry-api-source03-repair/README.md": "286bbaf945f2b8c5283d75cce335206ba8e886232906fa6d733a988f5ead349f",
+    "native-main-integration/native-registry-api-source03-repair/after-source.tar.gz": "817366c5ffa0d816a915f87aa8ccee8d3658c1622e4e1a280dbe0cc5acc3d9a5",
+    "native-main-integration/native-registry-api-source03-repair/after.json": "e73c878f07fdbfe3dbb856cf57252f599cf962d935999a9ed1728b1760e32081",
+    "native-main-integration/native-registry-api-source03-repair/before-source.tar.gz": "cd1112d2b67bbd847584f49266123e92888d618ea042c351e065a14f72d9df32",
+    "native-main-integration/native-registry-api-source03-repair/before.json": "a04e6ed02abe18fa6d487b9fe70f4795a32463028049ba2663c726b48b502ddf",
+    "native-main-integration/native-registry-api-source03-repair/delta.patch": "077f2cb662b802abcf6666bdbb8a5a3979da53cf1c423c5791c409aab0b1616e",
+    "native-main-integration/native-registry-api-source03-repair/modes.json": "f9f0bf01a82d5f9d2a4d5f5940c7b2670f57f0f40ba68f4a491f72b60d323433",
+    "native-main-integration/native-registry-api-source03-repair/proposed-commands.json": "76d4695f815e4a2fb3d9b5a10c9e3ae4cb2f90f57c8e1e9d5a66c063a3d9704c"
+  },
+  "inspected_source_hashes": {
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": "3c3793bb15a8492ae3b2c96963c8a77bed1d73b97541db4e23e389a8a4e7fab5",
+    "TreeDB/db/db.go": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+    "TreeDB/db/index_gen.go": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+    "TreeDB/db/original_startup_generation.go": "88ff3460df396a12918a72ab3cb364fbc077b4e5630c69c09905bec82350eced",
+    "TreeDB/db/vlog_ref_incarnation.go": "ddc684c077303db51d1b216462a7441642e49a6d5418ec15ff8574bead802743",
+    "TreeDB/lifecycle/registry.go": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "f080f03965a98f970598c2c1c82d7d08ca0d5ed3c813800ad914eb82c4e5b200",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_work.go": "8420cb0d319c8f7fa1a7bf99baea94722157385c3a884dfa5b8868d429e334f4"
+  },
+  "independent_checks": {
+    "all_eight_packet_artifact_hashes_match": {
+      "README.md": true,
+      "after-source.tar.gz": true,
+      "after.json": true,
+      "before-source.tar.gz": true,
+      "before.json": true,
+      "delta.patch": true,
+      "modes.json": true,
+      "proposed-commands.json": true
+    },
+    "handoff_hash_matches_assignment": true,
+    "selection_hash_matches_assignment": true,
+    "full_source03_archive_manifest_live_files_equal": 10451,
+    "non_target_source02_files_byte_identical": 10450,
+    "exact_changed_paths": [
+      "TreeDB/db/reader_registry_header_failure_v6_test.go"
+    ],
+    "regenerated_delta_byte_identical": true,
+    "before_after_one_file_archives_match_parent_and_successor": true,
+    "target_mode": "0o664"
+  },
+  "helper_users": [
+    {
+      "test": "TestReaderRegistryFailedBirthRetainsGenerationV6",
+      "target": "Actual first-leaf unused-branch refund, slow count exactly one; nil Snapshot and SAME registry error asserted.",
+      "retained_oracles": "Immediate unchanged wrapper baseline; same first registry receipt, original generation/header charge, failed physical completion, repeat Close and detach no refund."
+    },
+    {
+      "test": "TestReaderRegistryLateWrapperFailureRetainsHeaderV6",
+      "target": "Actual Snapshot.Close after completed DB.Close; one governing shrink failure.",
+      "retained_oracles": "Physical-first outcome remains separate; exact failed Snapshot edge/borrow/header, original capacity receipt and no replay/refund."
+    },
+    {
+      "test": "TestOfflineReaderRegistryFailureRetainsOriginalScopeV6",
+      "target": "Direct actual positive Unregister after registration; one governing shrink failure.",
+      "retained_oracles": "Same scope on original PRIMARY owner, completed parent file only, file-only accounting delta, same sticky receipt and no duplicate retained edge."
+    },
+    {
+      "test": "TestReaderRegistryStartupFailureRetainsOriginalHeaderV6",
+      "target": "Actual AcquireSnapshot first-leaf branch refund in original Open hook; SAME registry error and one failure.",
+      "retained_oracles": "Original startup operation plus capacity cause, actual OpenRecoveryCleanupError and generation, custody/LOCK/header refusal; OS LOCK teardown only after original assertions."
+    },
+    {
+      "test": "TestReaderRegistryCloseRacesFailedUnregisterV6",
+      "target": "Exact measured admitted registration contribution, SAME original registryID, closed+finalized Snapshot and detached last slow leaf; callback held while real DB.Close entry hook runs.",
+      "retained_oracles": "All 16 iterations; actual concurrent closes and original errors; SAME failed Snapshot/borrow/header/metadata; later close and containing completion cannot erase original debt."
+    }
+  ],
+  "lock_and_race_review": {
+    "target_callback": "Owner.mu -> budget.mu -> registry.mu only; Register/Unregister release registry.mu before Owner entry. No Owner.Bytes, OriginalCleanupError, wrapperMu or refundMu acquisition from callback.",
+    "paused_callback": "Releases budget.mu before waiting, retains original Owner.mu and refundMu. DB.Close entry hook executes before production teardown, so main releases callback without requiring either held lock.",
+    "snapshot_observations": "closed/finalized atomics; registryID inline on SAME finalizer goroutine before finalizer clears it. Close result fields read after channel completion/WaitGroup join.",
+    "failure_paths": "Snapshot completes without matching target -> channel selects failure; Close completes without hook -> release target and join before failure. Future production stalls remain subject to unchanged selected Go/subprocess deadlines.",
+    "schedules": "16 iterations of deterministic pre-terminal overlap remain, not a claim of 16 distinct orderings. Existing LateWrapper separately covers completed physical Close before unregister refusal."
+  },
+  "sticky_debt": "One-shot arm changes only governor injection. Failed RemovalWork and registry refundFailed/refundAmount remain; failed-birth detached-leaf charge becomes refundDeferred. Later successful unrelated lease shrinks do not reset these. OriginalCleanupError and generation terminal gates continue to refuse containing metadata detachment. Owner logical accounting may already debit the active amount before Resize refuses; this is not proof that every original debt byte remains in Owner.Bytes.",
+  "unchanged_boundaries": [
+    "No production source changes",
+    "No API, native minimum price, capacity, Q32 or workload changes",
+    "Original 16-loop count and custody/refund assertions preserved",
+    "Unchanged physical-debt sixth fixture and platform controls",
+    "Existing Go and subprocess caps in proposed command plan retained"
+  ],
+  "executed_go_commands": [],
+  "source_mutations": [],
+  "git_or_github_actions": [],
+  "limits": [
+    "No compile, test, race, benchmark, profile or native driver executed by reviewer.",
+    "Parent source02 normal-db failure is retained as RED; 20 top-level passes and 19 child passes precede its two failures/panic; later selected tests were not executed there.",
+    "Broader ordinary Owner.RemovePending governing-shrink refusal still panics; this repair targets registry-owned receipt failure and does not qualify arbitrary ordinary shrink failure.",
+    "All eight remaining source03 selected normal/race commands require root execution and exact source binding.",
+    "No guard/scan/actual native publication, performance, CI, merge or graph acceptance."
+  ]
+}

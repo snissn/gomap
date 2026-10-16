@@ -1,0 +1,142 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "C1 core successor source readiness, composed with separately accepted root reset seam; focused runtime remains pending",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed": false,
+  "source_writes_released": true,
+  "hosted_manual_review_unavailability_reason": "Hosted manual review cannot pin required exact gpt-6.1-sol; explicitly routed internal review used.",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-c1-core",
+  "handoff_sha256": "27c7d5cb4033d624b1a40d25808424d64311e75fcd7a718af5d571cbc39fecbc",
+  "artifact_bindings": {
+    "README.md": "d0e118f05cb80c831a52c3e5e396e3fa400b2ae4c407401b89d072e60e321436",
+    "before.tar.gz": "f85494db5d0d164a1d105ce8708cb48863a7dc3206fae196426a8426f66ccaf1",
+    "changed-files.json": "a124e23cdd6a1c9387950b3d1b2720493c0dbe57307e6b3683f257a1944f3d3d",
+    "changed-source.tar.gz": "f7320bc0388d51b782381f13bbcb473fee4804c3a0d32806f87430b89cbd6d84",
+    "owned-after.json": "1e57f446fb0997b311d86ed608c7f7170f6a2d7434b313b9b839b19c3662b1ed",
+    "owned-after.tar.gz": "ab1220b5ceb637d49f33adf7266c50fd4b793f020e01c96f38cb94c6b80ffc05",
+    "owned-before-modes.json": "10a8338a42b17a121d7ce03c17334f23918fca032daf9bb0d5b5846e9826de2c",
+    "owned-before.json": "e27c30ac4113aa2ffdae6d746afbff75375d1134227b6f276bfd602a27e0069c",
+    "owned-modes.json": "7c21bc52c31be932d253531ffd7c3bfd1d8ee43c41cfefb697938225cdc274c3",
+    "parent-binding.json": "5aefcd397733dee531dff36ed0fe4d09faa6d91bd1a453711d5326f905ba40e9",
+    "proposed-commands.json": "2e94b3094004a57bfa4d54cd7cd4e5c32d860de4aada61afc220d66e7801cb7a",
+    "source.delta.patch": "9078785da5851dbef4beca28adca22454262026404fa1cdfbe9bcc53ba5696d1",
+    "test-bindings.json": "2785558a7e1e685f5acc2847c573675974c83c791ae978cafd79b50b652a57d7"
+  },
+  "selection_sha256": "b76c05e80de7a5d8a6cb88046236ba7fe63626e1e84a7c2b2fc40842ba7680b6",
+  "changed_source_bindings": {
+    "TreeDB/db/db.go": {
+      "after": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+      "after_mode": "0o664",
+      "before": "ac761ed11cf9e5cf68e0361b1dbb23d449e2eff7f5a2e04ec3d804ce00ed4621",
+      "before_mode": "0o664"
+    },
+    "TreeDB/db/index_gen.go": {
+      "after": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+      "after_mode": "0o664",
+      "before": "15057e53cbbbd0292b3a82146c2e32e04e7e102a0ee0d7bfc1f735feb6d2a2ae",
+      "before_mode": "0o664"
+    },
+    "TreeDB/db/original_startup_generation.go": {
+      "after": "88ff3460df396a12918a72ab3cb364fbc077b4e5630c69c09905bec82350eced",
+      "after_mode": "0o664",
+      "before": "d18c812235b4718b61738b7dee560c5bcaf5ea0a339c34e01af9a7c693c7e6cc",
+      "before_mode": "0o664"
+    },
+    "TreeDB/db/primary_arena_owner_v5.go": {
+      "after": "205af9b59465f334461a19b9613d53ef7daead8f4346819a6ca32b075e155ed0",
+      "after_mode": "0o664",
+      "before": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+      "before_mode": "0o664"
+    },
+    "TreeDB/db/primary_offline_pair_v6.go": {
+      "after": "6c0b82bb061ac4aed6c088946293ba1af70f6e132a4bcc78e924a0f193288c80",
+      "after_mode": "0o664",
+      "before": "c6dddaf82d1e5885a70a635e82eb6e04005e14244bce7e8f58a8c0f87023961a",
+      "before_mode": "0o664"
+    },
+    "TreeDB/db/reader_registry_header_failure_v6_test.go": {
+      "after": "10b9aec29c783437ba494ca175d42cffae0d645876ddc83889aa20925b8e8e34",
+      "after_mode": "0o664",
+      "before": null,
+      "before_mode": null
+    },
+    "TreeDB/lifecycle/registry.go": {
+      "after": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+      "after_mode": "0o664",
+      "before": "d83ac5058a07d67bf3860ed878a82734534bc9392eb71891a162ea0da149fca3",
+      "before_mode": "0o664"
+    },
+    "TreeDB/lifecycle/registry_header_completion_v6_test.go": {
+      "after": "e53b816198b9dc56a6947b9eeda2ee5128af2a683c4227cdfcbbd90a41363416",
+      "after_mode": "0o664",
+      "before": null,
+      "before_mode": null
+    },
+    "TreeDB/lifecycle/registry_patricia_v6_test.go": {
+      "after": "99f50e7dca6e8b924682a00aef6a42dfc5dbc1aed711dd3fbadae7a84cc52d9b",
+      "after_mode": "0o664",
+      "before": "5479bff5b9c787d0c0260933aad4191bee61a9f9aeb9a6df3f031f90ce607073",
+      "before_mode": "0o664"
+    },
+    "TreeDB/lifecycle/registry_unregister_work_v6.go": {
+      "after": "231ad0865af34a412691db9f48994651f9eefd5c47edcd1369788b8e132ed11f",
+      "after_mode": "0o664",
+      "before": "2ef31d32d0bebee8bb72f4cee6f57122e381f5768e1534098ba246ccfeb70a73",
+      "before_mode": "0o664"
+    }
+  },
+  "owned_file_count": 503,
+  "exact_delta_paths": 10,
+  "production_delta_paths": 7,
+  "test_delta_paths": 3,
+  "prior_root_seam_review_md_sha256": "2f085fc24bbfee6c1142e77e8319790bb68e01753821327ce29f57d773fcec79",
+  "findings": [],
+  "c1_disposition": {
+    "status": "resolved in reviewed source",
+    "source_anchors": [
+      "TreeDB/lifecycle/registry.go:273",
+      "TreeDB/lifecycle/registry.go:290",
+      "TreeDB/lifecycle/registry.go:329",
+      "TreeDB/lifecycle/registry.go:437",
+      "TreeDB/db/index_gen.go:140",
+      "TreeDB/db/index_gen.go:271",
+      "TreeDB/db/index_gen.go:416",
+      "TreeDB/db/index_gen.go:461",
+      "TreeDB/db/original_startup_generation.go:202",
+      "TreeDB/db/primary_offline_pair_v6.go:90"
+    ],
+    "reason": "Disposed leaf/branch aliases end before refund into the independently admitted surviving registry header. Header receipt completion/reset happens while containing generation/scope admission survives. Failed active receipt remains unchanged, later detached pending charges enter only deferred scalar, and common containing completion refuses header debt. Physical Close, wrapper completion, startup and offline scope preserve original payload/edge custody instead of refunding the header."
+  },
+  "checks_actually_performed": [
+    "Verified full 503 archived source hashes/modes and full owned live equality",
+    "Verified all 501 predecessor owned bindings against immutable parent manifest 98b09c2c",
+    "Verified all 13 final handoff artifact hashes and reconstructed exact ten-path patch",
+    "Read all seven production deltas, all three test deltas, complete new controls, affected registration/detach/physical Close/wrapper/startup/offline callers and original error-link logic",
+    "Verified existing timer directives unchanged and all 55 proposed test-name bindings match immutable source; regexes select exact declared top sets",
+    "Verified proposed normal/race each select 19 lifecycle tops/12 required children and 36 DB tops/27 required children; constructor four children and startup/offline controls included"
+  ],
+  "reviewed_invariants": [
+    "Full and speculative node scrub before accounting-only header refund; partial branch leaves canonical leaf admitted",
+    "Header refund serialization independent of registry membership mutex permits supported Min callback reentry",
+    "Successful receipt reset only after governing shrink; sticky failed receipt and deferred same-owner pending accounting retained",
+    "Generation header admission joined before physical teardown and terminal metadata detach; late failed Snapshot retains original wrapper and physical edge",
+    "closeOnce invocation-local physical error merged under wrapperMu; helper and physical owner retention no longer overwrite closeErr from another lock domain",
+    "Exact consumed/physicalDebt distinguishes successful edge release from unresolved last-owner debt; dedup flags avoid replayed intrusive links",
+    "Fixed registry cause slot, snapshot cause copies and guarded prior links retain acyclic original error graph for traced callers",
+    "Startup failed terminal detach restores SAME original DB/Manager/LOCK/custody; offline file-only completion excludes retained control/header charges",
+    "Native DATA external accounting-only completion remains distinct from ordinary header receipt"
+  ],
+  "controls_assessment": "New tests discriminate actual governing shrink interval, pointer-slot/canonical-node scrub, header receipt reuse, partial live-leaf credit, Min reentry, failed-then-deferred debt, in-flight serialization, failed birth/no Snapshot, held-wrapper late failure, real joined Close races, startup LOCK, offline file-only completion, and genuine last PRIMARY physicalDebt. These are source assessments, not executed results.",
+  "limits": [
+    "No Go/compiler/test/benchmark/runtime or Git/GitHub/source mutation by reviewer",
+    "Full 63-bit first-hole exhaustion remains source-only; bounded test uses real admitted nodes and exact shared cleanup, not fabricated saturated summary",
+    "16 proposed joined race iterations do not establish universal schedule coverage",
+    "Original callback restrictions remain: no recursive slow Owner resize/refund; supported Min/fast unregister reentry is retained",
+    "Whole combined freeze/compile/focused runtime, native publication, Q32 progress, continuing-writer qualification, numeric allowance, performance and full graph acceptance remain outside this verdict"
+  ],
+  "review_lease": "RELEASED after report"
+}

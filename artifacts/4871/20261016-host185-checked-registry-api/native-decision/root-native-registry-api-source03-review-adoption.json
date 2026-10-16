@@ -1,0 +1,12 @@
+{
+  "disposition": "ACCEPT",
+  "independent_report_sha256": "f940217a1026cd86b270c543adf94b0ccf6c631ef175bf99d906ffe044fdb5b4",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-registry-api-source03-repair-review01.json",
+  "independent_review_sha256": "5ada7c6531dc12b33c7c2f50022b187c72362433efaea6b9fdf50fd4d13e475d",
+  "inputs_verified": 19,
+  "no_runtime_acceptance": true,
+  "scope": "independent source03 fixture repair review adoption; runtime pending",
+  "source_bindings_verified": 9,
+  "source_manifest_sha256": "b18405d22ef4d78910a503a83c42e3c7b9ead4f1386b5d4e6dbe60cdc4aa44d8",
+  "utc": "2026-10-16T14:42:44.492471+00:00"
+}

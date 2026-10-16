@@ -1,0 +1,11 @@
+{
+  "artifact_bindings_verified": 13,
+  "changed_source_bindings_verified": 10,
+  "combined_manifest_sha256": "5ccb28decc2e5cebeac7bf9f89a68bd9d6adc1ce4bdf74e3fbaf70ded603c815",
+  "disposition": "ACCEPT_SOURCE_READINESS",
+  "review_json_sha256": "48463b56d50ea69f49c7c49c7831ba077d5777b5c6694f906f9d98a77bef6c95",
+  "review_md_sha256": "183ad1ec1c08635f3b1558e600f0bc938c951e7cf9f82c768e80d7a656118bb8",
+  "runtime_status": "compile-only ongoing; no test bodies yet",
+  "scope": "C1 core repair composes with prior outside/root-seam source reviews; full graph and performance gates remain",
+  "utc": "2026-10-16T14:17:07.415044+00:00"
+}

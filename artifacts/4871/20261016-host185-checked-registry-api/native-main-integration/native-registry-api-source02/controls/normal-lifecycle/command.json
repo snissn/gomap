@@ -1,0 +1,84 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestLifecycle|TestNativeMVCCRegistryOriginalCohorts|TestReaderRegistryFastOnlyRefusalAndDrainProgress|TestReaderRegistryHeaderCompletionJoinsInFlightV6|TestReaderRegistryHeaderCompletionTimingV6|TestReaderRegistryHeaderFailureDebtV6|TestReaderRegistryOwnedAdmissionV6|TestReaderRegistryOwnedConcurrentSlowV6|TestReaderRegistryPatriciaModelV6|TestReaderRegistryPositiveCompletionV6|TestReaderRegistryPositiveHandleWidthV6|TestReaderRegistry_ConcurrentFastAndSlowReaders|TestReaderRegistry_EmptyShardClaimSerializesWithMinScan|TestReaderRegistry_FastAndSlowReadersMin|TestReaderRegistry_FastPathConcurrentRegisterUnregister|TestReaderRegistry_FastPathSingleSeq|TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle|TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing|TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow)$",
+    "./TreeDB/lifecycle"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/normal-lifecycle/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 12,
+  "expected_top_level_count": 19,
+  "grant_sha256": "9f0190be7990445238b2a84a348af336726a3bc264d0cb14c991369a10d59eb2",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/controls/identity.json",
+  "name": "normal-lifecycle",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestReaderRegistryHeaderCompletionTimingV6": [
+      "unregister",
+      "unused-fast-recheck",
+      "first-hole-cleanup",
+      "partial-branch"
+    ],
+    "TestReaderRegistryOwnedAdmissionV6": [
+      "header-refusal",
+      "peak-and-drain",
+      "closed-binding",
+      "outside-lock-recheck",
+      "failed-unused-refund"
+    ],
+    "TestReaderRegistryPositiveCompletionV6": [
+      "nil-work",
+      "short-work",
+      "different-owner"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestLifecycle",
+    "TestNativeMVCCRegistryOriginalCohorts",
+    "TestReaderRegistryFastOnlyRefusalAndDrainProgress",
+    "TestReaderRegistryHeaderCompletionJoinsInFlightV6",
+    "TestReaderRegistryHeaderCompletionTimingV6",
+    "TestReaderRegistryHeaderFailureDebtV6",
+    "TestReaderRegistryOwnedAdmissionV6",
+    "TestReaderRegistryOwnedConcurrentSlowV6",
+    "TestReaderRegistryPatriciaModelV6",
+    "TestReaderRegistryPositiveCompletionV6",
+    "TestReaderRegistryPositiveHandleWidthV6",
+    "TestReaderRegistry_ConcurrentFastAndSlowReaders",
+    "TestReaderRegistry_EmptyShardClaimSerializesWithMinScan",
+    "TestReaderRegistry_FastAndSlowReadersMin",
+    "TestReaderRegistry_FastPathConcurrentRegisterUnregister",
+    "TestReaderRegistry_FastPathSingleSeq",
+    "TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle",
+    "TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing",
+    "TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source02/source-frozen.tar.gz",
+  "source_archive_sha256": "3299e69ca1058219a530babdc5d5422731baa1b78596158cf053c08e03f20e47"
+}

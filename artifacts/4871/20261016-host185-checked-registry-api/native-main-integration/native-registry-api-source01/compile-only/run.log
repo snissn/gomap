@@ -1,0 +1,204 @@
+go: downloading github.com/edsrzf/mmap-go v1.2.0
+go: downloading github.com/go-errors/errors v1.5.1
+go: downloading github.com/dgraph-io/badger/v4 v4.8.0
+go: downloading github.com/stretchr/testify v1.11.1
+go: downloading github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
+go: downloading gonum.org/v1/plot v0.16.0
+go: downloading github.com/tidwall/redcon v1.6.2
+go: downloading github.com/yuin/goldmark v1.7.13
+go: downloading github.com/mattn/go-sqlite3 v1.14.42
+go: downloading github.com/akrylysov/pogreb v0.10.2
+go: downloading github.com/cockroachdb/pebble v1.1.5
+go: downloading github.com/nutsdb/nutsdb v1.1.0
+go: downloading github.com/tidwall/buntdb v1.3.2
+# github.com/snissn/gomap/HashDB
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB [setup failed]
+# github.com/snissn/gomap/HashDB/BTreeOnHashDB
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/BTreeOnHashDB
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/BTreeOnHashDB [setup failed]
+# github.com/snissn/gomap/HashDB/benchmark
+HashDB/benchmark/plot.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/benchmark
+HashDB/benchmark/plot.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/benchmark
+HashDB/benchmark/plot.go:11:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/benchmark
+HashDB/benchmark/plot.go:12:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/benchmark [setup failed]
+# github.com/snissn/gomap/HashDB/cmd/benchmarkmain
+HashDB/benchmark/plot.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/benchmarkmain
+HashDB/benchmark/plot.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/benchmarkmain
+HashDB/benchmark/plot.go:11:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/benchmarkmain
+HashDB/benchmark/plot.go:12:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/cmd/benchmarkmain [setup failed]
+# github.com/snissn/gomap/HashDB/cmd/loadfactorbench
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/loadfactorbench
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/cmd/loadfactorbench [setup failed]
+# github.com/snissn/gomap/HashDB/cmd/resizebench
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/resizebench
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/cmd/resizebench [setup failed]
+# github.com/snissn/gomap/HashDB/cmd/shardbench
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/cmd/shardbench
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/cmd/shardbench [setup failed]
+# github.com/snissn/gomap/HashDB/redisserver
+HashDB/redisserver/badgerredis/server.go:4:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/redisserver [setup failed]
+# github.com/snissn/gomap/HashDB/redisserver/badgerredis
+HashDB/redisserver/badgerredis/server.go:4:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver/badgerredis
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/redisserver/badgerredis [setup failed]
+# github.com/snissn/gomap/HashDB/redisserver/hashdbredis
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver/hashdbredis
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/HashDB/redisserver/hashdbredis
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/redisserver/hashdbredis [setup failed]
+# github.com/snissn/gomap/HashDB/redisserver/mapredis
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/HashDB/redisserver/mapredis [setup failed]
+# github.com/snissn/gomap/benchmarks/dgraph_durability
+HashDB/redisserver/badgerredis/server.go:4:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/benchmarks/dgraph_durability [setup failed]
+# github.com/snissn/gomap/cmd/benchprof
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/benchprof
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/benchprof [setup failed]
+# github.com/snissn/gomap/cmd/collection_bench_matrix_summary
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/collection_bench_matrix_summary
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/collection_bench_matrix_summary [setup failed]
+# github.com/snissn/gomap/cmd/collection_bench_report
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/collection_bench_report
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/collection_bench_report [setup failed]
+# github.com/snissn/gomap/cmd/collection_workload_bench
+cmd/collection_workload_bench/r1_sqlite.go:14:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/collection_workload_bench [setup failed]
+# github.com/snissn/gomap/cmd/redisserver
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/redisserver
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/redisserver
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/redisserver [setup failed]
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_pogreb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_pebble.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/redisserver/badgerredis/server.go:4:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_nutsdb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_leveldb.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_leveldb.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_leveldb.go:11:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_leveldb.go:12:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_leveldb.go:13:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_buntdb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/benchmark/plot.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/benchmark/plot.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/benchmark/plot.go:12:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:14:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:15:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/unified_bench [setup failed]
+# github.com/snissn/gomap/internal/benchprof
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/internal/benchprof
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/internal/benchprof [setup failed]
+# github.com/snissn/gomap/internal/contracttest
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/internal/contracttest [setup failed]
+# github.com/snissn/gomap/internal/redisserver
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/internal/redisserver
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/internal/redisserver
+HashDB/redisserver/badgerredis/server.go:5:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/internal/redisserver [setup failed]
+# github.com/snissn/gomap/kvstore/adapters/btreeonhashdb
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/kvstore/adapters/btreeonhashdb
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/kvstore/adapters/btreeonhashdb [setup failed]
+# github.com/snissn/gomap/kvstore/adapters/hashdb
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/kvstore/adapters/hashdb
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/kvstore/adapters/hashdb [setup failed]
+?   	github.com/snissn/gomap/HashDB/internal/lockfile	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/authority_inventory	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/db_histogram	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/debug_open	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/power_loss_certify	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/stress	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/template_corpus_extract	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/template_seed_train	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/unified_bench	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/verify	[no test files]
+?   	github.com/snissn/gomap/TreeDB/cmd/wal_classify	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/adaptive	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/commandwalbarrier	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/cowbench	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/durabilitycut	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/iterator	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/limits	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/m7routetrace	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/mvccadmission	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/stableio	[no test files]
+?   	github.com/snissn/gomap/TreeDB/internal/storagemaintenance	[no test files]
+?   	github.com/snissn/gomap/TreeDB/iterator	[no test files]
+?   	github.com/snissn/gomap/cmd/noreply_bench	[no test files]
+?   	github.com/snissn/gomap/cmd/trace_bench	[no test files]
+?   	github.com/snissn/gomap/cmd/treedb_column_section_audit	[no test files]
+?   	github.com/snissn/gomap/cmd/treedb_retained_payload_audit	[no test files]
+?   	github.com/snissn/gomap/examples/typed_rows	[no test files]
+?   	github.com/snissn/gomap/experiments/colgranule/cmd/jsonbench_colgranule	[no test files]
+?   	github.com/snissn/gomap/experiments/rust_leaf_bench/matched_go	[no test files]
+?   	github.com/snissn/gomap/kvstore	[no test files]
+?   	github.com/snissn/gomap/scripts	[no test files]
+FAIL
