@@ -1,0 +1,13 @@
+{
+  "compile_applicability": "Core01 compile result applies to all unchanged production and test bodies; changed lifecycle fixture is compiled/vetted by fresh lifecycle runtime commands. No separate whole-core02 compile-only claim.",
+  "disposition": "ACCEPT",
+  "freeze_sha256": "984e102ae22d828fb32939ad9d03e735fd2a9d0f30d4557d689782132e1ef3ed",
+  "native_publication_qualified": false,
+  "producer_integration_accepted": false,
+  "reuse_sha256": "c47fa75ca49b53bc96a75fa0af4a04b86a20a6eabecc36e1d772d3371f695c66",
+  "review_md_sha256": "628b171dfb602158b6ddeb7525a002bff478115742a98c5779cd93ee38adab30",
+  "review_sha256": "ff214a7072e189609ba49ad1a2400371927cd7817dadd097dbb016da35f2ae47",
+  "scope": "one-line lifecycle fixture repair; prior unchanged production/source review carries; readiness for five pending controls only",
+  "source_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "utc": "2026-10-16T16:02:12.894164+00:00"
+}

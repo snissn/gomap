@@ -1,0 +1,84 @@
+=== RUN   TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper
+--- PASS: TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper (0.00s)
+=== RUN   TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper
+--- PASS: TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper (0.00s)
+=== RUN   TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects
+=== RUN   TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/native
+=== RUN   TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/helper
+=== RUN   TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/combined
+--- PASS: TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects (0.00s)
+    --- PASS: TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/native (0.00s)
+    --- PASS: TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/helper (0.00s)
+    --- PASS: TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/combined (0.00s)
+=== RUN   TestCooperativeOwnerRemovalPreflightAndActualDebit
+=== RUN   TestCooperativeOwnerRemovalPreflightAndActualDebit/unsupported-before-detach
+=== RUN   TestCooperativeOwnerRemovalPreflightAndActualDebit/ordinary-helper-actual-debit
+--- PASS: TestCooperativeOwnerRemovalPreflightAndActualDebit (0.00s)
+    --- PASS: TestCooperativeOwnerRemovalPreflightAndActualDebit/unsupported-before-detach (0.00s)
+    --- PASS: TestCooperativeOwnerRemovalPreflightAndActualDebit/ordinary-helper-actual-debit (0.00s)
+=== RUN   TestCooperativeOwnerActiveEnrollmentAndPairMutations
+=== RUN   TestCooperativeOwnerActiveEnrollmentAndPairMutations/activate-pair
+=== RUN   TestCooperativeOwnerActiveEnrollmentAndPairMutations/transfer-pending
+=== RUN   TestCooperativeOwnerActiveEnrollmentAndPairMutations/finish-enrollment
+--- PASS: TestCooperativeOwnerActiveEnrollmentAndPairMutations (0.00s)
+    --- PASS: TestCooperativeOwnerActiveEnrollmentAndPairMutations/activate-pair (0.00s)
+    --- PASS: TestCooperativeOwnerActiveEnrollmentAndPairMutations/transfer-pending (0.00s)
+    --- PASS: TestCooperativeOwnerActiveEnrollmentAndPairMutations/finish-enrollment (0.00s)
+=== RUN   TestCooperativeOwnerEntryAndTerminalAdmission
+=== RUN   TestCooperativeOwnerEntryAndTerminalAdmission/observe
+=== RUN   TestCooperativeOwnerEntryAndTerminalAdmission/ack
+--- PASS: TestCooperativeOwnerEntryAndTerminalAdmission (0.00s)
+    --- PASS: TestCooperativeOwnerEntryAndTerminalAdmission/observe (0.00s)
+    --- PASS: TestCooperativeOwnerEntryAndTerminalAdmission/ack (0.00s)
+=== RUN   TestCooperativeOwnerEightyGovernorsNativeOnly
+--- PASS: TestCooperativeOwnerEightyGovernorsNativeOnly (0.00s)
+=== RUN   TestNativeAtomicOwnerGrowthAdmitsBeforeEffects
+--- PASS: TestNativeAtomicOwnerGrowthAdmitsBeforeEffects (0.00s)
+=== RUN   TestNativeAtomicOwnerGrowthPricesOriginalRollback
+--- PASS: TestNativeAtomicOwnerGrowthPricesOriginalRollback (0.00s)
+=== RUN   TestNativeOwnerGrowthAdapterPreservesYield
+--- PASS: TestNativeOwnerGrowthAdapterPreservesYield (0.00s)
+=== RUN   TestNativeOwnerGrowthAdapterPreservesUnsupported
+--- PASS: TestNativeOwnerGrowthAdapterPreservesUnsupported (0.00s)
+=== RUN   TestOriginalRemovalReceiptReuseKeepsExactAccounting
+--- PASS: TestOriginalRemovalReceiptReuseKeepsExactAccounting (0.00s)
+=== RUN   TestOriginalRemovalResetPreservesFailedGoverningShrink
+--- PASS: TestOriginalRemovalResetPreservesFailedGoverningShrink (0.00s)
+=== RUN   TestOriginalRemovalResetCannotConsumeBoundedReceipt
+--- PASS: TestOriginalRemovalResetCannotConsumeBoundedReceipt (0.00s)
+=== RUN   TestOwnerSharedDistinctAdmissionAndFailureUnwind
+--- PASS: TestOwnerSharedDistinctAdmissionAndFailureUnwind (0.00s)
+=== RUN   TestOwnerRetiredOrFailedCleanupKeepsExactGovernor
+--- PASS: TestOwnerRetiredOrFailedCleanupKeepsExactGovernor (0.00s)
+=== RUN   TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner
+--- PASS: TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner (0.00s)
+=== RUN   TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture
+--- PASS: TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture (0.00s)
+=== RUN   TestOwnerPairBorrowProducerAndRollback
+--- PASS: TestOwnerPairBorrowProducerAndRollback (0.00s)
+=== RUN   TestRemovalWorkManyOriginalBindingsAndFutureGrowth
+--- PASS: TestRemovalWorkManyOriginalBindingsAndFutureGrowth (0.00s)
+=== RUN   TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund
+--- PASS: TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund (0.00s)
+=== RUN   TestRemovalWorkConcurrentOriginalGrowthAndEnrollment
+--- PASS: TestRemovalWorkConcurrentOriginalGrowthAndEnrollment (0.01s)
+=== RUN   TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl
+--- PASS: TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl (0.00s)
+=== RUN   TestNativeRemovalCompletionRetainsExactDeltaOnRefusal
+--- PASS: TestNativeRemovalCompletionRetainsExactDeltaOnRefusal (0.00s)
+=== RUN   TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures
+--- PASS: TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures (0.01s)
+=== RUN   TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind
+--- PASS: TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind (0.00s)
+=== RUN   TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield
+--- PASS: TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield (0.01s)
+=== RUN   TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets
+--- PASS: TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets (0.01s)
+=== RUN   TestEnrollmentWorkConstructorCustodySurvivesOriginalClose
+--- PASS: TestEnrollmentWorkConstructorCustodySurvivesOriginalClose (0.00s)
+=== RUN   TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose
+--- PASS: TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose (0.00s)
+=== RUN   TestSelectedEnrollmentConstructorLedgerV6
+--- PASS: TestSelectedEnrollmentConstructorLedgerV6 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/retainedalloc	1.058s

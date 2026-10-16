@@ -1,0 +1,13 @@
+{
+  "changed_source_bindings_verified": 17,
+  "disposition": "ACCEPT",
+  "input_bindings_verified": 18,
+  "native_publication_qualified": false,
+  "producer_integration_accepted": false,
+  "review_md_sha256": "3691ffa66b626b87f665d3b05145156308e202c65d2093b03f419322336ea405",
+  "review_sha256": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+  "scope": "root adoption of independent core01 source readiness, followed by focused normal/race controls only",
+  "source_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "source_verification_sha256": "cfb03b240720b7924887a125afa426e6beb1d37d90b1761037f793fe3ab6e89a",
+  "utc": "2026-10-16T15:57:31.146081+00:00"
+}

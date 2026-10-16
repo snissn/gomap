@@ -1,0 +1,23 @@
+{
+  "accepted": true,
+  "all_other_source_build_module_asset_and_test_inputs_identical": true,
+  "changed_paths": [
+    "TreeDB/lifecycle/source_guard_test.go"
+  ],
+  "command_name": "normal-retainedalloc",
+  "compile_applicability": "Core01 compile result applies to all unchanged production and test bodies; changed lifecycle fixture is compiled/vetted by fresh lifecycle runtime commands. No separate whole-core02 compile-only claim.",
+  "counts": {
+    "child": 10,
+    "top": 31
+  },
+  "dependency_test_files_not_compiled_into_imports": true,
+  "parent_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "raw_log": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/run.log",
+  "raw_log_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+  "reason": "Sole changed _test.go belongs to lifecycle, outside retainedalloc own tests. Go does not import dependency test files. All production/build inputs and every retainedalloc test are identical.",
+  "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/result.json",
+  "result_sha256": "363df075dd69d0a0df62db88bcee97faeb39dc9105d176322d1e3edc2ab54ef0",
+  "scope": "unchanged normal-retainedalloc inputs retained from core01; only lifecycle test file differs",
+  "source_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "utc": "2026-10-16T16:00:39.267492+00:00"
+}

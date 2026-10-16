@@ -1,0 +1,96 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper|TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper|TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects|TestCooperativeOwnerRemovalPreflightAndActualDebit|TestCooperativeOwnerActiveEnrollmentAndPairMutations|TestCooperativeOwnerEntryAndTerminalAdmission|TestCooperativeOwnerEightyGovernorsNativeOnly|TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures|TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind|TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield|TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets|TestEnrollmentWorkConstructorCustodySurvivesOriginalClose|TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose|TestNativeAtomicOwnerGrowthAdmitsBeforeEffects|TestNativeAtomicOwnerGrowthPricesOriginalRollback|TestNativeOwnerGrowthAdapterPreservesYield|TestNativeOwnerGrowthAdapterPreservesUnsupported|TestOriginalRemovalReceiptReuseKeepsExactAccounting|TestOriginalRemovalResetPreservesFailedGoverningShrink|TestOriginalRemovalResetCannotConsumeBoundedReceipt|TestOwnerSharedDistinctAdmissionAndFailureUnwind|TestOwnerRetiredOrFailedCleanupKeepsExactGovernor|TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner|TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture|TestOwnerPairBorrowProducerAndRollback|TestRemovalWorkManyOriginalBindingsAndFutureGrowth|TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund|TestRemovalWorkConcurrentOriginalGrowthAndEnrollment|TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl|TestNativeRemovalCompletionRetainsExactDeltaOnRefusal|TestSelectedEnrollmentConstructorLedgerV6)$",
+    "./TreeDB/internal/retainedalloc"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 10,
+  "expected_top_level_count": 31,
+  "grant_sha256": "d8cb4f9fcc59e4b0259711e772c5e3bb8764d93df4da326badee6b73b696c1b5",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/identity.json",
+  "name": "normal-retainedalloc",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestCooperativeOwnerActiveEnrollmentAndPairMutations": [
+      "activate-pair",
+      "transfer-pending",
+      "finish-enrollment"
+    ],
+    "TestCooperativeOwnerEntryAndTerminalAdmission": [
+      "observe",
+      "ack"
+    ],
+    "TestCooperativeOwnerRemovalPreflightAndActualDebit": [
+      "unsupported-before-detach",
+      "ordinary-helper-actual-debit"
+    ],
+    "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects": [
+      "native",
+      "helper",
+      "combined"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper",
+    "TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper",
+    "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects",
+    "TestCooperativeOwnerRemovalPreflightAndActualDebit",
+    "TestCooperativeOwnerActiveEnrollmentAndPairMutations",
+    "TestCooperativeOwnerEntryAndTerminalAdmission",
+    "TestCooperativeOwnerEightyGovernorsNativeOnly",
+    "TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures",
+    "TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind",
+    "TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield",
+    "TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets",
+    "TestEnrollmentWorkConstructorCustodySurvivesOriginalClose",
+    "TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose",
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+    "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+    "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+    "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+    "TestOwnerSharedDistinctAdmissionAndFailureUnwind",
+    "TestOwnerRetiredOrFailedCleanupKeepsExactGovernor",
+    "TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner",
+    "TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture",
+    "TestOwnerPairBorrowProducerAndRollback",
+    "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+    "TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund",
+    "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+    "TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl",
+    "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+    "TestSelectedEnrollmentConstructorLedgerV6"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/source-frozen.tar.gz",
+  "source_archive_sha256": "3580f794e27997e8343d9e89c74d4fa4a243e81ccb6524e110c273069584290a"
+}

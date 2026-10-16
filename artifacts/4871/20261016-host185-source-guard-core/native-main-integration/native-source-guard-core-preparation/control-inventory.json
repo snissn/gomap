@@ -1,0 +1,285 @@
+{
+  "commands": {
+    "normal": [
+      {
+        "children": 10,
+        "name": "normal-retainedalloc",
+        "required_child_tests": {
+          "TestCooperativeOwnerActiveEnrollmentAndPairMutations": [
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/activate-pair",
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/transfer-pending",
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/finish-enrollment"
+          ],
+          "TestCooperativeOwnerEntryAndTerminalAdmission": [
+            "TestCooperativeOwnerEntryAndTerminalAdmission/observe",
+            "TestCooperativeOwnerEntryAndTerminalAdmission/ack"
+          ],
+          "TestCooperativeOwnerRemovalPreflightAndActualDebit": [
+            "TestCooperativeOwnerRemovalPreflightAndActualDebit/unsupported-before-detach",
+            "TestCooperativeOwnerRemovalPreflightAndActualDebit/ordinary-helper-actual-debit"
+          ],
+          "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects": [
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/native",
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/helper",
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/combined"
+          ]
+        },
+        "required_top_level_tests": [
+          "TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper",
+          "TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper",
+          "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects",
+          "TestCooperativeOwnerRemovalPreflightAndActualDebit",
+          "TestCooperativeOwnerActiveEnrollmentAndPairMutations",
+          "TestCooperativeOwnerEntryAndTerminalAdmission",
+          "TestCooperativeOwnerEightyGovernorsNativeOnly",
+          "TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures",
+          "TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind",
+          "TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield",
+          "TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets",
+          "TestEnrollmentWorkConstructorCustodySurvivesOriginalClose",
+          "TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose",
+          "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+          "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+          "TestNativeOwnerGrowthAdapterPreservesYield",
+          "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+          "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+          "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+          "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+          "TestOwnerSharedDistinctAdmissionAndFailureUnwind",
+          "TestOwnerRetiredOrFailedCleanupKeepsExactGovernor",
+          "TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner",
+          "TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture",
+          "TestOwnerPairBorrowProducerAndRollback",
+          "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+          "TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund",
+          "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+          "TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl",
+          "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+          "TestSelectedEnrollmentConstructorLedgerV6"
+        ],
+        "tops": 31
+      },
+      {
+        "children": 18,
+        "name": "normal-lifecycle",
+        "required_child_tests": {
+          "TestReaderRegistryHeaderCompletionTimingV6": [
+            "TestReaderRegistryHeaderCompletionTimingV6/unregister",
+            "TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck",
+            "TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup",
+            "TestReaderRegistryHeaderCompletionTimingV6/partial-branch"
+          ],
+          "TestReaderRegistryOwnedAdmissionV6": [
+            "TestReaderRegistryOwnedAdmissionV6/header-refusal",
+            "TestReaderRegistryOwnedAdmissionV6/peak-and-drain",
+            "TestReaderRegistryOwnedAdmissionV6/closed-binding",
+            "TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck",
+            "TestReaderRegistryOwnedAdmissionV6/failed-unused-refund"
+          ],
+          "TestReaderRegistryPositiveCompletionV6": [
+            "TestReaderRegistryPositiveCompletionV6/nil-work",
+            "TestReaderRegistryPositiveCompletionV6/short-work",
+            "TestReaderRegistryPositiveCompletionV6/different-owner"
+          ],
+          "TestSourceGuardEntryAdmissionAndResetRowsV6": [
+            "TestSourceGuardEntryAdmissionAndResetRowsV6/records",
+            "TestSourceGuardEntryAdmissionAndResetRowsV6/bytes"
+          ],
+          "TestSourceGuardRenewalAndOrdinaryChurnV6": [
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/increasing",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/equal",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/lower",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/zero"
+          ]
+        },
+        "required_top_level_tests": [
+          "TestReaderRegistryFastOnlyRefusalAndDrainProgress",
+          "TestLifecycle",
+          "TestReaderRegistry_FastPathSingleSeq",
+          "TestReaderRegistry_FastAndSlowReadersMin",
+          "TestReaderRegistry_FastPathConcurrentRegisterUnregister",
+          "TestReaderRegistry_ConcurrentFastAndSlowReaders",
+          "TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle",
+          "TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow",
+          "TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing",
+          "TestReaderRegistry_EmptyShardClaimSerializesWithMinScan",
+          "TestNativeMVCCRegistryOriginalCohorts",
+          "TestReaderRegistryHeaderCompletionTimingV6",
+          "TestReaderRegistryHeaderFailureDebtV6",
+          "TestReaderRegistryHeaderCompletionJoinsInFlightV6",
+          "TestReaderRegistryPatriciaModelV6",
+          "TestReaderRegistryPositiveHandleWidthV6",
+          "TestReaderRegistryOwnedAdmissionV6",
+          "TestReaderRegistryPositiveCompletionV6",
+          "TestReaderRegistryOwnedConcurrentSlowV6",
+          "TestSourceGuardCanonicalHoleAndCountedAuthorityV6",
+          "TestSourceGuardDepth63SavedRepairV6",
+          "TestSourceGuardReservedCellCancellationV6",
+          "TestSourceGuardHelperAndOriginRefusalV6",
+          "TestSourceGuardFullSearchFailureSharedCleanupV6",
+          "TestSourceGuardStructuralTrafficOverflowV6",
+          "TestSourceGuardLaterLeaseOnlyRefusalKeepsOriginalDebtV6",
+          "TestSourceGuardOrdinaryLeaseOnlyPolicyV6",
+          "TestSourceGuardWithdrawalUsesProtectedActualSpliceChargeV6",
+          "TestSourceGuardCancellationAcknowledgmentAndReuseV6",
+          "TestSourceGuardEntryAdmissionAndResetRowsV6",
+          "TestSourceGuardRenewalAndOrdinaryChurnV6"
+        ],
+        "tops": 31
+      },
+      {
+        "children": 0,
+        "name": "normal-memtable",
+        "required_child_tests": {},
+        "required_top_level_tests": [
+          "TestCOWExternalAdmissionLifetimeAndRefusal",
+          "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+        ],
+        "tops": 2
+      }
+    ],
+    "race": [
+      {
+        "children": 10,
+        "name": "race-retainedalloc",
+        "required_child_tests": {
+          "TestCooperativeOwnerActiveEnrollmentAndPairMutations": [
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/activate-pair",
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/transfer-pending",
+            "TestCooperativeOwnerActiveEnrollmentAndPairMutations/finish-enrollment"
+          ],
+          "TestCooperativeOwnerEntryAndTerminalAdmission": [
+            "TestCooperativeOwnerEntryAndTerminalAdmission/observe",
+            "TestCooperativeOwnerEntryAndTerminalAdmission/ack"
+          ],
+          "TestCooperativeOwnerRemovalPreflightAndActualDebit": [
+            "TestCooperativeOwnerRemovalPreflightAndActualDebit/unsupported-before-detach",
+            "TestCooperativeOwnerRemovalPreflightAndActualDebit/ordinary-helper-actual-debit"
+          ],
+          "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects": [
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/native",
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/helper",
+            "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects/combined"
+          ]
+        },
+        "required_top_level_tests": [
+          "TestCooperativeOwnerEightyGovernorsAndOrdinaryHelper",
+          "TestCooperativeOwnerRefusalDoesNotEscapeToOrdinaryHelper",
+          "TestCooperativeOwnerTrafficOverflowIsTerminalBeforeEffects",
+          "TestCooperativeOwnerRemovalPreflightAndActualDebit",
+          "TestCooperativeOwnerActiveEnrollmentAndPairMutations",
+          "TestCooperativeOwnerEntryAndTerminalAdmission",
+          "TestCooperativeOwnerEightyGovernorsNativeOnly",
+          "TestEnrollmentWorkEightyGovernorsFutureGrowthAndOrdinaryCaptures",
+          "TestEnrollmentWorkRefusalBeforeEffectsAndPairUnwind",
+          "TestEnrollmentWorkCancelAndPhysicalCloseAcrossYield",
+          "TestEnrollmentWorkFailedFutureGrowthRestoresActualLeaseTargets",
+          "TestEnrollmentWorkConstructorCustodySurvivesOriginalClose",
+          "TestEnrollmentWorkPromotedConstructorCancelAfterPhysicalClose",
+          "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+          "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+          "TestNativeOwnerGrowthAdapterPreservesYield",
+          "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+          "TestOriginalRemovalReceiptReuseKeepsExactAccounting",
+          "TestOriginalRemovalResetPreservesFailedGoverningShrink",
+          "TestOriginalRemovalResetCannotConsumeBoundedReceipt",
+          "TestOwnerSharedDistinctAdmissionAndFailureUnwind",
+          "TestOwnerRetiredOrFailedCleanupKeepsExactGovernor",
+          "TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner",
+          "TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture",
+          "TestOwnerPairBorrowProducerAndRollback",
+          "TestRemovalWorkManyOriginalBindingsAndFutureGrowth",
+          "TestEnrollmentCloseWorkClearsOriginalAliasesBeforeRefund",
+          "TestRemovalWorkConcurrentOriginalGrowthAndEnrollment",
+          "TestOrdinaryMetadataReleaseCreatesNoUnadmittedControl",
+          "TestNativeRemovalCompletionRetainsExactDeltaOnRefusal",
+          "TestSelectedEnrollmentConstructorLedgerV6"
+        ],
+        "tops": 31
+      },
+      {
+        "children": 18,
+        "name": "race-lifecycle",
+        "required_child_tests": {
+          "TestReaderRegistryHeaderCompletionTimingV6": [
+            "TestReaderRegistryHeaderCompletionTimingV6/unregister",
+            "TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck",
+            "TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup",
+            "TestReaderRegistryHeaderCompletionTimingV6/partial-branch"
+          ],
+          "TestReaderRegistryOwnedAdmissionV6": [
+            "TestReaderRegistryOwnedAdmissionV6/header-refusal",
+            "TestReaderRegistryOwnedAdmissionV6/peak-and-drain",
+            "TestReaderRegistryOwnedAdmissionV6/closed-binding",
+            "TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck",
+            "TestReaderRegistryOwnedAdmissionV6/failed-unused-refund"
+          ],
+          "TestReaderRegistryPositiveCompletionV6": [
+            "TestReaderRegistryPositiveCompletionV6/nil-work",
+            "TestReaderRegistryPositiveCompletionV6/short-work",
+            "TestReaderRegistryPositiveCompletionV6/different-owner"
+          ],
+          "TestSourceGuardEntryAdmissionAndResetRowsV6": [
+            "TestSourceGuardEntryAdmissionAndResetRowsV6/records",
+            "TestSourceGuardEntryAdmissionAndResetRowsV6/bytes"
+          ],
+          "TestSourceGuardRenewalAndOrdinaryChurnV6": [
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/increasing",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/equal",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/lower",
+            "TestSourceGuardRenewalAndOrdinaryChurnV6/zero"
+          ]
+        },
+        "required_top_level_tests": [
+          "TestReaderRegistryFastOnlyRefusalAndDrainProgress",
+          "TestLifecycle",
+          "TestReaderRegistry_FastPathSingleSeq",
+          "TestReaderRegistry_FastAndSlowReadersMin",
+          "TestReaderRegistry_FastPathConcurrentRegisterUnregister",
+          "TestReaderRegistry_ConcurrentFastAndSlowReaders",
+          "TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle",
+          "TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow",
+          "TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing",
+          "TestReaderRegistry_EmptyShardClaimSerializesWithMinScan",
+          "TestNativeMVCCRegistryOriginalCohorts",
+          "TestReaderRegistryHeaderCompletionTimingV6",
+          "TestReaderRegistryHeaderFailureDebtV6",
+          "TestReaderRegistryHeaderCompletionJoinsInFlightV6",
+          "TestReaderRegistryPatriciaModelV6",
+          "TestReaderRegistryPositiveHandleWidthV6",
+          "TestReaderRegistryOwnedAdmissionV6",
+          "TestReaderRegistryPositiveCompletionV6",
+          "TestReaderRegistryOwnedConcurrentSlowV6",
+          "TestSourceGuardCanonicalHoleAndCountedAuthorityV6",
+          "TestSourceGuardDepth63SavedRepairV6",
+          "TestSourceGuardReservedCellCancellationV6",
+          "TestSourceGuardHelperAndOriginRefusalV6",
+          "TestSourceGuardFullSearchFailureSharedCleanupV6",
+          "TestSourceGuardStructuralTrafficOverflowV6",
+          "TestSourceGuardLaterLeaseOnlyRefusalKeepsOriginalDebtV6",
+          "TestSourceGuardOrdinaryLeaseOnlyPolicyV6",
+          "TestSourceGuardWithdrawalUsesProtectedActualSpliceChargeV6",
+          "TestSourceGuardCancellationAcknowledgmentAndReuseV6",
+          "TestSourceGuardEntryAdmissionAndResetRowsV6",
+          "TestSourceGuardRenewalAndOrdinaryChurnV6"
+        ],
+        "tops": 31
+      },
+      {
+        "children": 0,
+        "name": "race-memtable",
+        "required_child_tests": {},
+        "required_top_level_tests": [
+          "TestCOWExternalAdmissionLifetimeAndRefusal",
+          "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+        ],
+        "tops": 2
+      }
+    ]
+  },
+  "executed": false,
+  "per_mode": {
+    "children": 28,
+    "tops": 64
+  }
+}

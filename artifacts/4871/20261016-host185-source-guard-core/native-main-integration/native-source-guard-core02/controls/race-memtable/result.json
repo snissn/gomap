@@ -1,0 +1,90 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 3.76620852900669,
+  "ended_utc": "2026-10-16T16:02:48.084233+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-memtable",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1796290,
+      "pid": 1796290,
+      "ppid": 1795482,
+      "session": 1796290,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1796290,
+      "pid": 1796309,
+      "ppid": 1796290,
+      "session": 1796290,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1796290,
+      "pid": 1796322,
+      "ppid": 1796290,
+      "session": 1796290,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1796290,
+      "pid": 1796332,
+      "ppid": 1796290,
+      "session": 1796290,
+      "state": "R"
+    },
+    {
+      "comm": "memtable.test",
+      "pgid": 1796290,
+      "pid": 1796338,
+      "ppid": 1796290,
+      "session": 1796290,
+      "state": "S"
+    }
+  ],
+  "pgid": 1796290,
+  "pid": 1796290,
+  "raw_log_sha256": "a74281f47fc687ee6f3c09e6aa588db15b546d2ac05779e244dab09d0e27510f",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestCOWExternalAdmissionLifetimeAndRefusal",
+    "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T16:02:44.318025+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestCOWExternalAdmissionLifetimeAndRefusal",
+    "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+  ],
+  "test_RUN_names": [
+    "TestCOWExternalAdmissionLifetimeAndRefusal",
+    "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestCOWExternalAdmissionLifetimeAndRefusal",
+    "TestCOWExternalAdmissionSharesPrepareAndRetirementBounds"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_RUN": []
+}

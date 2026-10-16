@@ -1,0 +1,34 @@
+{
+  "all_prior_runtime_joined": true,
+  "all_prior_source_writers_released": true,
+  "coordinator": "/root",
+  "drift_disposition": "Only separately reviewed and focused normal/race verified terminal DATA worker quiescence; all guard API/role inputs otherwise match. Guard implementation must preserve this closure.",
+  "git_github_granted_to_worker": false,
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "guard_preparation_production_drift": {
+    "TreeDB/db/index_gen.go": {
+      "preparation": "9336609315f4f3f938e97c4468916139528f65bc57610343453fe7f3c932e4d0",
+      "source04": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51"
+    }
+  },
+  "model": "gpt-6.1-sol",
+  "original_Q32_1MiB_changed": false,
+  "parent_archive_sha256": "6fe19cb928916c791730a56f177e7cb21677d40fed5afed4a4374e828fecdc56",
+  "parent_effective_verification_sha256": "f192cae29e1fd8bf62600d0559e1ecb4297818067548e0dc4480e846229d25bd",
+  "parent_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "reasoning_effort": "high",
+  "runtime_granted": false,
+  "scan_removal_authorized": false,
+  "scope": "Connected SAME registry/Owner cooperative guard core, original producer-role handoffs and withdrawal in feature-bearing TreeDB paths; root runtime and external actions",
+  "selection_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+  "source04_live_manifest_verified_files": 10451,
+  "source_lease_active": true,
+  "source_or_graph_qualification": false,
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "unchanged_guard_advice_source_bindings": 9,
+  "utc": "2026-10-16T14:57:51.210584+00:00",
+  "worker": "/root/native_prerequisite"
+}

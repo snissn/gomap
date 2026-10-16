@@ -1,0 +1,36 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_source_writers_released": true,
+  "authorized_command_names": [
+    "normal-retainedalloc",
+    "normal-lifecycle",
+    "normal-memtable",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable"
+  ],
+  "compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/result.json",
+  "compile_result_sha256": "3ba0c240f98548231d4254fbae67d7c97b8d442049c0e6f86df7da046f98dc95",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core01-review01.json",
+  "independent_review_sha256": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+  "proposed_commands_sha256": "7fc396bbb560062760ca1b081405369264bb29288e5986bec2d96fbab3fa7d37",
+  "root_review_adoption": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-review-adoption.json",
+  "root_review_adoption_sha256": "40c18cefba5a1d184e687d2fd3bdfe6b57a9b1b447abd5ab7698e54b77bb0a3b",
+  "runner_sha256": "8e1d39b4ccaadf315833e6379cd848010bb65f676caf3a101c0806d756baf272",
+  "scope": "focused-connected-source-guard-core",
+  "scope_limit": "64 top and 28 child controls per mode, no public native driver/performance or producer-role qualification",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "memtable"
+  ],
+  "source_archive_sha256": "3580f794e27997e8343d9e89c74d4fa4a243e81ccb6524e110c273069584290a",
+  "source_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-source-verification.json",
+  "source_verify_sha256": "cfb03b240720b7924887a125afa426e6beb1d37d90b1761037f793fe3ab6e89a",
+  "utc": "2026-10-16T15:57:31.146081+00:00"
+}

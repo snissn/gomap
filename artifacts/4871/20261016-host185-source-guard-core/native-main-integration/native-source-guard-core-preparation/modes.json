@@ -1,0 +1,19 @@
+{
+  "TreeDB/internal/memtable/native_retention_work.go": "0o664",
+  "TreeDB/internal/retainedalloc/native_pre_cursor_for_test_v6.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_cooperative_work.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_cooperative_work_test.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_enroll_work.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_growth_work.go": "0o664",
+  "TreeDB/internal/retainedalloc/owner_work.go": "0o664",
+  "TreeDB/lifecycle/SOURCE_GUARDS_V6.md": "0o664",
+  "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "0o664",
+  "TreeDB/lifecycle/registry.go": "0o664",
+  "TreeDB/lifecycle/registry_unregister_work_v6.go": "0o664",
+  "TreeDB/lifecycle/source_guard.go": "0o664",
+  "TreeDB/lifecycle/source_guard_price_for_test.go": "0o664",
+  "TreeDB/lifecycle/source_guard_test.go": "0o664"
+}

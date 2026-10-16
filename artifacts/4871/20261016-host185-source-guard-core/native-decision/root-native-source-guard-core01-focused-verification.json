@@ -1,0 +1,61 @@
+{
+  "Q32": "original gate remains open",
+  "accepted": false,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "checks": [
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 10,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-retainedalloc",
+      "raw_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+      "result_sha256": "363df075dd69d0a0df62db88bcee97faeb39dc9105d176322d1e3edc2ab54ef0",
+      "source_equal": true,
+      "top_pass": 31,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [
+        "TestSourceGuardWithdrawalUsesProtectedActualSpliceChargeV6"
+      ],
+      "SKIP": [],
+      "accepted": false,
+      "child_pass": 18,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-lifecycle",
+      "raw_sha256": "0ba7257c1fab423b20c426ce753dda4016495a2dfff0c843c4f396c50107ec76",
+      "result_sha256": "e86cd7e1e0f53f2220a16acd930eca1006275a1c8eab2349d78e2d84d1a5ed3b",
+      "source_equal": true,
+      "top_pass": 30,
+      "unexpected_RUN": []
+    }
+  ],
+  "commands_not_executed": [
+    "normal-memtable",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable"
+  ],
+  "counts": {
+    "normal": {
+      "child": 28,
+      "top": 61
+    },
+    "race": {
+      "child": 0,
+      "top": 0
+    }
+  },
+  "manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "plan_sha256": "7fc396bbb560062760ca1b081405369264bb29288e5986bec2d96fbab3fa7d37",
+  "scope": "frozen source-guard core focused normal/race raw recomputation",
+  "summary_sha256": "7d0f255538cdce29b788df147ba476b6aed1a359021af5506593fc5e5190c4a4",
+  "utc": "2026-10-16T15:58:01.670632+00:00"
+}

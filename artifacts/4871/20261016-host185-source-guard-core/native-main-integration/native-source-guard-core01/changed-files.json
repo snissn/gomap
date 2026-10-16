@@ -1,0 +1,121 @@
+[
+  {
+    "after_sha256": "e85abf36f905c845243e9d2c6c06b63ca103bd114ffca2f0d99236c1d58eb655",
+    "before_sha256": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/memtable/native_retention_work.go"
+  },
+  {
+    "after_sha256": "b615c91016623552688368bdd9215d4f480b202e72599c355f2908cf831f3a0e",
+    "before_sha256": "bdb1c2b05cf6ccd49b3810fb344933ae287135d3ad01f302929a91d6889dc7f6",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/native_pre_cursor_for_test_v6.go"
+  },
+  {
+    "after_sha256": "63d5ce994c227b15649f3743c69a203c52501c91351436697e25113dff04cc49",
+    "before_sha256": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner.go"
+  },
+  {
+    "after_sha256": "9c25cca8c6cf6257a364575b5b1e5c1c559ff104fdebf691d2c14575073622bc",
+    "before_sha256": "8ecbcd1dc3029f3dc5d21db08ab320461fad3da75485b1ac5e18df0218fc005b",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go"
+  },
+  {
+    "after_sha256": "7f01b264d19ab549ff59699338e60a1c79ed26a47da00ab93aabc2afd55faeab",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go"
+  },
+  {
+    "after_sha256": "2acf7b45dd568889495edfff1b8950eaa5d7cac98552af1a37b24a187a6270c5",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_cooperative_work.go"
+  },
+  {
+    "after_sha256": "2368d1db07c2131cc0d160bd537594ca049255e1251b31821811b524e49b024a",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_cooperative_work_test.go"
+  },
+  {
+    "after_sha256": "9e29e29a594787b435c588f9c6c98deb09eefa29dae2f6fe705c7596a9a9c033",
+    "before_sha256": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_enroll_work.go"
+  },
+  {
+    "after_sha256": "c2179962fb55e5e146ee436fe850a06c223c9709ddfc26a2350bc5bde4f84b23",
+    "before_sha256": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_growth_work.go"
+  },
+  {
+    "after_sha256": "661954013bf1ddbddc57d5c23340c656bf5f26d7c41473831b81d3448ce390f4",
+    "before_sha256": "8420cb0d319c8f7fa1a7bf99baea94722157385c3a884dfa5b8868d429e334f4",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/internal/retainedalloc/owner_work.go"
+  },
+  {
+    "after_sha256": "47c7eefa738523e51f9b83bcd633c86d27eaa2e3811d173de3b276b98bfe0c9a",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/SOURCE_GUARDS_V6.md"
+  },
+  {
+    "after_sha256": "22eb9ba95fb8a07f44e301bb926eb8c5baf7575627c032bec29229c2d73dba82",
+    "before_sha256": "f080f03965a98f970598c2c1c82d7d08ca0d5ed3c813800ad914eb82c4e5b200",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/native_minimum_price_for_test_v6.go"
+  },
+  {
+    "after_sha256": "536d5b8a5d35fe299e557f00279771d8a71c6a1d626ef007832a9e630fd11d02",
+    "before_sha256": "fa771ab6ac833218d159bdd364827a32efeecd86b4acf445497d9702c033a559",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/registry.go"
+  },
+  {
+    "after_sha256": "2dda676b78aaace3239cd3e6dcf41a4c52a792e5d52797134bb2bcbcdfffeb80",
+    "before_sha256": "231ad0865af34a412691db9f48994651f9eefd5c47edcd1369788b8e132ed11f",
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/registry_unregister_work_v6.go"
+  },
+  {
+    "after_sha256": "f2deb19f7cdde779f608121e9e0a0ed047c853da181947f5d3080166714eaa71",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/source_guard.go"
+  },
+  {
+    "after_sha256": "38a1835b53e547a5fc71db48109d35bc6dcf99f0fb0ac1ee0c505da835f49cef",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/source_guard_price_for_test.go"
+  },
+  {
+    "after_sha256": "721fb04f58a5cca17023a9c6b91c27a33fa61d98b0454593048eae37c370f92a",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-core",
+    "path": "TreeDB/lifecycle/source_guard_test.go"
+  }
+]

@@ -1,0 +1,26 @@
+{
+  "accepted": true,
+  "all_source_writers_released": true,
+  "archive_live_and_compile_source_match": true,
+  "archive_sha256": "3580f794e27997e8343d9e89c74d4fa4a243e81ccb6524e110c273069584290a",
+  "compile_processes_joined": true,
+  "compile_result_sha256": "3ba0c240f98548231d4254fbae67d7c97b8d442049c0e6f86df7da046f98dc95",
+  "compile_runtime_executed": false,
+  "compile_status": "PASS",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "handoff_sha256": "43127af4665a8e1d204a6917ec8db6a5c02b33f72b8b62ff5a85bba64dd48de7",
+  "manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "modes_sha256": "8a4c37f51b59e81709dbf1681faa11be7f4d8565780b87a2a0e848adaf8400f1",
+  "native_publication_qualified": false,
+  "normalized_child_labels_only": true,
+  "plan_sha256": "7fc396bbb560062760ca1b081405369264bb29288e5986bec2d96fbab3fa7d37",
+  "producer_integration": "PENDING",
+  "scope": "core01 source/archive/handoff and compile verification; source semantics await independent review",
+  "selected_paths": 17,
+  "source_paths": 10458,
+  "test_bodies_executed": false,
+  "utc": "2026-10-16T15:54:13.749812+00:00"
+}

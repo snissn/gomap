@@ -1,0 +1,96 @@
+{
+  "Q32": "original gate remains open",
+  "accepted": true,
+  "all_process_groups_joined": true,
+  "all_source_snapshots_equal": true,
+  "checks": [
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 18,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-lifecycle",
+      "raw_sha256": "7f4db0bada3ce8483049e4d78228b5e9a33b17ae4f69c267ae8ce7173ba1edec",
+      "result_sha256": "fd9a1df60c3f955d5a27290d79d956559fccaddfd078b11e54a743870c96cfe7",
+      "source_equal": true,
+      "top_pass": 31,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 0,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "normal-memtable",
+      "raw_sha256": "cc252f3ff6c0a7241c5b484c44685e9b2c596fef016d003455a825aed1a5ca28",
+      "result_sha256": "21dc37717194eaeff39a0ce6255fa294569f2afe6ca12a83b3eb16b448cda696",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 10,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-retainedalloc",
+      "raw_sha256": "54d55cbee8becaf713ecea1dcc2b6140ee9e3bacddae14d243f8c66cca7f84f6",
+      "result_sha256": "5534312cb3a658607b0a7055054f7fefb4f07b65fb8995ae7b8f73a005355274",
+      "source_equal": true,
+      "top_pass": 31,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 18,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-lifecycle",
+      "raw_sha256": "dadd08ae71e532d03a240733aa5cd20c34503b96777ad54416f305ddc1e97d9a",
+      "result_sha256": "3d6786571b610158a6b3d22f0c453aa087d983d6d16a0cfd95659808bcc42bed",
+      "source_equal": true,
+      "top_pass": 31,
+      "unexpected_RUN": []
+    },
+    {
+      "FAIL": [],
+      "SKIP": [],
+      "accepted": true,
+      "child_pass": 0,
+      "groups_empty": true,
+      "missing_RUN": [],
+      "name": "race-memtable",
+      "raw_sha256": "a74281f47fc687ee6f3c09e6aa588db15b546d2ac05779e244dab09d0e27510f",
+      "result_sha256": "dd0c85d2a17743de624a3cf0bdbc446b8700b174afef58bfd0af2f0ec1aa25ee",
+      "source_equal": true,
+      "top_pass": 2,
+      "unexpected_RUN": []
+    }
+  ],
+  "commands_not_executed": [],
+  "counts": {
+    "normal": {
+      "child": 18,
+      "top": 33
+    },
+    "race": {
+      "child": 28,
+      "top": 64
+    }
+  },
+  "manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "plan_sha256": "784139d9b41c515ef89d7938312b4979d346d227f2d2ad740846296f1599e29d",
+  "scope": "frozen source-guard core focused normal/race raw recomputation",
+  "summary_sha256": "abd045406dcfdd9556830e3d2e99227bcf601bb0f130e3e4e3b58ae9cb17f75b",
+  "utc": "2026-10-16T16:02:58.574627+00:00"
+}

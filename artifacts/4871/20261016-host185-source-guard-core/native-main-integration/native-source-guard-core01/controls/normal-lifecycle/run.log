@@ -1,0 +1,102 @@
+=== RUN   TestReaderRegistryFastOnlyRefusalAndDrainProgress
+--- PASS: TestReaderRegistryFastOnlyRefusalAndDrainProgress (0.00s)
+=== RUN   TestLifecycle
+--- PASS: TestLifecycle (0.00s)
+=== RUN   TestReaderRegistry_FastPathSingleSeq
+--- PASS: TestReaderRegistry_FastPathSingleSeq (0.00s)
+=== RUN   TestReaderRegistry_FastAndSlowReadersMin
+--- PASS: TestReaderRegistry_FastAndSlowReadersMin (0.00s)
+=== RUN   TestReaderRegistry_FastPathConcurrentRegisterUnregister
+--- PASS: TestReaderRegistry_FastPathConcurrentRegisterUnregister (0.01s)
+=== RUN   TestReaderRegistry_ConcurrentFastAndSlowReaders
+--- PASS: TestReaderRegistry_ConcurrentFastAndSlowReaders (0.00s)
+=== RUN   TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle
+--- PASS: TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle (0.00s)
+=== RUN   TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow
+--- PASS: TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow (0.00s)
+=== RUN   TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing
+--- PASS: TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing (0.00s)
+=== RUN   TestReaderRegistry_EmptyShardClaimSerializesWithMinScan
+--- PASS: TestReaderRegistry_EmptyShardClaimSerializesWithMinScan (0.03s)
+=== RUN   TestNativeMVCCRegistryOriginalCohorts
+--- PASS: TestNativeMVCCRegistryOriginalCohorts (0.00s)
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/unregister
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup
+=== RUN   TestReaderRegistryHeaderCompletionTimingV6/partial-branch
+--- PASS: TestReaderRegistryHeaderCompletionTimingV6 (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/unregister (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/unused-fast-recheck (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/first-hole-cleanup (0.00s)
+    --- PASS: TestReaderRegistryHeaderCompletionTimingV6/partial-branch (0.00s)
+=== RUN   TestReaderRegistryHeaderFailureDebtV6
+--- PASS: TestReaderRegistryHeaderFailureDebtV6 (0.00s)
+=== RUN   TestReaderRegistryHeaderCompletionJoinsInFlightV6
+--- PASS: TestReaderRegistryHeaderCompletionJoinsInFlightV6 (0.00s)
+=== RUN   TestReaderRegistryPatriciaModelV6
+--- PASS: TestReaderRegistryPatriciaModelV6 (0.01s)
+=== RUN   TestReaderRegistryPositiveHandleWidthV6
+--- PASS: TestReaderRegistryPositiveHandleWidthV6 (0.00s)
+=== RUN   TestReaderRegistryOwnedAdmissionV6
+=== RUN   TestReaderRegistryOwnedAdmissionV6/header-refusal
+=== RUN   TestReaderRegistryOwnedAdmissionV6/peak-and-drain
+=== RUN   TestReaderRegistryOwnedAdmissionV6/closed-binding
+=== RUN   TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck
+=== RUN   TestReaderRegistryOwnedAdmissionV6/failed-unused-refund
+--- PASS: TestReaderRegistryOwnedAdmissionV6 (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/header-refusal (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/peak-and-drain (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/closed-binding (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/outside-lock-recheck (0.00s)
+    --- PASS: TestReaderRegistryOwnedAdmissionV6/failed-unused-refund (0.00s)
+=== RUN   TestReaderRegistryPositiveCompletionV6
+=== RUN   TestReaderRegistryPositiveCompletionV6/nil-work
+=== RUN   TestReaderRegistryPositiveCompletionV6/short-work
+=== RUN   TestReaderRegistryPositiveCompletionV6/different-owner
+--- PASS: TestReaderRegistryPositiveCompletionV6 (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/nil-work (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/short-work (0.00s)
+    --- PASS: TestReaderRegistryPositiveCompletionV6/different-owner (0.00s)
+=== RUN   TestReaderRegistryOwnedConcurrentSlowV6
+--- PASS: TestReaderRegistryOwnedConcurrentSlowV6 (0.00s)
+=== RUN   TestSourceGuardCanonicalHoleAndCountedAuthorityV6
+--- PASS: TestSourceGuardCanonicalHoleAndCountedAuthorityV6 (0.00s)
+=== RUN   TestSourceGuardDepth63SavedRepairV6
+--- PASS: TestSourceGuardDepth63SavedRepairV6 (0.00s)
+=== RUN   TestSourceGuardReservedCellCancellationV6
+--- PASS: TestSourceGuardReservedCellCancellationV6 (0.00s)
+=== RUN   TestSourceGuardHelperAndOriginRefusalV6
+--- PASS: TestSourceGuardHelperAndOriginRefusalV6 (0.00s)
+=== RUN   TestSourceGuardFullSearchFailureSharedCleanupV6
+--- PASS: TestSourceGuardFullSearchFailureSharedCleanupV6 (0.00s)
+=== RUN   TestSourceGuardStructuralTrafficOverflowV6
+--- PASS: TestSourceGuardStructuralTrafficOverflowV6 (0.00s)
+=== RUN   TestSourceGuardLaterLeaseOnlyRefusalKeepsOriginalDebtV6
+--- PASS: TestSourceGuardLaterLeaseOnlyRefusalKeepsOriginalDebtV6 (0.00s)
+=== RUN   TestSourceGuardOrdinaryLeaseOnlyPolicyV6
+--- PASS: TestSourceGuardOrdinaryLeaseOnlyPolicyV6 (0.00s)
+=== RUN   TestSourceGuardWithdrawalUsesProtectedActualSpliceChargeV6
+    source_guard_test.go:497: -1 <nil>
+--- FAIL: TestSourceGuardWithdrawalUsesProtectedActualSpliceChargeV6 (0.00s)
+=== RUN   TestSourceGuardCancellationAcknowledgmentAndReuseV6
+--- PASS: TestSourceGuardCancellationAcknowledgmentAndReuseV6 (0.00s)
+=== RUN   TestSourceGuardEntryAdmissionAndResetRowsV6
+=== RUN   TestSourceGuardEntryAdmissionAndResetRowsV6/records
+=== RUN   TestSourceGuardEntryAdmissionAndResetRowsV6/bytes
+--- PASS: TestSourceGuardEntryAdmissionAndResetRowsV6 (0.00s)
+    --- PASS: TestSourceGuardEntryAdmissionAndResetRowsV6/records (0.00s)
+    --- PASS: TestSourceGuardEntryAdmissionAndResetRowsV6/bytes (0.00s)
+=== RUN   TestSourceGuardRenewalAndOrdinaryChurnV6
+=== RUN   TestSourceGuardRenewalAndOrdinaryChurnV6/increasing
+=== RUN   TestSourceGuardRenewalAndOrdinaryChurnV6/equal
+=== RUN   TestSourceGuardRenewalAndOrdinaryChurnV6/lower
+=== RUN   TestSourceGuardRenewalAndOrdinaryChurnV6/zero
+--- PASS: TestSourceGuardRenewalAndOrdinaryChurnV6 (0.00s)
+    --- PASS: TestSourceGuardRenewalAndOrdinaryChurnV6/increasing (0.00s)
+    --- PASS: TestSourceGuardRenewalAndOrdinaryChurnV6/equal (0.00s)
+    --- PASS: TestSourceGuardRenewalAndOrdinaryChurnV6/lower (0.00s)
+    --- PASS: TestSourceGuardRenewalAndOrdinaryChurnV6/zero (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/lifecycle	0.044s
+FAIL

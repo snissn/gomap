@@ -1,0 +1,84 @@
+{
+  "elapsed_seconds": 4.584404150024056,
+  "ended_utc": "2026-10-16T15:49:26.350943+00:00",
+  "exit_code": 0,
+  "git_identity_unchanged": true,
+  "groups_and_adopted_children_empty": true,
+  "initial_residual": [],
+  "leader_joined": true,
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1784008,
+      "pid": 1784008,
+      "ppid": 1783970,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1784008,
+      "pid": 1784030,
+      "ppid": 1784008,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1784008,
+      "pid": 1784035,
+      "ppid": 1784008,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1784008,
+      "pid": 1784053,
+      "ppid": 1784008,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1784008,
+      "pid": 1784075,
+      "ppid": 1784008,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1784008,
+      "pid": 1784080,
+      "ppid": 1784008,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1784008,
+      "pid": 1784088,
+      "ppid": 1784008,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1784008,
+      "pid": 1784104,
+      "ppid": 1784008,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1784008,
+      "pid": 1784113,
+      "ppid": 1784008,
+      "state": "R"
+    }
+  ],
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_children": [],
+  "scope": "retainedalloc/lifecycle/memtable compilation and default vet only; other packages, producer integration and runtime not qualified",
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T15:49:21.766530+00:00",
+  "status": "PASS",
+  "test_bodies_executed": false
+}

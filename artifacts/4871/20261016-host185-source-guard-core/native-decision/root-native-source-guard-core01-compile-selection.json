@@ -1,0 +1,32 @@
+{
+  "all_source_writers_released": true,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-c",
+    "-o",
+    "/dev/null",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/lifecycle",
+    "./TreeDB/internal/memtable"
+  ],
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "modes_sha256": "8a4c37f51b59e81709dbf1681faa11be7f4d8565780b87a2a0e848adaf8400f1",
+  "module_inputs_readonly": true,
+  "outer_timeout_seconds": 900,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01",
+  "prior_runtime_summary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-registry-api-source04/controls/summary.json",
+  "prior_runtime_summary_sha256": "79f3d721dc6653df9cfb2427c6c5a17e9a24c171debec0c3461acf334e48e7de",
+  "runner_sha256": "31d96b19e3a105ffacc45a010672dcb56caaed00e9a9abbb40900382e0985bb4",
+  "scope": "source-guard-core-compile-only",
+  "source_disposition": "root checked exact 17-path lease and frozen unchanged whole source; compilation only, independent semantic review remains pending",
+  "source_readiness": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/freeze.json",
+  "source_readiness_sha256": "6ed8d3af5992f997fe18dddea282a990d5c410b3b7001a8a7e58a2d01a901f84",
+  "test_bodies_authorized": false
+}

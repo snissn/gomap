@@ -1,0 +1,1082 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/canonical-before-source-guard-core.json",
+    "path": "live-startup/canonical-before-source-guard-core.json.gz",
+    "source_bytes": 70534,
+    "source_sha256": "4be76d3cc56dc66cfeca3fc5ba10490be3e1e8b9ced9b601cc34e91be98d7148",
+    "stored_bytes": 24836,
+    "stored_sha256": "425a0aeb15076e9a1912fe5bbdebe65a82c766ce0d0557dd2a689556a0d3746a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/issue4878-before-source-guard-core.json",
+    "path": "live-startup/issue4878-before-source-guard-core.json.gz",
+    "source_bytes": 69251,
+    "source_sha256": "5c293d64a1a606451bc4f4fb64432b605e9af3812c49c72adb906891361c560d",
+    "stored_bytes": 24586,
+    "stored_sha256": "47ffc3604695d675b8d2de29c27fbe97f0e72891fc7bf45c771141df105d4c07",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/live-startup/main-before-source-guard-core.json",
+    "path": "live-startup/main-before-source-guard-core.json",
+    "source_bytes": 361,
+    "source_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "stored_bytes": 361,
+    "stored_sha256": "9a4127e4cac0dc7974acf5d64348f08393af706af61aca789d23d70fa27d3520",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core01-review01.json",
+    "path": "native-decision/native-source-guard-core01-review01.json",
+    "source_bytes": 9141,
+    "source_sha256": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+    "stored_bytes": 9141,
+    "stored_sha256": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core01-review01.md",
+    "path": "native-decision/native-source-guard-core01-review01.md",
+    "source_bytes": 4371,
+    "source_sha256": "3691ffa66b626b87f665d3b05145156308e202c65d2093b03f419322336ea405",
+    "stored_bytes": 4371,
+    "stored_sha256": "3691ffa66b626b87f665d3b05145156308e202c65d2093b03f419322336ea405",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core02-fixture-review01.json",
+    "path": "native-decision/native-source-guard-core02-fixture-review01.json",
+    "source_bytes": 2965,
+    "source_sha256": "ff214a7072e189609ba49ad1a2400371927cd7817dadd097dbb016da35f2ae47",
+    "stored_bytes": 2965,
+    "stored_sha256": "ff214a7072e189609ba49ad1a2400371927cd7817dadd097dbb016da35f2ae47",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core02-fixture-review01.md",
+    "path": "native-decision/native-source-guard-core02-fixture-review01.md",
+    "source_bytes": 2682,
+    "source_sha256": "628b171dfb602158b6ddeb7525a002bff478115742a98c5779cd93ee38adab30",
+    "stored_bytes": 2682,
+    "stored_sha256": "628b171dfb602158b6ddeb7525a002bff478115742a98c5779cd93ee38adab30",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-implementation-preparation.json",
+    "path": "native-decision/native-source-guard-implementation-preparation.json",
+    "source_bytes": 5977,
+    "source_sha256": "dd10966f9fcd000a312903815bd4a840fc7b4f1cfd6c92fd50641c39a4477180",
+    "stored_bytes": 5977,
+    "stored_sha256": "dd10966f9fcd000a312903815bd4a840fc7b4f1cfd6c92fd50641c39a4477180",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-implementation-preparation.md",
+    "path": "native-decision/native-source-guard-implementation-preparation.md",
+    "source_bytes": 18626,
+    "source_sha256": "873ced24d8cd6cb4c2fbdc74a457afc4d90160b6be16ac49afd42c612ce4aa79",
+    "stored_bytes": 18626,
+    "stored_sha256": "873ced24d8cd6cb4c2fbdc74a457afc4d90160b6be16ac49afd42c612ce4aa79",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-mutation-advice01.json",
+    "path": "native-decision/native-source-guard-mutation-advice01.json",
+    "source_bytes": 4347,
+    "source_sha256": "643e6ce64d5d03da77ffa867b711950b23d28a27b78b02be17064ba3f55806f3",
+    "stored_bytes": 4347,
+    "stored_sha256": "643e6ce64d5d03da77ffa867b711950b23d28a27b78b02be17064ba3f55806f3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-mutation-advice01.md",
+    "path": "native-decision/native-source-guard-mutation-advice01.md",
+    "source_bytes": 17582,
+    "source_sha256": "ab00c86f80a5db59cf9b74f56ef79363f657f608be588c104637f7a876a92fb0",
+    "stored_bytes": 17582,
+    "stored_sha256": "ab00c86f80a5db59cf9b74f56ef79363f657f608be588c104637f7a876a92fb0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-advice-adoption.json",
+    "path": "native-decision/root-native-source-guard-advice-adoption.json",
+    "source_bytes": 962,
+    "source_sha256": "823410d29bb9013de9dd83d1c183fba61aea40e7f5a8a111c5798ab2e76ad115",
+    "stored_bytes": 962,
+    "stored_sha256": "823410d29bb9013de9dd83d1c183fba61aea40e7f5a8a111c5798ab2e76ad115",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-compile-selection.json",
+    "path": "native-decision/root-native-source-guard-core01-compile-selection.json",
+    "source_bytes": 1616,
+    "source_sha256": "89c51a9eecabba4a252cfe1c46f547e4184c492fa79031e6649251b17d92a2f6",
+    "stored_bytes": 1616,
+    "stored_sha256": "89c51a9eecabba4a252cfe1c46f547e4184c492fa79031e6649251b17d92a2f6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-focused-selection.json",
+    "path": "native-decision/root-native-source-guard-core01-focused-selection.json",
+    "source_bytes": 2037,
+    "source_sha256": "d8cb4f9fcc59e4b0259711e772c5e3bb8764d93df4da326badee6b73b696c1b5",
+    "stored_bytes": 2037,
+    "stored_sha256": "d8cb4f9fcc59e4b0259711e772c5e3bb8764d93df4da326badee6b73b696c1b5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-focused-verification.json",
+    "path": "native-decision/root-native-source-guard-core01-focused-verification.json",
+    "source_bytes": 1846,
+    "source_sha256": "d43298d3d66757f2b2d9454163c5f3b9b308bea879958fb1a5d8d620f2cfd4b6",
+    "stored_bytes": 1846,
+    "stored_sha256": "d43298d3d66757f2b2d9454163c5f3b9b308bea879958fb1a5d8d620f2cfd4b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-freeze-selection.json",
+    "path": "native-decision/root-native-source-guard-core01-freeze-selection.json",
+    "source_bytes": 6445,
+    "source_sha256": "dea9c9f187abb36e2a79054aac1c7d8d829c2b00545b5fa36523e9ad95e89630",
+    "stored_bytes": 6445,
+    "stored_sha256": "dea9c9f187abb36e2a79054aac1c7d8d829c2b00545b5fa36523e9ad95e89630",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-review-adoption.json",
+    "path": "native-decision/root-native-source-guard-core01-review-adoption.json",
+    "source_bytes": 720,
+    "source_sha256": "40c18cefba5a1d184e687d2fd3bdfe6b57a9b1b447abd5ab7698e54b77bb0a3b",
+    "stored_bytes": 720,
+    "stored_sha256": "40c18cefba5a1d184e687d2fd3bdfe6b57a9b1b447abd5ab7698e54b77bb0a3b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core01-source-verification.json",
+    "path": "native-decision/root-native-source-guard-core01-source-verification.json",
+    "source_bytes": 1268,
+    "source_sha256": "cfb03b240720b7924887a125afa426e6beb1d37d90b1761037f793fe3ab6e89a",
+    "stored_bytes": 1268,
+    "stored_sha256": "cfb03b240720b7924887a125afa426e6beb1d37d90b1761037f793fe3ab6e89a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-effective-verification.json",
+    "path": "native-decision/root-native-source-guard-core02-effective-verification.json",
+    "source_bytes": 1423,
+    "source_sha256": "12873453799d37b05ba6fe61e5aa3887e8744b122a7238f96480f990afa5a49b",
+    "stored_bytes": 1423,
+    "stored_sha256": "12873453799d37b05ba6fe61e5aa3887e8744b122a7238f96480f990afa5a49b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-focused-selection.json",
+    "path": "native-decision/root-native-source-guard-core02-focused-selection.json",
+    "source_bytes": 2499,
+    "source_sha256": "e24131867010c6ad84cdd23f312c4e4f4a8206789f50c8904674ae288c3ff810",
+    "stored_bytes": 2499,
+    "stored_sha256": "e24131867010c6ad84cdd23f312c4e4f4a8206789f50c8904674ae288c3ff810",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-focused-verification.json",
+    "path": "native-decision/root-native-source-guard-core02-focused-verification.json",
+    "source_bytes": 2984,
+    "source_sha256": "dadc621546b7c858c747b84739b4a85b6dd99d8448fd240cf1c111484821b104",
+    "stored_bytes": 2984,
+    "stored_sha256": "dadc621546b7c858c747b84739b4a85b6dd99d8448fd240cf1c111484821b104",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-freeze-selection.json",
+    "path": "native-decision/root-native-source-guard-core02-freeze-selection.json",
+    "source_bytes": 1117,
+    "source_sha256": "b05ef893b524dae00597ab68d7d73d812ac56bb8b7f2fb5a66b5a2e111aa565c",
+    "stored_bytes": 1117,
+    "stored_sha256": "b05ef893b524dae00597ab68d7d73d812ac56bb8b7f2fb5a66b5a2e111aa565c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-repair-selection.json",
+    "path": "native-decision/root-native-source-guard-core02-repair-selection.json",
+    "source_bytes": 925,
+    "source_sha256": "b7b214026c0aa72cf92dc0c4a02d697c3f207c1ce03df8a3a716458aaa042428",
+    "stored_bytes": 925,
+    "stored_sha256": "b7b214026c0aa72cf92dc0c4a02d697c3f207c1ce03df8a3a716458aaa042428",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-reuse.json",
+    "path": "native-decision/root-native-source-guard-core02-reuse.json",
+    "source_bytes": 1563,
+    "source_sha256": "c47fa75ca49b53bc96a75fa0af4a04b86a20a6eabecc36e1d772d3371f695c66",
+    "stored_bytes": 1563,
+    "stored_sha256": "c47fa75ca49b53bc96a75fa0af4a04b86a20a6eabecc36e1d772d3371f695c66",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-review-adoption.json",
+    "path": "native-decision/root-native-source-guard-core02-review-adoption.json",
+    "source_bytes": 976,
+    "source_sha256": "3601430e0c731b6884b1d3aeed32eb3e0243dad4047d0e0303ff1206a7bf243b",
+    "stored_bytes": 976,
+    "stored_sha256": "3601430e0c731b6884b1d3aeed32eb3e0243dad4047d0e0303ff1206a7bf243b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-implementation-activation.json",
+    "path": "native-decision/root-native-source-guard-implementation-activation.json",
+    "source_bytes": 1850,
+    "source_sha256": "8571a2231bc4a8304371475f43c4377802da50525b81d2e1853edbb253632869",
+    "stored_bytes": 1850,
+    "stored_sha256": "8571a2231bc4a8304371475f43c4377802da50525b81d2e1853edbb253632869",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-implementation-selection.md",
+    "path": "native-decision/root-native-source-guard-implementation-selection.md",
+    "source_bytes": 9125,
+    "source_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "stored_bytes": 9125,
+    "stored_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-last-drop-selection.md",
+    "path": "native-decision/root-native-source-guard-last-drop-selection.md",
+    "source_bytes": 2826,
+    "source_sha256": "d2c8b58bcf58c2b6098b46107e2173b56b22803b693657b11175ffca8701cc8b",
+    "stored_bytes": 2826,
+    "stored_sha256": "d2c8b58bcf58c2b6098b46107e2173b56b22803b693657b11175ffca8701cc8b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-ordinary-policy-selection.md",
+    "path": "native-decision/root-native-source-guard-ordinary-policy-selection.md",
+    "source_bytes": 1513,
+    "source_sha256": "f0451db39a9f85fbad1040571cbc9ee41694bc589d731d5e3245552337ccd789",
+    "stored_bytes": 1513,
+    "stored_sha256": "f0451db39a9f85fbad1040571cbc9ee41694bc589d731d5e3245552337ccd789",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer-integration-activation.json",
+    "path": "native-decision/root-native-source-guard-producer-integration-activation.json",
+    "source_bytes": 2668,
+    "source_sha256": "713094421e5573e7cb6684aa4feffe0af8782f865af387aa0c306e845a8bb2c5",
+    "stored_bytes": 2668,
+    "stored_sha256": "713094421e5573e7cb6684aa4feffe0af8782f865af387aa0c306e845a8bb2c5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-source-guard-core01.py",
+    "path": "native-main-integration/freeze-source-guard-core01.py",
+    "source_bytes": 5958,
+    "source_sha256": "5e14acd772cd530fc8c2116374e4be169641b6d9b83757868489b20d6cd458d8",
+    "stored_bytes": 5958,
+    "stored_sha256": "5e14acd772cd530fc8c2116374e4be169641b6d9b83757868489b20d6cd458d8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/freeze-source-guard-core02.py",
+    "path": "native-main-integration/freeze-source-guard-core02.py",
+    "source_bytes": 5954,
+    "source_sha256": "6b4a7a5e5fcf77c649c1f779113d033b28d261820f3b8bb519591e8569814265",
+    "stored_bytes": 5954,
+    "stored_sha256": "6b4a7a5e5fcf77c649c1f779113d033b28d261820f3b8bb519591e8569814265",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/README.md",
+    "path": "native-main-integration/native-source-guard-core-preparation/README.md",
+    "source_bytes": 5761,
+    "source_sha256": "051d1c9287406582655f30db1f317cbb56543ab1a4c3daf77af23996c1029baf",
+    "stored_bytes": 5761,
+    "stored_sha256": "051d1c9287406582655f30db1f317cbb56543ab1a4c3daf77af23996c1029baf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/after-source.tar.gz",
+    "path": "native-main-integration/native-source-guard-core-preparation/after-source.tar.gz.gz",
+    "source_bytes": 41514,
+    "source_sha256": "661910d5ad22d404f1316e14882b7eec0b1f04c30962e78277e7947fed71b288",
+    "stored_bytes": 41547,
+    "stored_sha256": "9bdc1329634abd3db2ab7921baf8894a186470c408affed5a2dbb2f85ef5f9bb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/after.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/after.json",
+    "source_bytes": 2069,
+    "source_sha256": "047b70ef14d634ba1fd07f9237a7d6fb79797b4d15f421cec9dc5146cd743936",
+    "stored_bytes": 2069,
+    "stored_sha256": "047b70ef14d634ba1fd07f9237a7d6fb79797b4d15f421cec9dc5146cd743936",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/before-source.tar.gz",
+    "path": "native-main-integration/native-source-guard-core-preparation/before-source.tar.gz",
+    "source_bytes": 19399,
+    "source_sha256": "cd51e87373f35d6c613e6e80263b9d40007dbc89c94f846963da6e56f4a4b418",
+    "stored_bytes": 19399,
+    "stored_sha256": "cd51e87373f35d6c613e6e80263b9d40007dbc89c94f846963da6e56f4a4b418",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/before.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/before.json",
+    "source_bytes": 1635,
+    "source_sha256": "55754712fd74bd426584a861435005dd12c8b3fd5f3319f7fabb2649bf4f71c6",
+    "stored_bytes": 1635,
+    "stored_sha256": "55754712fd74bd426584a861435005dd12c8b3fd5f3319f7fabb2649bf4f71c6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/control-inventory.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/control-inventory.json",
+    "source_bytes": 14562,
+    "source_sha256": "5aab0349cfe5633aac9feec7f01ea38082097c63e91bc975dc2f834e4ad48c43",
+    "stored_bytes": 14562,
+    "stored_sha256": "5aab0349cfe5633aac9feec7f01ea38082097c63e91bc975dc2f834e4ad48c43",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/delta.patch",
+    "path": "native-main-integration/native-source-guard-core-preparation/delta.patch.gz",
+    "source_bytes": 113276,
+    "source_sha256": "f8a19c1cac658fb9c63308198a263c8aac1af3ff4129346fe9126776af564372",
+    "stored_bytes": 24683,
+    "stored_sha256": "9a032b98d2ae95d0c154b7910d0b9bf54dd39da1c5ecc596e6e0e4029a20a21f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/handoff.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/handoff.json",
+    "source_bytes": 5678,
+    "source_sha256": "43127af4665a8e1d204a6917ec8db6a5c02b33f72b8b62ff5a85bba64dd48de7",
+    "stored_bytes": 5678,
+    "stored_sha256": "43127af4665a8e1d204a6917ec8db6a5c02b33f72b8b62ff5a85bba64dd48de7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/modes.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/modes.json",
+    "source_bytes": 1066,
+    "source_sha256": "c1e2a7c91726fc56eb7acd81158ae6371385542cbbdfe24a6ff7d97046100a35",
+    "stored_bytes": 1066,
+    "stored_sha256": "c1e2a7c91726fc56eb7acd81158ae6371385542cbbdfe24a6ff7d97046100a35",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/pricing-and-custody.md",
+    "path": "native-main-integration/native-source-guard-core-preparation/pricing-and-custody.md",
+    "source_bytes": 4366,
+    "source_sha256": "52c1ca33bf5b39c311dc38b73bc9f97dedafc5d63d4b373ecf18072f928eb96a",
+    "stored_bytes": 4366,
+    "stored_sha256": "52c1ca33bf5b39c311dc38b73bc9f97dedafc5d63d4b373ecf18072f928eb96a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/proposed-commands.json",
+    "path": "native-main-integration/native-source-guard-core-preparation/proposed-commands.json.gz",
+    "source_bytes": 30572,
+    "source_sha256": "646da32efbb8323bd699f5ccf42a9edd2835d1f4f89f2fcc98e7b9dd8c7718e2",
+    "stored_bytes": 3628,
+    "stored_sha256": "1ccb80e5249e8d006b8aaf79a0ed4d6ce4c14d8bd2936b16c07020d1845baec5",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/changed-files.json",
+    "path": "native-main-integration/native-source-guard-core01/changed-files.json",
+    "source_bytes": 4729,
+    "source_sha256": "3cbf8d48cdb523d9ed82ea7fa284cbdc2de331e0b92898d1c4dac1b56c55e031",
+    "stored_bytes": 4729,
+    "stored_sha256": "3cbf8d48cdb523d9ed82ea7fa284cbdc2de331e0b92898d1c4dac1b56c55e031",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/changed-source.tar.gz",
+    "path": "native-main-integration/native-source-guard-core01/changed-source.tar.gz.gz",
+    "source_bytes": 41731,
+    "source_sha256": "1001123f8da4448ce03099b5f5df50a092959a91fada024c990b1b8b7fc21bdb",
+    "stored_bytes": 41764,
+    "stored_sha256": "05577e1f1aad7d4d875be3cb8209e432c7ea87dc065a31cf5912175e3e71734d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/command.json",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/command.json",
+    "source_bytes": 2654,
+    "source_sha256": "bd9e2269a9a4628b7c2f0029198b4800b6d50fdb4b143b4947d87e0561118b9b",
+    "stored_bytes": 2654,
+    "stored_sha256": "bd9e2269a9a4628b7c2f0029198b4800b6d50fdb4b143b4947d87e0561118b9b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/process.json",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/process.json",
+    "source_bytes": 131,
+    "source_sha256": "1d94c6875419bbe752b12337290703ddd0907ad65445fcf43f4d26a2afd12878",
+    "stored_bytes": 131,
+    "stored_sha256": "1d94c6875419bbe752b12337290703ddd0907ad65445fcf43f4d26a2afd12878",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/result.json",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/result.json",
+    "source_bytes": 1842,
+    "source_sha256": "3ba0c240f98548231d4254fbae67d7c97b8d442049c0e6f86df7da046f98dc95",
+    "stored_bytes": 1842,
+    "stored_sha256": "3ba0c240f98548231d4254fbae67d7c97b8d442049c0e6f86df7da046f98dc95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/run.log",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/run.log",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/source-after.json",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/source-before.json",
+    "path": "native-main-integration/native-source-guard-core01/compile-only/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/identity.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/identity.json",
+    "source_bytes": 2875,
+    "source_sha256": "22a9a6e63b463bc1ee55d990d4986e391d78d2ccf892f17b6e0e1729d58e999a",
+    "stored_bytes": 2875,
+    "stored_sha256": "22a9a6e63b463bc1ee55d990d4986e391d78d2ccf892f17b6e0e1729d58e999a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/command.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/command.json",
+    "source_bytes": 5364,
+    "source_sha256": "cefad007b7c70b3a9b1ffe2d4fb7a6c0d8d53dc213083b1f6bfeecc57dd365b2",
+    "stored_bytes": 5364,
+    "stored_sha256": "cefad007b7c70b3a9b1ffe2d4fb7a6c0d8d53dc213083b1f6bfeecc57dd365b2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/environment.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/environment.json",
+    "source_bytes": 1705,
+    "source_sha256": "fee1f5bacf88c14fb0e4a646a428f9739dc29690d7d090a06441c58d24177a72",
+    "stored_bytes": 1705,
+    "stored_sha256": "fee1f5bacf88c14fb0e4a646a428f9739dc29690d7d090a06441c58d24177a72",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/process.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/process.json",
+    "source_bytes": 144,
+    "source_sha256": "54047b3832ac3622ff174456c43381b2ff80e1ea7be34602088f3d5460c9288d",
+    "stored_bytes": 144,
+    "stored_sha256": "54047b3832ac3622ff174456c43381b2ff80e1ea7be34602088f3d5460c9288d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/result.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/result.json",
+    "source_bytes": 11328,
+    "source_sha256": "e86cd7e1e0f53f2220a16acd930eca1006275a1c8eab2349d78e2d84d1a5ed3b",
+    "stored_bytes": 11328,
+    "stored_sha256": "e86cd7e1e0f53f2220a16acd930eca1006275a1c8eab2349d78e2d84d1a5ed3b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/run.log",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/run.log",
+    "source_bytes": 6256,
+    "source_sha256": "0ba7257c1fab423b20c426ce753dda4016495a2dfff0c843c4f396c50107ec76",
+    "stored_bytes": 6256,
+    "stored_sha256": "0ba7257c1fab423b20c426ce753dda4016495a2dfff0c843c4f396c50107ec76",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/source-after.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-lifecycle/source-before.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-lifecycle/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/command.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/command.json",
+    "source_bytes": 5648,
+    "source_sha256": "a7e7fe3a1d024f7be1044922d2bfeb3a232530388045d1110921d0b7ed9cbab3",
+    "stored_bytes": 5648,
+    "stored_sha256": "a7e7fe3a1d024f7be1044922d2bfeb3a232530388045d1110921d0b7ed9cbab3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/environment.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/environment.json",
+    "source_bytes": 1709,
+    "source_sha256": "55d78f6c5451ee11cd02f580a94133208b23d3926d0500653ffdbd3fc3a5ab86",
+    "stored_bytes": 1709,
+    "stored_sha256": "55d78f6c5451ee11cd02f580a94133208b23d3926d0500653ffdbd3fc3a5ab86",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/process.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/process.json",
+    "source_bytes": 144,
+    "source_sha256": "fb31389ed0013d7014938c587182f5685c85bd3b4d54b29435baebf15c3cc78f",
+    "stored_bytes": 144,
+    "stored_sha256": "fb31389ed0013d7014938c587182f5685c85bd3b4d54b29435baebf15c3cc78f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/result.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/result.json",
+    "source_bytes": 11052,
+    "source_sha256": "363df075dd69d0a0df62db88bcee97faeb39dc9105d176322d1e3edc2ab54ef0",
+    "stored_bytes": 11052,
+    "stored_sha256": "363df075dd69d0a0df62db88bcee97faeb39dc9105d176322d1e3edc2ab54ef0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/run.log",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/run.log",
+    "source_bytes": 5849,
+    "source_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+    "stored_bytes": 5849,
+    "stored_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/source-after.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/source-before.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/normal-retainedalloc/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/controls/summary.json",
+    "path": "native-main-integration/native-source-guard-core01/controls/summary.json",
+    "source_bytes": 1258,
+    "source_sha256": "7d0f255538cdce29b788df147ba476b6aed1a359021af5506593fc5e5190c4a4",
+    "stored_bytes": 1258,
+    "stored_sha256": "7d0f255538cdce29b788df147ba476b6aed1a359021af5506593fc5e5190c4a4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/freeze.json",
+    "path": "native-main-integration/native-source-guard-core01/freeze.json",
+    "source_bytes": 2763,
+    "source_sha256": "6ed8d3af5992f997fe18dddea282a990d5c410b3b7001a8a7e58a2d01a901f84",
+    "stored_bytes": 2763,
+    "stored_sha256": "6ed8d3af5992f997fe18dddea282a990d5c410b3b7001a8a7e58a2d01a901f84",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/proposed-commands.json",
+    "path": "native-main-integration/native-source-guard-core01/proposed-commands.json.gz",
+    "source_bytes": 28500,
+    "source_sha256": "7fc396bbb560062760ca1b081405369264bb29288e5986bec2d96fbab3fa7d37",
+    "stored_bytes": 3721,
+    "stored_sha256": "83c8d5bcabda2cc3a89786c60cfbf1893626a6946e8a150e6fd403788d40d9b1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/source-frozen.json",
+    "path": "native-main-integration/native-source-guard-core01/source-frozen.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+    "stored_bytes": 467643,
+    "stored_sha256": "45f6570c5f05fa8151dc0533cbd84e4d5f6e4ced93422335cb2c20a3eef5a23a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/source-modes.json",
+    "path": "native-main-integration/native-source-guard-core01/source-modes.json.gz",
+    "source_bytes": 982417,
+    "source_sha256": "8a4c37f51b59e81709dbf1681faa11be7f4d8565780b87a2a0e848adaf8400f1",
+    "stored_bytes": 72048,
+    "stored_sha256": "264c24a89d0bd5b5561eb83aafdb9782c0d3ee70683b47c1784230f1e642bbd6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/source.delta.patch",
+    "path": "native-main-integration/native-source-guard-core01/source.delta.patch.gz",
+    "source_bytes": 113559,
+    "source_sha256": "5498242f3a5b074146dadd4065e000611308915a072d3f2cfd5aee2796d508bf",
+    "stored_bytes": 24711,
+    "stored_sha256": "dccb2d5fdae68e19636fedc2cf702d7becad4f389daa5c076c4c96688b800cd9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/changed-files.json",
+    "path": "native-main-integration/native-source-guard-core02/changed-files.json",
+    "source_bytes": 296,
+    "source_sha256": "8fb857b1e30d459d424573d79380f86da7f3abead2b9b2a2d8d991543de17d07",
+    "stored_bytes": 296,
+    "stored_sha256": "8fb857b1e30d459d424573d79380f86da7f3abead2b9b2a2d8d991543de17d07",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/changed-source.tar.gz",
+    "path": "native-main-integration/native-source-guard-core02/changed-source.tar.gz",
+    "source_bytes": 5648,
+    "source_sha256": "fea6ce2af7488bce09b171732dd1405c196e17c0b6e3a58f2a2702064dcb9d24",
+    "stored_bytes": 5648,
+    "stored_sha256": "fea6ce2af7488bce09b171732dd1405c196e17c0b6e3a58f2a2702064dcb9d24",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/identity.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/identity.json",
+    "source_bytes": 2875,
+    "source_sha256": "a82569cf1885b9f4a0b0f2ba4a4857a1d60ba294a0b443407ecaef8cbf9aca77",
+    "stored_bytes": 2875,
+    "stored_sha256": "a82569cf1885b9f4a0b0f2ba4a4857a1d60ba294a0b443407ecaef8cbf9aca77",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/command.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/command.json",
+    "source_bytes": 5364,
+    "source_sha256": "dc44103f8e2006d8cbd737f1291c08a34da838787fea16a7af8327fe09c0e385",
+    "stored_bytes": 5364,
+    "stored_sha256": "dc44103f8e2006d8cbd737f1291c08a34da838787fea16a7af8327fe09c0e385",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/environment.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/environment.json",
+    "source_bytes": 1705,
+    "source_sha256": "77d96a3051391330a29f5723918d35de9a8e86bdac9756d9cbc87ac9e4506090",
+    "stored_bytes": 1705,
+    "stored_sha256": "77d96a3051391330a29f5723918d35de9a8e86bdac9756d9cbc87ac9e4506090",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/process.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/process.json",
+    "source_bytes": 144,
+    "source_sha256": "f9cb13d441666eb20e86b9a587a2ba8470445f35be3c987179041f1d4147fa99",
+    "stored_bytes": 144,
+    "stored_sha256": "f9cb13d441666eb20e86b9a587a2ba8470445f35be3c987179041f1d4147fa99",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/result.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/result.json",
+    "source_bytes": 11488,
+    "source_sha256": "fd9a1df60c3f955d5a27290d79d956559fccaddfd078b11e54a743870c96cfe7",
+    "stored_bytes": 11488,
+    "stored_sha256": "fd9a1df60c3f955d5a27290d79d956559fccaddfd078b11e54a743870c96cfe7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/run.log",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/run.log",
+    "source_bytes": 6212,
+    "source_sha256": "7f4db0bada3ce8483049e4d78228b5e9a33b17ae4f69c267ae8ce7173ba1edec",
+    "stored_bytes": 6212,
+    "stored_sha256": "7f4db0bada3ce8483049e4d78228b5e9a33b17ae4f69c267ae8ce7173ba1edec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/source-after.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/source-before.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-lifecycle/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/command.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/command.json",
+    "source_bytes": 1876,
+    "source_sha256": "4385a0401a1e6ab8cf69926411340d0c39d42d0ca48c6f14b3c19d42c252cc97",
+    "stored_bytes": 1876,
+    "stored_sha256": "4385a0401a1e6ab8cf69926411340d0c39d42d0ca48c6f14b3c19d42c252cc97",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/environment.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/environment.json",
+    "source_bytes": 1704,
+    "source_sha256": "8bede115cf15ce891f926ddae52854831775bc169adeb5dd63920f60ff6bce4c",
+    "stored_bytes": 1704,
+    "stored_sha256": "8bede115cf15ce891f926ddae52854831775bc169adeb5dd63920f60ff6bce4c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/process.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/process.json",
+    "source_bytes": 144,
+    "source_sha256": "4922f50fbda3b00fac88e6ee778800789f7567019a3bd6655b11e3ada99ebfbc",
+    "stored_bytes": 144,
+    "stored_sha256": "4922f50fbda3b00fac88e6ee778800789f7567019a3bd6655b11e3ada99ebfbc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/result.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/result.json",
+    "source_bytes": 1910,
+    "source_sha256": "21dc37717194eaeff39a0ce6255fa294569f2afe6ca12a83b3eb16b448cda696",
+    "stored_bytes": 1910,
+    "stored_sha256": "21dc37717194eaeff39a0ce6255fa294569f2afe6ca12a83b3eb16b448cda696",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/run.log",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/run.log",
+    "source_bytes": 322,
+    "source_sha256": "cc252f3ff6c0a7241c5b484c44685e9b2c596fef016d003455a825aed1a5ca28",
+    "stored_bytes": 322,
+    "stored_sha256": "cc252f3ff6c0a7241c5b484c44685e9b2c596fef016d003455a825aed1a5ca28",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/source-after.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/source-before.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/normal-memtable/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/command.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/command.json",
+    "source_bytes": 5373,
+    "source_sha256": "0e7eda042281705acb38574aebebd940f4fbefb1e8108b84de21988a46c38fc5",
+    "stored_bytes": 5373,
+    "stored_sha256": "0e7eda042281705acb38574aebebd940f4fbefb1e8108b84de21988a46c38fc5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/environment.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/environment.json",
+    "source_bytes": 1703,
+    "source_sha256": "f3b18eff70031f34ae24d775fb124ef0bf1f65e75867851bdde9b9d0cacce18b",
+    "stored_bytes": 1703,
+    "stored_sha256": "f3b18eff70031f34ae24d775fb124ef0bf1f65e75867851bdde9b9d0cacce18b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/process.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/process.json",
+    "source_bytes": 144,
+    "source_sha256": "a611c27d9733eb0809de424520863b6e1bc69523a2fae14a98d86610ce3eff25",
+    "stored_bytes": 144,
+    "stored_sha256": "a611c27d9733eb0809de424520863b6e1bc69523a2fae14a98d86610ce3eff25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/result.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/result.json",
+    "source_bytes": 11788,
+    "source_sha256": "3d6786571b610158a6b3d22f0c453aa087d983d6d16a0cfd95659808bcc42bed",
+    "stored_bytes": 11788,
+    "stored_sha256": "3d6786571b610158a6b3d22f0c453aa087d983d6d16a0cfd95659808bcc42bed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/run.log",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/run.log",
+    "source_bytes": 6212,
+    "source_sha256": "dadd08ae71e532d03a240733aa5cd20c34503b96777ad54416f305ddc1e97d9a",
+    "stored_bytes": 6212,
+    "stored_sha256": "dadd08ae71e532d03a240733aa5cd20c34503b96777ad54416f305ddc1e97d9a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/source-after.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/source-before.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-lifecycle/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/command.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/command.json",
+    "source_bytes": 1885,
+    "source_sha256": "9c3ab7d260e75146a21ad752b078380afc739366ef6a7cca65ac87de48bd8b2a",
+    "stored_bytes": 1885,
+    "stored_sha256": "9c3ab7d260e75146a21ad752b078380afc739366ef6a7cca65ac87de48bd8b2a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/environment.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/environment.json",
+    "source_bytes": 1702,
+    "source_sha256": "8d78f74f30eea4213deefec466cef242411db5da8aa1c96d3647fac4550e615f",
+    "stored_bytes": 1702,
+    "stored_sha256": "8d78f74f30eea4213deefec466cef242411db5da8aa1c96d3647fac4550e615f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/process.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/process.json",
+    "source_bytes": 144,
+    "source_sha256": "6ca84e00872441d6532c06d28ceaf1f8fe00959652d33617ac68adbec481bd2b",
+    "stored_bytes": 144,
+    "stored_sha256": "6ca84e00872441d6532c06d28ceaf1f8fe00959652d33617ac68adbec481bd2b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/result.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/result.json",
+    "source_bytes": 2361,
+    "source_sha256": "dd0c85d2a17743de624a3cf0bdbc446b8700b174afef58bfd0af2f0ec1aa25ee",
+    "stored_bytes": 2361,
+    "stored_sha256": "dd0c85d2a17743de624a3cf0bdbc446b8700b174afef58bfd0af2f0ec1aa25ee",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/run.log",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/run.log",
+    "source_bytes": 322,
+    "source_sha256": "a74281f47fc687ee6f3c09e6aa588db15b546d2ac05779e244dab09d0e27510f",
+    "stored_bytes": 322,
+    "stored_sha256": "a74281f47fc687ee6f3c09e6aa588db15b546d2ac05779e244dab09d0e27510f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/source-after.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/source-before.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-memtable/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/command.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/command.json",
+    "source_bytes": 5657,
+    "source_sha256": "28a42d4be6fd5844eddac2562cf80b78a462f2bf624b8d3687a250e77afa5304",
+    "stored_bytes": 5657,
+    "stored_sha256": "28a42d4be6fd5844eddac2562cf80b78a462f2bf624b8d3687a250e77afa5304",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/environment.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/environment.json",
+    "source_bytes": 1707,
+    "source_sha256": "675f1f2bb77a5f95a21a383da95a3565632cc53bfd721ff58ef0e415bdb819cf",
+    "stored_bytes": 1707,
+    "stored_sha256": "675f1f2bb77a5f95a21a383da95a3565632cc53bfd721ff58ef0e415bdb819cf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/process.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/process.json",
+    "source_bytes": 144,
+    "source_sha256": "bf6edc5468307e6ff6c61f0bda96de2db8b61920876f1359bc26a5dfa226eeea",
+    "stored_bytes": 144,
+    "stored_sha256": "bf6edc5468307e6ff6c61f0bda96de2db8b61920876f1359bc26a5dfa226eeea",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/result.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/result.json",
+    "source_bytes": 11809,
+    "source_sha256": "5534312cb3a658607b0a7055054f7fefb4f07b65fb8995ae7b8f73a005355274",
+    "stored_bytes": 11809,
+    "stored_sha256": "5534312cb3a658607b0a7055054f7fefb4f07b65fb8995ae7b8f73a005355274",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/run.log",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/run.log",
+    "source_bytes": 5849,
+    "source_sha256": "54d55cbee8becaf713ecea1dcc2b6140ee9e3bacddae14d243f8c66cca7f84f6",
+    "stored_bytes": 5849,
+    "stored_sha256": "54d55cbee8becaf713ecea1dcc2b6140ee9e3bacddae14d243f8c66cca7f84f6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/source-after.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/source-after.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/source-before.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/race-retainedalloc/source-before.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/summary.json",
+    "path": "native-main-integration/native-source-guard-core02/controls/summary.json",
+    "source_bytes": 1863,
+    "source_sha256": "abd045406dcfdd9556830e3d2e99227bcf601bb0f130e3e4e3b58ae9cb17f75b",
+    "stored_bytes": 1863,
+    "stored_sha256": "abd045406dcfdd9556830e3d2e99227bcf601bb0f130e3e4e3b58ae9cb17f75b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/freeze.json",
+    "path": "native-main-integration/native-source-guard-core02/freeze.json",
+    "source_bytes": 2148,
+    "source_sha256": "984e102ae22d828fb32939ad9d03e735fd2a9d0f30d4557d689782132e1ef3ed",
+    "stored_bytes": 2148,
+    "stored_sha256": "984e102ae22d828fb32939ad9d03e735fd2a9d0f30d4557d689782132e1ef3ed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/proposed-commands.json",
+    "path": "native-main-integration/native-source-guard-core02/proposed-commands.json.gz",
+    "source_bytes": 23222,
+    "source_sha256": "784139d9b41c515ef89d7938312b4979d346d227f2d2ad740846296f1599e29d",
+    "stored_bytes": 3774,
+    "stored_sha256": "6f99a2b250a0aedd918e630f1432302ee87228836bc7df5d7f707834098bbf35",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/source-frozen.json",
+    "path": "native-main-integration/native-source-guard-core02/source-frozen.json.gz",
+    "source_bytes": 1599439,
+    "source_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+    "stored_bytes": 467642,
+    "stored_sha256": "590fe3a9a48ba292c6ae6a1dcb9462dd86e3f987cb612efce07525703f5d2abc",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/source-modes.json",
+    "path": "native-main-integration/native-source-guard-core02/source-modes.json.gz",
+    "source_bytes": 982417,
+    "source_sha256": "8a4c37f51b59e81709dbf1681faa11be7f4d8565780b87a2a0e848adaf8400f1",
+    "stored_bytes": 72048,
+    "stored_sha256": "264c24a89d0bd5b5561eb83aafdb9782c0d3ee70683b47c1784230f1e642bbd6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/source.delta.patch",
+    "path": "native-main-integration/native-source-guard-core02/source.delta.patch",
+    "source_bytes": 424,
+    "source_sha256": "a9b14d577e2844cfe76eb59f48516f0ec7163a3746a0ff8037ae461f4877bd83",
+    "stored_bytes": 424,
+    "stored_sha256": "a9b14d577e2844cfe76eb59f48516f0ec7163a3746a0ff8037ae461f4877bd83",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-source-guard-core-compile.py",
+    "path": "native-main-integration/run-source-guard-core-compile.py",
+    "source_bytes": 8236,
+    "source_sha256": "31d96b19e3a105ffacc45a010672dcb56caaed00e9a9abbb40900382e0985bb4",
+    "stored_bytes": 8236,
+    "stored_sha256": "31d96b19e3a105ffacc45a010672dcb56caaed00e9a9abbb40900382e0985bb4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-source-guard-core-focused.py",
+    "path": "native-main-integration/run-source-guard-core-focused.py",
+    "source_bytes": 13933,
+    "source_sha256": "8e1d39b4ccaadf315833e6379cd848010bb65f676caf3a101c0806d756baf272",
+    "stored_bytes": 13933,
+    "stored_sha256": "8e1d39b4ccaadf315833e6379cd848010bb65f676caf3a101c0806d756baf272",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/run-source-guard-core-focused02.py",
+    "path": "native-main-integration/run-source-guard-core-focused02.py",
+    "source_bytes": 14583,
+    "source_sha256": "a12c5d6ec702895d80611847794bfd36047e938397621fab1e1a624f0516bc9c",
+    "stored_bytes": 14583,
+    "stored_sha256": "a12c5d6ec702895d80611847794bfd36047e938397621fab1e1a624f0516bc9c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-source-guard-core-controls.py",
+    "path": "native-main-integration/verify-source-guard-core-controls.py",
+    "source_bytes": 4362,
+    "source_sha256": "ff3b88c36a6358b34ea4a2142fe937d29d829d21972153365caaffbd18452797",
+    "stored_bytes": 4362,
+    "stored_sha256": "ff3b88c36a6358b34ea4a2142fe937d29d829d21972153365caaffbd18452797",
+    "encoding": "identity"
+  }
+]

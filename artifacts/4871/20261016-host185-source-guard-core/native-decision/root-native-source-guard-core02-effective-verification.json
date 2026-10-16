@@ -1,0 +1,41 @@
+{
+  "Q32": "Original public gate remains open; no allowance change",
+  "accepted": true,
+  "all_process_groups_joined": true,
+  "all_runtime_sources_and_index_frozen": true,
+  "effective_counts": {
+    "normal": {
+      "child": 28,
+      "top": 64
+    },
+    "race": {
+      "child": 28,
+      "top": 64
+    }
+  },
+  "fresh_counts": {
+    "normal": {
+      "child": 18,
+      "top": 33
+    },
+    "race": {
+      "child": 28,
+      "top": 64
+    }
+  },
+  "fresh_verification": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-focused-verification.json",
+  "fresh_verification_sha256": "dadc621546b7c858c747b84739b4a85b6dd99d8448fd240cf1c111484821b104",
+  "independent_source_review": "ACCEPT with exact one-line fixture successor",
+  "manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "native_publication_qualified": false,
+  "performance_and_graph_qualification": "OPEN",
+  "producer_role_closure": "PENDING",
+  "reuse": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-reuse.json",
+  "reuse_sha256": "c47fa75ca49b53bc96a75fa0af4a04b86a20a6eabecc36e1d772d3371f695c66",
+  "reused_normal_counts": {
+    "child": 10,
+    "top": 31
+  },
+  "scope": "connected source-guard core focused correctness only; producer integration and public Q32/performance remain open",
+  "utc": "2026-10-16T16:03:48.571150+00:00"
+}

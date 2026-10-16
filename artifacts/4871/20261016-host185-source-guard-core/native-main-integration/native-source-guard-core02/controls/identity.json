@@ -1,0 +1,35 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/source-frozen.tar.gz",
+  "archive_sha256": "02a829a478413fab74ebfe870410d45e060a4ea3eb9ec9221ac545f3f3cae3fd",
+  "archive_verified_files": 10458,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "e24131867010c6ad84cdd23f312c4e4f4a8206789f50c8904674ae288c3ff810",
+  "proposed_commands_sha256": "784139d9b41c515ef89d7938312b4979d346d227f2d2ad740846296f1599e29d",
+  "runner_pgid": 1795482,
+  "runner_pid": 1795482,
+  "runner_sha256": "a12c5d6ec702895d80611847794bfd36047e938397621fab1e1a624f0516bc9c",
+  "subreaper_verified": true,
+  "test_file_bindings": {
+    "TreeDB/internal/memtable/cow_test.go": "04009aa6780ab3c40e3852671f28101b47a4e8f8290e12809bf9a59d6937ee6e",
+    "TreeDB/internal/retainedalloc/owner_cooperative_work_test.go": "2368d1db07c2131cc0d160bd537594ca049255e1251b31821811b524e49b024a",
+    "TreeDB/internal/retainedalloc/owner_enroll_work_test.go": "e9cb39f91620339479a453afc877362bcadaa52f30a858f1236915c8e24a720c",
+    "TreeDB/internal/retainedalloc/owner_growth_work_test.go": "a9842bd7d906645dc5228a09620c3f5f28a973147914729253aefac0f1ea2645",
+    "TreeDB/internal/retainedalloc/owner_original_reset_test.go": "35c60598e70c9f91661b4b15bf3217385d2c4eab608d388980f1533c37d96e9a",
+    "TreeDB/internal/retainedalloc/owner_test.go": "5599d89d7c9d17130f42a1c3b37b33eade2aae1d0a9083f8ac1ebeb3803eaf5e",
+    "TreeDB/internal/retainedalloc/owner_work_test.go": "5ba4c2321c556f1195fbda4db632de802b7bf9cb9792eb808b8b2e1fd8842e03",
+    "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "TreeDB/lifecycle/bounded_registry_test.go": "edd4dfb7a42a651e98a3838a3cdd840cb5f991c3f9a3049c63b10e2a7480342f",
+    "TreeDB/lifecycle/lifecycle_test.go": "afe80caee9d7c8d64e0cafe71f0b375b1d494424e454e51bf0841a92ce975c07",
+    "TreeDB/lifecycle/native_mvcc_registry_test.go": "b00321d9cb35413aa752d30a37c48b11a0f3d308e0daf82a504ea029efaa8009",
+    "TreeDB/lifecycle/registry_header_completion_v6_test.go": "e53b816198b9dc56a6947b9eeda2ee5128af2a683c4227cdfcbbd90a41363416",
+    "TreeDB/lifecycle/registry_patricia_v6_test.go": "99f50e7dca6e8b924682a00aef6a42dfc5dbc1aed711dd3fbadae7a84cc52d9b",
+    "TreeDB/lifecycle/source_guard_test.go": "c96bea46a8cdc156ad10a0286482b421593c5feabc21771a071fb035ac75dffa"
+  }
+}

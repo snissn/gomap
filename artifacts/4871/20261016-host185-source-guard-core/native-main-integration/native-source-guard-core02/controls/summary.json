@@ -1,0 +1,49 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 5,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T16:02:49.032629+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Core controls only; producer-role integration, original public Q32 and performance qualification remain open",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-lifecycle/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/normal-memtable/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-retainedalloc/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-lifecycle/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/controls/race-memtable/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10458,
+  "source_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "top_pass_normal": 33,
+  "top_pass_race": 64
+}

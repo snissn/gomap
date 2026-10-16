@@ -1,0 +1,38 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_source_writers_released": true,
+  "authorized_command_names": [
+    "normal-lifecycle",
+    "normal-memtable",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable"
+  ],
+  "compile_applicability": "Core01 compile result applies to all unchanged production and test bodies; changed lifecycle fixture is compiled/vetted by fresh lifecycle runtime commands. No separate whole-core02 compile-only claim.",
+  "compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core01/compile-only/result.json",
+  "compile_result_sha256": "3ba0c240f98548231d4254fbae67d7c97b8d442049c0e6f86df7da046f98dc95",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "historical_reuse": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-reuse.json",
+  "historical_reuse_sha256": "c47fa75ca49b53bc96a75fa0af4a04b86a20a6eabecc36e1d772d3371f695c66",
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-core02-fixture-review01.json",
+  "independent_review_sha256": "ff214a7072e189609ba49ad1a2400371927cd7817dadd097dbb016da35f2ae47",
+  "proposed_commands_sha256": "784139d9b41c515ef89d7938312b4979d346d227f2d2ad740846296f1599e29d",
+  "root_review_adoption": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-core02-review-adoption.json",
+  "root_review_adoption_sha256": "3601430e0c731b6884b1d3aeed32eb3e0243dad4047d0e0303ff1206a7bf243b",
+  "runner_sha256": "a12c5d6ec702895d80611847794bfd36047e938397621fab1e1a624f0516bc9c",
+  "scope": "focused-connected-source-guard-core02",
+  "scope_limit": "Fresh normal33top18child and race64top28child; retain unchanged normal31top10child. No native driver/performance or producer-role qualification.",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "memtable"
+  ],
+  "source_archive_sha256": "02a829a478413fab74ebfe870410d45e060a4ea3eb9ec9221ac545f3f3cae3fd",
+  "source_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core02/freeze.json",
+  "source_verify_sha256": "984e102ae22d828fb32939ad9d03e735fd2a9d0f30d4557d689782132e1ef3ed",
+  "utc": "2026-10-16T16:02:12.894164+00:00"
+}

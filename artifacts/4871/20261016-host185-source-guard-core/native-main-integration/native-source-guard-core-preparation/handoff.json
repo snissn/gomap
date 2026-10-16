@@ -1,0 +1,82 @@
+{
+  "added_paths": 7,
+  "after": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/after.json",
+  "all_source_writers_released": true,
+  "artifact_sha256": {
+    "README.md": "051d1c9287406582655f30db1f317cbb56543ab1a4c3daf77af23996c1029baf",
+    "after-source.tar.gz": "661910d5ad22d404f1316e14882b7eec0b1f04c30962e78277e7947fed71b288",
+    "after.json": "047b70ef14d634ba1fd07f9237a7d6fb79797b4d15f421cec9dc5146cd743936",
+    "before-source.tar.gz": "cd51e87373f35d6c613e6e80263b9d40007dbc89c94f846963da6e56f4a4b418",
+    "before.json": "55754712fd74bd426584a861435005dd12c8b3fd5f3319f7fabb2649bf4f71c6",
+    "control-inventory.json": "5aab0349cfe5633aac9feec7f01ea38082097c63e91bc975dc2f834e4ad48c43",
+    "delta.patch": "f8a19c1cac658fb9c63308198a263c8aac1af3ff4129346fe9126776af564372",
+    "modes.json": "c1e2a7c91726fc56eb7acd81158ae6371385542cbbdfe24a6ff7d97046100a35",
+    "pricing-and-custody.md": "52c1ca33bf5b39c311dc38b73bc9f97dedafc5d63d4b373ecf18072f928eb96a",
+    "proposed-commands.json": "646da32efbb8323bd699f5ccf42a9edd2835d1f4f89f2fcc98e7b9dd8c7718e2"
+  },
+  "before": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/before.json",
+  "deleted_paths": 0,
+  "executed": false,
+  "formatter_only": "toolchains/go1.26.3/bin/gofmt",
+  "full_tree_freeze": "root-owned; this packet freezes selected paths only",
+  "input_sha256": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/README.md": "051d1c9287406582655f30db1f317cbb56543ab1a4c3daf77af23996c1029baf",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/after-source.tar.gz": "661910d5ad22d404f1316e14882b7eec0b1f04c30962e78277e7947fed71b288",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/after.json": "047b70ef14d634ba1fd07f9237a7d6fb79797b4d15f421cec9dc5146cd743936",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/before-source.tar.gz": "cd51e87373f35d6c613e6e80263b9d40007dbc89c94f846963da6e56f4a4b418",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/before.json": "55754712fd74bd426584a861435005dd12c8b3fd5f3319f7fabb2649bf4f71c6",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/control-inventory.json": "5aab0349cfe5633aac9feec7f01ea38082097c63e91bc975dc2f834e4ad48c43",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/delta.patch": "f8a19c1cac658fb9c63308198a263c8aac1af3ff4129346fe9126776af564372",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/modes.json": "c1e2a7c91726fc56eb7acd81158ae6371385542cbbdfe24a6ff7d97046100a35",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/pricing-and-custody.md": "52c1ca33bf5b39c311dc38b73bc9f97dedafc5d63d4b373ecf18072f928eb96a",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/proposed-commands.json": "646da32efbb8323bd699f5ccf42a9edd2835d1f4f89f2fcc98e7b9dd8c7718e2"
+  },
+  "limitations": [
+    "No runtime/compile evidence in this worker packet",
+    "Full 2^63 positive occupancy source-path-only; shared real-node scrub/refund control supplied",
+    "Unsupported negative retains original debt intentionally",
+    "No acquisition scan removal, public cap change, continuing-writer, Q32 publication, complete-role or performance acceptance"
+  ],
+  "modes": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-core-preparation/modes.json",
+  "modified_paths": 10,
+  "parent_archive_sha256": "6fe19cb928916c791730a56f177e7cb21677d40fed5afed4a4374e828fecdc56",
+  "parent_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "producer_integration": "pending root-directed source lease; no producer role enrolled by this checkpoint",
+  "proposed_mode_inventory": {
+    "normal": {
+      "calls": 3,
+      "children": 28,
+      "tops": 64
+    },
+    "race": {
+      "calls": 3,
+      "children": 28,
+      "tops": 64
+    }
+  },
+  "runtime_leases_released": true,
+  "scope": "connected-source-guard-core01-release",
+  "selection_sha256": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+  "source_lease": "root-native-source-guard-implementation-selection.md",
+  "source_paths": [
+    "TreeDB/internal/memtable/native_retention_work.go",
+    "TreeDB/internal/retainedalloc/native_pre_cursor_for_test_v6.go",
+    "TreeDB/internal/retainedalloc/owner.go",
+    "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go",
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go",
+    "TreeDB/internal/retainedalloc/owner_cooperative_work.go",
+    "TreeDB/internal/retainedalloc/owner_cooperative_work_test.go",
+    "TreeDB/internal/retainedalloc/owner_enroll_work.go",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go",
+    "TreeDB/internal/retainedalloc/owner_work.go",
+    "TreeDB/lifecycle/SOURCE_GUARDS_V6.md",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go",
+    "TreeDB/lifecycle/registry.go",
+    "TreeDB/lifecycle/registry_unregister_work_v6.go",
+    "TreeDB/lifecycle/source_guard.go",
+    "TreeDB/lifecycle/source_guard_price_for_test.go",
+    "TreeDB/lifecycle/source_guard_test.go"
+  ],
+  "source_writes_released": true,
+  "worker_go_compiler_or_tests_executed": false
+}

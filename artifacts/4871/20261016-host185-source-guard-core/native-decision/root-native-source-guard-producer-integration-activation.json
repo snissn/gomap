@@ -1,0 +1,36 @@
+{
+  "all_10458_starting_inputs_verified": true,
+  "all_other_source_writers_released": true,
+  "formatter": "pinned Go1.26.3 gofmt only",
+  "input_sha256": {
+    "native-decision/native-source-guard-core01-review01.json": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+    "native-decision/native-source-guard-core02-fixture-review01.json": "ff214a7072e189609ba49ad1a2400371927cd7817dadd097dbb016da35f2ae47",
+    "native-decision/root-native-source-guard-core02-effective-verification.json": "12873453799d37b05ba6fe61e5aa3887e8744b122a7238f96480f990afa5a49b",
+    "native-decision/root-native-source-guard-implementation-selection.md": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "native-decision/root-native-source-guard-last-drop-selection.md": "d2c8b58bcf58c2b6098b46107e2173b56b22803b693657b11175ffca8701cc8b",
+    "native-decision/root-native-source-guard-ordinary-policy-selection.md": "f0451db39a9f85fbad1040571cbc9ee41694bc589d731d5e3245552337ccd789",
+    "native-main-integration/native-source-guard-core02/controls/summary.json": "abd045406dcfdd9556830e3d2e99227bcf601bb0f130e3e4e3b58ae9cb17f75b"
+  },
+  "integration_obligations": [
+    "every original producer/source and withdrawal role from preparation table",
+    "actual generation and DATA floor, counted original role authority; no copies of self-bound refs/mutex-bearing continuations",
+    "overlap before child exposure; exact-floor renewal and original withdrawal before generation-empty teardown",
+    "enlarged containing and overlapping retained charges, actual work including ACK/reset/helpers/parent prefixes",
+    "keep both acquisition scans until separate root role-closure review/selection",
+    "unchanged public Q32/1MiB, workloads, Finish/old-reader/slot/failure/reopen oracles"
+  ],
+  "model": "gpt-6.1-sol",
+  "native_publication_qualified": false,
+  "prior_runtime_leases_released": true,
+  "reasoning_effort": "high",
+  "runtime_granted": false,
+  "scope": "original full producer-role integration under existing connected source-guard selection",
+  "scope_paths": "feature-bearing TreeDB source/tests/contracts only; full existing producer-role table; preserve all unrelated candidate work",
+  "sole_source_writer": "/root/native_prerequisite",
+  "source_lease_active": true,
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "starting_archive_sha256": "02a829a478413fab74ebfe870410d45e060a4ea3eb9ec9221ac545f3f3cae3fd",
+  "starting_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "utc": "2026-10-16T16:03:48.571150+00:00",
+  "worker_git_github_granted": false
+}

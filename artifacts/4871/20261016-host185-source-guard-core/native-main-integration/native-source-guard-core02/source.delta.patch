@@ -1,0 +1,11 @@
+--- source-guard-core01/TreeDB/lifecycle/source_guard_test.go
++++ source-guard-core02/TreeDB/lifecycle/source_guard_test.go
+@@ -492,7 +492,7 @@
+ 	}
+ 	// Genuine ordinary mutation between last-ref freeze and owner preflight
+ 	// changes the actual detached topology from leaf to leaf+branch.
+-	h, err := r.Register(1000)
++	h, err := r.Register(2000)
+ 	if err != nil || h <= 0 || g.leaf.parent == nil {
+ 		t.Fatal(h, err)
+ 	}

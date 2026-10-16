@@ -1,0 +1,14 @@
+{
+  "after_sha256": "c96bea46a8cdc156ad10a0286482b421593c5feabc21771a071fb035ac75dffa",
+  "before_sha256": "721fb04f58a5cca17023a9c6b91c27a33fa61d98b0454593048eae37c370f92a",
+  "diagnosis": "fillReaderFastV6 registers1000..1015; Register1000 joins fast cohort and cannot create intended sibling. Use unused2000 to exercise same real ordinary registration/parent topology and unchanged exact refund oracle.",
+  "failed_raw_log_sha256": "0ba7257c1fab423b20c426ce753dda4016495a2dfff0c843c4f396c50107ec76",
+  "parent_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "production_changes": false,
+  "runtime_and_worker_source_leases_released": true,
+  "scope": "core02 test-only fixture repair",
+  "sole_source_writer": "root",
+  "source_path": "TreeDB/lifecycle/source_guard_test.go",
+  "test_inventory_argv_allowance_or_oracle_changes": false,
+  "utc": "2026-10-16T15:59:02.863339+00:00"
+}

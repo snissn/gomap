@@ -1,0 +1,7 @@
+Root clarification of the connected source-guard and last-drop selections, 2026-10-16. The existing exact gpt-6.1-sol/high source lease continues; no runtime or source acceptance is granted.
+
+Ordinary producer support includes ordinary Lease-only governors. An explicitly original ordinary guard constructor/disposer may use ordinary admission and completion semantics, with its origin bound before effects. A native-origin operation continues to require the concrete bounded capability at actual consumption. Ordinary helpers driving that native operation use the SAME bounded native engine and account their actual work; helper identity does not change operation origin.
+
+Do not convert a failed native withdrawal or its continuation to ordinary/unmetered completion, clear its first cause, or create another receipt to consume the same debt. Later Lease-only refusal of a native last-drop retains that SAME original guard and disposer as unsupported custody; an ordinary call on that native-bound state must refuse. A separately originally ordinary role/receipt may complete its own edge under its originally selected ordinary policy. Preserve the existing RemovalWork and enrollment origin restrictions.
+
+The core packet must include origin binding/refusal controls together with ordinary Lease-only construction/disposal support, native unsupported-before-detach custody, and bounded helper completion. Public Q32/1MiB, all original lifecycle boundaries, and required producer-role closure remain unchanged.

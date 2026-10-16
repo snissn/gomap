@@ -1,0 +1,39 @@
+{
+  "added_paths": 7,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "1001123f8da4448ce03099b5f5df50a092959a91fada024c990b1b8b7fc21bdb",
+  "changed_paths": 17,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T15:48:37.546914+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "5498242f3a5b074146dadd4065e000611308915a072d3f2cfd5aee2796d508bf",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-source-guard-core01-freeze-selection.json": "dea9c9f187abb36e2a79054aac1c7d8d829c2b00545b5fa36523e9ad95e89630",
+    "native-decision/root-native-source-guard-implementation-selection.md": "e2914fa749f681fff414d519f21ec161ea2b48f5b04d439b6819a4382810bdff",
+    "native-decision/root-native-source-guard-last-drop-selection.md": "d2c8b58bcf58c2b6098b46107e2173b56b22803b693657b11175ffca8701cc8b",
+    "native-decision/root-native-source-guard-ordinary-policy-selection.md": "f0451db39a9f85fbad1040571cbc9ee41694bc589d731d5e3245552337ccd789",
+    "native-main-integration/native-registry-api-source04/freeze.json": "c79b63955f2fbd7efe8a168beb75057c076d9f115d20c7c8f333652e8e68269c",
+    "native-main-integration/native-source-guard-core-preparation/after-source.tar.gz": "661910d5ad22d404f1316e14882b7eec0b1f04c30962e78277e7947fed71b288",
+    "native-main-integration/native-source-guard-core-preparation/after.json": "047b70ef14d634ba1fd07f9237a7d6fb79797b4d15f421cec9dc5146cd743936",
+    "native-main-integration/native-source-guard-core-preparation/before.json": "55754712fd74bd426584a861435005dd12c8b3fd5f3319f7fabb2649bf4f71c6",
+    "native-main-integration/native-source-guard-core-preparation/modes.json": "c1e2a7c91726fc56eb7acd81158ae6371385542cbbdfe24a6ff7d97046100a35",
+    "native-main-integration/native-source-guard-core-preparation/proposed-commands.json": "646da32efbb8323bd699f5ccf42a9edd2835d1f4f89f2fcc98e7b9dd8c7718e2"
+  },
+  "modes_sha256": "8a4c37f51b59e81709dbf1681faa11be7f4d8565780b87a2a0e848adaf8400f1",
+  "parent_manifest_sha256": "b0568bd82a38112d26edf8015408e034479c58053146f54c6f1ce7da1f3e2628",
+  "partition_changed_counts": {
+    "source-guard-core": 17
+  },
+  "runtime_executed": false,
+  "scope": "connected source-guard core01; no producer-role closure or Q32 acceptance",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "3580f794e27997e8343d9e89c74d4fa4a243e81ccb6524e110c273069584290a",
+  "source_files": 10458,
+  "source_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

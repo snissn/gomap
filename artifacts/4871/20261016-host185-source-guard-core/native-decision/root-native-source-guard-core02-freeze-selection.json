@@ -1,0 +1,20 @@
+{
+  "after": {
+    "TreeDB/lifecycle/source_guard_test.go": "c96bea46a8cdc156ad10a0286482b421593c5feabc21771a071fb035ac75dffa"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/lifecycle/source_guard_test.go": "721fb04f58a5cca17023a9c6b91c27a33fa61d98b0454593048eae37c370f92a"
+  },
+  "input_sha256": {
+    "native-decision/native-source-guard-core01-review01.json": "3de181a24e293d9a974843d2139e60d43590a3254d58914a761084714f40e84d",
+    "native-decision/root-native-source-guard-core01-focused-verification.json": "d43298d3d66757f2b2d9454163c5f3b9b308bea879958fb1a5d8d620f2cfd4b6",
+    "native-decision/root-native-source-guard-core02-repair-selection.json": "b7b214026c0aa72cf92dc0c4a02d697c3f207c1ce03df8a3a716458aaa042428",
+    "native-main-integration/native-source-guard-core01/controls/summary.json": "7d0f255538cdce29b788df147ba476b6aed1a359021af5506593fc5e5190c4a4"
+  },
+  "parent_manifest_sha256": "ae98386c3ebb9568764bb7ada0462d67f1b5b918b9cca8b886810bc59dce1190",
+  "scope": "connected-source-guard-core02-freeze",
+  "source_lease": [
+    "TreeDB/lifecycle/source_guard_test.go"
+  ]
+}
