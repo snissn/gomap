@@ -70,13 +70,16 @@ class Contract(unittest.TestCase):
         collector.selftest()  # Original positive/six negative controls unchanged.
 
     def test_reviewed_algorithm_equivalence(self):
-        tree = ast.parse((SCRIPTS / 'mvcc_maintenance_collect.py').read_text())
-        wanted = {'schedule': '5323e2ff46d310326b032152c8b44fa0086feea02ce07403cfc68882da3fd15e',
-                  'parse': '08c21b50bace4954db65d4a06ef9860c0723247bbc0bd5dbe48a52c31e21999f',
-                  'selftest': '937dd197f07eee5770ebb5ec655d5236e7cc98c56f84e3d242cb3cf13447030c'}
+        source = (SCRIPTS / 'mvcc_maintenance_collect.py').read_text()
+        tree = ast.parse(source)
+        # Bind the reviewed function source, independent of Python's AST schema
+        # (Python 3.12 added FunctionDef.type_params to ast.dump output).
+        wanted = {'schedule': 'dcbbd4878b7c38c0d9746f5a53d51a3f43a7a5a408ed09cfcad2265a5c6c2363',
+                  'parse': '6f0a745f58541c821b57a1f054944faa3328f55b995b8462c78b3add6630762c',
+                  'selftest': '7f16ca94a5c45ac8de6631edfde312bbb72929d0e2f4af41da6350f9fd7ce9dd'}
         for name, expected in wanted.items():
             node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
-            self.assertEqual(hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(), expected)
+            self.assertEqual(hashlib.sha256(ast.get_source_segment(source, node).encode()).hexdigest(), expected)
 
     def test_fixed_product_inputs(self):
         self.assertEqual(bootstrap.BASELINE, '5bca87ffe6e1bfba2d693264d2dc82936adc234f')
