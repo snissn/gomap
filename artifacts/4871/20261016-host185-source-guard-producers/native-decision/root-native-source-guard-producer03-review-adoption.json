@@ -1,0 +1,10 @@
+{
+  "SGP1_resolved": true,
+  "created_utc": "2026-10-16T17:32:53.807802+00:00",
+  "disposition": "ACCEPT",
+  "review_inputs_verified": 12,
+  "review_sha256": "79d7a94e57d1d3b177ed2f9b6678a10deb98e964289ec6668b2a5776907790c5",
+  "root_read_full_report_and_repair": true,
+  "scope": "Exact producer03 source-only focused readiness; no runtime/performance or Q32 acceptance",
+  "source_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4"
+}

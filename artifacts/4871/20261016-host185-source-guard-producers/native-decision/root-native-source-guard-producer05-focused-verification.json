@@ -1,0 +1,42 @@
+{
+  "actual_driver_executed": false,
+  "all_groups_empty": true,
+  "manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "results": [
+    {
+      "child_pass": 18,
+      "failed": [],
+      "name": "normal-db",
+      "raw_sha256": "8c9b244a6085429f4a3fa65271bef9d57996643ffe0daf3bce520e74e75f187a",
+      "result_sha256": "1f69fcb930a8c0925a91df17af92dddb0b59b88b6a41d80b159bb4ab9f4e288b",
+      "status": "PASS",
+      "top_pass": 27
+    },
+    {
+      "child_pass": 3,
+      "failed": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape"
+      ],
+      "name": "normal-mvcc",
+      "raw_sha256": "e28ae4ff3fdad4970380dde30eced7a72997e916d21db9c9ab5abc74b11f1110",
+      "result_sha256": "27f831cb991cd4660fe3a782f1c1505635a0dfb123211485543ff4f1d6ae5a6c",
+      "status": "STOP",
+      "top_pass": 0
+    }
+  ],
+  "scope": "producer05 focused observed STOP verification",
+  "source_before_after_frozen": true,
+  "status": "STOP",
+  "summary_sha256": "cdbf98b7c75549e74fb577907d2c4370da4bda801e0c3a0acf0281d956ec5c10",
+  "unexecuted_commands": [
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "utc": "2026-10-16T17:50:53.629782+00:00"
+}

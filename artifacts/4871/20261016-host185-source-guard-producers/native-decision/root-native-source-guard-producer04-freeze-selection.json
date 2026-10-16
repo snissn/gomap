@@ -1,0 +1,29 @@
+{
+  "after": {
+    "TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/internal/primaryarena/arena_test.go": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b"
+  },
+  "created_utc": "2026-10-16T17:39:42.202485+00:00",
+  "input_sha256": {
+    "native-decision/native-source-guard-producer03-compatibility-diagnosis.json": "fcbf3e8994c9163aa035f36860ca7ed26a5573716e9daedd0b459f9e2f37e868",
+    "native-decision/root-native-source-guard-producer03-focused-verification.json": "bec1cba7c768b1498c1888777a5d1121a818f241329d6e7f32a8bb08ee5db073",
+    "native-main-integration/freeze-source-guard-producer04.py": "6512cc1aa657522fc5c94f9b1547560ffb50bb3f058a2145309a26a2b8fcf741",
+    "native-main-integration/native-source-guard-producer-test-compatibility/handoff.json": "5106a325130fbc37584d43d4300df9bf2b197c5b8bab39e92aeb8beb10314aa6",
+    "native-main-integration/native-source-guard-producer-test-compatibility/prepared-source.tar.gz": "140ad4e7de249eb14ad0a3ae84f364b7101d76e3703c356d7b0155b4ba072acb"
+  },
+  "parent_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "production_unchanged": true,
+  "rationale": "Inherited finite constructor and native cleanup fixture contracts corrected; preserve all semantic/lifetime/finite-flatten/limits assertions and existing shared Lease-only control",
+  "runtime_authorized": false,
+  "scope": "connected-source-guard-producer04-freeze",
+  "source_lease": [
+    "TreeDB/internal/primaryarena/arena_test.go",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go"
+  ],
+  "source_writer": "/root exact sealed two-test compatibility application"
+}

@@ -1,0 +1,68 @@
+=== RUN   TestPrimaryArenaAcquireAdmitsActualLookupV6
+--- PASS: TestPrimaryArenaAcquireAdmitsActualLookupV6 (0.00s)
+=== RUN   TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6
+--- PASS: TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6 (0.00s)
+=== RUN   TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6
+=== RUN   TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/finite
+=== RUN   TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/ordinary
+--- PASS: TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6 (0.00s)
+    --- PASS: TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/finite (0.00s)
+    --- PASS: TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/ordinary (0.00s)
+=== RUN   TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6
+--- PASS: TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6 (0.00s)
+=== RUN   TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6
+--- PASS: TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6 (0.00s)
+=== RUN   TestPrimaryArenaIndependentCustodyAndIncrementalReuse
+--- PASS: TestPrimaryArenaIndependentCustodyAndIncrementalReuse (0.00s)
+=== RUN   TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail
+--- PASS: TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail (0.02s)
+=== RUN   TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate
+    arena_test.go:442: ordinary replacement installs; last standalone flatten turn=15R; finite replacement and complete publication remain unqualified
+--- PASS: TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate (0.00s)
+=== RUN   TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent
+--- PASS: TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent (0.00s)
+=== RUN   TestPrimaryArenaPairReuseWaitsForBothIndependentOwners
+--- PASS: TestPrimaryArenaPairReuseWaitsForBothIndependentOwners (0.00s)
+=== RUN   TestPrimaryArenaPairAlignmentPaddingAndStaleClaim
+--- PASS: TestPrimaryArenaPairAlignmentPaddingAndStaleClaim (0.00s)
+=== RUN   TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease
+--- PASS: TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease (0.00s)
+=== RUN   TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking
+--- PASS: TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking (0.00s)
+=== RUN   TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6
+--- PASS: TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6 (0.00s)
+=== RUN   TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6
+--- PASS: TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6 (0.00s)
+=== RUN   TestOpenCapsuleOwnedFileUsesTransferredHandle
+--- PASS: TestOpenCapsuleOwnedFileUsesTransferredHandle (0.00s)
+=== RUN   TestOpenCapsuleOwnedFileFailedFormatClosesHandle
+--- PASS: TestOpenCapsuleOwnedFileFailedFormatClosesHandle (0.00s)
+=== RUN   TestOpenCapsuleOwnedFileFailedPagerRetainsGenuineOwner
+--- PASS: TestOpenCapsuleOwnedFileFailedPagerRetainsGenuineOwner (0.00s)
+=== RUN   TestArenaPhysicalCloseWorkOriginalCaptureRemains
+--- PASS: TestArenaPhysicalCloseWorkOriginalCaptureRemains (0.00s)
+=== RUN   TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody
+--- PASS: TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody (0.00s)
+=== RUN   TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody
+    read_root_v6_test.go:184: distinct promotion clone 6R/31672B plus ordinary outgoing release debt
+--- PASS: TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody (0.00s)
+=== RUN   TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance
+--- PASS: TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance (0.00s)
+=== RUN   TestPrimaryReadRootSourceMixedOriginLastConsumerV6
+=== RUN   TestPrimaryReadRootSourceMixedOriginLastConsumerV6/ordinary-ordinary
+=== RUN   TestPrimaryReadRootSourceMixedOriginLastConsumerV6/ordinary-finite
+=== RUN   TestPrimaryReadRootSourceMixedOriginLastConsumerV6/native-ordinary
+=== RUN   TestPrimaryReadRootSourceMixedOriginLastConsumerV6/native-finite
+--- PASS: TestPrimaryReadRootSourceMixedOriginLastConsumerV6 (0.00s)
+    --- PASS: TestPrimaryReadRootSourceMixedOriginLastConsumerV6/ordinary-ordinary (0.00s)
+    --- PASS: TestPrimaryReadRootSourceMixedOriginLastConsumerV6/ordinary-finite (0.00s)
+    --- PASS: TestPrimaryReadRootSourceMixedOriginLastConsumerV6/native-ordinary (0.00s)
+    --- PASS: TestPrimaryReadRootSourceMixedOriginLastConsumerV6/native-finite (0.00s)
+=== RUN   TestPrimaryReadRootSourceTerminalQueueV6
+--- PASS: TestPrimaryReadRootSourceTerminalQueueV6 (0.00s)
+=== RUN   TestPrimaryReadRootSourceOrdinaryLongLookupV6
+--- PASS: TestPrimaryReadRootSourceOrdinaryLongLookupV6 (0.00s)
+=== RUN   TestPrimaryReadRootSourceAccountingKeepsUncreditedOperandV6
+--- PASS: TestPrimaryReadRootSourceAccountingKeepsUncreditedOperandV6 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.034s

@@ -1,0 +1,16 @@
+[
+  {
+    "after_sha256": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "before_sha256": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/internal/primaryarena/arena_test.go"
+  },
+  {
+    "after_sha256": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af",
+    "before_sha256": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/internal/primaryarena/physical_close_work_test.go"
+  }
+]

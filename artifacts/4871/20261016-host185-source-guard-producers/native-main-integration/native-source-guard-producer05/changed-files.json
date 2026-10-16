@@ -1,0 +1,9 @@
+[
+  {
+    "after_sha256": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd",
+    "before_sha256": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/db/primary_source_guard_v6_test.go"
+  }
+]

@@ -1,0 +1,77 @@
+{
+  "status": "read-only actionable implementation proposal; not selected source or runtime",
+  "basis": {
+    "producer03_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/source-frozen.json",
+    "sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+    "inspection_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer-caller-repair/basis",
+    "all_listed_source_hashes_match_producer03": true
+  },
+  "source_sha256": {
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "5e3b9af23f2b45337d79a0c095e3de9b4a72fdf6b48dc7d7b9110a303e500503",
+    "TreeDB/db/primary_source_guard_v6.go": "e4e728ec020d3a98d032389529eb92ec03feec23bad1e00b76bd8e35988d5472",
+    "TreeDB/db/primary_read_certificate_v6.go": "13f39e21c4a4b2ab000f9f2491c2ab160def34b4a1ae1d629164f64f03009fe9",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+    "TreeDB/db/db.go": "cf8bf7783dfc9c496ab961858f8a8b1feae08ee4d7b9f264909800636fa87a92",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "7e645c00fc9b8fabf1052587b23e6a408cb091c6136e47d54ae008d5a9d986e9",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "a227694894160863b9a6d3373c69bf60f446330dbe6ca49b1723a63c377c2c84",
+    "TreeDB/db/durable_primary_rebuild_v5.go": "f6b56dbd16f111d0baac4792e05f08554f222cfa903a2b721f55b8564446e373",
+    "TreeDB/db/root_publication_activation.go": "3ccd613f101cdf3e0245db33d294d409a6c3a78b6ba31c0ebaf4eb71c46a295b",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "af9558400178678e0e890879f241e56fd51308a4618699e418f2a29bc863c601",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/snapshot_publication_work_v6.go": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "TreeDB/db/leaf_generation_runtime.go": "ba90c797e623c9b92157d0aeb216c8bb7b3a4adce77a0c1fadd846e08445d572",
+    "TreeDB/db/leaf_generation_pin_work.go": "ea35b5a60157706382d84ba0696492387aa668d34be18ec2ab05a334db1154b0",
+    "TreeDB/db/snapshot_primary_retention.go": "29d915209704c3254d25afc52a4e582b71b8bd020ee8ef821ab12688f616559d",
+    "TreeDB/db/vacuum_online.go": "4075d3a6b9491dd979a466f1721721ec9b9a90c654adc1e0d201f33adbbd0bbb",
+    "TreeDB/lifecycle/registry.go": "20d9603369efcaf74be3c80939144af5b4acfa1deb6ae4f0a395c021ea8911f4",
+    "TreeDB/lifecycle/source_guard.go": "fc97a27b9bb1407605641e2ceb9c9ae6b71112c022ba6f6e323f0d75ab574826",
+    "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "22eb9ba95fb8a07f44e301bb926eb8c5baf7575627c032bec29229c2d73dba82",
+    "TreeDB/internal/primaryarena/source_guard_v6.go": "c3cd27668ec05a678a76954b05b3055dffb0dc156518fcf54874d5672b9d9739",
+    "TreeDB/freelist/generation_v1_txn.go": "04a9692b3937333e761734fa8a0c8b0158d1c61c6b2eeb919d00f53c80fc3571",
+    "TreeDB/freelist/generation_v1_prune_work.go": "832dcf8424b9469fd08f647feff55a7d5477e4daec7e41bb29358f8bec24b002",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "6c077d3fb4a7f5051064d1a8504c6414e7bde42d8fa32595fa65840c8a237377"
+  },
+  "operation_boundary": "StepNativeMVCCAllocatorV6 phase4, only original retained Snapshot PRIMARY V6 Directory guard on same DATA idx/allocator/registry",
+  "authority_chain": [
+    "original Snapshot retained root/certificate",
+    "original arena certificate source generation/identity/floor and completed birth",
+    "guardRefLocked original self-cell under same registry mutex",
+    "minLocked conservative intermediate/exact completed minimum"
+  ],
+  "legacy": "DATA-only/V5 retain two-pass epoch/shard/map provider; public DB-wide minimum unchanged",
+  "freshness": "revalidate each phase4 entry; saved capability justified by prior source overlap, not scalar monotonicity",
+  "genuine_zero": {
+    "mismatch": "NewReuseCapability(oldest,0,0) ignores zero minimum",
+    "recommended": "existing zero-valued ReuseCapability disables new retired-page promotion; preserve fixed horizon validation",
+    "not_claimed": "all allocations append, all existing free storage is unusable, or continuing reclamation"
+  },
+  "price": {
+    "existing_cohort_summary_records": 17,
+    "new_authority_rows": "must be derived from real DB/arena/certificate/source/ref/leaf operands and public repeated prefixes",
+    "allowance_revision": false
+  },
+  "separate_leaf_blockers": [
+    "two actual 256-shard scans in publication scope currently without explicit scan admission",
+    "atomic old stale-transition 1+pins",
+    "whole tracker T*(1+A) records",
+    "no existing admitted persistent arbitrary-cardinality pruning continuation identified",
+    "atomic Fence and other public caller prefixes remain"
+  ],
+  "proposed_controls": [
+    "original-authority-and-copies",
+    "exact-record-byte-refusal",
+    "intermediate-and-exact-minimum",
+    "deep-tree-many-governors",
+    "real-registration-gap-and-lower-floor-renewal",
+    "shared-PRIMARY-distinct-DATA",
+    "rebuilt-record-versus-DATA-floor",
+    "genuine-zero-no-new-retirement-reuse",
+    "legacy-and-global-minimum-preservation",
+    "leaf-holder-publication-overlap-and-exact-refusal"
+  ],
+  "source_writes": false,
+  "runtime_executed": false,
+  "q32_qualification": false,
+  "performance_claim": false,
+  "markdown_sha256": "819be0a0d2fc348516c851d2b7876426220c052dac909807202093fc0f4a32e0"
+}

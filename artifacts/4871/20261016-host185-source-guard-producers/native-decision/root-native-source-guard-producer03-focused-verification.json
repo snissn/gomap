@@ -1,0 +1,64 @@
+{
+  "all_groups_empty": true,
+  "created_utc": "2026-10-16T17:34:49.567528+00:00",
+  "full_source_maps_unchanged": true,
+  "manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "native_driver_executed": false,
+  "remaining_unexecuted": [
+    "normal-rootpublication",
+    "normal-db",
+    "normal-mvcc",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "results": [
+    {
+      "child_pass": 10,
+      "failed": [],
+      "name": "normal-retainedalloc",
+      "raw_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "status": "PASS",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "failed": [],
+      "name": "normal-lifecycle",
+      "raw_sha256": "5b968f6b61cfb013651a9f0de2c035ed33a3ab34c5251c69fee2368d92325627",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "status": "PASS",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "failed": [],
+      "name": "normal-memtable",
+      "raw_sha256": "cc252f3ff6c0a7241c5b484c44685e9b2c596fef016d003455a825aed1a5ca28",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "status": "PASS",
+      "top_pass": 2
+    },
+    {
+      "child_pass": 6,
+      "failed": [
+        "TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate",
+        "TestArenaPhysicalCloseWorkOriginalCaptureRemains"
+      ],
+      "name": "normal-primaryarena",
+      "raw_sha256": "984638aaa087747d72030fb843351056ba9a8e33d18e333dd7a204ba2e5d11fd",
+      "result_sha256": "3db0890dc686ff885075f8ff076d84639d7e81a00fbe825b0ba5a353b03b8be7",
+      "status": "STOP",
+      "top_pass": 24
+    }
+  ],
+  "scope": "root exact raw/source/process recomputation of producer03 focused first4 calls",
+  "status": "STOP",
+  "summary_sha256": "060595be3e47be35464f5d799a263f382e334a88ee21699d8be7b22aeab686a5",
+  "test_inventory_recomputed": true
+}

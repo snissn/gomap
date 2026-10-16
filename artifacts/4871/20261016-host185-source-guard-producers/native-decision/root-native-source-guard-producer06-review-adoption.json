@@ -1,0 +1,19 @@
+{
+  "disposition": "ACCEPT",
+  "production_price_cap_changed": false,
+  "review_sha256": "6a0cd3c44498442b7345894d2144bd0d1ea70d8b8abaa59fb6741012b8753657",
+  "runtime_acceptance": false,
+  "scope": "narrow arithmetic fixture source correction",
+  "verified_bindings": {
+    "native-decision/native-source-guard-producer05-review01.md": "ae945e9dea61bce788a7c30c66e9c2117a75226da4a7d0a104d2214033d146fb",
+    "native-integrated/TreeDB/caching/native_capture_price_for_test_v6.go": "7e69414f57272b2b930846f7500a02f5bb9ee7c697a61268e76be3c26a2fed2f",
+    "native-integrated/TreeDB/db/native_minimum_price_for_test_v6.go": "eac36566476a24c778d28eed65c1810638e8cd97ed8eff0fbe734e199d78f96d",
+    "native-integrated/TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "22eb9ba95fb8a07f44e301bb926eb8c5baf7575627c032bec29229c2d73dba82",
+    "native-integrated/TreeDB/lifecycle/registry.go": "20d9603369efcaf74be3c80939144af5b4acfa1deb6ae4f0a395c021ea8911f4",
+    "native-integrated/TreeDB/mvcc/native_finaldriver_envelope_test.go": "90511281e6e753dfb464ce789418f5b76b0b6b235e1491fd080af703cabb7874",
+    "native-main-integration/native-source-guard-producer06/proposed-commands.json": "e2cebe3f4fc6c8788cb865746604afa5c55e2f1424ce9f2c60535f6f520535de",
+    "native-main-integration/native-source-guard-producer06/source-frozen.json": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+    "native-main-integration/native-source-guard-producer06/source-frozen.tar.gz": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+    "native-main-integration/native-source-guard-producer06/source-modes.json": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039"
+  }
+}

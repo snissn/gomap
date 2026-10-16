@@ -1,0 +1,30 @@
+[
+  {
+    "after_sha256": null,
+    "before_sha256": "7f01b264d19ab549ff59699338e60a1c79ed26a47da00ab93aabc2afd55faeab",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go"
+  },
+  {
+    "after_sha256": "7f01b264d19ab549ff59699338e60a1c79ed26a47da00ab93aabc2afd55faeab",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go"
+  },
+  {
+    "after_sha256": null,
+    "before_sha256": "38a1835b53e547a5fc71db48109d35bc6dcf99f0fb0ac1ee0c505da835f49cef",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/lifecycle/source_guard_price_for_test.go"
+  },
+  {
+    "after_sha256": "38a1835b53e547a5fc71db48109d35bc6dcf99f0fb0ac1ee0c505da835f49cef",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/lifecycle/source_guard_price_for_test_v6.go"
+  }
+]

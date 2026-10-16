@@ -1,0 +1,163 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-mod=readonly",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^TestNativeSelectedOriginalSplitDiagnosticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "All six SAME original full-oracle real diagnostic arms, unchanged nil meter. Includes genuine native publication/Finish and requires a SEPARATE root actual-route grant; never implied by focused grant.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/actual-controls/normal-actual-all-shared-arms/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 1,
+      "name": "normal-actual-all-shared-arms",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSelectedOriginalSplitDiagnosticV6": [
+          "ready-cancel",
+          "stale-before-fence",
+          "frozen-limits",
+          "once-ack",
+          "paused-finish-close",
+          "pruner-enabled-refusal"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6"
+      ],
+      "selection_class": "actual-separate-selection-required"
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-mod=readonly",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^TestNativeSelectedOriginalSplitDiagnosticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "All six SAME original full-oracle real diagnostic arms, unchanged nil meter. Includes genuine native publication/Finish and requires a SEPARATE root actual-route grant; never implied by focused grant.",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/actual-controls/race-actual-all-shared-arms/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 1,
+      "name": "race-actual-all-shared-arms",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativeSelectedOriginalSplitDiagnosticV6": [
+          "ready-cancel",
+          "stale-before-fence",
+          "frozen-limits",
+          "once-ack",
+          "paused-finish-close",
+          "pruner-enabled-refusal"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6"
+      ],
+      "selection_class": "actual-separate-selection-required"
+    }
+  ],
+  "parent_proposal_sha256": "e2cebe3f4fc6c8788cb865746604afa5c55e2f1424ce9f2c60535f6f520535de",
+  "scope": "unchanged six real-publication diagnostic arms, source-derived prebirth grant; notQ32/performance",
+  "test_file_bindings": {
+    "TreeDB/db/native_activation_output_admission_v6_test.go": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go": "ccd7c7e3f3fa7da360ec72d7d0ea1d24154cdf83837baad426e8e9839da886af",
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+    "TreeDB/db/original_rootset_authority_completion_test.go": "271abcd677cabb681b04386aeca3dbac308737b034a448ca4104fb7e032db503",
+    "TreeDB/db/original_startup_generation_test.go": "3d77128a4a498907cd9ed99a0c9576fb27dac794be8d8391b36c7407e4546101",
+    "TreeDB/db/primary_capsule_v6_test.go": "4e851b7d36cbb0c66a7fc9ffb2d5b779b81b01f34f0fc03077f0af8475943560",
+    "TreeDB/db/primary_construction_ledger_v6_test.go": "fef2232f7c4d3d128d32aef155fd279238fd8dc644c8f155002ba8b48be1eb48",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": "7ae6fa6b8ac02258aac9e05199bf6a77cb49199dddb8c2246c96a64abad93aa9",
+    "TreeDB/db/primary_runtime_disposal_work_v6_test.go": "122f949810461441033106311fc319661465c0a5b53725845b6a22b5e5a385a7",
+    "TreeDB/db/primary_source_guard_v6_test.go": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd",
+    "TreeDB/db/primary_vacuum_v5_test.go": "9d0065a944861a68ab5229c28ff57dc78cbe0588c04b0a90ebda0cf2de832706",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go": "fcdfb563383c4f6bf1f7be6cf0719a09b48d4deee6c6404c30074702a0de833b",
+    "TreeDB/db/recoverable_root_set_test.go": "61e4c796f67bfeda7c2aa426fae3cd92489cba8b0b42057e2bbd4c7a58a0e6e1",
+    "TreeDB/db/stable_resource_test.go": "a8ea3158d64800f0e1b1b1a0d8be47f0bfc611bd1ea782466c1a59ad4e528b4f",
+    "TreeDB/internal/memtable/cow_test.go": "04009aa6780ab3c40e3852671f28101b47a4e8f8290e12809bf9a59d6937ee6e",
+    "TreeDB/internal/primaryarena/arena_lookup_admission_v6_test.go": "aed0712539154b686836f8d784489fb5b798af72c19b44b8de95f532e7500f84",
+    "TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "TreeDB/internal/primaryarena/bundle_test.go": "408ae71a57d9e0e85a08448c556e6c13a167133745399aa082b46dc4317562e2",
+    "TreeDB/internal/primaryarena/claim_retention_test.go": "fa225279eafd17863ca4f76131c1925391882cadf505c25d1d7725e16bbfe913",
+    "TreeDB/internal/primaryarena/metadata_retention_test.go": "b83219bc5b7ca061094f776ff1434c632df92944a927ce31a85f2507d8ae454c",
+    "TreeDB/internal/primaryarena/origin_compatibility_test.go": "0fa502137da6b1931cacf07edaf860c9f8d10c1920b70aab778ff601f7212138",
+    "TreeDB/internal/primaryarena/owned_file_test.go": "f9b73852a1fd7a7cd07080bfd53c0b99a051b42277c31364f433f4443299496b",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af",
+    "TreeDB/internal/primaryarena/read_root_v6_test.go": "c4f4d1bdb21bd886b2b0bcfc3a1bd13694cd9296dfea7bb462230e229e3e2ead",
+    "TreeDB/internal/primaryarena/release_queue_test.go": "66b1605a8568a8aa6c0ca1da5ac1681a02a1f3f99a867972cadcf69d2a0c66c5",
+    "TreeDB/internal/primaryarena/source_guard_v6_test.go": "67eaf70166dfebb0a68cf3e7a0d7a6559ee23d9e5748876c1eba95393fe3f47a",
+    "TreeDB/internal/retainedalloc/owner_cooperative_work_test.go": "2368d1db07c2131cc0d160bd537594ca049255e1251b31821811b524e49b024a",
+    "TreeDB/internal/retainedalloc/owner_enroll_work_test.go": "e9cb39f91620339479a453afc877362bcadaa52f30a858f1236915c8e24a720c",
+    "TreeDB/internal/retainedalloc/owner_growth_work_test.go": "a9842bd7d906645dc5228a09620c3f5f28a973147914729253aefac0f1ea2645",
+    "TreeDB/internal/retainedalloc/owner_original_reset_test.go": "35c60598e70c9f91661b4b15bf3217385d2c4eab608d388980f1533c37d96e9a",
+    "TreeDB/internal/retainedalloc/owner_test.go": "5599d89d7c9d17130f42a1c3b37b33eade2aae1d0a9083f8ac1ebeb3803eaf5e",
+    "TreeDB/internal/retainedalloc/owner_work_test.go": "5ba4c2321c556f1195fbda4db632de802b7bf9cb9792eb808b8b2e1fd8842e03",
+    "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "TreeDB/internal/rootpublication/constructed_activation_rollback_v6_test.go": "4bde2a0ee0c873f1e98430fb052434f4bef61f561aafa2bb3db7933c8c0b9cd7",
+    "TreeDB/internal/rootpublication/coordinator_test.go": "7d43a65c038e3c879f9d64bcd8e106857f205146d237657e42daee001f82e334",
+    "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go": "5409729f46a6f9ee84250842d290f8aa508ddfa5548e6dcdc193d97960e37cdd",
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3301064ea565ed137cb1a0d61d3b86ba2a17a9c51fe23e5ca7fc1b28653ad47e",
+    "TreeDB/internal/rootpublication/reachability_root_capture_v6_test.go": "b06fbd1677708aeaf5ac2e64be96bd3e233ec58820f122627b8865abbef5a0e1",
+    "TreeDB/internal/rootpublication/resource_contract_test.go": "8b9a3032ad0defb7848512dc474212cdb5dd0ce8799cc3653e2a484b3102f92f",
+    "TreeDB/internal/rootpublication/resource_physical_union_test.go": "ebdad87f40f4e917c9a2368415905057f073984388f825c4356041b74fc3c7d2",
+    "TreeDB/internal/rootpublication/resource_set_allocation_test.go": "17e29508fa91f678b3a9e3f57f41e3592c0cedb4da7e95fb29c4e70af6d45462",
+    "TreeDB/lifecycle/bounded_registry_test.go": "edd4dfb7a42a651e98a3838a3cdd840cb5f991c3f9a3049c63b10e2a7480342f",
+    "TreeDB/lifecycle/lifecycle_test.go": "afe80caee9d7c8d64e0cafe71f0b375b1d494424e454e51bf0841a92ce975c07",
+    "TreeDB/lifecycle/native_mvcc_registry_test.go": "b00321d9cb35413aa752d30a37c48b11a0f3d308e0daf82a504ea029efaa8009",
+    "TreeDB/lifecycle/registry_header_completion_v6_test.go": "e53b816198b9dc56a6947b9eeda2ee5128af2a683c4227cdfcbbd90a41363416",
+    "TreeDB/lifecycle/registry_patricia_v6_test.go": "99f50e7dca6e8b924682a00aef6a42dfc5dbc1aed711dd3fbadae7a84cc52d9b",
+    "TreeDB/lifecycle/source_guard_test.go": "4d2a0418cb4d9829d8a82c25c1964e5e6d96c30257054e94e953ce6bd7e5730c",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "90511281e6e753dfb464ce789418f5b76b0b6b235e1491fd080af703cabb7874"
+  }
+}

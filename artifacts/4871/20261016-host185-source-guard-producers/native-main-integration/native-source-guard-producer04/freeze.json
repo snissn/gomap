@@ -1,0 +1,36 @@
+{
+  "added_paths": 0,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "b8d7e5cb4f6a706adfa803824a7993045ad52d7942cae5565718141871aa2774",
+  "changed_paths": 2,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T17:40:11.095360+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "94a5fb9240ba693163b97000afbaf3c0cca6920281e9763c0546462adc978dda",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/native-source-guard-producer03-compatibility-diagnosis.json": "fcbf3e8994c9163aa035f36860ca7ed26a5573716e9daedd0b459f9e2f37e868",
+    "native-decision/root-native-source-guard-producer03-focused-verification.json": "bec1cba7c768b1498c1888777a5d1121a818f241329d6e7f32a8bb08ee5db073",
+    "native-decision/root-native-source-guard-producer04-freeze-selection.json": "ed0047cad188ee9e628e35921fd55cdf69a2c2cf2d1aa5278d54698f7ebf7b2e",
+    "native-main-integration/freeze-source-guard-producer04.py": "6512cc1aa657522fc5c94f9b1547560ffb50bb3f058a2145309a26a2b8fcf741",
+    "native-main-integration/native-source-guard-producer-test-compatibility/handoff.json": "5106a325130fbc37584d43d4300df9bf2b197c5b8bab39e92aeb8beb10314aa6",
+    "native-main-integration/native-source-guard-producer-test-compatibility/prepared-source.tar.gz": "140ad4e7de249eb14ad0a3ae84f364b7101d76e3703c356d7b0155b4ba072acb",
+    "native-main-integration/native-source-guard-producer03/freeze.json": "965f045e124b0f1d17f9ea8fb9747584e2cc477e0856767789c950daaaac84d9"
+  },
+  "modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "parent_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "partition_changed_counts": {
+    "source-guard-producer": 2
+  },
+  "runtime_executed": false,
+  "scope": "connected source-guard producer04; source frozen only, no role-closure or Q32 acceptance",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "4e32474edfd1c01ee5838a6adf19a2e114b09cce7c9f2fabebb4c823b74a44d2",
+  "source_files": 10466,
+  "source_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

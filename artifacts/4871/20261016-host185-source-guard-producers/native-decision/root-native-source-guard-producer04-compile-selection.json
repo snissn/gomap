@@ -1,0 +1,34 @@
+{
+  "all_source_writers_released": true,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-c",
+    "-o",
+    "/dev/null",
+    "./TreeDB/internal/primaryarena"
+  ],
+  "created_utc": "2026-10-16T17:40:42.760645+00:00",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "module_inputs_readonly": true,
+  "outer_timeout_seconds": 900,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04",
+  "prior_runtime_summary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer03-focused-verification.json",
+  "prior_runtime_summary_sha256": "bec1cba7c768b1498c1888777a5d1121a818f241329d6e7f32a8bb08ee5db073",
+  "rationale": "Only two primaryarena fixture files changed; compile affected package/defaultvet without bodies. Production and other packages unchanged.",
+  "runner_sha256": "b2d01b21a1f18fe226f9efb7f9f69aa1953c6463b22cb97fb6ab3a4bccc43298",
+  "scope": "source-guard-producer-compile-only",
+  "selected_package_labels": [
+    "primaryarena"
+  ],
+  "source_readiness": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/freeze.json",
+  "source_readiness_sha256": "8491a5fe774252a358e0bb1f544c5fb81cdec0515ee8322245eff4a5f62f917b",
+  "test_bodies_authorized": false
+}

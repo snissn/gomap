@@ -1,0 +1,14 @@
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape
+    native_finaldriver_envelope_test.go:324: dirty fallback overflow granted {{{16 0 1 1048576 0 0 0 0 false false true true true true} {16 0 1 1048576 0 0 0 0 false false false true true true} {{false true 16 0 0 0 0 0 0 0 0 0 0 0 0} 16 0 0} {true false false false false 0 0 0 0 0 4 0 0 0 false false {false false false false false 256 0 0 4 0 0 0}} {0 0 0 0 0 0 0 false} {0 0 0 0 false true false false false} {0 0 0 0 false true false false false} 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 18446744073709551615 true true true false false true true true true true} {17 1 15 1 16 1 0 1 17 17 1 1 17 34 true} {2 1 1 26 33856 2 1051520 true} {241 847472} {8401 5241804} {738 1781810} {1577 2272053} {5874 6331855} {6283 6630167} {32 1048576} {23114 23105161} 10 1 0 1 }
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape
+--- FAIL: TestNativeFinaldriverEnvelopeCheckedArithmeticV6 (0.00s)
+    --- FAIL: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/mvcc	0.002s
+FAIL

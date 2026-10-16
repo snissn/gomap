@@ -1,0 +1,6 @@
+{
+  "TreeDB/lifecycle/registry.go": "20d9603369efcaf74be3c80939144af5b4acfa1deb6ae4f0a395c021ea8911f4",
+  "TreeDB/lifecycle/native_minimum_price_for_test_v6.go": "22eb9ba95fb8a07f44e301bb926eb8c5baf7575627c032bec29229c2d73dba82",
+  "TreeDB/db/native_minimum_price_for_test_v6.go": "eac36566476a24c778d28eed65c1810638e8cd97ed8eff0fbe734e199d78f96d",
+  "TreeDB/caching/native_capture_price_for_test_v6.go": "7e69414f57272b2b930846f7500a02f5bb9ee7c697a61268e76be3c26a2fed2f"
+}

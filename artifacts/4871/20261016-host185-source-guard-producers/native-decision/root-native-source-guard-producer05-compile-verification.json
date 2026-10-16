@@ -1,0 +1,60 @@
+{
+  "all_groups_empty": true,
+  "all_production_unchanged": true,
+  "changed_paths": [
+    "TreeDB/db/primary_source_guard_v6_test.go"
+  ],
+  "created_utc": "2026-10-16T17:49:12.234547+00:00",
+  "elapsed_seconds": 40.71791322110221,
+  "live_source_equal": true,
+  "manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "no_test_bodies": true,
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "result_sha256": "61a589109321dd63ac87d2d5074f0c0ec15969e3012201b43c1d5528357b0e33",
+  "retained_prior_results": [
+    {
+      "child_pass": 10,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 2
+    },
+    {
+      "child_pass": 6,
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-primaryarena/result.json",
+      "result_sha256": "52f06ef9ad8db23f44e0fb4fae1755f49a344ef8a6fd816f7e2f162eb09d72be",
+      "reuse_basis": "Only db test assertion ordering changed from producer04. Complete production, this package tests and build inputs identical. Same toolchain/env/command.",
+      "top_pass": 26
+    },
+    {
+      "child_pass": 9,
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-rootpublication/result.json",
+      "result_sha256": "743d1c06dfb24f34cc9281292d334d21ceacdc67aa5602445a85e7b118ba7ac4",
+      "reuse_basis": "Only db test assertion ordering changed from producer04. Complete production, this package tests and build inputs identical. Same toolchain/env/command.",
+      "top_pass": 18
+    }
+  ],
+  "scope": "producer05 db compile/defaultvet and unchanged input reuse",
+  "source_before_after_frozen": true,
+  "source_files": 10466,
+  "status": "PASS"
+}

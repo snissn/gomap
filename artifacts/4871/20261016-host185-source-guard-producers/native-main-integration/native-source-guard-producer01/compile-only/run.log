@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/internal/primaryarena
+TreeDB/internal/primaryarena/source_guard_price_for_test_v6.go:33:17: undefined: lifecycle.SourceGuardPriceForTestV6
+TreeDB/internal/primaryarena/source_guard_price_for_test_v6.go:34:21: undefined: retainedalloc.CooperativeMutationPricesForTestV6
+TreeDB/internal/primaryarena/source_guard_price_for_test_v6.go:35:26: undefined: lifecycle.SourceGuardUnitForTestV6
+TreeDB/internal/primaryarena/source_guard_price_for_test_v6.go:36:30: undefined: retainedalloc.PendingMutationUnitForTestV6

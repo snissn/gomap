@@ -1,0 +1,16 @@
+{
+  "disposition": "ACCEPT",
+  "q32_acceptance": false,
+  "review_sha256": "f3852434e2f65a4198055804a7c9e54634d56c79f1050eb314740a89d8bf4887",
+  "scope": "narrow fixture correction carry-forward",
+  "verified_inputs": {
+    "native-decision/native-source-guard-producer04-review01.md": "1dded5dda50a1db95b03be7acce5e1f49c27bc2fb661355518af730b91f642ac",
+    "native-decision/native-source-guard-producer04-snapshot-diagnosis.md": "207c39726675aff35120a7055a1c95e9c31abd9027e51f65476826c862343b68",
+    "native-decision/root-native-source-guard-producer05-freeze-selection.json": "b27b3007e1f0c1d3ae83eb10088ab9cc4c33687f8a76b00d2fc16e8c9f06ccd5",
+    "native-integrated/TreeDB/db/primary_source_guard_v6_test.go": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd",
+    "native-main-integration/native-source-guard-producer05/proposed-commands.json": "ba1ef5d00716943d793f22206d0a24f607ab21b2ed7f3bc971f45120f7622ccd",
+    "native-main-integration/native-source-guard-producer05/source-frozen.json": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+    "native-main-integration/native-source-guard-producer05/source-frozen.tar.gz": "8e71874548e96172dac76a6e9cbb59b31b5cf4f27a8d93bf0c8b467d10225e1c",
+    "native-main-integration/native-source-guard-producer05/source-modes.json": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039"
+  }
+}

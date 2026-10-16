@@ -1,0 +1,45 @@
+{
+  "elapsed_seconds": 1.8287806920707226,
+  "ended_utc": "2026-10-16T17:40:52.414803+00:00",
+  "exit_code": 0,
+  "git_identity_unchanged": true,
+  "groups_and_adopted_children_empty": true,
+  "initial_residual": [],
+  "leader_joined": true,
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1893050,
+      "pid": 1893050,
+      "ppid": 1892982,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1893050,
+      "pid": 1893064,
+      "ppid": 1893050,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1893050,
+      "pid": 1893084,
+      "ppid": 1893050,
+      "state": "S"
+    }
+  ],
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_children": [],
+  "scope": "selected producer packages compilation and default vet only; runtime and producer-role closure not qualified",
+  "selected_package_labels": [
+    "primaryarena"
+  ],
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T17:40:50.586014+00:00",
+  "status": "PASS",
+  "test_bodies_executed": false
+}

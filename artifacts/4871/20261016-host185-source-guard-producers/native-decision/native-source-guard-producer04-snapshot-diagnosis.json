@@ -1,0 +1,46 @@
+{
+  "disposition": "FIXTURE_CONTRACT_MISMATCH",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "runtime_executed": false,
+  "candidate_edits_by_reviewer": false,
+  "lease_released": true,
+  "source_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "source_archive_sha256": "4e32474edfd1c01ee5838a6adf19a2e114b09cce7c9f2fabebb4c823b74a44d2",
+  "raw_log_sha256": "890d4f93c3795ece5b58090ed69a166472c169a6344b8d1de8b4cad6a0983443",
+  "inspected_source_hashes": {
+    "TreeDB/db/primary_source_guard_v6_test.go": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02",
+    "TreeDB/db/primary_source_guard_v6.go": "e4e728ec020d3a98d032389529eb92ec03feec23bad1e00b76bd8e35988d5472",
+    "TreeDB/db/db.go": "cf8bf7783dfc9c496ab961858f8a8b1feae08ee4d7b9f264909800636fa87a92",
+    "TreeDB/db/index_gen_db.go": "a5f6c589181297a41cce5a3d5cec1b4a1a2cdfcfc60b62bcc41c90b408288a3c",
+    "TreeDB/db/index_gen.go": "435b13620467d39218becc580a56cd3fdc6f1a153da6e2db6a24b44f46f1027b",
+    "TreeDB/db/snapshot_primary_retention_test.go": "42f14d911dc7abb0cbc8066fee6f9a515d71c77fb7e6102604a96a30b48a1a37",
+    "TreeDB/internal/primaryarena/source_guard_v6.go": "c3cd27668ec05a678a76954b05b3055dffb0dc156518fcf54874d5672b9d9739",
+    "TreeDB/pager/pager.go": "a87e0f02ddf97c79d1c69b30504ec353994f1f6bfc7fdbb740c3fb1671a2dd1d",
+    "TreeDB/pager/physical_close_work.go": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+    "TreeDB/docs/spec/contracts.md": "561353e3a572fac8af5e1fe8e70805be29d4578521d2a9c0bbe130092d0eab95",
+    "TreeDB/docs/spec/recovery.md": "3bcf7c4aa88d3accab501c4a8ce4d364344c345dc59b47c7339cb717efa02590",
+    "TreeDB/docs/spec/storage-format.md": "0af5ca8323b6fed4597de53753b17e178dd2088eab3c7391c18dd99ee4b91c71",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go": "ccd7c7e3f3fa7da360ec72d7d0ea1d24154cdf83837baad426e8e9839da886af"
+  },
+  "cause": "Test performs normal Snapshot.Get after owning DB.Close; documented normal lifetime does not guarantee that storage read. DB.Close closes DATA mappings despite retained Snapshot PRIMARY/source cleanup edges.",
+  "minimal_fix": "Move unchanged exact old-value Snapshot.Get oracle after SetSync(new) and before d.Close; retain all post-Close PRIMARY owner/registry and last borrower cleanup assertions. No production change justified by this failure.",
+  "inventory": {
+    "expected_children_old": 16,
+    "observed_children": 18,
+    "missing_static_labels": [
+      "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+      "TestNativeRootPreparationSourceTerminalV6/last-owner"
+    ],
+    "both_missing_ran_and_passed": true,
+    "normal_and_race_child_count_correction": "+2 each; overall63 becomes65 per mode; no test change"
+  },
+  "limits": [
+    "Current failed run is not accepted or relabeled.",
+    "Post-Close PRIMARY guard/physical ownership check passed before failed read; snapshot final cleanup did not execute in that arm because Fatal stopped it. Recoverable-set arm passed through final cleanup.",
+    "No new compiler/runtime or production correctness/qualification claim.",
+    "Earlier source-only review remains historical; successor bytes and focused controls need their own binding."
+  ]
+}

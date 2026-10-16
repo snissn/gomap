@@ -1,0 +1,34 @@
+{
+  "all_source_writers_released": true,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-c",
+    "-o",
+    "/dev/null",
+    "./TreeDB/db"
+  ],
+  "created_utc": "2026-10-16T17:31:41.892644+00:00",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "module_inputs_readonly": true,
+  "outer_timeout_seconds": 900,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03",
+  "prior_runtime_summary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer02-compile-verification.json",
+  "prior_runtime_summary_sha256": "ea76f7e6e1b04b15587b2da70a77062c70f6bd109b24c3132dcf3ca2f70e43c3",
+  "rationale": "Only DB production and one DB test changed from seven-package compile PASS producer02; compile affected package including default vet, no bodies. Full semantic review carried plus narrow SGP1 repair review pending sealed source binding.",
+  "runner_sha256": "b2d01b21a1f18fe226f9efb7f9f69aa1953c6463b22cb97fb6ab3a4bccc43298",
+  "scope": "source-guard-producer-compile-only",
+  "selected_package_labels": [
+    "db"
+  ],
+  "source_readiness": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/freeze.json",
+  "source_readiness_sha256": "965f045e124b0f1d17f9ea8fb9747584e2cc477e0856767789c950daaaac84d9",
+  "test_bodies_authorized": false
+}

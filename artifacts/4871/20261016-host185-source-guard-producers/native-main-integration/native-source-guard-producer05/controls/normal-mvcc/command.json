@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestNativeFinaldriverEnvelopeCheckedArithmeticV6)$",
+    "./TreeDB/mvcc"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/controls/normal-mvcc/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 4,
+  "expected_top_level_count": 1,
+  "grant_sha256": "c63dd39eb40fef5242d0c2f8b41f3ab43205a01be8052f2ed595f68c00239a05",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/controls/identity.json",
+  "name": "normal-mvcc",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+      "supported-selected-shape",
+      "sum",
+      "multiply",
+      "missing-shape"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/source-frozen.tar.gz",
+  "source_archive_sha256": "8e71874548e96172dac76a6e9cbb59b31b5cf4f27a8d93bf0c8b467d10225e1c"
+}

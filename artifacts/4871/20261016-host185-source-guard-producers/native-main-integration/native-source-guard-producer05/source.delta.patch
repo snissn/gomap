@@ -1,0 +1,26 @@
+--- source-guard-producer04/TreeDB/db/primary_source_guard_v6_test.go
++++ source-guard-producer05/TreeDB/db/primary_source_guard_v6_test.go
+@@ -48,6 +48,13 @@
+ 			if err = d.SetSync([]byte("key"), []byte("new")); err != nil {
+ 				t.Fatal(err)
+ 			}
++			// Ordinary snapshots retain their old logical view while the DB is open.
++			// After DB.Close only the retained PRIMARY cleanup lifetime is supported.
++			if snapshot != nil {
++				if got, e := snapshot.Get([]byte("key")); e != nil || !bytes.Equal(got, []byte("old")) {
++					t.Fatal("held old source changed", got, e)
++				}
++			}
+ 			if err = d.Close(); err != nil {
+ 				t.Fatal(err)
+ 			}
+@@ -55,9 +62,6 @@
+ 				t.Fatal("DB close stole held ordinary source")
+ 			}
+ 			if snapshot != nil {
+-				if got, e := snapshot.Get([]byte("key")); e != nil || !bytes.Equal(got, []byte("old")) {
+-					t.Fatal("held old source changed", got, e)
+-				}
+ 				if err = snapshot.Close(); err != nil {
+ 					t.Fatal(err)
+ 				}

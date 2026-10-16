@@ -1,0 +1,45 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Narrow one-test assertion-move carry-forward; source-only focused readiness",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed": false,
+  "lease_released": true,
+  "source_manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "source_archive_sha256": "8e71874548e96172dac76a6e9cbb59b31b5cf4f27a8d93bf0c8b467d10225e1c",
+  "source_modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "selection_sha256": "b27b3007e1f0c1d3ae83eb10088ab9cc4c33687f8a76b00d2fc16e8c9f06ccd5",
+  "proposal_sha256": "ba1ef5d00716943d793f22206d0a24f607ab21b2ed7f3bc971f45120f7622ccd",
+  "changed_file": "TreeDB/db/primary_source_guard_v6_test.go",
+  "before_sha256": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02",
+  "after_sha256": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd",
+  "source_files": 10466,
+  "unchanged_files": 10465,
+  "production_and_prices_unchanged": true,
+  "findings": [],
+  "checks": [
+    "Read full test and exact diff against hash-verified immutable producer04.",
+    "Full manifest comparison confirms exactly one test change, no addition/deletion; modes unchanged.",
+    "Archive SHA checked against completed freeze; changed archive member equals reviewed test bytes.",
+    "All48 proposal test hashes match final manifest. All16 command entries unchanged except TMPDIR and normal/race DB child inventories16 to18; selectors, argv, caps and oracles unchanged."
+  ],
+  "semantic_resolution": "Exact old-value Snapshot.Get assertion moved unchanged after successful SetSync(new), before owning DB.Close; only explanatory comment added. All post-Close retained PRIMARY/source guard checks, genuine borrower release and final no-guard/physical-close checks unchanged.",
+  "carried_review": {
+    "path": "native-decision/native-source-guard-producer04-review01.md",
+    "sha256": "1dded5dda50a1db95b03be7acce5e1f49c27bc2fb661355518af730b91f642ac"
+  },
+  "diagnosis": {
+    "path": "native-decision/native-source-guard-producer04-snapshot-diagnosis.md",
+    "sha256": "207c39726675aff35120a7055a1c95e9c31abd9027e51f65476826c862343b68"
+  },
+  "limits": [
+    "Producer04 failure remains historical failed evidence.",
+    "No producer05 compiler/test result claimed; first5 normal-package pass provenance remains earlier-head evidence; root plans remaining9 focused commands.",
+    "Actual six-arm calls remain separately gated.",
+    "No scan-removal, public Q32-fit, numeric allowance, native-publication, performance, full-graph, CI or merge acceptance."
+  ],
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model."
+}

@@ -1,0 +1,106 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9758185123631542,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9758185123631542,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9758185123631542,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9758185123631542,
+        "pid": 3140140
+      },
+      {
+        "comm": "ksoftirqd/3",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 36
+      },
+      {
+        "comm": "ksoftirqd/6",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 54
+      },
+      {
+        "comm": "containerd",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 1286
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 19242
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 128239
+      },
+      {
+        "comm": "EmbyServer",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 538321
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9879092561815771,
+        "pid": 681192
+      }
+    ],
+    "aggregate_busy_percent": 0.6617038875103392,
+    "mem_available_kib": 21490160,
+    "seconds": 1.01223871903494
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9761415099033661,
+        "pid": 1881
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9761415099033661,
+        "pid": 681192
+      },
+      {
+        "comm": "tailscaled",
+        "one_core_cpu_percent": 0.9880707549516831,
+        "pid": 1274
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 0.9880707549516831,
+        "pid": 1949
+      },
+      {
+        "comm": "Plex Script Hos",
+        "one_core_cpu_percent": 0.9880707549516831,
+        "pid": 6254
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 0.9880707549516831,
+        "pid": 6357
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 0.9880707549516831,
+        "pid": 3140140
+      }
+    ],
+    "aggregate_busy_percent": 0.8264462809917356,
+    "mem_available_kib": 21511808,
+    "seconds": 1.0120732700452209
+  }
+]

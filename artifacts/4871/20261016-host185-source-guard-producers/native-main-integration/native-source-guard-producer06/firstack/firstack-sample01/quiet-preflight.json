@@ -1,0 +1,106 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 3.949718557741387,
+        "pid": 3140140
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9748592788706936,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9748592788706936,
+        "pid": 1949
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9748592788706936,
+        "pid": 6357
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9748592788706936,
+        "pid": 681192
+      },
+      {
+        "comm": "irq/158-s-nvidia",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 788
+      },
+      {
+        "comm": "tailscaled",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 1274
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 128239
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 624687
+      },
+      {
+        "comm": "kworker/u24:1-events_unbound",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 1750156
+      },
+      {
+        "comm": "kworker/u24:8-events_unbound",
+        "one_core_cpu_percent": 0.9874296394353468,
+        "pid": 1857640
+      }
+    ],
+    "aggregate_busy_percent": 0.9105960264900662,
+    "mem_available_kib": 21477360,
+    "seconds": 1.01273038610816
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 22.69860134278039,
+        "pid": 681192
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 2.9606871316670076,
+        "pid": 1949
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9737914211113383,
+        "pid": 1881
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 0.9868957105556692,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9868957105556692,
+        "pid": 120874
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9868957105556692,
+        "pid": 624687
+      },
+      {
+        "comm": "top",
+        "one_core_cpu_percent": 0.9868957105556692,
+        "pid": 874030
+      }
+    ],
+    "aggregate_busy_percent": 2.727272727272727,
+    "mem_available_kib": 21492320,
+    "seconds": 1.0132782920263708
+  }
+]

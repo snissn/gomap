@@ -1,0 +1,35 @@
+{
+  "added_paths": 0,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "9f67fdc2988f38a39a9a0999534258982b7204975ebc092f3dc5e5fdaba4b175",
+  "changed_paths": 1,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T17:53:23.572049+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "62ec12fcf3fa514f7dadbb67349a348078368980ca0fe7bca3ab5d98460ccb63",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer05-focused-verification.json": "96d6adafaef1dee21878f4f5c735846875252c1bfa2d7d90c33ddc4d889e6dad",
+    "native-decision/root-native-source-guard-producer06-freeze-selection.json": "814a1386d165e44accb042cc1cde516c6d1b5a2d390876a216e27e6e6294a9e7",
+    "native-main-integration/freeze-source-guard-producer06.py": "fae30988cc39a80a10fa3bafd56b6ebb144995a69c4700e0b6b877426ab965f0",
+    "native-main-integration/native-source-guard-producer-envelope-repair/handoff.json": "5b563e1f4e2f2621e2442d15e6e89f0c98b8e56081bf465cede7dff2220fca98",
+    "native-main-integration/native-source-guard-producer-envelope-repair/prepared-source.tar.gz": "0cbd3017aad6ffcdf2573507ade3bb8f89f93ea5a32fc55089b7d482070079a2",
+    "native-main-integration/native-source-guard-producer05/freeze.json": "ec96f9f9a92ba67a148010eb3dbb9a5ccf9a85245364b9ba18aa1097e978d127"
+  },
+  "modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "parent_manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "partition_changed_counts": {
+    "source-guard-producer": 1
+  },
+  "runtime_executed": false,
+  "scope": "connected source-guard producer06; source frozen only, no role-closure or Q32 acceptance",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "source_files": 10466,
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

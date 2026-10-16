@@ -1,0 +1,33 @@
+{
+  "added_paths": 0,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "20197b90bcef99c7f1ff7335f658613c055ccabec5c81c97b98406e46fa78182",
+  "changed_paths": 1,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T17:46:58.514097+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "ac255354a622e7a0cee5a925218f4c18bcaee8902d94a93952e5eace2499ff4e",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer04-focused-verification.json": "b80d57d05de75afd6430f4070d76980632a6aa5e0a62acd406eb2a55be599a45",
+    "native-decision/root-native-source-guard-producer05-freeze-selection.json": "b27b3007e1f0c1d3ae83eb10088ab9cc4c33687f8a76b00d2fc16e8c9f06ccd5",
+    "native-main-integration/freeze-source-guard-producer05.py": "79bdfa5a724d61c038e62b2254cd1bd686a3073fb844a508903a371f61e7a445",
+    "native-main-integration/native-source-guard-producer04/freeze.json": "8491a5fe774252a358e0bb1f544c5fb81cdec0515ee8322245eff4a5f62f917b"
+  },
+  "modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "parent_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "partition_changed_counts": {
+    "source-guard-producer": 1
+  },
+  "runtime_executed": false,
+  "scope": "connected source-guard producer05; source frozen only, no role-closure or Q32 acceptance",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "8e71874548e96172dac76a6e9cbb59b31b5cf4f27a8d93bf0c8b467d10225e1c",
+  "source_files": 10466,
+  "source_manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

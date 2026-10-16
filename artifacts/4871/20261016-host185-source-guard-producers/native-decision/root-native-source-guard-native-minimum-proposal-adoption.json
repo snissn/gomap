@@ -1,0 +1,18 @@
+{
+  "conditions": "No source change selected yet; first complete focused producer controls and actual six-arm diagnostic. Preserve source role overlap proof and separate leaf-publication prerequisite; derive actual authority/prefix prices.",
+  "created_utc": "2026-10-16T17:54:57.379471+00:00",
+  "disposition": "ACCEPT_AS_IMPLEMENTATION_PROPOSAL_ONLY",
+  "genuine_zero": {
+    "mismatch": "NewReuseCapability(oldest,0,0) ignores zero minimum",
+    "not_claimed": "all allocations append, all existing free storage is unusable, or continuing reclamation",
+    "recommended": "existing zero-valued ReuseCapability disables new retired-page promotion; preserve fixed horizon validation"
+  },
+  "markdown_sha256": "819be0a0d2fc348516c851d2b7876426220c052dac909807202093fc0f4a32e0",
+  "proposal_sha256": "a0cc517d29b71b6ac1b76b4ea0782bc70b1f1ded1301d31a4b1ffdb71a684dba",
+  "q32_or_performance_acceptance": false,
+  "runtime_granted": false,
+  "selected_boundary": "StepNativeMVCCAllocatorV6 phase4, only original retained Snapshot PRIMARY V6 Directory guard on same DATA idx/allocator/registry",
+  "source_lease_active": false,
+  "unchanged_producer03_through06": true,
+  "verified_source_bindings": 23
+}

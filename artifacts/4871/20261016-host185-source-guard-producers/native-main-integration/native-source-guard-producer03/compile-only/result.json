@@ -1,0 +1,143 @@
+{
+  "elapsed_seconds": 41.98227226501331,
+  "ended_utc": "2026-10-16T17:32:34.159024+00:00",
+  "exit_code": 0,
+  "git_identity_unchanged": true,
+  "groups_and_adopted_children_empty": true,
+  "initial_residual": [],
+  "leader_joined": true,
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1884355,
+      "pid": 1884355,
+      "ppid": 1884348,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884369,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884681,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884685,
+      "ppid": 1884355,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884750,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884757,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884761,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884865,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884873,
+      "ppid": 1884355,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884877,
+      "ppid": 1884355,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1884355,
+      "pid": 1884881,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1884355,
+      "pid": 1884889,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1884355,
+      "pid": 1884898,
+      "ppid": 1884355,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1884355,
+      "pid": 1884969,
+      "ppid": 1884355,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1884355,
+      "pid": 1884974,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1884355,
+      "pid": 1884984,
+      "ppid": 1884355,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1884355,
+      "pid": 1885005,
+      "ppid": 1884355,
+      "state": "R"
+    }
+  ],
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_children": [],
+  "scope": "selected producer packages compilation and default vet only; runtime and producer-role closure not qualified",
+  "selected_package_labels": [
+    "db"
+  ],
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T17:31:52.176744+00:00",
+  "status": "PASS",
+  "test_bodies_executed": false
+}

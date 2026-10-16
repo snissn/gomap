@@ -1,0 +1,282 @@
+{
+  "all_groups_joined": true,
+  "allocation_claim": false,
+  "created_utc": "2026-10-16T18:05:03.381751+00:00",
+  "discarded_timing_samples": 0,
+  "elf_sha256": "b974d74d7e60aac4a3733e089930990a1d22ac62997e55a1f579c5292f183f28",
+  "executed_samples": 3,
+  "first_attempt_preflight_no_sample": true,
+  "full_prune_or_Q32_or_final_performance_qualification": false,
+  "medians": {
+    "max_call_ns": 7675731,
+    "public_call_ns": 13468601,
+    "whole_birth_ack_ns": 23788617,
+    "work_bytes": 7435601,
+    "work_records": 6655
+  },
+  "samples": [
+    {
+      "calls": [
+        {
+          "index": 0,
+          "start_label": "cursor-birth",
+          "wall_ns": 71478,
+          "work_bytes": 2095524,
+          "work_records": 457
+        },
+        {
+          "index": 1,
+          "start_label": "16",
+          "wall_ns": 72143,
+          "work_bytes": 1984555,
+          "work_records": 2715
+        },
+        {
+          "index": 2,
+          "start_label": "16",
+          "wall_ns": 7362,
+          "work_bytes": 48288,
+          "work_records": 10
+        },
+        {
+          "index": 3,
+          "start_label": "24",
+          "wall_ns": 20795,
+          "work_bytes": 299432,
+          "work_records": 359
+        },
+        {
+          "index": 4,
+          "start_label": "25",
+          "wall_ns": 739,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 5,
+          "start_label": "25",
+          "wall_ns": 354,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 6,
+          "start_label": "25",
+          "wall_ns": 389,
+          "work_bytes": 304,
+          "work_records": 4
+        },
+        {
+          "index": 7,
+          "start_label": "25",
+          "wall_ns": 5528640,
+          "work_bytes": 928261,
+          "work_records": 2044
+        },
+        {
+          "index": 8,
+          "start_label": "26",
+          "wall_ns": 7599798,
+          "work_bytes": 1346084,
+          "work_records": 861
+        },
+        {
+          "index": 9,
+          "start_label": "27",
+          "wall_ns": 69981,
+          "work_bytes": 732143,
+          "work_records": 178
+        }
+      ],
+      "exact_ack_returns": 1,
+      "max_call_ns": 7599798,
+      "name": "firstack-sample01",
+      "other_process_cpu_below_limit": true,
+      "public_call_ns": 13371679,
+      "public_calls": 10,
+      "quiet_preflight_pass": true,
+      "raw_sha256": "d432e0cb27db6ebcfd89b3bbe645a8295b5ec53e5e609d061b0ffba477c68be6",
+      "result_sha256": "9919c4df035cefa69fabcf5379c51ce9c873f0e8a6ae3bfeeeb9d1343adb07cd",
+      "whole_birth_ack_ns": 23453226,
+      "work_bytes": 7435999,
+      "work_records": 6670
+    },
+    {
+      "calls": [
+        {
+          "index": 0,
+          "start_label": "cursor-birth",
+          "wall_ns": 75696,
+          "work_bytes": 2095116,
+          "work_records": 442
+        },
+        {
+          "index": 1,
+          "start_label": "16",
+          "wall_ns": 83508,
+          "work_bytes": 1984555,
+          "work_records": 2715
+        },
+        {
+          "index": 2,
+          "start_label": "16",
+          "wall_ns": 6345,
+          "work_bytes": 48288,
+          "work_records": 10
+        },
+        {
+          "index": 3,
+          "start_label": "24",
+          "wall_ns": 20635,
+          "work_bytes": 299432,
+          "work_records": 359
+        },
+        {
+          "index": 4,
+          "start_label": "25",
+          "wall_ns": 1020,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 5,
+          "start_label": "25",
+          "wall_ns": 360,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 6,
+          "start_label": "25",
+          "wall_ns": 239,
+          "work_bytes": 304,
+          "work_records": 4
+        },
+        {
+          "index": 7,
+          "start_label": "25",
+          "wall_ns": 5592900,
+          "work_bytes": 928269,
+          "work_records": 2044
+        },
+        {
+          "index": 8,
+          "start_label": "26",
+          "wall_ns": 7675731,
+          "work_bytes": 1346086,
+          "work_records": 861
+        },
+        {
+          "index": 9,
+          "start_label": "27",
+          "wall_ns": 65258,
+          "work_bytes": 732143,
+          "work_records": 178
+        }
+      ],
+      "exact_ack_returns": 1,
+      "max_call_ns": 7675731,
+      "name": "firstack-sample02",
+      "other_process_cpu_below_limit": true,
+      "public_call_ns": 13521692,
+      "public_calls": 10,
+      "quiet_preflight_pass": true,
+      "raw_sha256": "dae4733385788007a54fbbf4e5a87f3f8f186bc70ff3523b2caea48eff1f78c3",
+      "result_sha256": "02848d1c1ccc6166430e4b4642366add05d765c28af6b70532fccdbb3fd1b67f",
+      "whole_birth_ack_ns": 23971269,
+      "work_bytes": 7435601,
+      "work_records": 6655
+    },
+    {
+      "calls": [
+        {
+          "index": 0,
+          "start_label": "cursor-birth",
+          "wall_ns": 79849,
+          "work_bytes": 2094572,
+          "work_records": 422
+        },
+        {
+          "index": 1,
+          "start_label": "16",
+          "wall_ns": 64815,
+          "work_bytes": 1984555,
+          "work_records": 2715
+        },
+        {
+          "index": 2,
+          "start_label": "16",
+          "wall_ns": 6292,
+          "work_bytes": 48288,
+          "work_records": 10
+        },
+        {
+          "index": 3,
+          "start_label": "24",
+          "wall_ns": 20887,
+          "work_bytes": 299432,
+          "work_records": 359
+        },
+        {
+          "index": 4,
+          "start_label": "25",
+          "wall_ns": 985,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 5,
+          "start_label": "25",
+          "wall_ns": 324,
+          "work_bytes": 704,
+          "work_records": 21
+        },
+        {
+          "index": 6,
+          "start_label": "25",
+          "wall_ns": 230,
+          "work_bytes": 304,
+          "work_records": 4
+        },
+        {
+          "index": 7,
+          "start_label": "25",
+          "wall_ns": 5504164,
+          "work_bytes": 928269,
+          "work_records": 2044
+        },
+        {
+          "index": 8,
+          "start_label": "26",
+          "wall_ns": 7723377,
+          "work_bytes": 1346086,
+          "work_records": 861
+        },
+        {
+          "index": 9,
+          "start_label": "27",
+          "wall_ns": 67678,
+          "work_bytes": 732143,
+          "work_records": 178
+        }
+      ],
+      "exact_ack_returns": 1,
+      "max_call_ns": 7723377,
+      "name": "firstack-sample03",
+      "other_process_cpu_below_limit": true,
+      "public_call_ns": 13468601,
+      "public_calls": 10,
+      "quiet_preflight_pass": true,
+      "raw_sha256": "753d33219c40b887005f4635a7accc2f1691432d68e0899d1e6e3d049060ad51",
+      "result_sha256": "0d62811cbac2257d8dedf4deb91c37144f9f3956f6a48e31c00b9cd57b6111fb",
+      "whole_birth_ack_ns": 23788617,
+      "work_bytes": 7435057,
+      "work_records": 6635
+    }
+  ],
+  "scope": "three fresh-process original onceACK diagnostic observations; entry labels are not phase cost attribution",
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "source_unchanged": true,
+  "status": "PASS",
+  "summary_sha256": "02036de949418005c399be9e11290ae3c048a3b0cfb91de0ec04ca904b0bfa44"
+}

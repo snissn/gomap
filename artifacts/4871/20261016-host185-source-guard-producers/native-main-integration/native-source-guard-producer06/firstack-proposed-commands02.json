@@ -1,0 +1,193 @@
+{
+  "actual_oracle_source_sha256": "16c8717c0c2180ce65654a3b120b8128bcbfa4eb8bbd1f8e0908cd090aa025c2",
+  "allocation_claim": false,
+  "benchmark_source_sha256": "c080271d2cbb5cc81c2e7383d9157b719fdcccb00b1ac2eb0bfd24947da2a230",
+  "benchmem": false,
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-mod=readonly",
+        "-p=1",
+        "-c",
+        "-o",
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/build/native-firstack-cost.test",
+        "./TreeDB/mvcc"
+      ],
+      "behavior": "Prebuild benchmark ELF; zero test/benchmark bodies",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/build/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 0,
+      "expected_top_level_count": 0,
+      "name": "build-firstack-elf",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {},
+      "required_top_level_tests": []
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/build/native-firstack-cost.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeSelectedOriginalFirstACKCostV6$",
+        "-test.benchtime=1x",
+        "-test.count=1",
+        "-test.parallel=1",
+        "-test.timeout=3m",
+        "-test.v"
+      ],
+      "behavior": "ONE fresh process, original once-ACK full oracle, wall-time/work only, no benchmem",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/samples02/firstack-sample01/tmp"
+      },
+      "executed": false,
+      "expected_benchmark_count": 1,
+      "expected_benchmark_iterations": 1,
+      "name": "firstack-sample01",
+      "outer_timeout_seconds": 240,
+      "required_benchmarks": [
+        "BenchmarkNativeSelectedOriginalFirstACKCostV6"
+      ],
+      "required_child_tests": {},
+      "required_top_level_tests": []
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/build/native-firstack-cost.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeSelectedOriginalFirstACKCostV6$",
+        "-test.benchtime=1x",
+        "-test.count=1",
+        "-test.parallel=1",
+        "-test.timeout=3m",
+        "-test.v"
+      ],
+      "behavior": "ONE fresh process, original once-ACK full oracle, wall-time/work only, no benchmem",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/samples02/firstack-sample02/tmp"
+      },
+      "executed": false,
+      "expected_benchmark_count": 1,
+      "expected_benchmark_iterations": 1,
+      "name": "firstack-sample02",
+      "outer_timeout_seconds": 240,
+      "required_benchmarks": [
+        "BenchmarkNativeSelectedOriginalFirstACKCostV6"
+      ],
+      "required_child_tests": {},
+      "required_top_level_tests": []
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/build/native-firstack-cost.test",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeSelectedOriginalFirstACKCostV6$",
+        "-test.benchtime=1x",
+        "-test.count=1",
+        "-test.parallel=1",
+        "-test.timeout=3m",
+        "-test.v"
+      ],
+      "behavior": "ONE fresh process, original once-ACK full oracle, wall-time/work only, no benchmem",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/firstack/samples02/firstack-sample03/tmp"
+      },
+      "executed": false,
+      "expected_benchmark_count": 1,
+      "expected_benchmark_iterations": 1,
+      "name": "firstack-sample03",
+      "outer_timeout_seconds": 240,
+      "required_benchmarks": [
+        "BenchmarkNativeSelectedOriginalFirstACKCostV6"
+      ],
+      "required_child_tests": {},
+      "required_top_level_tests": []
+    }
+  ],
+  "discarded_samples": 0,
+  "preflight_reselection": "Initial sample preflight refused before any sample body: polystorechaind22.7percent of one core. Same thresholds and three samples, zero executed/discarded timing samples. Preserve service and failed preflight.",
+  "required_env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "retries": 0,
+  "scope": "three preselected fresh-process firstACK wall-only samples after complete actual controls",
+  "source_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "stop_first_failure": true,
+  "unmodified_original_Q32_acceptance": false
+}

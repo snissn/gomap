@@ -1,0 +1,12 @@
+{
+  "all_groups_empty": true,
+  "all_source_and_modes_still_frozen": true,
+  "compiler_evidence_accepted": false,
+  "expected_failure": "cross-package helper definitions excluded by Go _test.go filenames",
+  "manifest_sha256": "af84e82eb4bff3b5a844a768ba240a8738bf53039de0e913610c4991557a2797",
+  "no_test_bodies": true,
+  "raw_log_sha256": "aa2936e4808d6e20d919432e4dc9ab32b882f74d81e5e8313aca93e687a44e24",
+  "result_sha256": "3b44fd0bb2668d6a1aff99a638c6db17ff924d0d3a76731887933de99cc8289f",
+  "scope": "root producer01 compile failure verification",
+  "status": "STOP"
+}

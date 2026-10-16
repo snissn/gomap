@@ -1,0 +1,72 @@
+{
+  "executed": false,
+  "commands": [
+    {
+      "name": "normal-mvcc-envelope",
+      "argv": [
+        "go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^TestNativeFinaldriverEnvelopeCheckedArithmeticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer-envelope-repair/controls/normal-mvcc-envelope/tmp"
+      },
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+      ],
+      "required_child_tests": {
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+        ]
+      },
+      "executed": false,
+      "selection_class": "focused pure arithmetic only; root owns actual command selection and pinned Go environment"
+    },
+    {
+      "name": "race-mvcc-envelope",
+      "argv": [
+        "go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^TestNativeFinaldriverEnvelopeCheckedArithmeticV6$",
+        "./TreeDB/mvcc"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer-envelope-repair/controls/race-mvcc-envelope/tmp"
+      },
+      "outer_timeout_seconds": 600,
+      "required_top_level_tests": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+      ],
+      "required_child_tests": {
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+          "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+        ]
+      },
+      "executed": false,
+      "selection_class": "focused pure arithmetic only; root owns actual command selection and pinned Go environment"
+    }
+  ]
+}

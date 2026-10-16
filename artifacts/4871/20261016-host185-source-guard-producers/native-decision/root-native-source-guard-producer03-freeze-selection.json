@@ -1,0 +1,27 @@
+{
+  "after": {
+    "TreeDB/db/recoverable_root_set.go": "4406596cc009e574ce7192f6637416b2e19d5b318e500ef23790278464c78ef4",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go": "fcdfb563383c4f6bf1f7be6cf0719a09b48d4deee6c6404c30074702a0de833b"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/db/recoverable_root_set.go": "e50a13c2150147f25f73301fe1d106224f3c90c822053aa548214e2d80a43cb3",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go": null
+  },
+  "created_utc": "2026-10-16T17:30:28.070778+00:00",
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer-review01-adoption.json": "5f557646d0f0be1ac6f456885c29c90ae94a0d923d20ab556ace36818a114c07",
+    "native-main-integration/freeze-source-guard-producer03.py": "fc5d379a59ce4cd34f89d602f47094e69168bd4cdfad3235d6b5885143535908",
+    "native-main-integration/native-source-guard-producer-caller-repair/handoff.json": "0c3623f1d6255490580babebf82adbb9fca49d461b56d95c1fad30cce5975571",
+    "native-main-integration/native-source-guard-producer-caller-repair/prepared-source.tar.gz": "e799fbdc130cc38c7f3f04d60fc2d3f422332814511609cc8d83606ba74cd878"
+  },
+  "parent_manifest_sha256": "6680a1d2ae6fa89ac4828fce91095d600f03fe7b1c6c63f1f308c7d5102ca3b3",
+  "rationale": "Adopt SGP1: enumerate coordinator capture manifests using shared scoped decoder and StableIdentity dedup; add genuine coordinator-only and recycled-file-ID lifetime regression",
+  "runtime_authorized": false,
+  "scope": "connected-source-guard-producer03-freeze",
+  "source_lease": [
+    "TreeDB/db/recoverable_root_set.go",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go"
+  ],
+  "source_writer": "/root exact sealed two-path SGP1 application"
+}

@@ -1,0 +1,37 @@
+{
+  "status": "sealed prepared outside-W one-file fixture repair; not applied or executed",
+  "parent_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/source-frozen.json",
+  "parent_manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "changed_paths": [
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+  ],
+  "before_sha256": "4db3a62c636cc41b364f4a96b26a21b545cab70732ce194d539d196fde3c6194",
+  "after_sha256": "90511281e6e753dfb464ce789418f5b76b0b6b235e1491fd080af703cabb7874",
+  "mode": "0664",
+  "source_writes_released": true,
+  "native_integrated_writes": false,
+  "runtime_executed": false,
+  "production_or_price_or_cap_change": false,
+  "required_top_level_tests": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "required_child_tests": {
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+      "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+      "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+      "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+      "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+    ]
+  },
+  "artifact_sha256": {
+    "proposed-commands.json": "2b068a6753d4bbf09dbccd111c8fbc35c6a8c7ba2af40ed8d48babe428c60ebe",
+    "prepared-source.tar.gz": "0cbd3017aad6ffcdf2573507ade3bb8f89f93ea5a32fc55089b7d482070079a2",
+    "source-bindings.json": "654243ff606b78ebd1fed004ccc2f132aae944fa1bb6c96b1c57eebc9e8f7036",
+    "modes.json": "456ab04ccd05aac39e9882699651458991f7fce73bbf28ef28e087ecb8c05638",
+    "after.json": "6a754d0428c0db1312b2d05a0fff0b777462f67da741a61726b98549ea57c48e",
+    "delta.patch": "663075081437822bf851c09df6658c9664d17a2d68669d02409ad8986262809f",
+    "README.md": "42542df83064d639ec3c25a7c7b56aef302b9c420dba0ce1af3c5cf4b32849a6",
+    "before-source.tar.gz": "27ac20f4fa221bc0d153795e169759db8dfab3e3bdd6b1a67a5e5eee80f5be0f",
+    "before.json": "f6b983fbeeabea11075e6de68d8f71e00cf15da392fa42d27fabe8a6db7a12fe"
+  }
+}

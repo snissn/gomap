@@ -1,0 +1,83 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6|TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6|TestPrimaryReadRootSourceMixedOriginLastConsumerV6|TestPrimaryReadRootSourceTerminalQueueV6|TestPrimaryReadRootSourceOrdinaryLongLookupV6|TestPrimaryReadRootSourceAccountingKeepsUncreditedOperandV6|TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease|TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody|TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody|TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance|TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking|TestPrimaryArenaPairReuseWaitsForBothIndependentOwners|TestPrimaryArenaPairAlignmentPaddingAndStaleClaim|TestArenaPhysicalCloseWorkOriginalCaptureRemains|TestPrimaryArenaAcquireAdmitsActualLookupV6|TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6|TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6|TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6|TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6|TestOpenCapsuleOwnedFileUsesTransferredHandle|TestOpenCapsuleOwnedFileFailedFormatClosesHandle|TestOpenCapsuleOwnedFileFailedPagerRetainsGenuineOwner|TestPrimaryArenaIndependentCustodyAndIncrementalReuse|TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail|TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate|TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent)$",
+    "./TreeDB/internal/primaryarena"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-primaryarena/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 6,
+  "expected_top_level_count": 26,
+  "grant_sha256": "e647cc2efe0452cf6a71e8ad6851ac8a9f83401b3398076c8839e86dc3fc9671",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/identity.json",
+  "name": "normal-primaryarena",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6": [
+      "finite",
+      "ordinary"
+    ],
+    "TestPrimaryReadRootSourceMixedOriginLastConsumerV6": [
+      "ordinary-ordinary",
+      "ordinary-finite",
+      "native-ordinary",
+      "native-finite"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6",
+    "TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6",
+    "TestPrimaryReadRootSourceMixedOriginLastConsumerV6",
+    "TestPrimaryReadRootSourceTerminalQueueV6",
+    "TestPrimaryReadRootSourceOrdinaryLongLookupV6",
+    "TestPrimaryReadRootSourceAccountingKeepsUncreditedOperandV6",
+    "TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease",
+    "TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody",
+    "TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody",
+    "TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance",
+    "TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking",
+    "TestPrimaryArenaPairReuseWaitsForBothIndependentOwners",
+    "TestPrimaryArenaPairAlignmentPaddingAndStaleClaim",
+    "TestArenaPhysicalCloseWorkOriginalCaptureRemains",
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6",
+    "TestOpenCapsuleOwnedFileUsesTransferredHandle",
+    "TestOpenCapsuleOwnedFileFailedFormatClosesHandle",
+    "TestOpenCapsuleOwnedFileFailedPagerRetainsGenuineOwner",
+    "TestPrimaryArenaIndependentCustodyAndIncrementalReuse",
+    "TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail",
+    "TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate",
+    "TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/source-frozen.tar.gz",
+  "source_archive_sha256": "a8c4c96c2507af3db88cabd881d8f6c3e8b1352792f9a99fc09e046f67dce408"
+}

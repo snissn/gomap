@@ -1,0 +1,33 @@
+{
+  "actual_native_driver_authorized": true,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 2,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T17:58:53.845668+00:00",
+  "git_identity_still_frozen": true,
+  "not_selected_here": [],
+  "public_native_driver_executed": true,
+  "public_status": "Actual six-arm source-derived diagnostic grant only; original public Q32 and performance qualification remain open",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-actual-all-shared-arms",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/actual-controls/normal-actual-all-shared-arms/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-actual-all-shared-arms",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/actual-controls/race-actual-all-shared-arms/result.json",
+      "status": "PASS"
+    }
+  ],
+  "retained_prior_results": [],
+  "source_files": 10466,
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "top_pass_normal": 1,
+  "top_pass_race": 1
+}

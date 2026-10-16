@@ -1,0 +1,27 @@
+{
+  "acceptance": "Source handoff only; root will review exact source, run focused normal/race then unchanged original public Q32 observation and bounded measurement as justified. Not final graph/native acceptance.",
+  "actual_verification_sha256": "a2f1644dac8ecee1032359b69f49cf41ccdfda8b42a44616be7f9f346c9842eb",
+  "all_prior_process_groups_joined": true,
+  "created_utc": "2026-10-16T18:05:25.699912+00:00",
+  "firstack_verification_sha256": "137c581d302084ccf6870cba63de2ad41039cb8fd08583a6c2b1947642fe6e28",
+  "ownership": "TreeDB lifecycle, primaryarena and db guard/query/phase4 implementation, direct pure prices and meaningful focused controls/contracts only; root owns runtime, Git/GitHub and integration",
+  "parent_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "parent_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/source-frozen.json",
+  "parent_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "proposal": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-native-minimum-next.md",
+  "proposal_sha256": "819be0a0d2fc348516c851d2b7876426220c052dac909807202093fc0f4a32e0",
+  "required": [
+    "Actual retained Snapshot/index/allocator/root/certificate/generation/source/floor/self-cell validation under arena then registry locks; no fabricated format flag authority",
+    "Fresh original guarded minimum on each phase4 retry; fixed17 cohort/summary plus actual authority/prefix rows admitted before effects",
+    "Genuine zero selects existing no-new-retirement-reuse capability after original fixed horizon checks; preserve original custody and first errors",
+    "Audit lower-floor acquisition/renewal overlap and DATA-generation transition; DATA-only/V5 retains legacy scans and public global minimum unchanged",
+    "Keep separate leaf publication scans/stale/tracker work unchanged; no originalQ32 cap, workload, protected original driver or benchmark meter edits",
+    "Focused real controls for authority mismatch, pending/conservative zero/lower renewal, actual paused acquisition and phase4 retry; concise named command/child inventory and exact source packet"
+  ],
+  "routing": "exact gpt-6.1-sol high; no children",
+  "runtime_lease_active": false,
+  "scope": "implement actual held V6 source-guard authorized SAME DATA registry minimum for native allocator phase4",
+  "sole_writer": "/root/native_prerequisite",
+  "source_lease_active": true,
+  "worktree": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

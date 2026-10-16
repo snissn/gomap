@@ -1,0 +1,107 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 4,
+  "elapsed_seconds": 4.331465736031532,
+  "ended_utc": "2026-10-16T17:55:53.232811+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-mvcc",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1907939,
+      "pid": 1907939,
+      "ppid": 1907897,
+      "session": 1907939,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1907939,
+      "pid": 1907958,
+      "ppid": 1907939,
+      "session": 1907939,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1907939,
+      "pid": 1908033,
+      "ppid": 1907939,
+      "session": 1907939,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1907939,
+      "pid": 1908037,
+      "ppid": 1907939,
+      "session": 1907939,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1907939,
+      "pid": 1908049,
+      "ppid": 1907939,
+      "session": 1907939,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1907939,
+      "pid": 1908057,
+      "ppid": 1907939,
+      "session": 1907939,
+      "state": "R"
+    }
+  ],
+  "pgid": 1907939,
+  "pid": 1907939,
+  "raw_log_sha256": "0d00d6be6a510f65ef99f6c0f60d11a06c4b23af8ba16e3c981484a4449a6959",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T17:55:48.901336+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

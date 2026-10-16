@@ -1,0 +1,22 @@
+{
+  "actual_driver_acceptance": false,
+  "created_utc": "2026-10-16T17:44:09.419578+00:00",
+  "disposition": "ACCEPT",
+  "performance_qualification": false,
+  "q32_acceptance": false,
+  "review_markdown_sha256": "1dded5dda50a1db95b03be7acce5e1f49c27bc2fb661355518af730b91f642ac",
+  "review_sha256": "ec4542c3d0db44ecd0321bc252fd8473b45546561974e90b3711dd4979a7ab77",
+  "scope": "producer04 narrow fixture source review adoption",
+  "verified_bindings": {
+    "native-decision/native-source-guard-producer03-compatibility-diagnosis.md": "7da7fff0a9eb998efeea8d6ff460b41473c3cc774d99133270cd2220d13d3603",
+    "native-decision/native-source-guard-producer03-review01.md": "a2257652d5a2836d38d55c4750a807d877f14f434a287431ec23bb52e1c3a0b0",
+    "native-integrated/TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "native-integrated/TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af",
+    "native-main-integration/native-source-guard-producer-test-compatibility/handoff.json": "5106a325130fbc37584d43d4300df9bf2b197c5b8bab39e92aeb8beb10314aa6",
+    "native-main-integration/native-source-guard-producer-test-compatibility/prepared-source.tar.gz": "140ad4e7de249eb14ad0a3ae84f364b7101d76e3703c356d7b0155b4ba072acb",
+    "native-main-integration/native-source-guard-producer04/proposed-commands.json": "2fcaead23b23d5f6fda57c57669b3c9422e9b49636e8f944356efcccd058eba6",
+    "native-main-integration/native-source-guard-producer04/source-frozen.json": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+    "native-main-integration/native-source-guard-producer04/source-frozen.tar.gz": "4e32474edfd1c01ee5838a6adf19a2e114b09cce7c9f2fabebb4c823b74a44d2",
+    "native-main-integration/native-source-guard-producer04/source-modes.json": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039"
+  }
+}

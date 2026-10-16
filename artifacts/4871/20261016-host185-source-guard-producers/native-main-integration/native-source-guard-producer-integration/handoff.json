@@ -1,0 +1,35 @@
+{
+  "actual_commands_separately_selected": true,
+  "artifact_sha256": {
+    "README.md": "32621b55a58bef807255bbec21fabac2443d0abb519d90621102def1f3d784ae",
+    "after.json": "93eb00bb957b676d3fb23f884014511d83cecc9ca864cac6785e65ba5c36f836",
+    "after.tar.gz": "0aff8b8af473e985280459e069dc8c0012807e824f4ce494c5afb1ccd8ef4e88",
+    "assemble-proposal.py": "f2bbad115512a745f93b8c785243da7f5e527cc7c3126798ee07615416c558ce",
+    "before.json": "c1681fa42192fd0b3bbafc5cf5712a052566e52ba7afb08fd77127e67eb0b8fb",
+    "before.tar.gz": "3844b13861f05145d6ad17ae80b0b6a987d53aa417d9ce0dbbb46472543db926",
+    "delta.patch": "1a560c4b7b73877f5a5184bdd650eefe70ee3638307d6b22a143cc366e1e3174",
+    "modes.json": "2746d0982af1c5c6bd01db047e15501559d0b9dc5adb33c126c6881bd11e612a",
+    "proposed-commands.json": "e6c61eb755012e9bd8d361cf3f295629c7b5e0ff7ce1eda5a3ca0c5b9f311ea3",
+    "proposed-compile.json": "c8d94c6ab2ad4d4370285425db5d42de7db4e49cfe3eb9485d0729a6025c9a4d",
+    "source-inventory.json": "7c1781d3548c25b0fe9d8e740dbe2e659bd21606837c8e47f79b1b6c1ee80c13"
+  },
+  "compile_executed": false,
+  "focused_inventory_per_mode": {
+    "normal": {
+      "children": 61,
+      "top": 138
+    },
+    "race": {
+      "children": 61,
+      "top": 138
+    }
+  },
+  "root_owns_full_freeze_and_execution": true,
+  "runtime_lease_released": true,
+  "scope": "source guard full original producer integration checkpoint",
+  "source_basis": "native-source-guard-core02",
+  "source_basis_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "source_files_changed": 32,
+  "source_writes_released": true,
+  "tests_executed": false
+}

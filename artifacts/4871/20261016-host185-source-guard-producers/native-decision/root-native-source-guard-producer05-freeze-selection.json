@@ -1,0 +1,28 @@
+{
+  "after": {
+    "TreeDB/db/primary_source_guard_v6_test.go": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/db/primary_source_guard_v6_test.go": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02"
+  },
+  "changed_paths": {
+    "TreeDB/db/primary_source_guard_v6_test.go": {
+      "after_sha256": "01b8ad11c6cf4ca357553bea0b9f4ef85c72b9680100c6bc60c067f44c34f6fd",
+      "before_sha256": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02"
+    }
+  },
+  "created_utc": "2026-10-16T17:46:12.113182+00:00",
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer04-focused-verification.json": "b80d57d05de75afd6430f4070d76980632a6aa5e0a62acd406eb2a55be599a45",
+    "native-main-integration/freeze-source-guard-producer05.py": "79bdfa5a724d61c038e62b2254cd1bd686a3073fb844a508903a371f61e7a445"
+  },
+  "parent_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "rationale": "Unchanged exact old-value read moved after successor write and before DB.Close per documented snapshot contract. Preserve all original post-Close PRIMARY/registry custody and final release assertions. No production or price changes. Add missing proposal children last-owner and independent-held-owner by source inventory only.",
+  "runtime_executed": false,
+  "scope": "connected-source-guard-producer05-freeze",
+  "source_lease": [
+    "TreeDB/db/primary_source_guard_v6_test.go"
+  ],
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

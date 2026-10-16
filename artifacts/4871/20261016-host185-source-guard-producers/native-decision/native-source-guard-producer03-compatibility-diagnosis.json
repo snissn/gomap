@@ -1,0 +1,42 @@
+{
+  "disposition": "INHERITED_FIXTURE_CONTRACT_MISMATCHES",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "independent read-only source and retained runtime evidence diagnosis",
+  "runtime_executed": false,
+  "candidate_edits_by_reviewer": false,
+  "review_lease_released": true,
+  "source_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "core02_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "raw_log_sha256": "984638aaa087747d72030fb843351056ba9a8e33d18e333dd7a204ba2e5d11fd",
+  "root_verification_sha256": "bec1cba7c768b1498c1888777a5d1121a818f241329d6e7f32a8bb08ee5db073",
+  "unchanged_core02_to_producer03_paths": {
+    "TreeDB/internal/primaryarena/arena_test.go": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b",
+    "TreeDB/internal/primaryarena/origin_compatibility_test.go": "0fa502137da6b1931cacf07edaf860c9f8d10c1920b70aab778ff601f7212138",
+    "TreeDB/internal/retainedalloc/owner_work.go": "661954013bf1ddbddc57d5c23340c656bf5f26d7c41473831b81d3448ce390f4",
+    "TreeDB/pager/physical_close_work.go": "e46be8444c1f4aad1dd1a680bef3cb55e6d51eb2f59b5142c565d45466ce6146",
+    "TreeDB/internal/primaryarena/custody.go": "456c1dc00d45f1df998714121369a95936250f033877369d1f0a65cdeaddbcad"
+  },
+  "findings": [
+    {
+      "id": "PF1",
+      "test": "TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate",
+      "location": "TreeDB/internal/primaryarena/arena_test.go:301",
+      "classification": "Inherited unsupported finite-constructor fixture assumption, not new source-guard producer regression.",
+      "proof": "core02 already has sealExactAbsence at arena.go:1377-1380 returning ErrWorkRequired for every nonnil work before general group constructor/rollback. The unchanged test expects short finite work to yield nil error and later expects three finite success installations.",
+      "minimum_repair": "Explicitly require ErrWorkRequired and no-effects on finite attempts; execute three exact replacement successes with ordinary nil work. Preserve stale predicate, full image/directory/root independence and old-root stability, two sparse overrides/third consolidation, original bounded flatten and all final ownership/release assertions. Remove any finite replacement qualification claim; do not change production capability or caps."
+    },
+    {
+      "id": "PF2",
+      "test": "TestArenaPhysicalCloseWorkOriginalCaptureRemains",
+      "location": "TreeDB/internal/primaryarena/physical_close_work_test.go:60",
+      "classification": "Inherited Lease-only positive native-cleanup fixture mismatch, not new source-guard producer regression.",
+      "proof": "closeLease implements Resize/Close only. CloseWork reaches original metadata.CloseWork at physical_close_work.go:174-176, then Owner.closeStep/shrinkStepLocked require WorkLease at owner_work.go:139-142 before ResizeWork. The path-opened Pager has no ownedFileMetadata so its terminal refund is not an additional failed capability here. Original binding/enrollment must remain until supported shrink and final capture release.",
+      "minimum_repair": "Use a distinct supported work-capable test budget/lease for this positive physical-close fixture; all concrete resize/close admission must precede original accounting effects. Preserve zero-work no-effects, ordinary Close refusal after native custody, 32-record/1MiB calls, finite completion bound, actual physical close with live capture accounting, and exact zero only after original enrollment release. Do not enrich closeBudget/closeLease globally: origin_compatibility_test.go uses it to prove ordinary Lease-only success and strict native refusal."
+    }
+  ],
+  "runtime_limits": "Raw primaryarena run reports24 top passes/2 failures; later focused calls and race were not run. Source review does not relabel the failed run or grant a rerun. Other sourceguard mixed-origin/terminal controls passed only in their retained original attribution.",
+  "decision": "Prepared-only two-test correction is sufficient scope; no production/allowance/Q32/public-oracle change justified by these failures."
+}

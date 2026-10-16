@@ -1,0 +1,61 @@
+{
+  "actual_driver_executed": false,
+  "all_groups_joined": true,
+  "manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "results": [
+    {
+      "child_pass": 6,
+      "extra_children": [],
+      "failed": [],
+      "missing_children": [],
+      "name": "normal-primaryarena",
+      "raw_sha256": "ca2c35d86509e71b18e1f9eeb9f1c247c91842bc0a462ad43a692bdd7f048fe3",
+      "result_sha256": "52f06ef9ad8db23f44e0fb4fae1755f49a344ef8a6fd816f7e2f162eb09d72be",
+      "status": "PASS",
+      "top_pass": 26
+    },
+    {
+      "child_pass": 9,
+      "extra_children": [],
+      "failed": [],
+      "missing_children": [],
+      "name": "normal-rootpublication",
+      "raw_sha256": "c3ed7c3ad0cc9ddf904eaa3cf4eb03172028d12c04eb54c5a2629b68469c49c0",
+      "result_sha256": "743d1c06dfb24f34cc9281292d334d21ceacdc67aa5602445a85e7b118ba7ac4",
+      "status": "PASS",
+      "top_pass": 18
+    },
+    {
+      "child_pass": 17,
+      "extra_children": [
+        "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+        "TestNativeRootPreparationSourceTerminalV6/last-owner"
+      ],
+      "failed": [
+        "TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6",
+        "TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6/snapshot"
+      ],
+      "missing_children": [],
+      "name": "normal-db",
+      "raw_sha256": "890d4f93c3795ece5b58090ed69a166472c169a6344b8d1de8b4cad6a0983443",
+      "result_sha256": "0eff8d4310be2b1824ff3529e7dc6ebe0c5a55e6775076e215d159a7608f7593",
+      "status": "STOP",
+      "top_pass": 26
+    }
+  ],
+  "scope": "producer04 focused observed STOP verification",
+  "source_before_after_frozen": true,
+  "status": "STOP",
+  "summary_sha256": "4ea13191464ea6d999d4be015fd16aaba423ddf91af963fc17e87db44b2fb289",
+  "unexecuted_commands": [
+    "normal-mvcc",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "utc": "2026-10-16T17:45:13.437361+00:00"
+}

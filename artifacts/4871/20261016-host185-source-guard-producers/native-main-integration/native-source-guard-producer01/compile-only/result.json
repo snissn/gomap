@@ -1,0 +1,101 @@
+{
+  "elapsed_seconds": 4.789634321816266,
+  "ended_utc": "2026-10-16T17:17:36.626671+00:00",
+  "exit_code": 1,
+  "git_identity_unchanged": true,
+  "groups_and_adopted_children_empty": true,
+  "initial_residual": [],
+  "leader_joined": true,
+  "observed_group": [
+    {
+      "comm": "go",
+      "pgid": 1870291,
+      "pid": 1870291,
+      "ppid": 1870254,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870310,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870318,
+      "ppid": 1870291,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1870291,
+      "pid": 1870339,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870359,
+      "ppid": 1870291,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870370,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870374,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1870291,
+      "pid": 1870390,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870398,
+      "ppid": 1870291,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1870291,
+      "pid": 1870414,
+      "ppid": 1870291,
+      "state": "S"
+    }
+  ],
+  "raw_log_sha256": "aa2936e4808d6e20d919432e4dc9ab32b882f74d81e5e8313aca93e687a44e24",
+  "reaped": [],
+  "reasons": [
+    "compile command failed"
+  ],
+  "remaining_group_or_children": [],
+  "scope": "selected producer packages compilation and default vet only; runtime and producer-role closure not qualified",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "primaryarena",
+    "rootpublication",
+    "db",
+    "mvcc"
+  ],
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T17:17:31.837037+00:00",
+  "status": "STOP",
+  "test_bodies_executed": false
+}

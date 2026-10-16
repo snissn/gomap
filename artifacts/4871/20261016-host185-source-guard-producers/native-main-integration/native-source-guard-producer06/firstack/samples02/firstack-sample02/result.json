@@ -1,0 +1,31 @@
+{
+  "PASS": [],
+  "RUN": [],
+  "elapsed_seconds": 1.2634763941168785,
+  "elf_sha256": "b974d74d7e60aac4a3733e089930990a1d22ac62997e55a1f579c5292f183f28",
+  "executed": true,
+  "exit_code": 0,
+  "interventions": [],
+  "leader_joined": true,
+  "name": "firstack-sample02",
+  "observed_group": [
+    {
+      "comm": "native-firstack",
+      "pgid": 1916399,
+      "pid": 1916399,
+      "ppid": 1916280,
+      "start_ticks": 374934741,
+      "state": "S",
+      "ticks": 1
+    }
+  ],
+  "pgid": 1916399,
+  "pid": 1916399,
+  "raw_sha256": "dae4733385788007a54fbbf4e5a87f3f8f186bc70ff3523b2caea48eff1f78c3",
+  "reaped": [],
+  "reasons": [],
+  "remaining_group_or_adopted_children": [],
+  "source_before_after_frozen": true,
+  "status": "PASS",
+  "subreaper": true
+}

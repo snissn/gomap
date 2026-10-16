@@ -1,0 +1,12 @@
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply
+=== RUN   TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape
+--- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6 (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply (0.00s)
+    --- PASS: TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/mvcc	0.002s

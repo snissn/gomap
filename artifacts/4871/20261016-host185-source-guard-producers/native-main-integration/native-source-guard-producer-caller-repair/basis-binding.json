@@ -1,0 +1,19 @@
+{
+  "archive_sha256": "67fed97a88f1ddd66aa6996f5793fcd6245adf9ccc23f11ea40e96fb539e59d3",
+  "basis": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer02",
+  "manifest_sha256": "6680a1d2ae6fa89ac4828fce91095d600f03fe7b1c6c63f1f308c7d5102ca3b3",
+  "modes_sha256": "d1fafffa7ae6a5a16d0d4037b5510f48d15a5c49fa51e264ef6dfe747ac23564",
+  "review_json_sha256": "f61da6e048a9e7bcf844b5258986dcba6fa4c44bf3b58c8e8d23bf82f3386c44",
+  "review_md_sha256": "470f72da6b7bc2f4326fc9cafa782eeddcc9491708fc175b7e075daddba1b914",
+  "source_bindings": {
+    "TreeDB/db/leaf_generation_gc.go": "714049706db18ad99a063d83b0ce9f6e81209bc40e35d0d5bb4d4192f36fb3b3",
+    "TreeDB/db/leaf_generation_manifest.go": "1bbefc621aee133323939e26d7a60f4729a07e1b55449fcd17c6fe85ba5bdfc3",
+    "TreeDB/db/leaf_generation_manifest_stable_test.go": "05279ec0b39a849b3f25bddb427a0c270089e3000237f55129449c178f918fad",
+    "TreeDB/db/leaf_generation_manifest_store.go": "f30b5f735bf9c170366ada0f0923e457a67341576b7a781ec106966bd513b5b5",
+    "TreeDB/db/recoverable_root_set.go": "e50a13c2150147f25f73301fe1d106224f3c90c822053aa548214e2d80a43cb3",
+    "TreeDB/internal/rootpublication/coordinator.go": "76869ce52ab880c9ca4c00d11f6ae6586d8af637326d8411608d5711497ee26a",
+    "TreeDB/internal/rootpublication/resource_kind_allocation.go": "b97b87ed04b42e0f33e08fa65f4e98000cb042241d9b15c5535db0e2e0521ca9",
+    "TreeDB/internal/rootpublication/resource_set.go": "ea4775015a3c261007b1682724b8aab9784cdec1528b0fe83a2fc0417bd3944c",
+    "TreeDB/internal/rootpublication/types.go": "fc322fe8d3a2ead1dd84fcd569cbadc6b3511099f48b454e685b2eaf5dd9d5aa"
+  }
+}

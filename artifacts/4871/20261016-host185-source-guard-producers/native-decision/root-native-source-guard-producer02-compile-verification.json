@@ -1,0 +1,24 @@
+{
+  "all_groups_empty": true,
+  "created_utc": "2026-10-16T17:23:59.815868+00:00",
+  "elapsed_seconds": 74.4125371677801,
+  "known_review_blocker": "RecoverableRootSet leaf generation manifest consumer omits coordinatorCapture.Resources; concrete isolated patch in preparation.",
+  "manifest_sha256": "6680a1d2ae6fa89ac4828fce91095d600f03fe7b1c6c63f1f308c7d5102ca3b3",
+  "no_test_bodies": true,
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "result_sha256": "d6e00c5ae3f5ff91c12144d96b529da46301041f885f310254d7bd76657e8c3e",
+  "scope": "root producer02 selected package compile verification",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "memtable",
+    "primaryarena",
+    "rootpublication",
+    "db",
+    "mvcc"
+  ],
+  "source_before_after_frozen": true,
+  "source_files": 10465,
+  "source_semantic_acceptance": false,
+  "status": "PASS"
+}

@@ -1,0 +1,136 @@
+--- source-guard-producer01/TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go
++++ /dev/null
+@@ -1,23 +0,0 @@
+-package retainedalloc
+-
+-import "unsafe"
+-
+-// PendingMutationUnitForTestV6 describes one actual local Reserve row. Parent
+-// prefixes and concrete lease/participant children are separate, never zero.
+-type PendingMutationUnitForTestV6 struct{ Records, Bytes uint64 }
+-type PendingMutationPricesForTestV6 struct {
+-	OwnerBytes, StateBytes                               uint64
+-	Entry, Binding, Enrollment, Acknowledge, Observation PendingMutationUnitForTestV6
+-}
+-
+-func CooperativeMutationPricesForTestV6() PendingMutationPricesForTestV6 {
+-	o, s := uint64(unsafe.Sizeof(Owner{})), uint64(unsafe.Sizeof(PendingMutationWork{}))
+-	return PendingMutationPricesForTestV6{
+-		OwnerBytes: o, StateBytes: s,
+-		Entry:       PendingMutationUnitForTestV6{1, 2*o + 2*s},
+-		Binding:     PendingMutationUnitForTestV6{1, 2 * uint64(unsafe.Sizeof(binding{}))},
+-		Enrollment:  PendingMutationUnitForTestV6{1, 2 * uint64(unsafe.Sizeof(EnrollmentWork{}))},
+-		Acknowledge: PendingMutationUnitForTestV6{1, 2*s + 2*o + uint64(unsafe.Sizeof(PendingMutationTraffic{}))},
+-		Observation: PendingMutationUnitForTestV6{1, 2*s + o},
+-	}
+-}
+--- /dev/null
++++ source-guard-producer02/TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go
+@@ -0,0 +1,23 @@
++package retainedalloc
++
++import "unsafe"
++
++// PendingMutationUnitForTestV6 describes one actual local Reserve row. Parent
++// prefixes and concrete lease/participant children are separate, never zero.
++type PendingMutationUnitForTestV6 struct{ Records, Bytes uint64 }
++type PendingMutationPricesForTestV6 struct {
++	OwnerBytes, StateBytes                               uint64
++	Entry, Binding, Enrollment, Acknowledge, Observation PendingMutationUnitForTestV6
++}
++
++func CooperativeMutationPricesForTestV6() PendingMutationPricesForTestV6 {
++	o, s := uint64(unsafe.Sizeof(Owner{})), uint64(unsafe.Sizeof(PendingMutationWork{}))
++	return PendingMutationPricesForTestV6{
++		OwnerBytes: o, StateBytes: s,
++		Entry:       PendingMutationUnitForTestV6{1, 2*o + 2*s},
++		Binding:     PendingMutationUnitForTestV6{1, 2 * uint64(unsafe.Sizeof(binding{}))},
++		Enrollment:  PendingMutationUnitForTestV6{1, 2 * uint64(unsafe.Sizeof(EnrollmentWork{}))},
++		Acknowledge: PendingMutationUnitForTestV6{1, 2*s + 2*o + uint64(unsafe.Sizeof(PendingMutationTraffic{}))},
++		Observation: PendingMutationUnitForTestV6{1, 2*s + o},
++	}
++}
+--- source-guard-producer01/TreeDB/lifecycle/source_guard_price_for_test.go
++++ /dev/null
+@@ -1,39 +0,0 @@
+-package lifecycle
+-
+-import "unsafe"
+-
+-// SourceGuardUnitForTestV6 is an actual local row, not a whole native call.
+-// Constructors contain the Owner/removal continuations inline. Price their
+-// real containing allocation once; do not add independent inline-state charges.
+-type SourceGuardUnitForTestV6 struct{ Records, Bytes uint64 }
+-type SourceGuardPricesForTestV6 struct {
+-	RegistryBytes, ReferenceBytes, ConstructionBytes, WithdrawalBytes uint64
+-	LeafBytes, BranchBytes, HeaderCharge, LeafCharge, BranchCharge    uint64
+-	Retain, Transfer, ConstructEntry, WithdrawEntry, CancelEntry      SourceGuardUnitForTestV6
+-	Birth, Structural, Splice, ParticipantEntry                       SourceGuardUnitForTestV6
+-	AcknowledgeConstruction, AcknowledgeWithdrawal                    SourceGuardUnitForTestV6
+-	ResetConstruction, ResetWithdrawal                                SourceGuardUnitForTestV6
+-}
+-
+-func SourceGuardPriceForTestV6() SourceGuardPricesForTestV6 {
+-	r, g := uint64(unsafe.Sizeof(ReaderRegistry{})), uint64(unsafe.Sizeof(SourceGuardRef{}))
+-	c, d := uint64(unsafe.Sizeof(SourceGuardConstruction{})), uint64(unsafe.Sizeof(SourceGuardWithdrawal{}))
+-	l, b, a := uint64(unsafe.Sizeof(readerLeaf{})), uint64(unsafe.Sizeof(readerBranch{})), uint64(unsafe.Sizeof(SourceGuardAccounting{}))
+-	return SourceGuardPricesForTestV6{
+-		RegistryBytes: r, ReferenceBytes: g, ConstructionBytes: c, WithdrawalBytes: d,
+-		LeafBytes: l, BranchBytes: b, HeaderCharge: ReaderRegistryHeaderCharge(), LeafCharge: readerLeafCharge(), BranchCharge: readerBranchCharge(),
+-		Retain:                  SourceGuardUnitForTestV6{1, 2*g + 2*l + 2*r},
+-		Transfer:                SourceGuardUnitForTestV6{1, 4*g + l + 2*r},
+-		ConstructEntry:          SourceGuardUnitForTestV6{1, 2*c + 2*g + 2*r},
+-		WithdrawEntry:           SourceGuardUnitForTestV6{1, 2*d + 2*g + 2*r + 2*l},
+-		CancelEntry:             SourceGuardUnitForTestV6{1, 2*c + 2*r + 2*g},
+-		Birth:                   SourceGuardUnitForTestV6{2, l + b},
+-		Structural:              SourceGuardUnitForTestV6{1, guardRowBytes()},
+-		Splice:                  SourceGuardUnitForTestV6{2, 2*l + 4*b},
+-		ParticipantEntry:        SourceGuardUnitForTestV6{1, 2*d + 2*r + 2*g + 2*l},
+-		AcknowledgeConstruction: SourceGuardUnitForTestV6{1, 2*c + 2*r + a},
+-		AcknowledgeWithdrawal:   SourceGuardUnitForTestV6{1, 2*d + 2*r + a},
+-		ResetConstruction:       SourceGuardUnitForTestV6{1, 2 * c},
+-		ResetWithdrawal:         SourceGuardUnitForTestV6{1, 2 * d},
+-	}
+-}
+--- /dev/null
++++ source-guard-producer02/TreeDB/lifecycle/source_guard_price_for_test_v6.go
+@@ -0,0 +1,39 @@
++package lifecycle
++
++import "unsafe"
++
++// SourceGuardUnitForTestV6 is an actual local row, not a whole native call.
++// Constructors contain the Owner/removal continuations inline. Price their
++// real containing allocation once; do not add independent inline-state charges.
++type SourceGuardUnitForTestV6 struct{ Records, Bytes uint64 }
++type SourceGuardPricesForTestV6 struct {
++	RegistryBytes, ReferenceBytes, ConstructionBytes, WithdrawalBytes uint64
++	LeafBytes, BranchBytes, HeaderCharge, LeafCharge, BranchCharge    uint64
++	Retain, Transfer, ConstructEntry, WithdrawEntry, CancelEntry      SourceGuardUnitForTestV6
++	Birth, Structural, Splice, ParticipantEntry                       SourceGuardUnitForTestV6
++	AcknowledgeConstruction, AcknowledgeWithdrawal                    SourceGuardUnitForTestV6
++	ResetConstruction, ResetWithdrawal                                SourceGuardUnitForTestV6
++}
++
++func SourceGuardPriceForTestV6() SourceGuardPricesForTestV6 {
++	r, g := uint64(unsafe.Sizeof(ReaderRegistry{})), uint64(unsafe.Sizeof(SourceGuardRef{}))
++	c, d := uint64(unsafe.Sizeof(SourceGuardConstruction{})), uint64(unsafe.Sizeof(SourceGuardWithdrawal{}))
++	l, b, a := uint64(unsafe.Sizeof(readerLeaf{})), uint64(unsafe.Sizeof(readerBranch{})), uint64(unsafe.Sizeof(SourceGuardAccounting{}))
++	return SourceGuardPricesForTestV6{
++		RegistryBytes: r, ReferenceBytes: g, ConstructionBytes: c, WithdrawalBytes: d,
++		LeafBytes: l, BranchBytes: b, HeaderCharge: ReaderRegistryHeaderCharge(), LeafCharge: readerLeafCharge(), BranchCharge: readerBranchCharge(),
++		Retain:                  SourceGuardUnitForTestV6{1, 2*g + 2*l + 2*r},
++		Transfer:                SourceGuardUnitForTestV6{1, 4*g + l + 2*r},
++		ConstructEntry:          SourceGuardUnitForTestV6{1, 2*c + 2*g + 2*r},
++		WithdrawEntry:           SourceGuardUnitForTestV6{1, 2*d + 2*g + 2*r + 2*l},
++		CancelEntry:             SourceGuardUnitForTestV6{1, 2*c + 2*r + 2*g},
++		Birth:                   SourceGuardUnitForTestV6{2, l + b},
++		Structural:              SourceGuardUnitForTestV6{1, guardRowBytes()},
++		Splice:                  SourceGuardUnitForTestV6{2, 2*l + 4*b},
++		ParticipantEntry:        SourceGuardUnitForTestV6{1, 2*d + 2*r + 2*g + 2*l},
++		AcknowledgeConstruction: SourceGuardUnitForTestV6{1, 2*c + 2*r + a},
++		AcknowledgeWithdrawal:   SourceGuardUnitForTestV6{1, 2*d + 2*r + a},
++		ResetConstruction:       SourceGuardUnitForTestV6{1, 2 * c},
++		ResetWithdrawal:         SourceGuardUnitForTestV6{1, 2 * d},
++	}
++}

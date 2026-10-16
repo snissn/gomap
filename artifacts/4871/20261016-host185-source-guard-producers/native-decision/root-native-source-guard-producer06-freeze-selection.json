@@ -1,0 +1,22 @@
+{
+  "after": {
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "90511281e6e753dfb464ce789418f5b76b0b6b235e1491fd080af703cabb7874"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "4db3a62c636cc41b364f4a96b26a21b545cab70732ce194d539d196fde3c6194"
+  },
+  "created_utc": "2026-10-16T17:52:55.911470+00:00",
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer05-focused-verification.json": "96d6adafaef1dee21878f4f5c735846875252c1bfa2d7d90c33ddc4d889e6dad",
+    "native-main-integration/freeze-source-guard-producer06.py": "fae30988cc39a80a10fa3bafd56b6ebb144995a69c4700e0b6b877426ab965f0",
+    "native-main-integration/native-source-guard-producer-envelope-repair/handoff.json": "5b563e1f4e2f2621e2442d15e6e89f0c98b8e56081bf465cede7dff2220fca98",
+    "native-main-integration/native-source-guard-producer-envelope-repair/prepared-source.tar.gz": "0cbd3017aad6ffcdf2573507ade3bb8f89f93ea5a32fc55089b7d482070079a2"
+  },
+  "parent_manifest_sha256": "01fb5d7697bc3a097a97a459102195df2fb38c46f7e08c6519f78772cac7a8ee",
+  "rationale": "Exact one-test correction for compatibility-only slow-leaf operand, explicitly assert all eight family prices unchanged; preserve overflow rejection via actual MaxUint64 capture shards. Entire diagnostic expression, production and caps unchanged. Selected go test will compile/vet changed test; no redundant compile-only.",
+  "scope": "connected-source-guard-producer06-freeze",
+  "source_lease": [
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 6,
+  "elapsed_seconds": 3.8678991668857634,
+  "ended_utc": "2026-10-16T17:58:52.897293+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-actual-all-shared-arms",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1912019,
+      "pid": 1912019,
+      "ppid": 1911896,
+      "session": 1912019,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1912019,
+      "pid": 1912042,
+      "ppid": 1912019,
+      "session": 1912019,
+      "state": "S"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1912019,
+      "pid": 1912086,
+      "ppid": 1912019,
+      "session": 1912019,
+      "state": "S"
+    }
+  ],
+  "pgid": 1912019,
+  "pid": 1912019,
+  "raw_log_sha256": "b20f178168bc579df88208dd86cc60b7b93b2e18ff00f4b69cb771a109ae9b83",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T17:58:49.029393+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+  ],
+  "test_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/frozen-limits",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/pruner-enabled-refusal"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

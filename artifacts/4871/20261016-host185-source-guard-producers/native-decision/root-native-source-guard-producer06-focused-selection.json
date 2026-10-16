@@ -1,0 +1,89 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_source_writers_released": true,
+  "authorized_command_names": [
+    "normal-mvcc",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "compile_in_selected_tests": true,
+  "created_utc": "2026-10-16T17:55:33.232266+00:00",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-producer06-review01.json",
+  "independent_review_sha256": "6a0cd3c44498442b7345894d2144bd0d1ea70d8b8abaa59fb6741012b8753657",
+  "proposed_commands_sha256": "e2cebe3f4fc6c8788cb865746604afa5c55e2f1424ce9f2c60535f6f520535de",
+  "rationale": "Exact single-test arithmetic fixture correction ACCEPT. Compile/defaultvet through selected Go test; all production/price inputs unchanged. Remaining8normalMVCC+7race; first6normal packages retained with original provenance,139top65child/mode. Actual six-arm excluded.",
+  "retained_prior_results": [
+    {
+      "child_pass": 10,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 2
+    },
+    {
+      "child_pass": 6,
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-primaryarena/result.json",
+      "result_sha256": "52f06ef9ad8db23f44e0fb4fae1755f49a344ef8a6fd816f7e2f162eb09d72be",
+      "reuse_basis": "Only db test assertion ordering changed from producer04. Complete production, this package tests and build inputs identical. Same toolchain/env/command.",
+      "top_pass": 26
+    },
+    {
+      "child_pass": 9,
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-rootpublication/result.json",
+      "result_sha256": "743d1c06dfb24f34cc9281292d334d21ceacdc67aa5602445a85e7b118ba7ac4",
+      "reuse_basis": "Only db test assertion ordering changed from producer04. Complete production, this package tests and build inputs identical. Same toolchain/env/command.",
+      "top_pass": 18
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/controls/normal-db/result.json",
+      "result_sha256": "1f69fcb930a8c0925a91df17af92dddb0b59b88b6a41d80b159bb4ab9f4e288b",
+      "reuse_basis": "Only one mvcc test assertion changed. Complete production, db tests and build inputs unchanged; exact command/env/toolchain retained.",
+      "top_pass": 27
+    }
+  ],
+  "runner_sha256": "96df3111b0c67633536d775abec8b392871e765eadd4bf11420e634d8bba35fd",
+  "scope": "focused-connected-source-guard-producer",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "memtable",
+    "primaryarena",
+    "rootpublication",
+    "db",
+    "mvcc"
+  ],
+  "source_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-source-verification.json",
+  "source_verify_sha256": "2a9035a027d35094a75d45e3670ca7ced0ec580953f34a63be0b114c503e37e5"
+}

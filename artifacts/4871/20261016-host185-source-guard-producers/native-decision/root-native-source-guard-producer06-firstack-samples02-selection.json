@@ -1,0 +1,28 @@
+{
+  "actual_native_driver_authorized": true,
+  "actual_verification": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-actual-verification.json",
+  "actual_verification_sha256": "a2f1644dac8ecee1032359b69f49cf41ccdfda8b42a44616be7f9f346c9842eb",
+  "archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "commands": [
+    "firstack-sample01",
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "created_utc": "2026-10-16T18:04:06.724475+00:00",
+  "elf_sha256": "b974d74d7e60aac4a3733e089930990a1d22ac62997e55a1f579c5292f183f28",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-producer06-review01.json",
+  "independent_review_sha256": "6a0cd3c44498442b7345894d2144bd0d1ea70d8b8abaa59fb6741012b8753657",
+  "manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "preflight_reselection": "Initial sample preflight refused before any sample body: polystorechaind22.7percent of one core. Same thresholds and three samples, zero executed/discarded timing samples. Preserve service and failed preflight.",
+  "proposal_sha256": "f9b3dd9218ff9e50be4f78f4cd280280fd73d26ceecd327448759c21abcd0fd8",
+  "rationale": "Exactly three original once-ACK fresh-process 1x wall-only samples after accepted six-arm controls. Prebuilt binary, host preflight and process/source receipts, no retries/discards, no allocation/fullprune/Q32 claim.",
+  "runner_sha256": "4d7b7135f0c7f096b7715d5e1d7ec24f42259db5a3796240a755cd55146c6f0e",
+  "scope": "firstack-connected-source-guard-producer",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-source-verification.json",
+  "source_verify_sha256": "2a9035a027d35094a75d45e3670ca7ced0ec580953f34a63be0b114c503e37e5",
+  "stage": "samples"
+}

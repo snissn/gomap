@@ -1,0 +1,6 @@
+=== RUN   TestCOWExternalAdmissionLifetimeAndRefusal
+--- PASS: TestCOWExternalAdmissionLifetimeAndRefusal (0.00s)
+=== RUN   TestCOWExternalAdmissionSharesPrepareAndRetirementBounds
+--- PASS: TestCOWExternalAdmissionSharesPrepareAndRetirementBounds (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/memtable	0.002s

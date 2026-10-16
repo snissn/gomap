@@ -1,0 +1,39 @@
+{
+  "added_paths": 7,
+  "all_source_writers_released": true,
+  "archive_members_verified": true,
+  "changed_archive_sha256": "faa833e90f56dc799e8619d203bb510575088f7de352e2ea8eb2419f493a025f",
+  "changed_paths": 32,
+  "compile_executed": false,
+  "created_utc": "2026-10-16T17:17:06.096323+00:00",
+  "deleted_paths": 0,
+  "delta_sha256": "665e8c8b9548b1d3134612e7dca5455397464d2e589fa19530bbd1438c25a75c",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer-packet-verification.json": "6fb51d21952e2c68ca91eda5b8ea31d75b6c6dd1c19612972dc19d5201a68562",
+    "native-decision/root-native-source-guard-producer01-freeze-selection.json": "ebbba976c22704fe95596fbfb7ffcdde99feef95ef5b0bdec71d945efb9284db",
+    "native-main-integration/native-source-guard-core02/freeze.json": "984e102ae22d828fb32939ad9d03e735fd2a9d0f30d4557d689782132e1ef3ed",
+    "native-main-integration/native-source-guard-producer-integration/after.json": "93eb00bb957b676d3fb23f884014511d83cecc9ca864cac6785e65ba5c36f836",
+    "native-main-integration/native-source-guard-producer-integration/after.tar.gz": "0aff8b8af473e985280459e069dc8c0012807e824f4ce494c5afb1ccd8ef4e88",
+    "native-main-integration/native-source-guard-producer-integration/before.json": "c1681fa42192fd0b3bbafc5cf5712a052566e52ba7afb08fd77127e67eb0b8fb",
+    "native-main-integration/native-source-guard-producer-integration/before.tar.gz": "3844b13861f05145d6ad17ae80b0b6a987d53aa417d9ce0dbbb46472543db926",
+    "native-main-integration/native-source-guard-producer-integration/delta.patch": "1a560c4b7b73877f5a5184bdd650eefe70ee3638307d6b22a143cc366e1e3174",
+    "native-main-integration/native-source-guard-producer-integration/modes.json": "2746d0982af1c5c6bd01db047e15501559d0b9dc5adb33c126c6881bd11e612a",
+    "native-main-integration/native-source-guard-producer-integration/source-inventory.json": "7c1781d3548c25b0fe9d8e740dbe2e659bd21606837c8e47f79b1b6c1ee80c13"
+  },
+  "modes_sha256": "987c7cc5e1b5bac52fb4d7f6be70964273036377e95383da9e834155908f71f4",
+  "parent_manifest_sha256": "c9b47c099bca64f6c13c94488f46a165e5cb8c1e94bf294b33d30fca5d3158f1",
+  "partition_changed_counts": {
+    "source-guard-producer": 32
+  },
+  "runtime_executed": false,
+  "scope": "connected source-guard producer01; source frozen only, no role-closure or Q32 acceptance",
+  "source_and_index_unchanged": true,
+  "source_archive_sha256": "8e84dca2e69415076ad3ef5b81e57388888adf4166a32e6679c0a6ae0c73f10a",
+  "source_files": 10465,
+  "source_manifest_sha256": "af84e82eb4bff3b5a844a768ba240a8738bf53039de0e913610c4991557a2797",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated"
+}

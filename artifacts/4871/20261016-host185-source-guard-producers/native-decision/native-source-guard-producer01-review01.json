@@ -1,0 +1,305 @@
+{
+  "disposition": "REJECT",
+  "scope": "Source-guard producer integration focused-control readiness; producer01 semantics composed with producer02 filename-only correction.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model; internal explicitly routed independent review used.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed": false,
+  "source_writes_released": true,
+  "review_lease_released": true,
+  "inputs_sha256": {
+    "native-main-integration/native-source-guard-producer01/source-frozen.json": "af84e82eb4bff3b5a844a768ba240a8738bf53039de0e913610c4991557a2797",
+    "native-main-integration/native-source-guard-producer01/source-frozen.tar.gz": "8e84dca2e69415076ad3ef5b81e57388888adf4166a32e6679c0a6ae0c73f10a",
+    "native-main-integration/native-source-guard-producer01/source.delta.patch": "665e8c8b9548b1d3134612e7dca5455397464d2e589fa19530bbd1438c25a75c",
+    "native-main-integration/native-source-guard-producer02/source-frozen.json": "6680a1d2ae6fa89ac4828fce91095d600f03fe7b1c6c63f1f308c7d5102ca3b3",
+    "native-main-integration/native-source-guard-producer02/source-frozen.tar.gz": "67fed97a88f1ddd66aa6996f5793fcd6245adf9ccc23f11ea40e96fb539e59d3",
+    "native-main-integration/native-source-guard-producer02/source.delta.patch": "352ca37e0ea4e155b7dbe305985267be5ac5eec149d4b8ca825d75687445b64f",
+    "native-main-integration/native-source-guard-producer-integration/handoff.json": "8c4223739e89bfa1ff7344b957e1ecebf1db9aaf93ba7d939602b103ce2bd399",
+    "native-main-integration/native-source-guard-producer-integration/README.md": "32621b55a58bef807255bbec21fabac2443d0abb519d90621102def1f3d784ae",
+    "native-main-integration/native-source-guard-producer-integration/proposed-commands.json": "e6c61eb755012e9bd8d361cf3f295629c7b5e0ff7ce1eda5a3ca0c5b9f311ea3",
+    "native-main-integration/native-source-guard-producer02/compile-only/command.json": "1fbc43d244d245e7ae68647f74d8a3130a3b8bfde47ec6d570f4751cb3cc27d0",
+    "native-main-integration/native-source-guard-producer02/compile-only/result.json": "d6e00c5ae3f5ff91c12144d96b529da46301041f885f310254d7bd76657e8c3e"
+  },
+  "source_files": 10465,
+  "full_producer02_archive_and_modes_verified": true,
+  "producer01_extraction_all_file_hashes_verified": true,
+  "producer02_equivalence": {
+    "unchanged_entries": 10463,
+    "same_bytes_renames": {
+      "TreeDB/lifecycle/source_guard_price_for_test.go": "TreeDB/lifecycle/source_guard_price_for_test_v6.go",
+      "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go": "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go"
+    },
+    "semantic_review_carries": true
+  },
+  "reviewed_scope": [
+    "Complete 32-path producer01 delta (all production, new and modified controls, documentation and price forwarding), plus byte-identical two-helper filename promotions in producer02.",
+    "Immutable Directory certificate identity/floor/generation attachment; ordinary publication, both recovery slots and proof parents, rebuild/offline/vacuum, native candidate partial birth and cancellation.",
+    "Counted bank acquisition and release queue, source guard last withdrawal/ACK, original wrapper lifetime and terminal close ordering, Snapshot queue and old-reader cleanup, runtime disposal and generation metadata detach.",
+    "Coordinator pending/fenced/recovery member capture, physical union before bank acquire, transaction finishBusy exclusion, partial failure custody, transfer and release aliases; complete actual production consumers of CaptureReachability/ReachabilitySnapshot/coordinatorCapture.Resources.",
+    "Ordinary/native mixed-origin source guard consumers, bounded conversion and receipt exclusivity, helper/caller traffic attribution, reset/overflow operands, changed constructor and envelope size expressions.",
+    "Changed tests for genuine counted root and physical-envelope lifetimes, snapshot/root-set Close, rebuilt DATA floor, real coordinator capture, Finish overlap and finite cancellation; proposal 47 test-file bindings and command separation."
+  ],
+  "reviewed_changed_files": [
+    {
+      "after_sha256": "cf8bf7783dfc9c496ab961858f8a8b1feae08ee4d7b9f264909800636fa87a92",
+      "before_sha256": "284fd1d8d8ca3cb80d7dadc1162deea7e76e80171d6691af466f6c4bd4a90ca1",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/db.go"
+    },
+    {
+      "after_sha256": "f6b56dbd16f111d0baac4792e05f08554f222cfa903a2b721f55b8564446e373",
+      "before_sha256": "65e0ae3c2fc603228d8450de9807be2b821e35bb3db78e853d8171fc43e9d6bd",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go"
+    },
+    {
+      "after_sha256": "435b13620467d39218becc580a56cd3fdc6f1a153da6e2db6a24b44f46f1027b",
+      "before_sha256": "7a868cc2fc54a29c7c100425811ea4bdc6048926d6ac38debb2af697c92f9d51",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/index_gen.go"
+    },
+    {
+      "after_sha256": "af9558400178678e0e890879f241e56fd51308a4618699e418f2a29bc863c601",
+      "before_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go"
+    },
+    {
+      "after_sha256": "685a6f513e4fc49029bcc6f49b890609558d16003e9b0f0ade3f87bfb1ba498b",
+      "before_sha256": "ca5614b05d9c7210bb147bed0b08aa17cb525aa59bd2f597f2eb564ebc8b3b29",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/native_preparation_price_for_test_v6.go"
+    },
+    {
+      "after_sha256": "a227694894160863b9a6d3373c69bf60f446330dbe6ca49b1723a63c377c2c84",
+      "before_sha256": "3dd9858e71d2d99b4e669aa90cd8d511361870dd4cb3ad84f566c6c59c6ca5e5",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go"
+    },
+    {
+      "after_sha256": "7e645c00fc9b8fabf1052587b23e6a408cb091c6136e47d54ae008d5a9d986e9",
+      "before_sha256": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go"
+    },
+    {
+      "after_sha256": "fef2232f7c4d3d128d32aef155fd279238fd8dc644c8f155002ba8b48be1eb48",
+      "before_sha256": "bc8454b00bf5de02691b16bd5e41de55bd3e9caa4243c2b7673050865a4c7975",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_construction_ledger_v6_test.go"
+    },
+    {
+      "after_sha256": "91cf482f5e243d76b4df8d6976c548be9b16459d408dd537fdd58a6592200c98",
+      "before_sha256": "6c0b82bb061ac4aed6c088946293ba1af70f6e132a4bcc78e924a0f193288c80",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_offline_pair_v6.go"
+    },
+    {
+      "after_sha256": "8fbdc58054fbc59d1b87770ac5806d7bdd6f4eed8e1502e225d96c6ac01f8017",
+      "before_sha256": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_runtime_disposal_work_v6.go"
+    },
+    {
+      "after_sha256": "e4e728ec020d3a98d032389529eb92ec03feec23bad1e00b76bd8e35988d5472",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_source_guard_v6.go"
+    },
+    {
+      "after_sha256": "af01951de26f8c7dca02898a11c74557a540025273c2abc60cba94663f275d02",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/primary_source_guard_v6_test.go"
+    },
+    {
+      "after_sha256": "e50a13c2150147f25f73301fe1d106224f3c90c822053aa548214e2d80a43cb3",
+      "before_sha256": "5630e20bea65ef84c607820c17521ae389ce50b6568071530e39f4f5b3391d46",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/recoverable_root_set.go"
+    },
+    {
+      "after_sha256": "3ccd613f101cdf3e0245db33d294d409a6c3a78b6ba31c0ebaf4eb71c46a295b",
+      "before_sha256": "525bcaa5f10dc7ba54032f22d27077cb3c6a0092480b1546867b4b41f7b1fe37",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/root_publication_activation.go"
+    },
+    {
+      "after_sha256": "29d915209704c3254d25afc52a4e582b71b8bd020ee8ef821ab12688f616559d",
+      "before_sha256": "c5fca2d8f61ccbe8672ea9a29ef73e9c35778fab69b26a247cf9f236ae463e9b",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/snapshot_primary_retention.go"
+    },
+    {
+      "after_sha256": "4075d3a6b9491dd979a466f1721721ec9b9a90c654adc1e0d201f33adbbd0bbb",
+      "before_sha256": "3f2969a4b6e7182b3e0eb10567cae3484d777c1d9049b82843c23b071755fe86",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/db/vacuum_online.go"
+    },
+    {
+      "after_sha256": "2addecaa77a03877990d3a13c5938b27bfa151373014d1b66e7067f2bfc3629f",
+      "before_sha256": "f1a2fd47dfd1408c75e2eadb8b82e9019a3bbdf1624c8ca2ead9b2618163456b",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/arena.go"
+    },
+    {
+      "after_sha256": "691bc2f30a86f1506baa6daccdef81dc1d0c855b0fb615d0cf80c987329f79fc",
+      "before_sha256": "72d9ee92691fca7512ad3f872e3ec6b8bd47d2a0a414a57efb173069beba09d5",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/physical_close_work.go"
+    },
+    {
+      "after_sha256": "c71c114ba31f2a94ab2f10cec928765eaba1673bdf2a8e112518c46c50d28a64",
+      "before_sha256": "75654de9e97fcaace9a1465872144b57c1bafab72956ca1b00c463a1470a278e",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go"
+    },
+    {
+      "after_sha256": "1eb7940c6037c1200fd6aa262fca209fd5bcd824480eb0f0c2c3d679bd6b8291",
+      "before_sha256": "8d21fd802582b4b00b507f228b91b2ad54faaf6f14827adc4b395168c15d9e6e",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/release_queue.go"
+    },
+    {
+      "after_sha256": "f702c7e1ef503832d3366d79ecafe236e8a6ad1ac61be7c41186ee1993f63dc4",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/source_guard_price_for_test_v6.go"
+    },
+    {
+      "after_sha256": "c3cd27668ec05a678a76954b05b3055dffb0dc156518fcf54874d5672b9d9739",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/source_guard_v6.go"
+    },
+    {
+      "after_sha256": "67eaf70166dfebb0a68cf3e7a0d7a6559ee23d9e5748876c1eba95393fe3f47a",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/primaryarena/source_guard_v6_test.go"
+    },
+    {
+      "after_sha256": "f281c1f9b4ff52d7d61d41215d7aee06bc66cec220bf60611e535461b246b80a",
+      "before_sha256": "2acf7b45dd568889495edfff1b8950eaa5d7cac98552af1a37b24a187a6270c5",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/retainedalloc/owner_cooperative_work.go"
+    },
+    {
+      "after_sha256": "76869ce52ab880c9ca4c00d11f6ae6586d8af637326d8411608d5711497ee26a",
+      "before_sha256": "8d861b321eceea1daa6966b783f9e550bb2189d66c6256a0132f7513848e7ef1",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/rootpublication/coordinator.go"
+    },
+    {
+      "after_sha256": "6e22ef62256f3f6b0cc3bcc1be0255b06f019c9166b74b8ee7c3cadc90ded3f7",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/rootpublication/reachability_root_capture_v6.go"
+    },
+    {
+      "after_sha256": "b06fbd1677708aeaf5ac2e64be96bd3e233ec58820f122627b8865abbef5a0e1",
+      "before_sha256": null,
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/internal/rootpublication/reachability_root_capture_v6_test.go"
+    },
+    {
+      "after_sha256": "3f3532940d9cfc72da4123cf69bbdef88560782776b6aa713204d1d17f7a6642",
+      "before_sha256": "47c7eefa738523e51f9b83bcd633c86d27eaa2e3811d173de3b276b98bfe0c9a",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/lifecycle/SOURCE_GUARDS_V6.md"
+    },
+    {
+      "after_sha256": "20d9603369efcaf74be3c80939144af5b4acfa1deb6ae4f0a395c021ea8911f4",
+      "before_sha256": "536d5b8a5d35fe299e557f00279771d8a71c6a1d626ef007832a9e630fd11d02",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/lifecycle/registry.go"
+    },
+    {
+      "after_sha256": "fc97a27b9bb1407605641e2ceb9c9ae6b71112c022ba6f6e323f0d75ab574826",
+      "before_sha256": "f2deb19f7cdde779f608121e9e0a0ed047c853da181947f5d3080166714eaa71",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/lifecycle/source_guard.go"
+    },
+    {
+      "after_sha256": "4d2a0418cb4d9829d8a82c25c1964e5e6d96c30257054e94e953ce6bd7e5730c",
+      "before_sha256": "c96bea46a8cdc156ad10a0286482b421593c5feabc21771a071fb035ac75dffa",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/lifecycle/source_guard_test.go"
+    },
+    {
+      "after_sha256": "4db3a62c636cc41b364f4a96b26a21b545cab70732ce194d539d196fde3c6194",
+      "before_sha256": "05e146fae55722ea2f80324be8750ab09dfa129d622b733f14d863a065af6c5e",
+      "mode": "0o664",
+      "owner": "source-guard-producer",
+      "path": "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+    }
+  ],
+  "additional_consumer_binding": {
+    "TreeDB/db/leaf_generation_gc.go": "714049706db18ad99a063d83b0ce9f6e81209bc40e35d0d5bb4d4192f36fb3b3"
+  },
+  "findings": [
+    {
+      "id": "SGP1",
+      "severity": "blocking",
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "line": 693,
+      "related_locations": [
+        "TreeDB/db/recoverable_root_set.go:283-296",
+        "TreeDB/db/recoverable_root_set.go:720-732",
+        "TreeDB/db/leaf_generation_gc.go:418-453"
+      ],
+      "title": "Outer-leaf generation discovery omits the retained coordinator resource child",
+      "trigger": "A captured pending or recovery coordinator root has an outer-leaf manifest not otherwise present in the current view, visible resources, or selected durable slot/proof resources.",
+      "cause": "Capture transfers coordinator Resources into set.coordinatorCapture, retaining bank and physical-resource custody together, but leafGenerationIDsForFiles continues enumerating only set.resources. The capture child is otherwise consumed only by release.",
+      "effect": "A unique historical file ID now produces the missing-manifest maintenance error. If another manifest already resolves a recycled file ID, unresolved is empty and the omitted historical generation is silently absent from the returned protection set. Physical retention itself is present; runtime deletion/data loss has not been demonstrated.",
+      "correction": "Enumerate coordinatorCapture.Resources under the same scoped token traversal and shared identity dedup used for set.resources; keep its sole original release parent. Add coordinator-only historical-manifest and recycled-file-ID/distinct-generation controls through the actual recoverable leaf-generation consumer.",
+      "provenance": "Independent source finding, reported to and acknowledged by root before final report."
+    }
+  ],
+  "other_dispositions": {
+    "compile01": "Compile-only failed before bodies because cross-package price helpers ended in _test.go. Byte-identical producer02 filename promotions resolve visibility.",
+    "compile02": "Root compile-only receipt PASS, 7 packages, 74.4125371677801 seconds, exit0, no test bodies, leader joined and empty groups/adopted children. Independently compared both recorded source manifests to producer02 full manifest. No claim of compiler/test execution by reviewer.",
+    "controls": "138 top-level and 61 required child tests per mode proposed across 14 focused calls; two actual six-arm calls explicitly require separate selection. All 47 proposal test-file hashes match producer02. No focused runtime acceptance.",
+    "remaining_scope": "Both acquisition scans remain and supported legacy DATA-only/V5 capture is preserved; scan removal and continuing-writer convergence are outside this source disposition."
+  },
+  "nonclaims": [
+    "No Q32 fit or numeric allowance selected.",
+    "No actual native publication, whole retained-union, FutureFinish/full graph, performance, or merge qualification.",
+    "No runtime reproduction or data-loss demonstration of SGP1.",
+    "No blanket claim for source beyond reviewed changes and affected callers."
+  ]
+}

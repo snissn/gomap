@@ -1,0 +1,77 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 3,
+  "commands_not_executed": [
+    "normal-mvcc",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "completed_utc": "2026-10-16T17:44:31.691379+00:00",
+  "git_identity_still_frozen": true,
+  "not_selected_here": [
+    "normal-retainedalloc",
+    "normal-lifecycle",
+    "normal-memtable"
+  ],
+  "public_native_driver_executed": false,
+  "public_status": "Producer controls only; role-closure acceptance, original public Q32 and performance qualification remain open",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-primaryarena/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-rootpublication/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 1,
+      "name": "normal-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-db/result.json",
+      "status": "STOP"
+    }
+  ],
+  "retained_prior_results": [
+    {
+      "child_pass": 10,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 2
+    }
+  ],
+  "source_files": 10466,
+  "source_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true,
+  "top_pass_normal": 70,
+  "top_pass_race": 0
+}

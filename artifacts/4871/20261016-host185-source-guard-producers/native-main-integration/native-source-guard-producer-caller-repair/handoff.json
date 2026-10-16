@@ -1,0 +1,27 @@
+{
+  "artifact_sha256": {
+    "README.md": "338e055a1ca7751d44b0eb8d6172042d75b9807b85c2fc2ccebf13ef5bc6b7c8",
+    "after.json": "c5312edb60308e496fd0733bf333996c713122895ac91df662863551c6a0fa06",
+    "basis-binding.json": "b5bbf0695746fe122a9343d8f7dbc53ba5b609fdf53f0c24fa3d2cb644bf48b2",
+    "before.json": "43849160d40a25d4b1f774faf098d13b786f3caf4a8b4929e4bba96ee80337b7",
+    "delta.patch": "34ff70909e09eab9ebf3a2bf1a3060a404c489ddb1a8a860fbbf472b88322a2e",
+    "modes.json": "e558cec8cb84af84f810c6c5dbf1c64f74f540b2ff71dbf02daa1675c2c04443",
+    "prepared-source.tar.gz": "e799fbdc130cc38c7f3f04d60fc2d3f422332814511609cc8d83606ba74cd878",
+    "proposed-commands.json": "c2f94063f0ac296e6bf08825d6407bf242992f0ff3029f7a69b72544c0891ea2"
+  },
+  "basis_manifest_sha256": "6680a1d2ae6fa89ac4828fce91095d600f03fe7b1c6c63f1f308c7d5102ca3b3",
+  "compiler_or_product_runtime_executed": false,
+  "native_integrated_modified": false,
+  "prepared_artifacts_sealed": true,
+  "replacement_paths": [
+    "TreeDB/db/recoverable_root_set.go",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go"
+  ],
+  "replacement_sha256": {
+    "TreeDB/db/recoverable_root_set.go": "4406596cc009e574ce7192f6637416b2e19d5b318e500ef23790278464c78ef4",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go": "fcdfb563383c4f6bf1f7be6cf0719a09b48d4deee6c6404c30074702a0de833b"
+  },
+  "scope": "prepared-only SGP1 coordinator manifest GC caller + genuine resource/capture-lifetime regression",
+  "source_promotion_authorized": false,
+  "source_writes_released": true
+}

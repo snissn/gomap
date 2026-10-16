@@ -1,0 +1,48 @@
+{
+  "all_groups_empty": true,
+  "all_production_unchanged": true,
+  "changed_paths": [
+    "TreeDB/internal/primaryarena/arena_test.go",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go"
+  ],
+  "created_utc": "2026-10-16T17:41:40.837996+00:00",
+  "elapsed_seconds": 1.8287806920707226,
+  "live_source_equal": true,
+  "manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "no_test_bodies": true,
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "result_sha256": "3a4e20ce22190821fad680e58f38ecad9f4e104d0455cc6dd82b5c150c3d7396",
+  "retained_prior_results": [
+    {
+      "child_pass": 10,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 2
+    }
+  ],
+  "scope": "producer04 primaryarena compile/default vet and exact unchanged input reuse",
+  "selected_package_labels": [
+    "primaryarena"
+  ],
+  "source_before_after_frozen": true,
+  "source_files": 10466,
+  "status": "PASS"
+}

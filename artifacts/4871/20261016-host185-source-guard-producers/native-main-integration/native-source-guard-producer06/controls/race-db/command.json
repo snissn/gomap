@@ -1,0 +1,107 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-mod=readonly",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-race",
+    "-run",
+    "^(TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6|TestPrimaryConstructionLedgerLateHandoffCustodyV6|TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6|TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6|TestOriginalStartupCleanupPhysicalRefusalRetainsLock|TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock|TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair|TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose|TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6|TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6|TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6|TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestNativeRootPreparationSourceWitnessV6|TestNativeRootPreparationSourceTerminalV6|TestRecoverableRootSetOriginalContainingAdmissionRefusal|TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge|TestRecoverableRootSetCaptureBackingRefundsAfterOriginalCompletion|TestRecoverableRootSetIncludesBothDurableSlotsAndRevalidates|TestRecoverableRootSetKeepsDistinctReplayFrontiersForSamePages|TestRecoverableRootSetRejectsWriteAfterCapture|TestRecoverableRootSetRejectsDurableAdvanceAfterCapture|TestRecoverableRootSetExactFilePinBlocksDeleteUntilRelease|TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6)$",
+    "./TreeDB/db"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-db/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 18,
+  "expected_top_level_count": 27,
+  "grant_sha256": "7fa4c7f3a33f3d90da05be6db19665e370bc0d5283355493e8954b6a290a72ee",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/identity.json",
+  "name": "race-db",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestNativeRootPreparationSourceTerminalV6": [
+      "before-acquire",
+      "last-owner",
+      "independent-held-owner",
+      "partial-scratch-cancel-and-refund"
+    ],
+    "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock": [
+      "shared-lock",
+      "caller-lock"
+    ],
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6": [
+      "success",
+      "late-drain",
+      "failed-close",
+      "runtime-release"
+    ],
+    "TestPrimaryJointVacuumV6PointersAndIndependentFallback": [
+      "false",
+      "true"
+    ],
+    "TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6": [
+      "snapshot",
+      "recoverable-set"
+    ],
+    "TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots": [
+      "manifest",
+      "directory"
+    ],
+    "TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6": [
+      "coordinator-only",
+      "recycled-file-id"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6",
+    "TestPrimaryConstructionLedgerLateHandoffCustodyV6",
+    "TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6",
+    "TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6",
+    "TestOriginalStartupCleanupPhysicalRefusalRetainsLock",
+    "TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock",
+    "TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots",
+    "TestPrimaryJointVacuumV6SuccessfulReplacement",
+    "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+    "TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair",
+    "TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose",
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+    "TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6",
+    "TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6",
+    "TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6",
+    "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+    "TestNativeRootPreparationSourceWitnessV6",
+    "TestNativeRootPreparationSourceTerminalV6",
+    "TestRecoverableRootSetOriginalContainingAdmissionRefusal",
+    "TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge",
+    "TestRecoverableRootSetCaptureBackingRefundsAfterOriginalCompletion",
+    "TestRecoverableRootSetIncludesBothDurableSlotsAndRevalidates",
+    "TestRecoverableRootSetKeepsDistinctReplayFrontiersForSamePages",
+    "TestRecoverableRootSetRejectsWriteAfterCapture",
+    "TestRecoverableRootSetRejectsDurableAdvanceAfterCapture",
+    "TestRecoverableRootSetExactFilePinBlocksDeleteUntilRelease",
+    "TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6"
+  ],
+  "selection_class": "focused_requires_root_runtime_grant",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/source-frozen.tar.gz",
+  "source_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6"
+}

@@ -1,0 +1,27 @@
+{
+  "actual_native_driver_authorized": true,
+  "actual_verification": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-actual-verification.json",
+  "actual_verification_sha256": "a2f1644dac8ecee1032359b69f49cf41ccdfda8b42a44616be7f9f346c9842eb",
+  "archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "commands": [
+    "firstack-sample01",
+    "firstack-sample02",
+    "firstack-sample03"
+  ],
+  "created_utc": "2026-10-16T18:03:27.504231+00:00",
+  "elf_sha256": "b974d74d7e60aac4a3733e089930990a1d22ac62997e55a1f579c5292f183f28",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-producer06-review01.json",
+  "independent_review_sha256": "6a0cd3c44498442b7345894d2144bd0d1ea70d8b8abaa59fb6741012b8753657",
+  "manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "proposal_sha256": "4840cd126f9d983f4460bcad80f2733130e6aa80e8264b9a9a2e75114fb290a8",
+  "rationale": "Exactly three original once-ACK fresh-process 1x wall-only samples after accepted six-arm controls. Prebuilt binary, host preflight and process/source receipts, no retries/discards, no allocation/fullprune/Q32 claim.",
+  "runner_sha256": "46b7a8d06877412139313cc695facb1332581b61a1b1427f6b14ea4b199e8f07",
+  "scope": "firstack-connected-source-guard-producer",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-source-verification.json",
+  "source_verify_sha256": "2a9035a027d35094a75d45e3670ca7ced0ec580953f34a63be0b114c503e37e5",
+  "stage": "samples"
+}

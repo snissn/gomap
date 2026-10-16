@@ -1,0 +1,16 @@
+[
+  {
+    "after_sha256": "4406596cc009e574ce7192f6637416b2e19d5b318e500ef23790278464c78ef4",
+    "before_sha256": "e50a13c2150147f25f73301fe1d106224f3c90c822053aa548214e2d80a43cb3",
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/db/recoverable_root_set.go"
+  },
+  {
+    "after_sha256": "fcdfb563383c4f6bf1f7be6cf0719a09b48d4deee6c6404c30074702a0de833b",
+    "before_sha256": null,
+    "mode": "0o664",
+    "owner": "source-guard-producer",
+    "path": "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go"
+  }
+]

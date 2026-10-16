@@ -1,0 +1,126 @@
+[
+  {
+    "active_other_processes": [
+      {
+        "comm": "kcompactd0",
+        "one_core_cpu_percent": 3.950827061649257,
+        "pid": 95
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 2.963120296236943,
+        "pid": 624687
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9754135308246286,
+        "pid": 1881
+      },
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 1.9754135308246286,
+        "pid": 1949
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9754135308246286,
+        "pid": 128239
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 1.9754135308246286,
+        "pid": 681192
+      },
+      {
+        "comm": "ksoftirqd/9",
+        "one_core_cpu_percent": 0.9877067654123143,
+        "pid": 72
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 0.9877067654123143,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9877067654123143,
+        "pid": 120874
+      },
+      {
+        "comm": "systemd-journal",
+        "one_core_cpu_percent": 0.9877067654123143,
+        "pid": 213453
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9877067654123143,
+        "pid": 3875558
+      }
+    ],
+    "aggregate_busy_percent": 1.6501650165016502,
+    "mem_available_kib": 21491716,
+    "seconds": 1.0124462391249835
+  },
+  {
+    "active_other_processes": [
+      {
+        "comm": "pulseaudio",
+        "one_core_cpu_percent": 2.9620132909594314,
+        "pid": 1949
+      },
+      {
+        "comm": "fluidsynth",
+        "one_core_cpu_percent": 1.9746755273062877,
+        "pid": 1881
+      },
+      {
+        "comm": "clickhouse-serv",
+        "one_core_cpu_percent": 1.9746755273062877,
+        "pid": 6357
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9746755273062877,
+        "pid": 128239
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 1.9746755273062877,
+        "pid": 1595344
+      },
+      {
+        "comm": "htop",
+        "one_core_cpu_percent": 1.9746755273062877,
+        "pid": 3140140
+      },
+      {
+        "comm": "tmux: server",
+        "one_core_cpu_percent": 0.9873377636531439,
+        "pid": 19242
+      },
+      {
+        "comm": "codex",
+        "one_core_cpu_percent": 0.9873377636531439,
+        "pid": 120874
+      },
+      {
+        "comm": "systemd-resolve",
+        "one_core_cpu_percent": 0.9873377636531439,
+        "pid": 213435
+      },
+      {
+        "comm": "polystorechaind",
+        "one_core_cpu_percent": 0.9873377636531439,
+        "pid": 681192
+      },
+      {
+        "comm": "top",
+        "one_core_cpu_percent": 0.9873377636531439,
+        "pid": 874030
+      }
+    ],
+    "aggregate_busy_percent": 2.0661157024793386,
+    "mem_available_kib": 21475428,
+    "seconds": 1.0128246247768402
+  }
+]

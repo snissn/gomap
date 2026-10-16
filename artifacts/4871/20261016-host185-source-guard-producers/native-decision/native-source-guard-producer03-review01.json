@@ -1,0 +1,65 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Exact producer03 source-only readiness for focused controls, composed with prior full producer review; not runtime or complete native qualification.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the required exact model; internal explicitly routed independent review used.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed": false,
+  "review_lease_released": true,
+  "source_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "source_file_count": 10466,
+  "inputs_sha256": {
+    "native-main-integration/native-source-guard-producer03/source-frozen.json": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+    "native-main-integration/native-source-guard-producer03/source-frozen.tar.gz": "a8c4c96c2507af3db88cabd881d8f6c3e8b1352792f9a99fc09e046f67dce408",
+    "native-main-integration/native-source-guard-producer03/source-modes.json": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+    "native-main-integration/native-source-guard-producer03/source.delta.patch": "a66d4f10e933dd0d473a76891dcc5e5aa4bf9c9e55781c456b191e1faaff7886",
+    "native-main-integration/native-source-guard-producer03/proposed-commands.json": "b05ebf381d788f054bcaab427ff9b708c8e56651ca4de57dd83cdf5992ff9972",
+    "native-main-integration/native-source-guard-producer03/freeze.json": "965f045e124b0f1d17f9ea8fb9747584e2cc477e0856767789c950daaaac84d9",
+    "native-main-integration/native-source-guard-producer-caller-repair/handoff.json": "0c3623f1d6255490580babebf82adbb9fca49d461b56d95c1fad30cce5975571",
+    "native-main-integration/native-source-guard-producer-caller-repair/prepared-source.tar.gz": "e799fbdc130cc38c7f3f04d60fc2d3f422332814511609cc8d83606ba74cd878",
+    "native-main-integration/native-source-guard-producer-caller-repair/delta.patch": "34ff70909e09eab9ebf3a2bf1a3060a404c489ddb1a8a860fbbf472b88322a2e",
+    "native-main-integration/native-source-guard-producer-caller-repair/basis-binding.json": "b5bbf0695746fe122a9343d8f7dbc53ba5b609fdf53f0c24fa3d2cb644bf48b2",
+    "native-decision/native-source-guard-producer01-review01.md": "470f72da6b7bc2f4326fc9cafa782eeddcc9491708fc175b7e075daddba1b914",
+    "native-decision/native-source-guard-producer01-review01.json": "f61da6e048a9e7bcf844b5258986dcba6fa4c44bf3b58c8e8d23bf82f3386c44"
+  },
+  "changed_source_sha256": {
+    "TreeDB/db/recoverable_root_set.go": "4406596cc009e574ce7192f6637416b2e19d5b318e500ef23790278464c78ef4",
+    "TreeDB/db/recoverable_root_set_coordinator_manifest_test.go": "fcdfb563383c4f6bf1f7be6cf0719a09b48d4deee6c6404c30074702a0de833b"
+  },
+  "verified": [
+    "All10466 archive payload hashes and modes match producer03 manifest.",
+    "Exactly two changed paths versus producer02, including one new test; all10464 other entries unchanged.",
+    "Prepared handoff and all artifact hashes, replacement payload, exact preimages and reconstructed diff match sealed packet.",
+    "All nine unchanged semantic dependency bindings match prior verified extraction.",
+    "All48 proposed test-file bindings match producer03."
+  ],
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "SGP1",
+      "disposition": "resolved",
+      "source": "TreeDB/db/recoverable_root_set.go:696-737",
+      "proof": "One consumeResources callback enumerates set.resources and coordinatorCapture.Resources before unresolved validation, with one shared StableIdentity dedup and unchanged token decoder. No new retained alias or release parent. WithScopedTokens(nil) safely invokes callback with nil tokens.",
+      "regression": "Two actual stable-file manifest cases use original admitted builder/token/registry and coordinator CaptureReachability/TransferCustodyTo. Original candidate is published/disposed before lookup. Unique historical file and recycled same-fileID/distinct-generation arms require exact returned generations. Pins must survive original candidate disposal and then disappear with real capture/resource/store cleanup; replay must preserve owner accounting.",
+      "limits": "Local RecoverableRootSet is deliberately not DB-minted; validates actual manifest lookup and genuine coordinator resource lifetime, not full DB GC publication/integration."
+    }
+  ],
+  "coverage_composition": "Prior full32-path producer01 semantic review and producer02 byte-identical filename correction carry unchanged. Previous REJECT is historical and resolved only for its sole SGP1 blocker; no unrelated evidence relabeled.",
+  "command_readiness": {
+    "focused_calls": 14,
+    "top_level_per_mode": 139,
+    "required_children_per_mode": 63,
+    "additional_actual_calls": 2,
+    "actual_scope": "one top/six arms each, separate root selection required",
+    "no_execution_authorized_by_review": true
+  },
+  "validation_limits": [
+    "No compiler, Go test, native driver or benchmark executed by reviewer.",
+    "Producer02 compile-only PASS remains attributed to producer02; producer03 DB compile/runtime are separate root evidence, not claimed passed here.",
+    "Both acquisition scans remain; no scan-removal acceptance.",
+    "No Q32 fit, numeric allowance, performance, complete producer/public native graph or merge approval."
+  ]
+}

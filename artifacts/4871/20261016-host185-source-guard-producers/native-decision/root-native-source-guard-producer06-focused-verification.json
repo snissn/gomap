@@ -1,0 +1,205 @@
+{
+  "actual_native_driver_executed": false,
+  "all_groups_empty": true,
+  "archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "created_utc": "2026-10-16T17:58:11.965747+00:00",
+  "effective_counts": {
+    "normal": {
+      "child": 65,
+      "top": 139
+    },
+    "race": {
+      "child": 65,
+      "top": 139
+    }
+  },
+  "fresh_commands": 8,
+  "manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "performance_or_graph_qualification": false,
+  "q32_acceptance": false,
+  "results": [
+    {
+      "child_pass": 4,
+      "equivalence_differences": [],
+      "name": "normal-mvcc",
+      "raw_sha256": "0d00d6be6a510f65ef99f6c0f60d11a06c4b23af8ba16e3c981484a4449a6959",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/normal-mvcc/result.json",
+      "result_sha256": "ca171d87c1d62e1b9ce79dde02dd8359bedc52e715251edd704f6ec9224abb86",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 1
+    },
+    {
+      "child_pass": 10,
+      "equivalence_differences": [],
+      "name": "race-retainedalloc",
+      "raw_sha256": "b925f396d6cf49116587e6fdb45d76a7caa1d107fdf5bf7853d3168143313bad",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-retainedalloc/result.json",
+      "result_sha256": "95d6b8847a4b1c3f51df2ac51e145187aec8414a510c88812df96d841aab96f9",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "equivalence_differences": [],
+      "name": "race-lifecycle",
+      "raw_sha256": "77704a1aaf6860157194d89f3ada66bff6e92b5db9f4787d02a5ccfc6c764472",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-lifecycle/result.json",
+      "result_sha256": "95fed946c8d3a8b4ee85fd65bebff403d37d4b7ccc952195f9225215a3adf36a",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "equivalence_differences": [],
+      "name": "race-memtable",
+      "raw_sha256": "43c5676e6f2621677c219f9a28d76926917eef25a20905e63bdf1040aefc55c3",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-memtable/result.json",
+      "result_sha256": "01e6a55464fd01d53d5be284bdbb1e0a97fe95bef98353d28458e22fb9d05593",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 2
+    },
+    {
+      "child_pass": 6,
+      "equivalence_differences": [],
+      "name": "race-primaryarena",
+      "raw_sha256": "210526a011f096dc24d6696d93c93ee629d1084e17b7e3cea36145949dbbc06c",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-primaryarena/result.json",
+      "result_sha256": "b0f5f6367bb699be60f2451e147dabec439094f426faf983f1eeef7d3371fc50",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 26
+    },
+    {
+      "child_pass": 9,
+      "equivalence_differences": [],
+      "name": "race-rootpublication",
+      "raw_sha256": "bb7dc6b7eabab0ce9cf660762a647a3d5f714e1799eba682a29dfd9a48cd1cc8",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-rootpublication/result.json",
+      "result_sha256": "a633ddcff4cba7edc0987abd3696f747c3818168b56e6cb4e5e702f1400041b3",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 18
+    },
+    {
+      "child_pass": 18,
+      "equivalence_differences": [],
+      "name": "race-db",
+      "raw_sha256": "2f920ab52a168a00c118746d38cea312c8d807fa5a6711d571d7997e0eefb584",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-db/result.json",
+      "result_sha256": "dca2c9ba4d19eae1f5056f40acff6bd89d48a2149d8d49ba87a33dfb0fc88661",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 27
+    },
+    {
+      "child_pass": 4,
+      "equivalence_differences": [],
+      "name": "race-mvcc",
+      "raw_sha256": "56a710dc117c67370899b1222764963e052b986bd3080f4c010f8f473456d97f",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/race-mvcc/result.json",
+      "result_sha256": "1589acb9d0662ae1e7ac4c031c6b184f9066960fa0d64bd9649b0dcb306a6efc",
+      "retained_prior": false,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06",
+      "top_pass": 1
+    },
+    {
+      "child_pass": 10,
+      "equivalence_differences": [
+        "TreeDB/db/primary_source_guard_v6_test.go",
+        "TreeDB/internal/primaryarena/arena_test.go",
+        "TreeDB/internal/primaryarena/physical_close_work_test.go",
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-retainedalloc",
+      "raw_sha256": "c700c573118331a61d6bd49109a63046b68382bb5fd18402aff9c6ac1549be5c",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "equivalence_differences": [
+        "TreeDB/db/primary_source_guard_v6_test.go",
+        "TreeDB/internal/primaryarena/arena_test.go",
+        "TreeDB/internal/primaryarena/physical_close_work_test.go",
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-lifecycle",
+      "raw_sha256": "5b968f6b61cfb013651a9f0de2c035ed33a3ab34c5251c69fee2368d92325627",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "equivalence_differences": [
+        "TreeDB/db/primary_source_guard_v6_test.go",
+        "TreeDB/internal/primaryarena/arena_test.go",
+        "TreeDB/internal/primaryarena/physical_close_work_test.go",
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-memtable",
+      "raw_sha256": "cc252f3ff6c0a7241c5b484c44685e9b2c596fef016d003455a825aed1a5ca28",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03",
+      "top_pass": 2
+    },
+    {
+      "child_pass": 6,
+      "equivalence_differences": [
+        "TreeDB/db/primary_source_guard_v6_test.go",
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-primaryarena",
+      "raw_sha256": "ca2c35d86509e71b18e1f9eeb9f1c247c91842bc0a462ad43a692bdd7f048fe3",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-primaryarena/result.json",
+      "result_sha256": "52f06ef9ad8db23f44e0fb4fae1755f49a344ef8a6fd816f7e2f162eb09d72be",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04",
+      "top_pass": 26
+    },
+    {
+      "child_pass": 9,
+      "equivalence_differences": [
+        "TreeDB/db/primary_source_guard_v6_test.go",
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-rootpublication",
+      "raw_sha256": "c3ed7c3ad0cc9ddf904eaa3cf4eb03172028d12c04eb54c5a2629b68469c49c0",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/controls/normal-rootpublication/result.json",
+      "result_sha256": "743d1c06dfb24f34cc9281292d334d21ceacdc67aa5602445a85e7b118ba7ac4",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04",
+      "top_pass": 18
+    },
+    {
+      "child_pass": 18,
+      "equivalence_differences": [
+        "TreeDB/mvcc/native_finaldriver_envelope_test.go"
+      ],
+      "name": "normal-db",
+      "raw_sha256": "8c9b244a6085429f4a3fa65271bef9d57996643ffe0daf3bce520e74e75f187a",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05/controls/normal-db/result.json",
+      "result_sha256": "1f69fcb930a8c0925a91df17af92dddb0b59b88b6a41d80b159bb4ab9f4e288b",
+      "retained_prior": true,
+      "source_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer05",
+      "top_pass": 27
+    }
+  ],
+  "retained_prior_commands": 6,
+  "scope": "focused producer controls with explicit unchanged-input historical reuse",
+  "source_files": 10466,
+  "source_frozen": true,
+  "status": "PASS",
+  "summary_sha256": "0558168b1708d167303cba134e31930463a9ec3267a8758a4a358ef60a616aae"
+}

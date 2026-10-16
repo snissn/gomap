@@ -1,0 +1,17 @@
+{
+  "all_groups_empty": true,
+  "created_utc": "2026-10-16T17:33:14.284775+00:00",
+  "elapsed_seconds": 41.98227226501331,
+  "manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "no_test_bodies": true,
+  "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "result_sha256": "dd94de900bac1cf29b5352eabdf2728485ae934bf049ba01edc903567d838536",
+  "scope": "producer03 affected DB compile and default vet, full unchanged source/process verification",
+  "selected_package_labels": [
+    "db"
+  ],
+  "source_before_after_frozen": true,
+  "source_files": 10466,
+  "status": "PASS",
+  "unchanged_package_compile_reuse": "producer02 seven-package compile remains applicable to unchanged six packages; new DB compile includes changed production/test"
+}

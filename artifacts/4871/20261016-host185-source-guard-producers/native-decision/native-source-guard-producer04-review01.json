@@ -1,0 +1,61 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Producer04 two-fixture correction; source-only readiness for focused controls",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model; internal independent review used.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed": false,
+  "lease_released": true,
+  "source_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "source_archive_sha256": "4e32474edfd1c01ee5838a6adf19a2e114b09cce7c9f2fabebb4c823b74a44d2",
+  "source_modes_sha256": "0bceb3cbf9af0e75c116531c68a06c2af556cdce375213c2c0ac78f45a611039",
+  "source_files": 10466,
+  "modified_files": 2,
+  "unchanged_files": 10464,
+  "added_files": 0,
+  "deleted_files": 0,
+  "proposal_sha256": "2fcaead23b23d5f6fda57c57669b3c9422e9b49636e8f944356efcccd058eba6",
+  "prepared_handoff_sha256": "5106a325130fbc37584d43d4300df9bf2b197c5b8bab39e92aeb8beb10314aa6",
+  "prepared_patch_sha256": "c825614009bba3263305493df34bb38ad11dd901bbdbc40bea53a2aa29960002",
+  "prepared_archive_sha256": "140ad4e7de249eb14ad0a3ae84f364b7101d76e3703c356d7b0155b4ba072acb",
+  "reviewed_files": {
+    "TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af"
+  },
+  "checks": [
+    "Full 10466-file archive hashes and modes independently verified against manifest.",
+    "Exactly two test modifications against producer03; no production, pricing, modes, additions or deletions.",
+    "Prepared payloads, parent preimages, handoff bindings and reconstructed patch verified.",
+    "All 48 selected test bindings match producer04; all 16 proposal entries unchanged except TMPDIR and the two test hashes.",
+    "Both complete changed fixture bodies and relevant sealExactAbsence, Owner close, WorkLease and origin compatibility callers reviewed."
+  ],
+  "resolved_findings": [
+    {
+      "id": "PF1",
+      "resolution": "Finite exact-replacement attempts explicitly refuse without effects; ordinary nil-work installs retain full logical and physical semantic oracles and bounded flatten controls."
+    },
+    {
+      "id": "PF2",
+      "resolution": "Distinct concrete WorkLease adapter supplies actual pre-effect resize/close admission; shared Lease-only closeLease and origin refusal coverage remain unchanged."
+    }
+  ],
+  "findings": [],
+  "carried_source_review": {
+    "path": "native-decision/native-source-guard-producer03-review01.md",
+    "sha256": "a2257652d5a2836d38d55c4750a807d877f14f434a287431ec23bb52e1c3a0b0"
+  },
+  "preserved_failure_diagnosis": {
+    "path": "native-decision/native-source-guard-producer03-compatibility-diagnosis.md",
+    "sha256": "7da7fff0a9eb998efeea8d6ff460b41473c3cc774d99133270cd2220d13d3603"
+  },
+  "runtime_status": "No producer04 compiler or runtime result claimed. Root plans remaining 11 focused calls; prior producer03 first three normal calls (67 tops, 28 children) retain their original attribution and exact-input reuse. Actual six-arm calls remain separately gated.",
+  "limitations": [
+    "No acquisition scan removal acceptance",
+    "No public Q32 fit or numeric allowance",
+    "No actual native driver/publication qualification",
+    "No performance, complete graph, CI or merge readiness claim"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "after": {
+    "TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af"
+  },
+  "artifact_sha256": {
+    "README.md": "3b0095ded2fddf7791b7f446d41df17ca54cce9cb9f031155fcb7dc27414db41",
+    "after.json": "0b86fe448e185c5c61f5cf52f0ef0e9bc1504d4b22a7f85c39bb0b1023e216f2",
+    "before-source.tar.gz": "699118222894d7e79d0df2d28438b9abba6c69dc1f8954c16de748c95bdb6948",
+    "before.json": "b25ab52f43d7685df16d88276737f6bf7318c57d55bfd5790a75cfee6c07c12c",
+    "before/TreeDB/internal/primaryarena/arena_test.go": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e",
+    "before/TreeDB/internal/primaryarena/physical_close_work_test.go": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b",
+    "delta.patch": "c825614009bba3263305493df34bb38ad11dd901bbdbc40bea53a2aa29960002",
+    "modes.json": "d4b70d1228fea9e63de2119b03d07e2967e9a5d372f5449064ba40014c88dbea",
+    "prepared-source.tar.gz": "140ad4e7de249eb14ad0a3ae84f364b7101d76e3703c356d7b0155b4ba072acb",
+    "prepared/TreeDB/internal/primaryarena/arena_test.go": "138ae3277a9b58dcdcf94e3df9777a5fa91fa40c94b14bfdb83f4d9e3f6bb5b2",
+    "prepared/TreeDB/internal/primaryarena/physical_close_work_test.go": "55b874360be11471be4061c5395734d854eff1f6ca84fed8c3977f41f530e7af",
+    "proposed-commands.json": "fdbfc19033e64812be68e1908ff38b9a1721a77467727ed676a1b79275d9449a"
+  },
+  "before": {
+    "TreeDB/internal/primaryarena/arena_test.go": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "24df670ad03254bc2ce9bd64fe4499de14a692d3a63a56ccb9c2db5e149d653b"
+  },
+  "compiler_executed": false,
+  "format_tool": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/gofmt",
+  "format_tool_sha256": "f5b77505ba58bdbf60725592b1499c55f50c89b28757a02227165532a73f8545",
+  "modes": {
+    "TreeDB/internal/primaryarena/arena_test.go": "0o664",
+    "TreeDB/internal/primaryarena/physical_close_work_test.go": "0o664"
+  },
+  "parent_archive_sha256": "a8c4c96c2507af3db88cabd881d8f6c3e8b1352792f9a99fc09e046f67dce408",
+  "parent_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/source-frozen.json",
+  "parent_manifest_sha256": "459e1c1d61cb0fc41b9cb7fe4f59f4bbdaaf1aa2d4c2be1a74ed3a961cc79ae4",
+  "production_changes": false,
+  "runtime_executed": false,
+  "scope": "two test files only; outside-W prepared replacements; no source promotion",
+  "source_writes_released": true
+}

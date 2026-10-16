@@ -1,0 +1,38 @@
+{
+  "after": {
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go": null,
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go": "7f01b264d19ab549ff59699338e60a1c79ed26a47da00ab93aabc2afd55faeab",
+    "TreeDB/lifecycle/source_guard_price_for_test.go": null,
+    "TreeDB/lifecycle/source_guard_price_for_test_v6.go": "38a1835b53e547a5fc71db48109d35bc6dcf99f0fb0ac1ee0c505da835f49cef"
+  },
+  "all_source_writers_released": true,
+  "before": {
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go": "7f01b264d19ab549ff59699338e60a1c79ed26a47da00ab93aabc2afd55faeab",
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go": null,
+    "TreeDB/lifecycle/source_guard_price_for_test.go": "38a1835b53e547a5fc71db48109d35bc6dcf99f0fb0ac1ee0c505da835f49cef",
+    "TreeDB/lifecycle/source_guard_price_for_test_v6.go": null
+  },
+  "contents_must_be_identical": true,
+  "created_utc": "2026-10-16T17:20:46.510382+00:00",
+  "exact_renames": {
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go": "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go",
+    "TreeDB/lifecycle/source_guard_price_for_test.go": "TreeDB/lifecycle/source_guard_price_for_test_v6.go"
+  },
+  "input_sha256": {
+    "native-decision/root-native-source-guard-producer01-compile-verification.json": "e3770f58b6d882eefdaf0733c7f485094799d20553ccda9521b99b1119d31e11",
+    "native-main-integration/freeze-source-guard-producer02.py": "e19235067418c044d0526f73a37c33a096a45a858886735164f94481d5b62325",
+    "native-main-integration/native-source-guard-producer01/compile-only/result.json": "3b44fd0bb2668d6a1aff99a638c6db17ff924d0d3a76731887933de99cc8289f",
+    "native-main-integration/native-source-guard-producer01/compile-only/run.log": "aa2936e4808d6e20d919432e4dc9ab32b882f74d81e5e8313aca93e687a44e24"
+  },
+  "parent_manifest_sha256": "af84e82eb4bff3b5a844a768ba240a8738bf53039de0e913610c4991557a2797",
+  "rationale": "Make unchanged price definitions available to actual cross-package price forwarding; original _test.go names are excluded by Go imports.",
+  "runtime_authorized": false,
+  "scope": "connected-source-guard-producer02-freeze",
+  "source_lease": [
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test.go",
+    "TreeDB/internal/retainedalloc/owner_cooperative_price_for_test_v6.go",
+    "TreeDB/lifecycle/source_guard_price_for_test.go",
+    "TreeDB/lifecycle/source_guard_price_for_test_v6.go"
+  ],
+  "source_writer": "/root narrow two-file filename promotion"
+}

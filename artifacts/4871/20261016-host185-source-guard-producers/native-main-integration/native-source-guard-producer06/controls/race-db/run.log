@@ -1,0 +1,95 @@
+=== RUN   TestNativeSnapshotPublicationUsesSameLeafOperandV6
+--- PASS: TestNativeSnapshotPublicationUsesSameLeafOperandV6 (0.00s)
+=== RUN   TestNativeRootPreparationSourceWitnessV6
+    native_mvcc_root_preparation_v6_test.go:191: source witness records=2 bytes=145; comparison delta only, before adoption; original acquired edge retained
+--- PASS: TestNativeRootPreparationSourceWitnessV6 (0.00s)
+=== RUN   TestNativeRootPreparationSourceTerminalV6
+=== RUN   TestNativeRootPreparationSourceTerminalV6/before-acquire
+=== RUN   TestNativeRootPreparationSourceTerminalV6/last-owner
+=== RUN   TestNativeRootPreparationSourceTerminalV6/independent-held-owner
+=== RUN   TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund
+--- PASS: TestNativeRootPreparationSourceTerminalV6 (0.01s)
+    --- PASS: TestNativeRootPreparationSourceTerminalV6/before-acquire (0.00s)
+    --- PASS: TestNativeRootPreparationSourceTerminalV6/last-owner (0.00s)
+    --- PASS: TestNativeRootPreparationSourceTerminalV6/independent-held-owner (0.00s)
+    --- PASS: TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund (0.00s)
+=== RUN   TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6
+--- PASS: TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6 (0.10s)
+=== RUN   TestRecoverableRootSetOriginalContainingAdmissionRefusal
+--- PASS: TestRecoverableRootSetOriginalContainingAdmissionRefusal (0.05s)
+=== RUN   TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge
+--- PASS: TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge (0.04s)
+=== RUN   TestRecoverableRootSetCaptureBackingRefundsAfterOriginalCompletion
+--- PASS: TestRecoverableRootSetCaptureBackingRefundsAfterOriginalCompletion (0.04s)
+=== RUN   TestOriginalStartupCleanupPhysicalRefusalRetainsLock
+--- PASS: TestOriginalStartupCleanupPhysicalRefusalRetainsLock (0.05s)
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock
+=== RUN   TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock
+--- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock (0.20s)
+    --- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/shared-lock (0.09s)
+    --- PASS: TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock/caller-lock (0.10s)
+=== RUN   TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6
+    primary_capsule_v6_test.go:86: pre-corruption slot0 commit3 parent2 newest0 prior2
+    primary_capsule_v6_test.go:86: pre-corruption slot1 commit2 parent1 newest0 prior2
+--- PASS: TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6 (0.13s)
+=== RUN   TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6
+--- PASS: TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6 (0.10s)
+=== RUN   TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6
+--- PASS: TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6 (0.17s)
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/success
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close
+=== RUN   TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release
+--- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6 (0.70s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/success (0.18s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/late-drain (0.17s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/failed-close (0.17s)
+    --- PASS: TestPrimaryConstructionLedgerLateHandoffCustodyV6/runtime-release (0.18s)
+=== RUN   TestPrimaryJointVacuumV6SuccessfulReplacement
+--- PASS: TestPrimaryJointVacuumV6SuccessfulReplacement (0.17s)
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/false
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/true
+--- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback (0.56s)
+    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/false (0.28s)
+    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/true (0.27s)
+=== RUN   TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair
+--- PASS: TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair (0.22s)
+=== RUN   TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6
+--- PASS: TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6 (0.00s)
+=== RUN   TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6
+--- PASS: TestPrimaryRuntimeDisposalPhysicalFailureIsOriginalAndStickyV6 (0.00s)
+=== RUN   TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6
+=== RUN   TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6/snapshot
+=== RUN   TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6/recoverable-set
+--- PASS: TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6 (0.21s)
+    --- PASS: TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6/snapshot (0.10s)
+    --- PASS: TestPrimarySourceOrdinaryBorrowerAfterDBCloseV6/recoverable-set (0.10s)
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory
+--- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots (2.38s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest (1.19s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory (1.19s)
+=== RUN   TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6
+=== RUN   TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6/coordinator-only
+=== RUN   TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6/recycled-file-id
+--- PASS: TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6 (0.06s)
+    --- PASS: TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6/coordinator-only (0.02s)
+    --- PASS: TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6/recycled-file-id (0.04s)
+=== RUN   TestRecoverableRootSetIncludesBothDurableSlotsAndRevalidates
+--- PASS: TestRecoverableRootSetIncludesBothDurableSlotsAndRevalidates (0.09s)
+=== RUN   TestRecoverableRootSetKeepsDistinctReplayFrontiersForSamePages
+--- PASS: TestRecoverableRootSetKeepsDistinctReplayFrontiersForSamePages (0.00s)
+=== RUN   TestRecoverableRootSetRejectsWriteAfterCapture
+--- PASS: TestRecoverableRootSetRejectsWriteAfterCapture (0.07s)
+=== RUN   TestRecoverableRootSetRejectsDurableAdvanceAfterCapture
+--- PASS: TestRecoverableRootSetRejectsDurableAdvanceAfterCapture (0.09s)
+=== RUN   TestRecoverableRootSetExactFilePinBlocksDeleteUntilRelease
+--- PASS: TestRecoverableRootSetExactFilePinBlocksDeleteUntilRelease (0.04s)
+=== RUN   TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose
+--- PASS: TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose (0.10s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	6.629s

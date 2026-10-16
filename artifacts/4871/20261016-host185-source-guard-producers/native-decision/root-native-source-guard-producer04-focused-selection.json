@@ -1,0 +1,69 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_source_writers_released": true,
+  "authorized_command_names": [
+    "normal-primaryarena",
+    "normal-rootpublication",
+    "normal-db",
+    "normal-mvcc",
+    "race-retainedalloc",
+    "race-lifecycle",
+    "race-memtable",
+    "race-primaryarena",
+    "race-rootpublication",
+    "race-db",
+    "race-mvcc"
+  ],
+  "compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer04/compile-only/result.json",
+  "compile_result_sha256": "3a4e20ce22190821fad680e58f38ecad9f4e104d0455cc6dd82b5c150c3d7396",
+  "created_utc": "2026-10-16T17:44:09.419965+00:00",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-producer04-review01.json",
+  "independent_review_sha256": "ec4542c3d0db44ecd0321bc252fd8473b45546561974e90b3711dd4979a7ab77",
+  "proposed_commands_sha256": "2fcaead23b23d5f6fda57c57669b3c9422e9b49636e8f944356efcccd058eba6",
+  "rationale": "Accepted two-test compatibility correction, primaryarena compile PASS. Run remaining eleven normal/race focused calls; retain first three normal producer03 results only by exact production and relevant test/build input equivalence. Actual six-arm/native Q32/performance commands excluded.",
+  "retained_prior_results": [
+    {
+      "child_pass": 10,
+      "name": "normal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-retainedalloc/result.json",
+      "result_sha256": "04527c657c3b4f81ee503e06c90c7c7c45d203f05e28fed1aa1caa61eaafaf43",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 31
+    },
+    {
+      "child_pass": 18,
+      "name": "normal-lifecycle",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-lifecycle/result.json",
+      "result_sha256": "5918213b3ce9215b39c084147664fb385dd4d14bffaeb4be25a4b82305ef227e",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 34
+    },
+    {
+      "child_pass": 0,
+      "name": "normal-memtable",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer03/controls/normal-memtable/result.json",
+      "result_sha256": "ad9cff23387e51d09c790c627f982ef814021e0ddd4c5c2880cc79616c181108",
+      "reuse_basis": "Only two primaryarena test files changed globally; complete production, package tests and imports/build inputs for this package are identical. Toolchain/env/command unchanged.",
+      "top_pass": 2
+    }
+  ],
+  "runner_sha256": "a2b84b8aa93ad0c80215d20f376289b9b502bd9254348fc1da3b544633fd866d",
+  "scope": "focused-connected-source-guard-producer",
+  "selected_package_labels": [
+    "retainedalloc",
+    "lifecycle",
+    "memtable",
+    "primaryarena",
+    "rootpublication",
+    "db",
+    "mvcc"
+  ],
+  "source_archive_sha256": "4e32474edfd1c01ee5838a6adf19a2e114b09cce7c9f2fabebb4c823b74a44d2",
+  "source_manifest_sha256": "2f037d22d022e0db5b22a362913d5afbc1bc8660b9f7b2da66ca48c031f08992",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer04-compile-verification.json",
+  "source_verify_sha256": "cb409f94aeeece495c6248ddad5a34836efe92beee8c88e102c591c98b4bf2ec"
+}

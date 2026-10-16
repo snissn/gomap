@@ -1,0 +1,89 @@
+{
+  "all_groups_empty": true,
+  "created_utc": "2026-10-16T18:02:24.951311+00:00",
+  "live_source_equal": true,
+  "original_Q32_acceptance": false,
+  "performance_qualification": false,
+  "results": [
+    {
+      "child_pass": 6,
+      "complete_constructor_rows": 132,
+      "name": "normal-actual-all-shared-arms",
+      "paused_finish": [
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0"
+      ],
+      "prebirth_grants": [
+        {
+          "bytes": 44058112,
+          "records": 39842
+        },
+        {
+          "bytes": 44059269,
+          "records": 39842
+        },
+        {
+          "bytes": 44058150,
+          "records": 39842
+        },
+        {
+          "bytes": 44058055,
+          "records": 39842
+        },
+        {
+          "bytes": 44059288,
+          "records": 39842
+        },
+        {
+          "bytes": 44059307,
+          "records": 39842
+        }
+      ],
+      "raw_sha256": "a841d2e35af094b78683d9f9a6a8c4761fd4a3b1391e771f2ee7ad9158f84dd7",
+      "result_sha256": "e78b752964b80d3af8de4a79027c2c3e0fdd08ba91bebb5b78723dfafd55fb0a",
+      "top_pass": 1
+    },
+    {
+      "child_pass": 6,
+      "complete_constructor_rows": 132,
+      "name": "race-actual-all-shared-arms",
+      "paused_finish": [
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0",
+        "native_finaldriver_diagnostic_v6_test.go:20: native-split genuine paused Finish position={Phase:8 SourceWitnessPresent:true OriginalBinding:true Release:{Finishing:true Detached:true AccountingComplete:false} Receipt:{SameOwner:true Bound:true Turn:false Fenced:true Complete:false RecoveryRequired:false}} ACK=0"
+      ],
+      "prebirth_grants": [
+        {
+          "bytes": 44058093,
+          "records": 39842
+        },
+        {
+          "bytes": 44058207,
+          "records": 39842
+        },
+        {
+          "bytes": 44058112,
+          "records": 39842
+        },
+        {
+          "bytes": 44057998,
+          "records": 39842
+        },
+        {
+          "bytes": 44059250,
+          "records": 39842
+        },
+        {
+          "bytes": 44059269,
+          "records": 39842
+        }
+      ],
+      "raw_sha256": "b20f178168bc579df88208dd86cc60b7b93b2e18ff00f4b69cb771a109ae9b83",
+      "result_sha256": "b8d44e0263e4129d6dda0eabb794b84e4ef3895f43168f22eb396a695c442735",
+      "top_pass": 1
+    }
+  ],
+  "scope": "all six real shared-protocol arms with source-derived diagnostic grant",
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "status": "PASS",
+  "summary_sha256": "562a26f8129520964b479459bd1a3a588af481a9ef2d6269639ed04996bacce8"
+}

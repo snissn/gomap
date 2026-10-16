@@ -1,0 +1,30 @@
+{
+  "actual_native_driver_authorized": true,
+  "all_source_writers_released": true,
+  "authorized_command_names": [
+    "normal-actual-all-shared-arms",
+    "race-actual-all-shared-arms"
+  ],
+  "compile_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/native-source-guard-producer06/controls/normal-mvcc/result.json",
+  "compile_result_sha256": "ca171d87c1d62e1b9ce79dde02dd8359bedc52e715251edd704f6ec9224abb86",
+  "created_utc": "2026-10-16T17:58:30.655361+00:00",
+  "focused_verification": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-focused-verification.json",
+  "focused_verification_sha256": "837842117b12172e90d8c3585253b925db7f02318ba321fca2a2b740f4667649",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "independent_review": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-source-guard-producer06-review01.json",
+  "independent_review_sha256": "6a0cd3c44498442b7345894d2144bd0d1ea70d8b8abaa59fb6741012b8753657",
+  "proposed_commands_sha256": "63addfe12b3da8465427f3137141a7e918bfe45714e45a55df2f0a508f5bf94a",
+  "rationale": "Full producer source/caller/custody/pricing reviews accepted and effective139top65child normal/race focused PASS; run unchanged all six real publication/cancellation arms on same frozen06, source-derived prebirth grant only, originalQ32 and performance still open. Stop at first package failure, retain all evidence.",
+  "runner_sha256": "4b7abf9a221ce8634945c283ddbdd98be8678c5531766373043848b7b476e11a",
+  "scope": "actual-connected-source-guard-producer",
+  "selected_package_labels": [
+    "mvcc"
+  ],
+  "source_archive_sha256": "8c4aaed686a6517ac9bad4426867b22d2de769652eb4820e1435c1219c10ecc6",
+  "source_manifest_sha256": "2323626ae82ea2011645acae5575590edb0447dab466b1dd3d8efbe7cd046d74",
+  "source_verify": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-source-guard-producer06-source-verification.json",
+  "source_verify_sha256": "2a9035a027d35094a75d45e3670ca7ced0ec580953f34a63be0b114c503e37e5"
+}

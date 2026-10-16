@@ -1,0 +1,193 @@
+--- a/TreeDB/db/recoverable_root_set.go
++++ b/TreeDB/db/recoverable_root_set.go
+@@ -690,8 +690,11 @@
+ 		consumeManifest(current.sourceManifest)
+ 	}
+ 	seen := make(map[rootpublication.StableIdentity]struct{})
+-	for _, resources := range set.resources {
+-		if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
++	// Visit both original disposing parents without introducing another owning
++	// alias. Coordinator capture custody is transferred out of set.resources;
++	// its manifest tokens remain independently relevant to generation GC.
++	consumeResources := func(resources *rootpublication.StableResourceSet) error {
++		return resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+ 			for _, token := range tokens {
+ 				if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
+ 					continue
+@@ -723,9 +726,15 @@
+ 				consumeManifest(manifest)
+ 			}
+ 			return nil
+-		}); err != nil {
++		})
++	}
++	for _, resources := range set.resources {
++		if err := consumeResources(resources); err != nil {
+ 			return nil, err
+ 		}
++	}
++	if err := consumeResources(set.coordinatorCapture.Resources); err != nil {
++		return nil, err
+ 	}
+ 	if len(unresolved) != 0 {
+ 		return nil, fmt.Errorf("treedb: recoverable leaf files have no retained generation manifest: %v", unresolved)
+--- /dev/null
++++ b/TreeDB/db/recoverable_root_set_coordinator_manifest_test.go
+@@ -0,0 +1,157 @@
++//go:build darwin || linux || freebsd || netbsd || openbsd
++
++package db
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++)
++
++// This isolates the actual GC generation lookup and original capture lifetime.
++// The local view is not a DB-minted maintenance capability. Its authorities are
++// real immutable manifest files/tokens and a real coordinator capture/transfer;
++// no synthetic token, pin count, resource owner or transaction phase is used.
++func TestRecoverableLeafGenerationsIncludeCoordinatorManifestV6(t *testing.T) {
++	for _, recycled := range []bool{false, true} {
++		name := "coordinator-only"
++		if recycled {
++			name = "recycled-file-id"
++		}
++		t.Run(name, func(t *testing.T) {
++			ctx := context.Background()
++			registry := rootpublication.NewIdentityPinRegistry()
++			owner := registry.MetadataOwner()
++			store := newLeafGenerationManifestStore(t.TempDir(), registry, leafGenerationManifestStable, nil)
++			defer store.Close()
++			const fileID uint32 = 77
++			manifestSet := func(generation uint64) (*rootpublication.StableResourceSet, rootpublication.StableIdentity) {
++				t.Helper()
++				manifest := newLeafGenerationManifest(1)
++				manifest.CurrentGenerationID, manifest.NextGenerationID = generation, generation+1
++				manifest.Generations[0].GenerationID = generation
++				manifest.Generations[0].FileIDs = []uint32{fileID}
++				token, err := store.Replace(manifest)
++				if err != nil {
++					t.Fatal(err)
++				}
++				identity := token.Identity()
++				builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(owner)
++				if err != nil {
++					token.Release()
++					t.Fatal(err)
++				}
++				defer builder.Abandon()
++				if err = builder.Add(token); err != nil {
++					token.Release()
++					t.Fatal(err)
++				}
++				resources, err := builder.Freeze()
++				if err != nil {
++					t.Fatal(err)
++				}
++				return resources, identity
++			}
++			coordinatorResources, firstIdentity := manifestSet(11)
++			candidate, err := rootpublication.NewPreparedRootCandidate(rootpublication.CandidateSpec{
++				Frontier: rootpublication.NewFrontier(1, 10, 11, 0, 0), TotalPages: 12, ResourceSet: coordinatorResources,
++			})
++			if err != nil {
++				coordinatorResources.Release()
++				t.Fatal(err)
++			}
++			coordinator, err := rootpublication.New(rootpublication.Options{StartupSynchronous: true,
++				Publisher: rootpublication.PublisherFunc(func(context.Context, *rootpublication.PreparedRootCandidate) rootpublication.PublishResult {
++					return rootpublication.PublishResult{Outcome: rootpublication.PublishSucceeded}
++				}),
++			})
++			if err != nil {
++				if e := candidate.Abandon(); e != nil {
++					t.Error(e)
++				}
++				t.Fatal(err)
++			}
++			defer func() {
++				if e := coordinator.Stop(ctx); e != nil && !errors.Is(e, rootpublication.ErrPublicationStopped) {
++					t.Error(e)
++				}
++				handoff, e := coordinator.TakeRecoveryHandoff()
++				if e != nil {
++					t.Error(e)
++				} else if e = handoff.ReleaseWithError(); e != nil {
++					t.Error(e)
++				}
++			}()
++			if err = coordinator.Enqueue(ctx, candidate); err != nil {
++				t.Fatal(err)
++			}
++			capture, err := coordinator.CaptureReachability()
++			defer capture.Release()
++			if err != nil {
++				t.Fatal(err)
++			}
++			var view RecoverableRootSet
++			if !capture.TransferCustodyTo(&view.coordinatorCapture) || capture.Resources != nil || view.coordinatorCapture.Resources == nil || len(view.resources) != 0 {
++				t.Fatal("capture did not transfer its single original resource owner")
++			}
++			// TransferCustodyTo leaves the scalar pending view borrowed. End that
++			// borrow before the owning capture child can refund its backing.
++			capture.Pending = nil
++			defer view.coordinatorCapture.Release()
++			// Remove the original candidate's ownership through the maintained
++			// publisher before lookup: only the independently pinned capture remains.
++			if err = coordinator.WaitThrough(ctx, 1); err != nil {
++				t.Fatal(err)
++			}
++			if err = coordinator.Stop(ctx); err != nil || coordinatorResources.Owner() != rootpublication.ResourceOwnerReleased || registry.PinCount(firstIdentity) == 0 {
++				t.Fatal("capture lost its pinned manifest with candidate disposal", err)
++			}
++			var direct *rootpublication.StableResourceSet
++			var secondIdentity rootpublication.StableIdentity
++			if recycled {
++				direct, secondIdentity = manifestSet(22)
++				defer direct.Release()
++				view.resources = []*rootpublication.StableResourceSet{direct}
++				if rootpublication.SamePhysicalIdentity(firstIdentity, secondIdentity) {
++					t.Fatal("stable replacement reused the old pinned physical manifest")
++				}
++			}
++			live, err := view.leafGenerationIDsForFiles(map[uint32]struct{}{fileID: {}}, nil)
++			if err != nil {
++				t.Fatal(err)
++			}
++			want := 1
++			if recycled {
++				want = 2
++			}
++			if _, ok := live[11]; !ok || len(live) != want {
++				t.Fatalf("coordinator-only historical generation missing: %v", live)
++			}
++			if recycled {
++				if _, ok := live[22]; !ok {
++					t.Fatalf("direct historical generation missing for recycled file ID: %v", live)
++				}
++			}
++			before := owner.Bytes()
++			if err = view.coordinatorCapture.ReleaseWithError(); err != nil {
++				t.Fatal(err)
++			}
++			if direct != nil {
++				if err = direct.ReleaseWithError(); err != nil {
++					t.Fatal(err)
++				}
++			}
++			view.resources = nil
++			store.Close()
++			after := owner.Bytes()
++			if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 || after >= before {
++				t.Fatal("original disposal did not release pins/accounting", before, after, registry.ActivePins(), registry.ActiveIdentities())
++			}
++			if err = view.coordinatorCapture.ReleaseWithError(); err != nil || direct.ReleaseWithError() != nil || owner.Bytes() != after {
++				t.Fatal("capture/resource release replay changed original refund", err)
++			}
++		})
++	}
++}

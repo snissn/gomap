@@ -1,0 +1,175 @@
+--- source-guard-producer03/TreeDB/internal/primaryarena/arena_test.go
++++ source-guard-producer04/TreeDB/internal/primaryarena/arena_test.go
+@@ -1,9 +1,12 @@
+ package primaryarena
+ 
+ import (
++	"bytes"
+ 	"crypto/sha256"
++	"errors"
+ 	"fmt"
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
++	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"github.com/snissn/gomap/TreeDB/pager"
+@@ -295,20 +298,31 @@
+ 	if _, e = a.SealExactReplacement(destination, old, replacement, 9, scratch, nil); e != ErrStale {
+ 		t.Fatalf("stale predicate accepted: %v", e)
+ 	}
++	// General exact replacement still owns an ordinary group constructor and
++	// rollback. Both finite vectors must refuse before work or output effects.
+ 	before := a.Counters()
+-	short := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
+-	if ok, e := a.SealExactReplacement(destination, old, replacement, 1, scratch, short); ok || e != nil {
+-		t.Fatalf("unadmitted replacement: %t %v", ok, e)
+-	}
+-	if a.Counters() != before {
+-		t.Fatal("failed admission changed bank custody")
+-	}
+-	w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+-	ok, e := a.SealExactReplacement(destination, old, replacement, 1, scratch, w)
++	beforeMetadata := a.MetadataOwner().Bytes()
++	beforeScratch := append([]byte(nil), scratch...)
++	refusedDestinationImage, e := a.Get(destination.PageID)
++	if e != nil {
++		t.Fatal(e)
++	}
++	refusedDestinationDigest := sha256.Sum256(refusedDestinationImage)
++	for _, limit := range []uint64{1, 32} {
++		w := &iterator.OrdinalScanWork{RecordLimit: limit, ByteLimit: 1 << 20}
++		if ok, e := a.SealExactReplacement(destination, old, replacement, 1, scratch, w); ok || !errors.Is(e, retainedalloc.ErrWorkRequired) {
++			t.Fatalf("unsupported finite replacement: %t %v", ok, e)
++		}
++		if w.Records != 0 || w.Bytes != 0 || a.Counters() != before || a.MetadataOwner().Bytes() != beforeMetadata || !bytes.Equal(scratch, beforeScratch) || sha256.Sum256(refusedDestinationImage) != refusedDestinationDigest || a.valid(destination).sealed {
++			t.Fatal("unsupported finite replacement changed work, custody or output")
++		}
++	}
++	// Exercise the maintained ordinary installation without claiming a finite
++	// physical seal or complete publication envelope.
++	ok, e := a.SealExactReplacement(destination, old, replacement, 1, scratch, nil)
+ 	if e != nil || !ok {
+-		t.Fatalf("physical replacement unit: %t %v work=%+v", ok, e, w)
+-	}
+-	t.Logf("isolated physical seal only: records=%d bytes=%d; whole publication remains unqualified", w.Records, w.Bytes)
++		t.Fatalf("ordinary physical replacement: %t %v", ok, e)
++	}
+ 	clear(scratch)
+ 	currentImage, e := a.Get(destination.PageID)
+ 	if e != nil {
+@@ -357,9 +371,8 @@
+ 	}
+ 	secondComponent, secondEntry := makeAbsence(14)
+ 	second := testClaim(t, a, Directory)
+-	secondWork := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+-	if ok, e := a.SealExactReplacement(second, destination, secondEntry, 1, scratch, secondWork); !ok || e != nil {
+-		t.Fatalf("second override %v work=%+v", e, secondWork)
++	if ok, e := a.SealExactReplacement(second, destination, secondEntry, 1, scratch, nil); !ok || e != nil {
++		t.Fatalf("ordinary second override: %v", e)
+ 	}
+ 	if _, e = a.Drop(secondComponent, nil); e != nil {
+ 		t.Fatal(e)
+@@ -403,9 +416,8 @@
+ 	if sha256.Sum256(beforeImage) != beforeDigest {
+ 		t.Fatal("flatten changed independent physical directory")
+ 	}
+-	thirdWork := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+-	if ok, e := a.SealExactReplacement(third, second, thirdEntry, 1, scratch, thirdWork); !ok || e != nil {
+-		t.Fatalf("post-flatten replacement %v work=%+v", e, thirdWork)
++	if ok, e := a.SealExactReplacement(third, second, thirdEntry, 1, scratch, nil); !ok || e != nil {
++		t.Fatalf("ordinary post-flatten replacement: %v", e)
+ 	}
+ 	if _, e = a.Drop(thirdComponent, nil); e != nil {
+ 		t.Fatal(e)
+@@ -427,7 +439,7 @@
+ 			t.Fatalf("obsolete component retained %d", r.PageID)
+ 		}
+ 	}
+-	t.Logf("isolated second=%dR flatten=%dR third=%dR; complete publication remains unqualified", secondWork.Records, flatWork.Records, thirdWork.Records)
++	t.Logf("ordinary replacement installs; last standalone flatten turn=%dR; finite replacement and complete publication remain unqualified", flatWork.Records)
+ }
+ 
+ func TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent(t *testing.T) {
+--- source-guard-producer03/TreeDB/internal/primaryarena/physical_close_work_test.go
++++ source-guard-producer04/TreeDB/internal/primaryarena/physical_close_work_test.go
+@@ -8,6 +8,7 @@
+ 	"reflect"
+ 	"runtime"
+ 	"testing"
++	"unsafe"
+ )
+ 
+ type closeBudget struct{ bytes uint64 }
+@@ -27,6 +28,54 @@
+ }
+ func (l *closeLease) Close() { l.budget.bytes -= l.bytes; l.bytes = 0 }
+ 
++// These distinct concrete types support finite cleanup. closeLease intentionally
++// remains Lease-only for the ordinary-origin compatibility controls.
++type finiteCloseBudget struct {
++	bytes                    uint64
++	resizes, closeAdmissions uint64
++}
++type finiteCloseLease struct {
++	budget *finiteCloseBudget
++	bytes  uint64
++}
++
++var _ retainedalloc.WorkLease = (*finiteCloseLease)(nil)
++
++func (b *finiteCloseBudget) AcquireRetention(n uint64) (retainedalloc.Lease, error) {
++	b.bytes += n
++	return &finiteCloseLease{budget: b, bytes: n}, nil
++}
++func (l *finiteCloseLease) Resize(n uint64) error {
++	l.budget.bytes = l.budget.bytes - l.bytes + n
++	l.bytes = n
++	l.budget.resizes++
++	return nil
++}
++func (l *finiteCloseLease) Close() {
++	l.budget.bytes -= l.bytes
++	l.bytes = 0
++}
++func (l *finiteCloseLease) AdmitRetentionResize(w *iterator.OrdinalScanWork) bool {
++	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(*l.budget)))
++}
++func (l *finiteCloseLease) ResizeWork(n uint64, w *iterator.OrdinalScanWork) (bool, error) {
++	if w == nil {
++		return false, retainedalloc.ErrWorkRequired
++	}
++	if !l.AdmitRetentionResize(w) {
++		return false, nil
++	}
++	err := l.Resize(n)
++	return err == nil, err
++}
++func (l *finiteCloseLease) AdmitRetentionClose(w *iterator.OrdinalScanWork) bool {
++	if w == nil || !w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(*l.budget))) {
++		return false
++	}
++	l.budget.closeAdmissions++
++	return true
++}
++
+ func TestArenaPhysicalCloseWorkOriginalCaptureRemains(t *testing.T) {
+ 	a, err := Open(filepath.Join(t.TempDir(), "arena.db"))
+ 	if err != nil {
+@@ -36,7 +85,7 @@
+ 		a.Close()
+ 		t.Skip("native partial mapping unsupported")
+ 	}
+-	b := &closeBudget{}
++	b := &finiteCloseBudget{}
+ 	e, err := a.MetadataOwner().Enroll(b)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -94,7 +143,7 @@
+ 			break
+ 		}
+ 	}
+-	if b.bytes != 0 || a.MetadataOwner().Bytes() != 0 {
++	if b.bytes != 0 || a.MetadataOwner().Bytes() != 0 || b.resizes == 0 || b.closeAdmissions == 0 {
+ 		t.Fatal("last actual capture did not refund")
+ 	}
+ }
