@@ -1,0 +1,23 @@
+{
+  "created_utc": "2026-10-16T11:33:30.808329+00:00",
+  "decision": "ACCEPT_REPRESENTATION_DIRECTION_CONDITIONALLY_NO_SOURCE_LEASE",
+  "report_sha256": "27f505f7fc927fe8587bc723d4ed995e8c37cdd29fea3e8f2ddeb3be6ffcafc0",
+  "bindings_sha256": "b4821cccda8690442f992eaf4644db00815998330970de744bcd608343949a5e",
+  "all_25_inspected_bindings_match_minimum01": true,
+  "accepted": [
+    "Same ReaderRegistry retains sixteen existing fast cohorts and replaces fallback vectors/free/min/dirty with one typed augmented positive-handle Patricia tree. Fixed-width handle search, reuse, mutation and coherent 16-cohort-plus-root query remove historical vector work.",
+    "Separate exact registry header and leaf/branch allocations belong to original indexGen.metadata; header persists through physical and wrapper completion. Same-owner detached accounting joins original DATA dependency receipt after all node aliases clear.",
+    "Same-sequence fast join/last drop preserve existing first-claim serialization, validation and exhaustion boundary; no newly supported native fallback is implied."
+  ],
+  "required_before_source": [
+    "Resolve fallible owned registration API/caller propagation including pointer-only AcquireSnapshot without success lacking a pin.",
+    "Audit concrete registry-to-metadata-owner-to-budget callback and lock order; prove original pending debt/header lifecycle.",
+    "Combine representation with already accepted role-complete source guards and original native same-generation identity. Representation alone is not later-lowering-producer safety."
+  ],
+  "not_selected": [
+    "No source implementation during current canonical-ledger lease.",
+    "No Q32 fit, changed quantum, worst-case mutex/CAS progress or ordinary performance acceptance.",
+    "No new registry/owner/global aggregate or native fallback exhaustion waiver."
+  ],
+  "next": "Read-only exact registration API and owner lock-order preparation by existing gpt-6.1-sol/high reviewer; source selection waits for coherent ledger freeze/controls."
+}

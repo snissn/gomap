@@ -1,0 +1,21 @@
+{
+  "utc": "2026-10-16T11:41:09.898753+00:00",
+  "decision": "SELECT_CHECKED_API_AND_SPECULATIVE_ADMISSION_DIRECTION_SOURCE_LEASE_PENDING_LEDGER_GATES",
+  "report_sha256": "c68dcf15d0177760c0a51d52687f7dd51b71491397a89fdd50603fda6e5dcd29",
+  "bindings_sha256": "eba0f2ab27e0d03085c7186c7dc3dd59da11923ab01ec5b1a4502955740b731c",
+  "caller_inventory_sha256": "640962bf54ddddb4a76e2cc57ab914c7e64be465cbb425b7527d80102acdbd0b",
+  "all_31_inspected_source_bindings_match": true,
+  "selected": [
+    "Backend/caching AcquireSnapshot returns (*Snapshot,error); public returns (Snapshot,error). Propagate actual capacity or closed-binding cause through original interfaces/callers and ordinary failure custody. Pre-alpha API policy permits this explicit breaking migration.",
+    "Keep ordinary growable fallback and all supported modes when genuine admission succeeds; no fast-cohort-count-based ordinary refusal or no-error wrapper. Existing explicit native/bounded fast-only boundary remains.",
+    "Outside ReaderRegistry.mu preadmit maximum separate leaf+branch storage against exact original owner; keep original generation/rootReuse custody, then lock/recheck and adopt actual storage; scrub and refund unused speculation outside registry mutex. Count full speculative peak and actual Owner work.",
+    "Header birth/refund uses exact normal/startup/vacuum generation owner and original terminal completion; offline PRIMARY scope must use its actual namespace owner/parent completion, not infer idx.metadata.",
+    "Failure keeps original parent/attempt ownership and first cause until real cleanup; no leaked registration, pooled unsettled Snapshot, panic-as-success, hidden keeper or GC refund."
+  ],
+  "future_partition": "Core DB/lifecycle plus direct registry users versus disjoint outside callers; no current source delegation. Lexical 87 production/301 test files must be supplemented with type checks.",
+  "protected_fixture_policy": "Current ledger lease leaves original public fixture byte-identical. Future checked-API migration may require only explicit arity/error-handling syntax adaptation in original fixtures; preserve all actual modes, inputs, caps, call budget and semantic oracles, retain exact prior source, and review that equivalence diff. No numeric allowance or workload/oracle weakening is selected.",
+  "followon_role_guards": "Separate necessary same-generation producer/registry invariant and original withdrawal order remain required before continuing-writer qualification.",
+  "runtime_executed": false,
+  "source_lease_granted": false,
+  "next": "Finish current ledger freeze/review/focused and actual diagnostic controls, then select coherent source construction with original owner/custody and complete caller migration."
+}
